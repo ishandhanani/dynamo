@@ -140,14 +140,14 @@ class DynamoMultimodalEmbeddingCacheConnector(ECConnectorBase):
             if mm_hash not in self._mm_datas_need_loads:
                 meta.add_mm_data(MMMeta(mm_hash=mm_hash, num_token=0))
 
-        if meta.mm_datas:
-            logger.info(
-                "build_connector_meta: from_update_state=%d, from_has_caches=%d, "
-                "total_meta_mm_datas=%d",
-                len(self._mm_datas_need_loads),
-                len(self._hashes_this_step),
-                len(meta.mm_datas),
-            )
+        # if meta.mm_datas:
+        #     logger.info(
+        #         "build_connector_meta: from_update_state=%d, from_has_caches=%d, "
+        #         "total_meta_mm_datas=%d",
+        #         len(self._mm_datas_need_loads),
+        #         len(self._hashes_this_step),
+        #         len(meta.mm_datas),
+        #     )
 
         self._mm_datas_need_loads.clear()
         self._hashes_this_step.clear()
@@ -166,16 +166,16 @@ class DynamoMultimodalEmbeddingCacheConnector(ECConnectorBase):
         if not metadata.mm_datas:
             return
 
-        cpu_cache_stats = self._cache_manager.stats
-        logger.info(
-            "start_load_caches: encoder_cache=%d, metadata_mm_datas=%d, "
-            "cpu_cache_entries=%d, cpu_cache_hits=%d, cpu_cache_misses=%d",
-            len(encoder_cache),
-            len(metadata.mm_datas),
-            cpu_cache_stats["entries"],
-            cpu_cache_stats["hits"],
-            cpu_cache_stats["misses"],
-        )
+        # cpu_cache_stats = self._cache_manager.stats
+        # logger.info(
+        #     "start_load_caches: encoder_cache=%d, metadata_mm_datas=%d, "
+        #     "cpu_cache_entries=%d, cpu_cache_hits=%d, cpu_cache_misses=%d",
+        #     len(encoder_cache),
+        #     len(metadata.mm_datas),
+        #     cpu_cache_stats["entries"],
+        #     cpu_cache_stats["hits"],
+        #     cpu_cache_stats["misses"],
+        # )
 
         for mm_data in metadata.mm_datas:
             if mm_data.mm_hash in encoder_cache:

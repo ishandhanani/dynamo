@@ -292,16 +292,16 @@ class MultimodalPDWorkerHandler(BaseWorkerHandler):
             yield self._format_engine_output(response, num_output_tokens_so_far)
             if response.outputs:
                 num_output_tokens_so_far = len(response.outputs[0].token_ids)
-                if response.outputs[0].finish_reason:
-                    prompt_tokens = len(response.prompt_token_ids)
-                    cached = response.num_cached_tokens or 0
-                    hit_rate = cached / prompt_tokens if prompt_tokens else 0
-                    logger.info(
-                        f"[{request.request_id}] KV prefix cache: "
-                        f"cached_tokens={cached}/{prompt_tokens} "
-                        f"hit_rate={hit_rate:.2%} "
-                        f"output_tokens={num_output_tokens_so_far}"
-                    )
+                # if response.outputs[0].finish_reason:
+                #     prompt_tokens = len(response.prompt_token_ids)
+                #     cached = response.num_cached_tokens or 0
+                #     hit_rate = cached / prompt_tokens if prompt_tokens else 0
+                # logger.info(
+                #     f"[{request.request_id}] KV prefix cache: "
+                #     f"cached_tokens={cached}/{prompt_tokens} "
+                #     f"hit_rate={hit_rate:.2%} "
+                #     f"output_tokens={num_output_tokens_so_far}"
+                # )
 
     # ── Disaggregated generation (prefill here, decode remote) ───────
 
