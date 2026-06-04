@@ -143,9 +143,52 @@ where
         allowed_worker_ids: Option<HashSet<WorkerId>>,
         shared_cache_hits: Option<SharedCacheHits>,
     ) -> Result<SchedulingResponse, KvSchedulerError> {
+        self.schedule_with_remote_g2_scores(
+            maybe_request_id,
+            isl_tokens,
+            token_seq,
+            tier_overlap_blocks,
+            effective_overlap_blocks,
+            effective_cached_tokens,
+            router_config_override,
+            update_states,
+            lora_name,
+            priority_jump,
+            expected_output_tokens,
+            pinned_worker,
+            allowed_worker_ids,
+            HashMap::new(),
+            0.0,
+            None,
+            shared_cache_hits,
+        )
+        .await
+    }
+
+    #[expect(clippy::too_many_arguments)]
+    pub async fn schedule_with_remote_g2_scores(
+        &self,
+        maybe_request_id: Option<String>,
+        isl_tokens: usize,
+        token_seq: Option<Vec<SequenceHash>>,
+        tier_overlap_blocks: TierOverlapBlocks,
+        effective_overlap_blocks: HashMap<dynamo_kv_router::protocols::WorkerWithDpRank, f64>,
+        effective_cached_tokens: HashMap<dynamo_kv_router::protocols::WorkerWithDpRank, usize>,
+        router_config_override: Option<&RouterConfigOverride>,
+        update_states: bool,
+        lora_name: Option<String>,
+        priority_jump: f64,
+        expected_output_tokens: Option<u32>,
+        pinned_worker: Option<WorkerWithDpRank>,
+        allowed_worker_ids: Option<HashSet<WorkerId>>,
+        remote_g2_score_blocks: HashMap<WorkerWithDpRank, u32>,
+        remote_g2_score_multiplier: f64,
+        remote_g2_score_max_local_gap_blocks: Option<f64>,
+        shared_cache_hits: Option<SharedCacheHits>,
+    ) -> Result<SchedulingResponse, KvSchedulerError> {
         let response = self
             .inner
-            .schedule(
+            .schedule_with_remote_g2_scores(
                 maybe_request_id,
                 isl_tokens,
                 token_seq,
@@ -159,6 +202,9 @@ where
                 expected_output_tokens,
                 pinned_worker,
                 allowed_worker_ids,
+                remote_g2_score_blocks,
+                remote_g2_score_multiplier,
+                remote_g2_score_max_local_gap_blocks,
                 shared_cache_hits,
             )
             .await;

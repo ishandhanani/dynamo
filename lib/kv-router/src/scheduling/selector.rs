@@ -119,6 +119,7 @@ impl DefaultWorkerSelector {
         overlap_weight: f64,
         shared_cache_multiplier: f64,
         formula_name: &'static str,
+        apply_remote_g2_score: bool,
     ) -> f64 {
         let effective_overlap_blocks = request.effective_overlap_blocks_for(worker);
         // `shared_cache_hits::hits_beyond` expects an integer block count, so
@@ -127,7 +128,7 @@ impl DefaultWorkerSelector {
         let prefill_token = request.prefill_tokens_for(worker);
 
         // Adjust prefill tokens by shared cache hits beyond this worker's device prefix.
-        let (adjusted_prefill_token, shared_beyond) =
+        let (prefill_after_shared_cache, shared_beyond) =
             if let Some(ref shared_hits) = request.shared_cache_hits {
                 let beyond = shared_hits.hits_beyond(device_overlap_blocks);
                 let reduction = shared_cache_multiplier * (beyond as f64) * (block_size as f64);
@@ -136,6 +137,26 @@ impl DefaultWorkerSelector {
             } else {
                 (prefill_token, 0)
             };
+        let remote_g2_score_blocks = if apply_remote_g2_score {
+            request
+                .remote_g2_score_blocks
+                .get(&worker)
+                .copied()
+                .unwrap_or(0)
+        } else {
+            0
+        };
+        let remote_g2_score_multiplier = if request.remote_g2_score_multiplier.is_finite()
+            && request.remote_g2_score_multiplier > 0.0
+        {
+            request.remote_g2_score_multiplier
+        } else {
+            0.0
+        };
+        let remote_g2_reduction =
+            remote_g2_score_multiplier * remote_g2_score_blocks as f64 * block_size as f64;
+        let adjusted_prefill_token =
+            (prefill_after_shared_cache as f64 - remote_g2_reduction).max(0.0) as usize;
 
         // DYN_ROUTER_LOAD_BLOCK_SIZE: override the divisor used for the load
         // metric only. When set, the score derives directly from the active
@@ -155,10 +176,11 @@ impl DefaultWorkerSelector {
         };
         let logit = overlap_weight * potential_prefill_block + decode_block;
 
-        if shared_beyond > 0 {
+        if shared_beyond > 0 || remote_g2_score_blocks > 0 {
             tracing::debug!(
                 "{formula_name} for worker_id={} dp_rank={:?} with {effective_overlap_blocks:.2} effective device blocks, \
-                 {shared_beyond} shared blocks beyond device (multiplier={shared_cache_multiplier:.2}): {logit:.3} \
+                 {shared_beyond} shared blocks beyond device (multiplier={shared_cache_multiplier:.2}), \
+                 {remote_g2_score_blocks} remote G2 score blocks (multiplier={remote_g2_score_multiplier:.2}): {logit:.3} \
                  = {overlap_weight:.1} * adjusted_prefill_blocks + decode_blocks \
                  = {overlap_weight:.1} * {potential_prefill_block:.3} + {decode_block:.3} \
                  (prefill_tokens: {prefill_token} -> {adjusted_prefill_token})",
@@ -223,6 +245,7 @@ impl<C: WorkerConfigLike> WorkerSelector<C> for DefaultWorkerSelector {
                 overlap_weight,
                 shared_cache_multiplier,
                 "Pinned formula",
+                true,
             );
             let effective_overlap_blocks = request.effective_overlap_blocks_for(worker);
             let cached_tokens = request.effective_cached_tokens_for(worker);
@@ -250,18 +273,7 @@ impl<C: WorkerConfigLike> WorkerSelector<C> for DefaultWorkerSelector {
             .and_then(|cfg| cfg.router_temperature)
             .unwrap_or(self.kv_router_config.router_temperature);
 
-        let get_score = |worker: WorkerWithDpRank| -> f64 {
-            self.worker_logit(
-                request,
-                worker,
-                block_size,
-                overlap_weight,
-                shared_cache_multiplier,
-                "Formula",
-            )
-        };
-
-        let worker_iter = workers
+        let worker_vec: Vec<_> = workers
             .iter()
             .filter(move |(worker_id, _)| request.is_worker_allowed(**worker_id))
             .flat_map(|(worker_id, config)| {
@@ -269,12 +281,58 @@ impl<C: WorkerConfigLike> WorkerSelector<C> for DefaultWorkerSelector {
                 let data_parallel_start_rank = config.data_parallel_start_rank();
                 (data_parallel_start_rank..(data_parallel_start_rank + data_parallel_size))
                     .map(move |dp_rank| WorkerWithDpRank::new(*worker_id, dp_rank))
+            })
+            .collect();
+
+        let remote_g2_gate = request
+            .remote_g2_score_max_local_gap_blocks
+            .filter(|gap| gap.is_finite() && *gap >= 0.0)
+            .and_then(|gap| {
+                (!request.remote_g2_score_blocks.is_empty()).then(|| {
+                    let mut base_logits = FxHashMap::default();
+                    let mut best_base_logit = f64::INFINITY;
+                    for &worker in &worker_vec {
+                        let base_logit = self.worker_logit(
+                            request,
+                            worker,
+                            block_size,
+                            overlap_weight,
+                            shared_cache_multiplier,
+                            "Remote G2 base formula",
+                            false,
+                        );
+                        best_base_logit = best_base_logit.min(base_logit);
+                        base_logits.insert(worker, base_logit);
+                    }
+                    (base_logits, best_base_logit, gap)
+                })
             });
+
+        let get_score = |worker: WorkerWithDpRank| -> f64 {
+            let apply_remote_g2_score =
+                remote_g2_gate
+                    .as_ref()
+                    .is_none_or(|(base_logits, best_base_logit, max_gap)| {
+                        base_logits
+                            .get(&worker)
+                            .copied()
+                            .is_none_or(|base| base <= *best_base_logit + *max_gap)
+                    });
+            self.worker_logit(
+                request,
+                worker,
+                block_size,
+                overlap_weight,
+                shared_cache_multiplier,
+                "Formula",
+                apply_remote_g2_score,
+            )
+        };
 
         let (best_worker, best_logit) = if temperature == 0.0 {
             let mut min_workers = Vec::new();
             let mut min_score = f64::INFINITY;
-            for worker in worker_iter {
+            for &worker in &worker_vec {
                 let score = get_score(worker);
                 if score < min_score {
                     min_workers.clear();
@@ -293,7 +351,7 @@ impl<C: WorkerConfigLike> WorkerSelector<C> for DefaultWorkerSelector {
             }
         } else {
             let mut worker_logits = FxHashMap::default();
-            for worker in worker_iter {
+            for &worker in &worker_vec {
                 let score = get_score(worker);
                 worker_logits.insert(worker, score);
             }
@@ -535,6 +593,9 @@ mod tests {
             pinned_worker: None,
             allowed_worker_ids: None,
             shared_cache_hits: Some(shared_hits),
+            remote_g2_score_blocks: Default::default(),
+            remote_g2_score_multiplier: 0.0,
+            remote_g2_score_max_local_gap_blocks: None,
             resp_tx: Some(tx),
         };
 
@@ -546,6 +607,129 @@ mod tests {
         assert_eq!(
             result.worker, worker1,
             "Worker 1 should be selected (lower logit due to shared cache)"
+        );
+    }
+
+    /// Remote G2 score blocks reduce prefill cost for the target/source pair
+    /// the router can actually plan. This mirrors shared-cache scoring but uses
+    /// a Dynamo-computed per-worker block count instead of querying Mooncake.
+    #[test]
+    fn test_remote_g2_score_blocks_scoring() {
+        use crate::test_utils::SimpleWorkerConfig;
+
+        let block_size = 1u32;
+        let isl = 4usize;
+        let worker0 = WorkerWithDpRank::from_worker_id(0);
+        let worker1 = WorkerWithDpRank::from_worker_id(1);
+
+        let mut effective_overlap_blocks = HashMap::new();
+        effective_overlap_blocks.insert(worker0, 2.0);
+
+        let config = KvRouterConfig {
+            overlap_score_weight: 1.0,
+            router_temperature: 0.0,
+            ..Default::default()
+        };
+
+        let selector = DefaultWorkerSelector::new(Some(config), "test");
+        let mut workers = HashMap::new();
+        workers.insert(0, SimpleWorkerConfig::default());
+        workers.insert(1, SimpleWorkerConfig::default());
+
+        let (tx, _rx) = tokio::sync::oneshot::channel();
+        let request = SchedulingRequest {
+            maybe_request_id: Some("test".into()),
+            token_seq: None,
+            isl_tokens: isl,
+            tier_overlap_blocks: Default::default(),
+            effective_overlap_blocks,
+            effective_cached_tokens: HashMap::new(),
+            decode_blocks: FxHashMap::default(),
+            prefill_tokens: FxHashMap::default(),
+            track_prefill_tokens: true,
+            router_config_override: None,
+            update_states: false,
+            lora_name: None,
+            priority_jump: 0.0,
+            expected_output_tokens: None,
+            pinned_worker: None,
+            allowed_worker_ids: None,
+            shared_cache_hits: None,
+            remote_g2_score_blocks: HashMap::from([(worker1, 3)]),
+            remote_g2_score_multiplier: 1.0,
+            remote_g2_score_max_local_gap_blocks: None,
+            resp_tx: Some(tx),
+        };
+
+        let result = selector
+            .select_worker(&workers, &request, block_size)
+            .unwrap();
+
+        assert_eq!(
+            result.worker, worker1,
+            "Worker 1 should be selected by remote G2 score reduction"
+        );
+    }
+
+    #[test]
+    fn test_remote_g2_score_respects_max_local_gap() {
+        use crate::test_utils::SimpleWorkerConfig;
+
+        let block_size = 1u32;
+        let isl = 100usize;
+        let worker0 = WorkerWithDpRank::from_worker_id(0);
+        let worker1 = WorkerWithDpRank::from_worker_id(1);
+
+        let mut effective_overlap_blocks = HashMap::new();
+        effective_overlap_blocks.insert(worker0, 90.0);
+        effective_overlap_blocks.insert(worker1, 0.0);
+        let mut prefill_tokens = FxHashMap::default();
+        prefill_tokens.insert(worker0, 10);
+        prefill_tokens.insert(worker1, 100);
+
+        let config = KvRouterConfig {
+            overlap_score_weight: 1.0,
+            router_temperature: 0.0,
+            ..Default::default()
+        };
+
+        let selector = DefaultWorkerSelector::new(Some(config), "test");
+        let mut workers = HashMap::new();
+        workers.insert(0, SimpleWorkerConfig::default());
+        workers.insert(1, SimpleWorkerConfig::default());
+
+        let (tx, _rx) = tokio::sync::oneshot::channel();
+        let request = SchedulingRequest {
+            maybe_request_id: Some("test".into()),
+            token_seq: None,
+            isl_tokens: isl,
+            tier_overlap_blocks: Default::default(),
+            effective_overlap_blocks,
+            effective_cached_tokens: HashMap::new(),
+            decode_blocks: FxHashMap::default(),
+            prefill_tokens,
+            track_prefill_tokens: true,
+            router_config_override: None,
+            update_states: false,
+            lora_name: None,
+            priority_jump: 0.0,
+            expected_output_tokens: None,
+            pinned_worker: None,
+            allowed_worker_ids: None,
+            shared_cache_hits: None,
+            remote_g2_score_blocks: HashMap::from([(worker1, 100)]),
+            remote_g2_score_multiplier: 1.0,
+            remote_g2_score_max_local_gap_blocks: Some(16.0),
+            resp_tx: Some(tx),
+        };
+
+        let result = selector
+            .select_worker(&workers, &request, block_size)
+            .unwrap();
+
+        assert_eq!(
+            result.worker, worker0,
+            "Worker 1's remote score should be ignored because its base score is outside the local gap"
         );
     }
 
@@ -585,6 +769,9 @@ mod tests {
             pinned_worker: None,
             allowed_worker_ids: None,
             shared_cache_hits: None,
+            remote_g2_score_blocks: Default::default(),
+            remote_g2_score_multiplier: 0.0,
+            remote_g2_score_max_local_gap_blocks: None,
             resp_tx: Some(tx),
         };
 

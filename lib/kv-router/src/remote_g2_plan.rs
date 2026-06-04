@@ -46,6 +46,7 @@ pub enum RemoteKvReuseNoPlanReason {
     Disabled,
     NoRemoteG2Candidate,
     NoContiguousPrefix,
+    BelowMinPlannedBlocks,
     SourceIsTarget,
     IncompatibleBlockSize,
     PlanExpired,
@@ -59,6 +60,7 @@ impl RemoteKvReuseNoPlanReason {
             Self::Disabled => "disabled",
             Self::NoRemoteG2Candidate => "no_remote_g2_candidate",
             Self::NoContiguousPrefix => "no_contiguous_prefix",
+            Self::BelowMinPlannedBlocks => "below_min_planned_blocks",
             Self::SourceIsTarget => "source_is_target",
             Self::IncompatibleBlockSize => "incompatible_block_size",
             Self::PlanExpired => "plan_expired",
@@ -95,20 +97,164 @@ pub enum RemoteKvReuseDecision {
     },
 }
 
-fn choose_better_candidate(
-    best: &mut Option<(WorkerWithDpRank, usize, usize)>,
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RemoteKvReuseCandidate {
+    pub source: WorkerWithDpRank,
+    pub start_block_index: usize,
+    pub planned_prefix_blocks: usize,
+    pub incremental_blocks: usize,
+}
+
+fn device_match_blocks(tiered_matches: &TieredMatchDetails, worker: WorkerWithDpRank) -> usize {
+    tiered_matches
+        .device
+        .overlap_scores
+        .scores
+        .get(&worker)
+        .copied()
+        .unwrap_or(0) as usize
+}
+
+fn host_pinned_hits(tiered_matches: &TieredMatchDetails, worker: WorkerWithDpRank) -> usize {
+    tiered_matches
+        .lower_tier
+        .get(&StorageTier::HostPinned)
+        .and_then(|matches| matches.hits.get(&worker).copied())
+        .unwrap_or(0)
+}
+
+fn local_prefix_blocks(
+    tiered_matches: &TieredMatchDetails,
     worker: WorkerWithDpRank,
-    start: usize,
-    hits: usize,
+    request_blocks: usize,
+) -> usize {
+    device_match_blocks(tiered_matches, worker)
+        .saturating_add(host_pinned_hits(tiered_matches, worker))
+        .min(request_blocks)
+}
+
+fn source_interval(
+    tiered_matches: &TieredMatchDetails,
+    worker: WorkerWithDpRank,
+    request_blocks: usize,
+) -> Option<(usize, usize)> {
+    let host_continuation_hits = host_pinned_hits(tiered_matches, worker);
+    let device_match = device_match_blocks(tiered_matches, worker);
+
+    // Normal lower-tier semantics report HostPinned hits as a continuation
+    // after the source worker's Device match. With write-through HiCache, the
+    // same blocks are present in both GPU and CPU, so that continuation can be
+    // zero even though a valid CPU-pinned chain exists from root.
+    let (start, hits) = if host_continuation_hits > 0 {
+        (device_match.min(request_blocks), host_continuation_hits)
+    } else if device_match > 0 {
+        (0, device_match.min(request_blocks))
+    } else {
+        return None;
+    };
+
+    let hits = hits.min(request_blocks.saturating_sub(start));
+    (hits > 0).then_some((start, hits))
+}
+
+fn incremental_blocks_for_target(target_local_prefix: usize, start: usize, hits: usize) -> usize {
+    let end = start.saturating_add(hits);
+    if target_local_prefix < start || target_local_prefix >= end {
+        0
+    } else {
+        end - target_local_prefix
+    }
+}
+
+fn choose_better_candidate(
+    best: &mut Option<RemoteKvReuseCandidate>,
+    candidate: RemoteKvReuseCandidate,
 ) {
     match best {
-        None => *best = Some((worker, start, hits)),
-        Some((best_worker, _, best_hits))
-            if hits > *best_hits || (hits == *best_hits && worker < *best_worker) =>
+        None => *best = Some(candidate),
+        Some(best_candidate)
+            if candidate.incremental_blocks > best_candidate.incremental_blocks
+                || (candidate.incremental_blocks == best_candidate.incremental_blocks
+                    && candidate.planned_prefix_blocks > best_candidate.planned_prefix_blocks)
+                || (candidate.incremental_blocks == best_candidate.incremental_blocks
+                    && candidate.planned_prefix_blocks == best_candidate.planned_prefix_blocks
+                    && candidate.source < best_candidate.source) =>
         {
-            *best = Some((worker, start, hits));
+            *best = Some(candidate);
         }
         Some(_) => {}
+    }
+}
+
+fn has_remote_g2_candidate(
+    target: WorkerWithDpRank,
+    _request_blocks: usize,
+    tiered_matches: &TieredMatchDetails,
+) -> bool {
+    tiered_matches
+        .lower_tier
+        .get(&StorageTier::HostPinned)
+        .is_some_and(|matches| matches.hits.keys().any(|&worker| worker != target))
+}
+
+pub fn best_remote_g2_candidate_for_target(
+    target: WorkerWithDpRank,
+    request_blocks: usize,
+    tiered_matches: &TieredMatchDetails,
+) -> Option<RemoteKvReuseCandidate> {
+    let host_pinned_matches = tiered_matches.lower_tier.get(&StorageTier::HostPinned)?;
+    let target_local_prefix = local_prefix_blocks(tiered_matches, target, request_blocks);
+    let mut best = None;
+
+    for &worker in host_pinned_matches.hits.keys() {
+        if worker == target {
+            continue;
+        }
+        let Some((start, hits)) = source_interval(tiered_matches, worker, request_blocks) else {
+            continue;
+        };
+        let incremental_blocks = incremental_blocks_for_target(target_local_prefix, start, hits);
+        if incremental_blocks == 0 {
+            continue;
+        }
+
+        choose_better_candidate(
+            &mut best,
+            RemoteKvReuseCandidate {
+                source: worker,
+                start_block_index: start,
+                planned_prefix_blocks: hits,
+                incremental_blocks,
+            },
+        );
+    }
+
+    best
+}
+
+pub fn remote_g2_score_blocks_for_target(
+    target: WorkerWithDpRank,
+    request_blocks: usize,
+    tiered_matches: &TieredMatchDetails,
+    tax_blocks: u32,
+    cap_blocks: Option<u32>,
+) -> u32 {
+    if local_prefix_blocks(tiered_matches, target, request_blocks) == 0 {
+        return 0;
+    }
+    let Some(candidate) =
+        best_remote_g2_candidate_for_target(target, request_blocks, tiered_matches)
+    else {
+        return 0;
+    };
+    let score_blocks: u32 = candidate
+        .incremental_blocks
+        .saturating_sub(tax_blocks as usize)
+        .try_into()
+        .unwrap_or(u32::MAX);
+    match cap_blocks.filter(|cap| *cap > 0) {
+        Some(cap) => score_blocks.min(cap),
+        None => score_blocks,
     }
 }
 
@@ -126,66 +272,12 @@ pub fn select_remote_g2_reuse_plan(
             .count() as u32,
     };
 
-    let Some(host_pinned_matches) = input
-        .tiered_matches
-        .lower_tier
-        .get(&StorageTier::HostPinned)
-    else {
-        return RemoteKvReuseDecision::NoPlan {
-            reason: RemoteKvReuseNoPlanReason::NoRemoteG2Candidate,
-            stats,
-        };
-    };
-
     let request_blocks = input.block_hashes.len();
-    let mut saw_remote_candidate = false;
-    let mut best_continuation: Option<(WorkerWithDpRank, usize, usize)> = None;
-    let mut best_root_fallback: Option<(WorkerWithDpRank, usize, usize)> = None;
-    for (&worker, &host_continuation_hits) in &host_pinned_matches.hits {
-        if worker == input.target {
-            continue;
-        }
-        saw_remote_candidate = true;
-
-        let device_match = input
-            .tiered_matches
-            .device
-            .overlap_scores
-            .scores
-            .get(&worker)
-            .copied()
-            .unwrap_or(0) as usize;
-
-        // Normal lower-tier semantics report HostPinned hits as a continuation
-        // after the source worker's Device match. With write-through HiCache,
-        // the same blocks are present in both GPU and CPU, so that continuation
-        // can be zero even though a valid CPU-pinned chain exists from root.
-        // Prefer real HostPinned continuations first; only fall back to a root
-        // candidate if no positive HostPinned continuation exists. Otherwise a
-        // zero-hit write-through fallback can beat a smaller but real write-back
-        // HostPinned chain, only to fail the later source-side chain walk.
-        let (start, hits) = if host_continuation_hits > 0 {
-            (device_match.min(request_blocks), host_continuation_hits)
-        } else if device_match > 0 {
-            (0, device_match.min(request_blocks))
-        } else {
-            continue;
-        };
-
-        let hits = hits.min(request_blocks.saturating_sub(start));
-        if hits == 0 {
-            continue;
-        }
-
-        if host_continuation_hits > 0 {
-            choose_better_candidate(&mut best_continuation, worker, start, hits);
-        } else {
-            choose_better_candidate(&mut best_root_fallback, worker, start, hits);
-        }
-    }
-
-    let best = best_continuation.or(best_root_fallback);
-    let Some((source, start, hits)) = best else {
+    let saw_remote_candidate =
+        has_remote_g2_candidate(input.target, request_blocks, input.tiered_matches);
+    let Some(best) =
+        best_remote_g2_candidate_for_target(input.target, request_blocks, input.tiered_matches)
+    else {
         return RemoteKvReuseDecision::NoPlan {
             reason: if saw_remote_candidate {
                 RemoteKvReuseNoPlanReason::NoContiguousPrefix
@@ -199,7 +291,9 @@ pub fn select_remote_g2_reuse_plan(
     // Continuation candidates start where the source worker's Device chain ended.
     // Write-through candidates start at root because their HostPinned copy mirrors
     // blocks that are also still present in the source worker's Device tier.
-    let planned_prefix_blocks = hits as u32;
+    let source = best.source;
+    let start = best.start_block_index;
+    let planned_prefix_blocks = best.planned_prefix_blocks as u32;
     if planned_prefix_blocks == 0 {
         return RemoteKvReuseDecision::NoPlan {
             reason: RemoteKvReuseNoPlanReason::NoContiguousPrefix,
@@ -244,7 +338,8 @@ mod tests {
     use crate::protocols::{LocalBlockHash, OverlapScores, StorageTier, WorkerWithDpRank};
     use crate::remote_g2_plan::{
         REMOTE_KV_REUSE_PLAN_VERSION, RemoteKvReuseDecision, RemoteKvReuseNoPlanReason,
-        RemoteKvReusePlan, RemoteKvReuseSelectionInput, select_remote_g2_reuse_plan,
+        RemoteKvReusePlan, RemoteKvReuseSelectionInput, remote_g2_score_blocks_for_target,
+        select_remote_g2_reuse_plan,
     };
 
     fn test_plan() -> RemoteKvReusePlan {
@@ -505,11 +600,12 @@ mod tests {
     fn plan_start_block_index_equals_source_device_match() {
         // Source A has 2 device-tier matches and 2 HostPinned hits chained
         // past them → plan covers request positions [2, 4) and
-        // start_block_index == 2 (skip past A's device chain).
+        // start_block_index == 2 (skip past A's device chain). Target already
+        // has the first 2 blocks locally, so it can attach this continuation.
         let hashes = block_hashes(6);
         let target = WorkerWithDpRank::new(9, 0);
         let source = WorkerWithDpRank::new(7, 0);
-        let matches = tiered_matches(&[(source, 2)], &[(source, 2)]);
+        let matches = tiered_matches(&[(target, 2), (source, 2)], &[(source, 2)]);
 
         let decision = select_remote_g2_reuse_plan(selection_input(target, &hashes, &matches));
 
@@ -521,5 +617,79 @@ mod tests {
             }
             other => panic!("expected plan, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn continuation_before_target_prefix_returns_no_plan() {
+        let hashes = block_hashes(6);
+        let target = WorkerWithDpRank::new(9, 0);
+        let source = WorkerWithDpRank::new(7, 0);
+        let matches = tiered_matches(&[(source, 2)], &[(source, 2)]);
+
+        let decision = select_remote_g2_reuse_plan(selection_input(target, &hashes, &matches));
+
+        match decision {
+            RemoteKvReuseDecision::NoPlan { reason, .. } => {
+                assert_eq!(reason, RemoteKvReuseNoPlanReason::NoContiguousPrefix);
+            }
+            other => panic!("expected no plan, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn remote_g2_score_counts_only_incremental_blocks_after_tax() {
+        let target = WorkerWithDpRank::new(9, 0);
+        let source = WorkerWithDpRank::new(7, 0);
+        let matches = tiered_matches(&[(target, 2), (source, 2)], &[(source, 5)]);
+
+        assert_eq!(
+            remote_g2_score_blocks_for_target(target, 8, &matches, 0, None),
+            5
+        );
+        assert_eq!(
+            remote_g2_score_blocks_for_target(target, 8, &matches, 2, None),
+            3
+        );
+        assert_eq!(
+            remote_g2_score_blocks_for_target(target, 8, &matches, 8, None),
+            0
+        );
+    }
+
+    #[test]
+    fn remote_g2_score_caps_incremental_blocks_after_tax() {
+        let target = WorkerWithDpRank::new(9, 0);
+        let source = WorkerWithDpRank::new(7, 0);
+        let matches = tiered_matches(&[(target, 2), (source, 2)], &[(source, 8)]);
+
+        assert_eq!(
+            remote_g2_score_blocks_for_target(target, 10, &matches, 1, Some(3)),
+            3
+        );
+        assert_eq!(
+            remote_g2_score_blocks_for_target(target, 10, &matches, 1, Some(0)),
+            7
+        );
+    }
+
+    #[test]
+    fn remote_g2_score_does_not_credit_cold_target_root_transfer() {
+        let target = WorkerWithDpRank::new(9, 0);
+        let source = WorkerWithDpRank::new(7, 0);
+        let matches = tiered_matches(&[(source, 5)], &[(source, 0)]);
+
+        let decision =
+            select_remote_g2_reuse_plan(selection_input(target, &block_hashes(8), &matches));
+        match decision {
+            RemoteKvReuseDecision::Plan { plan, .. } => {
+                assert_eq!(plan.start_block_index, 0);
+                assert_eq!(plan.planned_prefix_blocks, 5);
+            }
+            other => panic!("expected post-hoc root plan, got {other:?}"),
+        }
+        assert_eq!(
+            remote_g2_score_blocks_for_target(target, 8, &matches, 0, None),
+            0
+        );
     }
 }

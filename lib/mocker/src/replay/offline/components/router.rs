@@ -174,6 +174,9 @@ impl PendingRequest {
             pinned_worker: None,
             allowed_worker_ids: None,
             shared_cache_hits: None,
+            remote_g2_score_blocks: Default::default(),
+            remote_g2_score_multiplier: 0.0,
+            remote_g2_score_max_local_gap_blocks: None,
             resp_tx: None,
         }
     }
