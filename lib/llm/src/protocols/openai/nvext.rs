@@ -377,6 +377,11 @@ pub struct NvExt {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub request_timestamp_ms: Option<f64>,
 
+    /// Optional external client request ID, usually from the HTTP x-request-id header.
+    #[builder(default, setter(strip_option))]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub x_request_id: Option<String>,
+
     /// Session control for subagent KV isolation and sticky routing.
     /// When present, the router uses `session_id` for worker affinity.
     /// When `action` is set to `open` or `close`, the router also fires

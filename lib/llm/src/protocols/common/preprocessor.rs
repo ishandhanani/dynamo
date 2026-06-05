@@ -216,6 +216,11 @@ pub struct PreprocessedRequest {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub request_timestamp_ms: Option<f64>,
 
+    /// Optional external client request ID, usually from the HTTP x-request-id header.
+    #[builder(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub x_request_id: Option<String>,
+
     /// Optional request tracker for per-request metrics (shared with DeltaGenerator)
     #[builder(default)]
     #[serde(skip)]
@@ -370,14 +375,14 @@ mod tests {
             source_host: "10.0.0.7".to_string(),
             source_bootstrap_port: 41000,
             source_tier: StorageTier::HostPinned,
-            block_hashes: vec![LocalBlockHash(11), LocalBlockHash(22)],
+            router_block_hashes: vec![LocalBlockHash(11), LocalBlockHash(22)],
             start_block_index: 0,
             planned_prefix_blocks: 2,
             block_size_tokens: 16,
             created_at_ms: 1000,
             expires_at_ms: 2000,
             plan_version: REMOTE_KV_REUSE_PLAN_VERSION,
-            kv_block_hashes: vec![],
+            engine_block_hashes: vec![],
         }
     }
 
@@ -429,5 +434,27 @@ mod tests {
         ] {
             assert!(!serialized.contains(forbidden));
         }
+    }
+
+    #[test]
+    fn x_request_id_round_trips_when_present() {
+        let request = PreprocessedRequest::builder()
+            .model("test".to_string())
+            .token_ids(vec![1, 2, 3, 4])
+            .stop_conditions(Default::default())
+            .sampling_options(Default::default())
+            .output_options(Default::default())
+            .x_request_id(Some("client-request-1".to_string()))
+            .build()
+            .unwrap();
+
+        let serialized = serde_json::to_value(&request).unwrap();
+        assert_eq!(serialized["x_request_id"], "client-request-1");
+
+        let round_tripped: PreprocessedRequest = serde_json::from_value(serialized).unwrap();
+        assert_eq!(
+            round_tripped.x_request_id.as_deref(),
+            Some("client-request-1")
+        );
     }
 }

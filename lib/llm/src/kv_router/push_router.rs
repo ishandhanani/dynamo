@@ -314,6 +314,7 @@ impl KvPushRouter {
                 .chooser
                 .find_best_match_details(
                     Some(context_id),
+                    request.x_request_id.as_deref(),
                     routing_token_ids,
                     block_mm_infos,
                     request.router_config_override.as_ref(),
@@ -372,6 +373,7 @@ impl KvPushRouter {
                 .chooser
                 .find_best_match_details(
                     Some(context_id),
+                    request.x_request_id.as_deref(),
                     routing_token_ids,
                     block_mm_infos,
                     request.router_config_override.as_ref(),
@@ -413,6 +415,7 @@ impl KvPushRouter {
                 .chooser
                 .find_best_match_details(
                     Some(context_id),
+                    request.x_request_id.as_deref(),
                     routing_token_ids,
                     block_mm_infos,
                     request.router_config_override.as_ref(),

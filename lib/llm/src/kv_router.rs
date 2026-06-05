@@ -593,6 +593,7 @@ where
     pub(crate) async fn find_best_match_details(
         &self,
         context_id: Option<&str>,
+        x_request_id: Option<&str>,
         tokens: &[u32],
         block_mm_infos: Option<&[Option<BlockExtraInfo>]>,
         router_config_override: Option<&RouterConfigOverride>,
@@ -831,6 +832,14 @@ where
         let total_elapsed = start.elapsed();
 
         if remote_g2_trace_enabled() {
+            let trace_context = dynamo_runtime::logging::get_distributed_tracing_context();
+            let x_request_id = x_request_id
+                .or_else(|| {
+                    trace_context
+                        .as_ref()
+                        .and_then(|context| context.x_request_id.as_deref())
+                })
+                .unwrap_or_default();
             let device_hits: Vec<_> = tiered_matches
                 .device
                 .overlap_scores
@@ -851,6 +860,7 @@ where
                 .unwrap_or_else(Vec::new);
             tracing::warn!(
                 request_id = context_id.unwrap_or_default(),
+                x_request_id,
                 target_worker_id = response.best_worker.worker_id,
                 target_dp_rank = response.best_worker.dp_rank,
                 request_blocks = block_hashes.len(),
@@ -931,6 +941,7 @@ where
         let result = self
             .find_best_match_details(
                 context_id,
+                None,
                 tokens,
                 block_mm_infos,
                 router_config_override,

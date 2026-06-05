@@ -90,6 +90,16 @@ class TestBuildDynamoPreproc:  # FRONTEND.7 — worker subprocess preproc constr
         assert sampling["frequency_penalty"] == 0.0
         assert sampling["repetition_penalty"] == 1.0
         assert sampling["seed"] is None
+        assert "x_request_id" not in result
+
+    def test_x_request_id_from_nvext(self):
+        result = _build_dynamo_preproc(
+            {"model": "test", "nvext": {"x_request_id": "client-request-1"}},
+            prompt_token_ids=[1],
+            model_name="test",
+            eos_token_id=None,
+        )
+        assert result["x_request_id"] == "client-request-1"
 
     def test_top_k_zero_maps_to_negative_one(self):
         """SGLang uses -1 for disabled top_k, OpenAI uses 0."""
@@ -1681,6 +1691,56 @@ class TestIncrementalDetokenization:  # FRONTEND.6 — token-id stream → text
         assert len(items) == 1
         assert items[0]["nvext"]["stop_reason"] == "END"
         assert "stop_reason" not in items[0]["choices"][0]
+
+    def test_kv_router_generate_receives_x_request_id(self, tokenizer):
+        class FakeRouter:
+            def __init__(self):
+                self.kwargs = None
+
+            async def generate(self, *args, **kwargs):
+                self.kwargs = kwargs
+
+                async def stream():
+                    yield {
+                        "token_ids": [],
+                        "finish_reason": "stop",
+                        "stop_reason": "END",
+                    }
+
+                return stream()
+
+        async def collect():
+            router = FakeRouter()
+            processor = SglangProcessor(
+                tokenizer=tokenizer,
+                router=router,
+                tool_call_parser_name=None,
+                reasoning_parser_name=None,
+                eos_token_id=None,
+            )
+            processor.is_kv_router = True
+            post = SglangStreamingPostProcessor(
+                tokenizer=tokenizer, tool_call_parser=None, reasoning_parser=None
+            )
+            dynamo_preproc = {
+                "model": "test-model",
+                "stop_conditions": {},
+                "sampling_options": {},
+                "output_options": {},
+                "x_request_id": "client-request-1",
+            }
+            items = [
+                item
+                async for item in processor._generate_and_stream(
+                    "req-kv", {"model": "test-model"}, dynamo_preproc, [], post
+                )
+            ]
+            return router.kwargs, items
+
+        kwargs, items = asyncio.run(collect())
+
+        assert kwargs["x_request_id"] == "client-request-1"
+        assert len(items) == 1
 
     def test_lookback_trimming(self, tokenizer):
         """Verify _all_token_ids doesn't grow unbounded."""

@@ -970,7 +970,7 @@ impl KvRouter {
     }
 
     #[allow(clippy::too_many_arguments)]
-    #[pyo3(signature = (token_ids, model, stop_conditions=None, sampling_options=None, output_options=None, router_config_override=None, worker_id=None, dp_rank=None, extra_args=None, block_mm_infos=None, multi_modal_data=None, mm_routing_info=None))]
+    #[pyo3(signature = (token_ids, model, stop_conditions=None, sampling_options=None, output_options=None, router_config_override=None, worker_id=None, dp_rank=None, extra_args=None, block_mm_infos=None, multi_modal_data=None, mm_routing_info=None, x_request_id=None))]
     fn generate<'p>(
         &self,
         py: Python<'p>,
@@ -986,6 +986,7 @@ impl KvRouter {
         block_mm_infos: Option<PyObject>,
         multi_modal_data: Option<PyObject>,
         mm_routing_info: Option<PyObject>,
+        x_request_id: Option<String>,
     ) -> PyResult<Bound<'p, PyAny>> {
         // Depythonize the options with defaults
         let stop_conditions: StopConditions = if let Some(obj) = stop_conditions {
@@ -1057,6 +1058,7 @@ impl KvRouter {
             .router_config_override(router_config_override)
             .multi_modal_data(multi_modal_data)
             .mm_routing_info(mm_routing_info)
+            .x_request_id(x_request_id)
             .extra_args(extra_args)
             .tracker(Some(tracker.clone()));
 

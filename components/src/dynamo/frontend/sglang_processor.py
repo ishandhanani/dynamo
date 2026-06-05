@@ -268,6 +268,13 @@ def _build_dynamo_preproc(
     if mm_data:
         preproc["multi_modal_data"] = mm_data
 
+    x_request_id = request.get("x_request_id")
+    nvext = request.get("nvext")
+    if x_request_id is None and isinstance(nvext, dict):
+        x_request_id = nvext.get("x_request_id")
+    if isinstance(x_request_id, str) and x_request_id:
+        preproc["x_request_id"] = x_request_id
+
     return preproc
 
 
@@ -493,6 +500,7 @@ class SglangProcessor:
                     sampling_options=dynamo_preproc["sampling_options"],
                     output_options=dynamo_preproc["output_options"],
                     multi_modal_data=dynamo_preproc.get("multi_modal_data"),
+                    x_request_id=dynamo_preproc.get("x_request_id"),
                 )
             else:
                 dynamo_stream = await self.router.generate(

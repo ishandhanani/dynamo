@@ -339,6 +339,7 @@ impl OpenAIPreprocessor {
             // Build routing hints from nvext fields
             let hints = nvext.agent_hints.as_ref();
             builder.request_timestamp_ms(nvext.request_timestamp_ms);
+            builder.x_request_id(nvext.x_request_id.clone());
             builder.agent_context(nvext.agent_context.clone());
             let routing = RoutingHints {
                 backend_instance_id: nvext.backend_instance_id,
@@ -1649,6 +1650,16 @@ impl
             .preprocess_request(&request, tracker.as_deref())
             .await?;
         tracing::trace!(request = ?common_request, prompt_injected_reasoning, "Pre-processed request");
+        let x_request_id = dynamo_runtime::logging::get_distributed_tracing_context()
+            .and_then(|context| context.x_request_id)
+            .or_else(|| {
+                context
+                    .get::<String>(crate::agents::trace::X_REQUEST_ID_CONTEXT_KEY)
+                    .ok()
+                    .map(|value| value.as_ref().clone())
+            })
+            .or_else(|| common_request.x_request_id.clone());
+        common_request.x_request_id = x_request_id.clone();
         let trace_state = if crate::agents::trace::is_enabled() {
             common_request.agent_context.clone().map(|agent_context| {
                 let request_model = common_request.model.clone();
@@ -1657,14 +1668,6 @@ impl
                     &common_request.token_ids,
                     self.kv_cache_block_size,
                 );
-                let x_request_id = dynamo_runtime::logging::get_distributed_tracing_context()
-                    .and_then(|context| context.x_request_id)
-                    .or_else(|| {
-                        context
-                            .get::<String>(crate::agents::trace::X_REQUEST_ID_CONTEXT_KEY)
-                            .ok()
-                            .map(|value| value.as_ref().clone())
-                    });
                 (
                     agent_context,
                     request_model,

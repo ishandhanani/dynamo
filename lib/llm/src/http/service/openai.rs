@@ -44,6 +44,7 @@ use super::{
 };
 use crate::engines::ValidateRequest;
 use crate::protocols::openai::chat_completions::aggregator::ChatCompletionAggregator;
+use crate::protocols::openai::nvext::NvExt;
 use crate::protocols::openai::nvext::apply_header_routing_overrides;
 use crate::protocols::openai::{
     audios::{NvAudioSpeechResponse, NvCreateAudioSpeechRequest},
@@ -379,29 +380,31 @@ pub(super) fn get_or_create_request_id(headers: &HeaderMap) -> String {
 }
 
 fn attach_x_request_id<T: Send + Sync + 'static>(request: &mut Context<T>, headers: &HeaderMap) {
-    if !crate::agents::trace::is_enabled() {
-        return;
+    if let Some(x_request_id) = x_request_id_from_headers(headers) {
+        request.insert(crate::agents::trace::X_REQUEST_ID_CONTEXT_KEY, x_request_id);
     }
+}
 
-    if let Some(x_request_id) = headers
+fn x_request_id_from_headers(headers: &HeaderMap) -> Option<String> {
+    headers
         .get(X_REQUEST_ID_HEADER)
         .and_then(|value| value.to_str().ok())
-    {
-        request.insert(
-            crate::agents::trace::X_REQUEST_ID_CONTEXT_KEY,
-            x_request_id.to_string(),
-        );
-    }
+        .map(ToString::to_string)
+}
+
+fn apply_header_x_request_id(nvext: Option<NvExt>, headers: &HeaderMap) -> Option<NvExt> {
+    let Some(x_request_id) = x_request_id_from_headers(headers) else {
+        return nvext;
+    };
+    let mut ext = nvext.unwrap_or_default();
+    ext.x_request_id = Some(x_request_id);
+    Some(ext)
 }
 
 fn copy_x_request_id<T: Send + Sync + 'static, U: Send + Sync + 'static>(
     source: &Context<T>,
     target: &mut Context<U>,
 ) {
-    if !crate::agents::trace::is_enabled() {
-        return;
-    }
-
     if let Ok(x_request_id) = source.get::<String>(crate::agents::trace::X_REQUEST_ID_CONTEXT_KEY) {
         target.insert(
             crate::agents::trace::X_REQUEST_ID_CONTEXT_KEY,
@@ -426,7 +429,10 @@ async fn handler_completions(
     // return a 503 if the service is not ready
     check_ready(&state)?;
 
-    request.nvext = apply_header_routing_overrides(request.nvext.take(), &headers);
+    request.nvext = apply_header_x_request_id(
+        apply_header_routing_overrides(request.nvext.take(), &headers),
+        &headers,
+    );
 
     // create the context for the request
     let request_id = get_or_create_request_id(&headers);
@@ -908,7 +914,10 @@ async fn handler_chat_completions(
     // return a 503 if the service is not ready
     check_ready(&state)?;
 
-    request.nvext = apply_header_routing_overrides(request.nvext.take(), &headers);
+    request.nvext = apply_header_x_request_id(
+        apply_header_routing_overrides(request.nvext.take(), &headers),
+        &headers,
+    );
 
     // create the context for the request
     let request_id = get_or_create_request_id(&headers);
