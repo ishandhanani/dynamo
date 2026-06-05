@@ -116,11 +116,6 @@ struct CacheHitEstimates {
 const REMOTE_KV_REUSE_PLAN_TTL_MS: u64 = 30_000;
 const REMOTE_G2_REUSE_ENABLED_ENV: &str = "DYN_REMOTE_G2_REUSE_ENABLED";
 const REMOTE_G2_TRACE_ENV: &str = "DYN_REMOTE_G2_TRACE";
-const REMOTE_G2_MIN_PLANNED_BLOCKS_ENV: &str = "DYN_REMOTE_G2_MIN_PLANNED_BLOCKS";
-const REMOTE_G2_SCORE_MULTIPLIER_ENV: &str = "DYN_REMOTE_G2_SCORE_MULTIPLIER";
-const REMOTE_G2_SCORE_TAX_BLOCKS_ENV: &str = "DYN_REMOTE_G2_SCORE_TAX_BLOCKS";
-const REMOTE_G2_SCORE_CAP_BLOCKS_ENV: &str = "DYN_REMOTE_G2_SCORE_CAP_BLOCKS";
-const REMOTE_G2_SCORE_MAX_LOCAL_GAP_BLOCKS_ENV: &str = "DYN_REMOTE_G2_SCORE_MAX_LOCAL_GAP_BLOCKS";
 const SGLANG_SHARED_HICACHE_RUNTIME_KEY: &str = "sglang_shared_hicache";
 
 #[derive(Debug, Clone, Deserialize)]
@@ -182,42 +177,6 @@ fn remote_g2_trace_enabled() -> bool {
             !matches!(normalized.as_str(), "0" | "false" | "no" | "off")
         })
         .unwrap_or(false)
-}
-
-fn remote_g2_min_planned_blocks() -> u32 {
-    env::var(REMOTE_G2_MIN_PLANNED_BLOCKS_ENV)
-        .ok()
-        .and_then(|value| value.parse::<u32>().ok())
-        .unwrap_or(0)
-}
-
-fn remote_g2_score_multiplier() -> f64 {
-    env::var(REMOTE_G2_SCORE_MULTIPLIER_ENV)
-        .ok()
-        .and_then(|value| value.parse::<f64>().ok())
-        .filter(|value| value.is_finite() && *value > 0.0)
-        .unwrap_or(0.0)
-}
-
-fn remote_g2_score_tax_blocks() -> u32 {
-    env::var(REMOTE_G2_SCORE_TAX_BLOCKS_ENV)
-        .ok()
-        .and_then(|value| value.parse::<u32>().ok())
-        .unwrap_or(0)
-}
-
-fn remote_g2_score_cap_blocks() -> Option<u32> {
-    env::var(REMOTE_G2_SCORE_CAP_BLOCKS_ENV)
-        .ok()
-        .and_then(|value| value.parse::<u32>().ok())
-        .filter(|value| *value > 0)
-}
-
-fn remote_g2_score_max_local_gap_blocks() -> Option<f64> {
-    env::var(REMOTE_G2_SCORE_MAX_LOCAL_GAP_BLOCKS_ENV)
-        .ok()
-        .and_then(|value| value.parse::<f64>().ok())
-        .filter(|value| value.is_finite() && *value >= 0.0)
 }
 
 pub(crate) fn attach_remote_kv_reuse_decision(
@@ -300,6 +259,15 @@ fn cache_hit_estimates_from_tiered_matches(
         effective_overlap_blocks,
         cached_tokens,
     }
+}
+
+fn shared_cache_multiplier_for_request(
+    kv_router_config: &KvRouterConfig,
+    router_config_override: Option<&RouterConfigOverride>,
+) -> f64 {
+    router_config_override
+        .and_then(|cfg| cfg.shared_cache_multiplier)
+        .unwrap_or(kv_router_config.shared_cache_multiplier)
 }
 
 fn cache_hit_for_worker(
@@ -721,7 +689,8 @@ where
         // scheduling returns, since `overlap_blocks` isn't known until then.
         let num_blocks = isl_tokens / self.block_size as usize;
         let sc_hits_for_metrics = shared_cache_hits.clone();
-        let remote_g2_score_multiplier = remote_g2_score_multiplier();
+        let remote_g2_score_multiplier =
+            shared_cache_multiplier_for_request(&self.kv_router_config, router_config_override);
         let remote_g2_score_blocks =
             if remote_g2_reuse_enabled() && remote_g2_score_multiplier > 0.0 {
                 let workers = self.workers_with_configs.borrow();
@@ -729,8 +698,8 @@ where
                     &workers,
                     block_hashes.len(),
                     &tiered_matches,
-                    remote_g2_score_tax_blocks(),
-                    remote_g2_score_cap_blocks(),
+                    self.kv_router_config.remote_g2_score_tax_blocks,
+                    self.kv_router_config.remote_g2_score_cap_blocks,
                 )
             } else {
                 HashMap::new()
@@ -754,13 +723,13 @@ where
                 allowed_worker_ids,
                 remote_g2_score_blocks.clone(),
                 remote_g2_score_multiplier,
-                remote_g2_score_max_local_gap_blocks(),
+                self.kv_router_config.remote_g2_score_max_local_gap_blocks,
                 shared_cache_hits,
             )
             .instrument(tracing::info_span!("kv_router.schedule"))
             .await?;
         let created_at_ms = unix_epoch_ms();
-        let min_remote_g2_planned_blocks = remote_g2_min_planned_blocks();
+        let min_remote_g2_planned_blocks = self.kv_router_config.remote_g2_min_planned_blocks;
         let mut remote_kv_reuse = if remote_g2_reuse_enabled() {
             select_remote_g2_reuse_plan(RemoteKvReuseSelectionInput {
                 request_id: context_id.unwrap_or_default(),

@@ -268,6 +268,22 @@ pub struct KvRouterConfig {
     #[validate(range(min = 0.0, max = 1.0))]
     pub shared_cache_multiplier: f64,
 
+    /// Minimum Direct G2 planned blocks required before the router attaches a
+    /// remote reuse plan.
+    pub remote_g2_min_planned_blocks: u32,
+
+    /// Conservative fixed transfer tax, in router blocks, charged before Direct
+    /// G2 remote blocks contribute to worker scoring.
+    pub remote_g2_score_tax_blocks: u32,
+
+    /// Optional cap, in router blocks, on Direct G2 score credit per target.
+    pub remote_g2_score_cap_blocks: Option<u32>,
+
+    /// Optional maximum normal-router score gap, in blocks, within which Direct
+    /// G2 score credit may affect target selection.
+    #[validate(range(min = 0.0))]
+    pub remote_g2_score_max_local_gap_blocks: Option<f64>,
+
     /// Type of external shared KV cache to query during routing.
     /// "none" (default): disabled. "hicache": query sglang workers for L3 cache state.
     pub shared_cache_type: SharedCacheType,
@@ -298,6 +314,10 @@ impl Default for KvRouterConfig {
             use_remote_indexer: false,
             serve_indexer: false,
             shared_cache_multiplier: 0.0,
+            remote_g2_min_planned_blocks: 64,
+            remote_g2_score_tax_blocks: 64,
+            remote_g2_score_cap_blocks: Some(64),
+            remote_g2_score_max_local_gap_blocks: Some(64.0),
             shared_cache_type: SharedCacheType::default(),
         }
     }
@@ -516,5 +536,14 @@ mod tests {
     #[test]
     fn test_kv_router_config_default_shared_cache_multiplier_is_disabled() {
         assert_eq!(KvRouterConfig::default().shared_cache_multiplier, 0.0);
+    }
+
+    #[test]
+    fn test_kv_router_config_defaults_bound_remote_g2_scoring() {
+        let config = KvRouterConfig::default();
+        assert_eq!(config.remote_g2_min_planned_blocks, 64);
+        assert_eq!(config.remote_g2_score_tax_blocks, 64);
+        assert_eq!(config.remote_g2_score_cap_blocks, Some(64));
+        assert_eq!(config.remote_g2_score_max_local_gap_blocks, Some(64.0));
     }
 }
