@@ -20,9 +20,9 @@ use dynamo_kv_router::{
         WorkerWithDpRank, compute_block_hash_for_seq,
     },
     remote_g2_plan::{
-        RemoteKvReuseDecision, RemoteKvReuseNoPlanReason, RemoteKvReuseSelectionInput,
-        RemoteKvReuseSelectionStats, remote_g2_score_blocks_for_target,
-        select_remote_g2_reuse_plan,
+        RemoteKvReuseDecision, RemoteKvReuseNoPlanReason, RemoteKvReusePlan,
+        RemoteKvReuseSelectionInput, RemoteKvReuseSelectionStats,
+        remote_g2_score_blocks_for_target, select_remote_g2_reuse_plan,
     },
     scheduling::TierOverlapBlocks,
 };
@@ -145,6 +145,29 @@ fn shared_hicache_source_route_from_config(
         return None;
     }
     Some(route)
+}
+
+fn remote_g2_plan_incremental_blocks(
+    plan: &RemoteKvReusePlan,
+    target_local_prefix_blocks: u32,
+) -> u32 {
+    let start = plan.start_block_index;
+    let end = start.saturating_add(plan.planned_prefix_blocks);
+    if target_local_prefix_blocks < start || target_local_prefix_blocks >= end {
+        0
+    } else {
+        end - target_local_prefix_blocks
+    }
+}
+
+fn remote_g2_top_up_below_score_tax(
+    plan: &RemoteKvReusePlan,
+    target_local_prefix_blocks: u32,
+    tax_blocks: u32,
+) -> bool {
+    target_local_prefix_blocks > 0
+        && tax_blocks > 0
+        && remote_g2_plan_incremental_blocks(plan, target_local_prefix_blocks) <= tax_blocks
 }
 
 #[derive(Debug, Clone)]
@@ -731,6 +754,8 @@ where
             .await?;
         let created_at_ms = unix_epoch_ms();
         let min_remote_g2_planned_blocks = self.kv_router_config.remote_g2_min_planned_blocks;
+        let remote_g2_score_tax_blocks = self.kv_router_config.remote_g2_score_tax_blocks;
+        let target_local_prefix_blocks = response.effective_overlap_blocks.round().max(0.0) as u32;
         let mut remote_kv_reuse = if remote_g2_reuse_enabled() {
             select_remote_g2_reuse_plan(RemoteKvReuseSelectionInput {
                 request_id: context_id.unwrap_or_default(),
@@ -754,6 +779,18 @@ where
         {
             remote_kv_reuse = RemoteKvReuseDecision::NoPlan {
                 reason: RemoteKvReuseNoPlanReason::BelowMinPlannedBlocks,
+                stats: *stats,
+            };
+        }
+        if let RemoteKvReuseDecision::Plan { plan, stats } = &remote_kv_reuse
+            && remote_g2_top_up_below_score_tax(
+                plan,
+                target_local_prefix_blocks,
+                remote_g2_score_tax_blocks,
+            )
+        {
+            remote_kv_reuse = RemoteKvReuseDecision::NoPlan {
+                reason: RemoteKvReuseNoPlanReason::BelowScoreTax,
                 stats: *stats,
             };
         }
@@ -815,6 +852,16 @@ where
                         let stats_copy = *plan_stats;
                         remote_kv_reuse = RemoteKvReuseDecision::NoPlan {
                             reason: RemoteKvReuseNoPlanReason::BelowMinPlannedBlocks,
+                            stats: stats_copy,
+                        };
+                    } else if remote_g2_top_up_below_score_tax(
+                        plan,
+                        target_local_prefix_blocks,
+                        remote_g2_score_tax_blocks,
+                    ) {
+                        let stats_copy = *plan_stats;
+                        remote_kv_reuse = RemoteKvReuseDecision::NoPlan {
+                            reason: RemoteKvReuseNoPlanReason::BelowScoreTax,
                             stats: stats_copy,
                         };
                     } else {
@@ -1517,6 +1564,27 @@ mod tests {
             plan_version: REMOTE_KV_REUSE_PLAN_VERSION,
             engine_block_hashes: vec![],
         }
+    }
+
+    #[test]
+    fn remote_g2_top_up_score_tax_preserves_cold_root_plans() {
+        let mut plan = remote_g2_test_plan();
+        plan.start_block_index = 0;
+        plan.planned_prefix_blocks = 256;
+
+        assert_eq!(remote_g2_plan_incremental_blocks(&plan, 0), 256);
+        assert!(!remote_g2_top_up_below_score_tax(&plan, 0, 2048));
+    }
+
+    #[test]
+    fn remote_g2_top_up_score_tax_applies_to_target_local_plans() {
+        let mut plan = remote_g2_test_plan();
+        plan.start_block_index = 0;
+        plan.planned_prefix_blocks = 512;
+
+        assert_eq!(remote_g2_plan_incremental_blocks(&plan, 384), 128);
+        assert!(remote_g2_top_up_below_score_tax(&plan, 384, 2048));
+        assert!(!remote_g2_top_up_below_score_tax(&plan, 384, 64));
     }
 
     #[test]

@@ -273,7 +273,8 @@ pub struct KvRouterConfig {
     pub remote_g2_min_planned_blocks: u32,
 
     /// Conservative fixed transfer tax, in router blocks, charged before Direct
-    /// G2 remote blocks contribute to worker scoring.
+    /// G2 remote blocks contribute to worker scoring. Target-local top-up plans
+    /// must also exceed this incremental-block tax before being attached.
     pub remote_g2_score_tax_blocks: u32,
 
     /// Optional cap, in router blocks, on Direct G2 score credit per target.
@@ -315,7 +316,7 @@ impl Default for KvRouterConfig {
             serve_indexer: false,
             shared_cache_multiplier: 0.0,
             remote_g2_min_planned_blocks: 64,
-            remote_g2_score_tax_blocks: 64,
+            remote_g2_score_tax_blocks: 8192,
             remote_g2_score_cap_blocks: Some(64),
             remote_g2_score_max_local_gap_blocks: Some(64.0),
             shared_cache_type: SharedCacheType::default(),
@@ -542,7 +543,7 @@ mod tests {
     fn test_kv_router_config_defaults_bound_remote_g2_scoring() {
         let config = KvRouterConfig::default();
         assert_eq!(config.remote_g2_min_planned_blocks, 64);
-        assert_eq!(config.remote_g2_score_tax_blocks, 64);
+        assert_eq!(config.remote_g2_score_tax_blocks, 8192);
         assert_eq!(config.remote_g2_score_cap_blocks, Some(64));
         assert_eq!(config.remote_g2_score_max_local_gap_blocks, Some(64.0));
     }

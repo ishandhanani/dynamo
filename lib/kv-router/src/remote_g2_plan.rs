@@ -47,6 +47,7 @@ pub enum RemoteKvReuseNoPlanReason {
     NoRemoteG2Candidate,
     NoContiguousPrefix,
     BelowMinPlannedBlocks,
+    BelowScoreTax,
     SourceIsTarget,
     IncompatibleBlockSize,
     PlanExpired,
@@ -61,6 +62,7 @@ impl RemoteKvReuseNoPlanReason {
             Self::NoRemoteG2Candidate => "no_remote_g2_candidate",
             Self::NoContiguousPrefix => "no_contiguous_prefix",
             Self::BelowMinPlannedBlocks => "below_min_planned_blocks",
+            Self::BelowScoreTax => "below_score_tax",
             Self::SourceIsTarget => "source_is_target",
             Self::IncompatibleBlockSize => "incompatible_block_size",
             Self::PlanExpired => "plan_expired",
@@ -458,6 +460,8 @@ mod tests {
     fn no_plan_reason_is_low_cardinality_snake_case() {
         let json = serde_json::to_string(&RemoteKvReuseNoPlanReason::NoRemoteG2Candidate).unwrap();
         assert_eq!(json, "\"no_remote_g2_candidate\"");
+        let json = serde_json::to_string(&RemoteKvReuseNoPlanReason::BelowScoreTax).unwrap();
+        assert_eq!(json, "\"below_score_tax\"");
     }
 
     #[test]
