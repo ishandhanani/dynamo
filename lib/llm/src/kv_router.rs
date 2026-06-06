@@ -163,10 +163,12 @@ fn remote_g2_plan_incremental_blocks(
 fn remote_g2_top_up_below_score_tax(
     plan: &RemoteKvReusePlan,
     target_local_prefix_blocks: u32,
+    min_meaningful_local_prefix_blocks: u32,
     tax_blocks: u32,
 ) -> bool {
-    target_local_prefix_blocks > 0
-        && tax_blocks > 0
+    let meaningful_local_prefix_blocks = min_meaningful_local_prefix_blocks.max(1);
+    tax_blocks > 0
+        && target_local_prefix_blocks >= meaningful_local_prefix_blocks
         && remote_g2_plan_incremental_blocks(plan, target_local_prefix_blocks) <= tax_blocks
 }
 
@@ -786,6 +788,7 @@ where
             && remote_g2_top_up_below_score_tax(
                 plan,
                 target_local_prefix_blocks,
+                min_remote_g2_planned_blocks,
                 remote_g2_score_tax_blocks,
             )
         {
@@ -857,6 +860,7 @@ where
                     } else if remote_g2_top_up_below_score_tax(
                         plan,
                         target_local_prefix_blocks,
+                        min_remote_g2_planned_blocks,
                         remote_g2_score_tax_blocks,
                     ) {
                         let stats_copy = *plan_stats;
@@ -1573,7 +1577,11 @@ mod tests {
         plan.planned_prefix_blocks = 256;
 
         assert_eq!(remote_g2_plan_incremental_blocks(&plan, 0), 256);
-        assert!(!remote_g2_top_up_below_score_tax(&plan, 0, 2048));
+        assert!(!remote_g2_top_up_below_score_tax(&plan, 0, 64, 2048));
+
+        assert_eq!(remote_g2_plan_incremental_blocks(&plan, 1), 255);
+        assert!(!remote_g2_top_up_below_score_tax(&plan, 1, 64, 2048));
+        assert!(remote_g2_top_up_below_score_tax(&plan, 1, 0, 2048));
     }
 
     #[test]
@@ -1583,8 +1591,8 @@ mod tests {
         plan.planned_prefix_blocks = 512;
 
         assert_eq!(remote_g2_plan_incremental_blocks(&plan, 384), 128);
-        assert!(remote_g2_top_up_below_score_tax(&plan, 384, 2048));
-        assert!(!remote_g2_top_up_below_score_tax(&plan, 384, 64));
+        assert!(remote_g2_top_up_below_score_tax(&plan, 384, 64, 2048));
+        assert!(!remote_g2_top_up_below_score_tax(&plan, 384, 64, 64));
     }
 
     #[test]
