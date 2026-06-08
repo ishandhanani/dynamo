@@ -82,20 +82,6 @@ fn softmax_sample_with_sample(
     *entries.last().unwrap()
 }
 
-/// Read DYN_ROUTER_LOAD_BLOCK_SIZE once. When set to a positive integer it
-/// replaces `block_size` in the load-metric portion of `worker_logit`; the
-/// indexer / hash sequence / worker-event matching are untouched.
-fn load_block_size_override() -> Option<u32> {
-    use std::sync::OnceLock;
-    static OVERRIDE: OnceLock<Option<u32>> = OnceLock::new();
-    *OVERRIDE.get_or_init(|| {
-        std::env::var("DYN_ROUTER_LOAD_BLOCK_SIZE")
-            .ok()
-            .and_then(|v| v.parse::<u32>().ok())
-            .filter(|v| *v > 0)
-    })
-}
-
 /// Default implementation matching the Python _cost_function.
 #[derive(Debug, Clone)]
 pub struct DefaultWorkerSelector {
@@ -137,9 +123,18 @@ impl DefaultWorkerSelector {
             } else {
                 (prefill_token, 0)
             };
-        let remote_g2_score_blocks = if apply_remote_g2_score {
+        let remote_g2_benefit_blocks = if apply_remote_g2_score {
             request
-                .remote_g2_score_blocks
+                .remote_g2_benefit_blocks
+                .get(&worker)
+                .copied()
+                .unwrap_or(0)
+        } else {
+            0
+        };
+        let remote_g2_cost_blocks = if apply_remote_g2_score {
+            request
+                .remote_g2_cost_blocks
                 .get(&worker)
                 .copied()
                 .unwrap_or(0)
@@ -153,34 +148,29 @@ impl DefaultWorkerSelector {
         } else {
             0.0
         };
-        let remote_g2_reduction =
-            remote_g2_score_multiplier * remote_g2_score_blocks as f64 * block_size as f64;
+        let remote_g2_reduction_blocks = (remote_g2_score_multiplier
+            * remote_g2_benefit_blocks as f64
+            - remote_g2_cost_blocks as f64)
+            .max(0.0);
+        let remote_g2_reduction = remote_g2_reduction_blocks * block_size as f64;
         let adjusted_prefill_token =
             (prefill_after_shared_cache as f64 - remote_g2_reduction).max(0.0) as usize;
 
-        // DYN_ROUTER_LOAD_BLOCK_SIZE: override the divisor used for the load
-        // metric only. When set, the score derives directly from the active
-        // prefill-token sum instead of the (coarser) tracker block count,
-        // giving finer ISL discrimination without re-hashing.
-        let load_block_size = load_block_size_override().unwrap_or(block_size);
-        let potential_prefill_block = (adjusted_prefill_token as f64) / (load_block_size as f64);
-        let decode_block = if load_block_size_override().is_some() {
-            (prefill_token as f64) / (load_block_size as f64)
-        } else {
-            let decode_block_fallback = (prefill_token as f64) / (block_size as f64);
-            request
-                .decode_blocks
-                .get(&worker)
-                .copied()
-                .unwrap_or(decode_block_fallback.floor() as usize) as f64
-        };
+        let potential_prefill_block = (adjusted_prefill_token as f64) / (block_size as f64);
+        let decode_block_fallback = (prefill_token as f64) / (block_size as f64);
+        let decode_block = request
+            .decode_blocks
+            .get(&worker)
+            .copied()
+            .unwrap_or(decode_block_fallback.floor() as usize) as f64;
         let logit = overlap_weight * potential_prefill_block + decode_block;
 
-        if shared_beyond > 0 || remote_g2_score_blocks > 0 {
+        if shared_beyond > 0 || remote_g2_benefit_blocks > 0 {
             tracing::debug!(
                 "{formula_name} for worker_id={} dp_rank={:?} with {effective_overlap_blocks:.2} effective device blocks, \
                  {shared_beyond} shared blocks beyond device (multiplier={shared_cache_multiplier:.2}), \
-                 {remote_g2_score_blocks} remote G2 score blocks (multiplier={remote_g2_score_multiplier:.2}): {logit:.3} \
+                 {remote_g2_benefit_blocks} remote G2 benefit blocks minus {remote_g2_cost_blocks} cost blocks \
+                 (multiplier={remote_g2_score_multiplier:.2}, effective_score={remote_g2_reduction_blocks:.2}): {logit:.3} \
                  = {overlap_weight:.1} * adjusted_prefill_blocks + decode_blocks \
                  = {overlap_weight:.1} * {potential_prefill_block:.3} + {decode_block:.3} \
                  (prefill_tokens: {prefill_token} -> {adjusted_prefill_token})",
@@ -288,7 +278,7 @@ impl<C: WorkerConfigLike> WorkerSelector<C> for DefaultWorkerSelector {
             .remote_g2_score_max_local_gap_blocks
             .filter(|gap| gap.is_finite() && *gap >= 0.0)
             .and_then(|gap| {
-                (!request.remote_g2_score_blocks.is_empty()).then(|| {
+                (!request.remote_g2_benefit_blocks.is_empty()).then(|| {
                     let mut base_logits = FxHashMap::default();
                     let mut best_base_logit = f64::INFINITY;
                     for &worker in &worker_vec {
@@ -593,7 +583,8 @@ mod tests {
             pinned_worker: None,
             allowed_worker_ids: None,
             shared_cache_hits: Some(shared_hits),
-            remote_g2_score_blocks: Default::default(),
+            remote_g2_cost_blocks: Default::default(),
+            remote_g2_benefit_blocks: Default::default(),
             remote_g2_score_multiplier: 0.0,
             remote_g2_score_max_local_gap_blocks: None,
             resp_tx: Some(tx),
@@ -610,11 +601,11 @@ mod tests {
         );
     }
 
-    /// Remote G2 score blocks reduce prefill cost for the target/source pair
+    /// Remote G2 benefit blocks reduce prefill cost for the target/source pair
     /// the router can actually plan. This mirrors shared-cache scoring but uses
     /// a Dynamo-computed per-worker block count instead of querying Mooncake.
     #[test]
-    fn test_remote_g2_score_blocks_scoring() {
+    fn test_remote_g2_benefit_blocks_scoring() {
         use crate::test_utils::SimpleWorkerConfig;
 
         let block_size = 1u32;
@@ -624,6 +615,9 @@ mod tests {
 
         let mut effective_overlap_blocks = HashMap::new();
         effective_overlap_blocks.insert(worker0, 2.0);
+        let mut prefill_tokens = FxHashMap::default();
+        prefill_tokens.insert(worker0, 3);
+        prefill_tokens.insert(worker1, 4);
 
         let config = KvRouterConfig {
             overlap_score_weight: 1.0,
@@ -645,7 +639,7 @@ mod tests {
             effective_overlap_blocks,
             effective_cached_tokens: HashMap::new(),
             decode_blocks: FxHashMap::default(),
-            prefill_tokens: FxHashMap::default(),
+            prefill_tokens,
             track_prefill_tokens: true,
             router_config_override: None,
             update_states: false,
@@ -655,7 +649,8 @@ mod tests {
             pinned_worker: None,
             allowed_worker_ids: None,
             shared_cache_hits: None,
-            remote_g2_score_blocks: HashMap::from([(worker1, 3)]),
+            remote_g2_cost_blocks: Default::default(),
+            remote_g2_benefit_blocks: HashMap::from([(worker1, 3)]),
             remote_g2_score_multiplier: 1.0,
             remote_g2_score_max_local_gap_blocks: None,
             resp_tx: Some(tx),
@@ -667,8 +662,127 @@ mod tests {
 
         assert_eq!(
             result.worker, worker1,
-            "Worker 1 should be selected by remote G2 score reduction"
+            "Worker 1 should be selected by remote G2 benefit reduction"
         );
+    }
+
+    #[test]
+    fn test_remote_g2_cost_blocks_are_charged_after_multiplier() {
+        use crate::test_utils::SimpleWorkerConfig;
+
+        let block_size = 1u32;
+        let isl = 10usize;
+        let worker0 = WorkerWithDpRank::from_worker_id(0);
+        let worker1 = WorkerWithDpRank::from_worker_id(1);
+
+        let mut prefill_tokens = FxHashMap::default();
+        prefill_tokens.insert(worker0, 9);
+        prefill_tokens.insert(worker1, 10);
+
+        let config = KvRouterConfig {
+            overlap_score_weight: 1.0,
+            router_temperature: 0.0,
+            ..Default::default()
+        };
+
+        let selector = DefaultWorkerSelector::new(Some(config), "test");
+        let mut workers = HashMap::new();
+        workers.insert(0, SimpleWorkerConfig::default());
+        workers.insert(1, SimpleWorkerConfig::default());
+
+        let (tx, _rx) = tokio::sync::oneshot::channel();
+        let request = SchedulingRequest {
+            maybe_request_id: Some("test".into()),
+            token_seq: None,
+            isl_tokens: isl,
+            tier_overlap_blocks: Default::default(),
+            effective_overlap_blocks: Default::default(),
+            effective_cached_tokens: HashMap::new(),
+            decode_blocks: FxHashMap::default(),
+            prefill_tokens,
+            track_prefill_tokens: true,
+            router_config_override: None,
+            update_states: false,
+            lora_name: None,
+            priority_jump: 0.0,
+            expected_output_tokens: None,
+            pinned_worker: None,
+            allowed_worker_ids: None,
+            shared_cache_hits: None,
+            remote_g2_cost_blocks: HashMap::from([(worker1, 6)]),
+            remote_g2_benefit_blocks: HashMap::from([(worker1, 10)]),
+            remote_g2_score_multiplier: 0.5,
+            remote_g2_score_max_local_gap_blocks: None,
+            resp_tx: Some(tx),
+        };
+
+        let result = selector
+            .select_worker(&workers, &request, block_size)
+            .unwrap();
+
+        assert_eq!(
+            result.worker, worker0,
+            "Remote G2 cost should be an absolute penalty after weighting benefit"
+        );
+    }
+
+    #[test]
+    fn test_remote_g2_benefit_blocks_can_preserve_selected_base_winner() {
+        use crate::test_utils::SimpleWorkerConfig;
+
+        let block_size = 1u32;
+        let isl = 4usize;
+        let worker0 = WorkerWithDpRank::from_worker_id(0);
+        let worker1 = WorkerWithDpRank::from_worker_id(1);
+
+        let mut effective_overlap_blocks = HashMap::new();
+        effective_overlap_blocks.insert(worker0, 2.0);
+        let mut prefill_tokens = FxHashMap::default();
+        prefill_tokens.insert(worker0, 2);
+        prefill_tokens.insert(worker1, 4);
+
+        let config = KvRouterConfig {
+            overlap_score_weight: 1.0,
+            router_temperature: 0.0,
+            ..Default::default()
+        };
+
+        let selector = DefaultWorkerSelector::new(Some(config), "test");
+        let mut workers = HashMap::new();
+        workers.insert(0, SimpleWorkerConfig::default());
+        workers.insert(1, SimpleWorkerConfig::default());
+
+        let (tx, _rx) = tokio::sync::oneshot::channel();
+        let request = SchedulingRequest {
+            maybe_request_id: Some("test".into()),
+            token_seq: None,
+            isl_tokens: isl,
+            tier_overlap_blocks: Default::default(),
+            effective_overlap_blocks,
+            effective_cached_tokens: HashMap::new(),
+            decode_blocks: FxHashMap::default(),
+            prefill_tokens,
+            track_prefill_tokens: true,
+            router_config_override: None,
+            update_states: false,
+            lora_name: None,
+            priority_jump: 0.0,
+            expected_output_tokens: None,
+            pinned_worker: None,
+            allowed_worker_ids: None,
+            shared_cache_hits: None,
+            remote_g2_cost_blocks: Default::default(),
+            remote_g2_benefit_blocks: HashMap::from([(worker0, 1)]),
+            remote_g2_score_multiplier: 1.0,
+            remote_g2_score_max_local_gap_blocks: None,
+            resp_tx: Some(tx),
+        };
+
+        let result = selector
+            .select_worker(&workers, &request, block_size)
+            .unwrap();
+
+        assert_eq!(result.worker, worker0);
     }
 
     #[test]
@@ -717,7 +831,8 @@ mod tests {
             pinned_worker: None,
             allowed_worker_ids: None,
             shared_cache_hits: None,
-            remote_g2_score_blocks: HashMap::from([(worker1, 100)]),
+            remote_g2_cost_blocks: Default::default(),
+            remote_g2_benefit_blocks: HashMap::from([(worker1, 100)]),
             remote_g2_score_multiplier: 1.0,
             remote_g2_score_max_local_gap_blocks: Some(16.0),
             resp_tx: Some(tx),
@@ -729,7 +844,7 @@ mod tests {
 
         assert_eq!(
             result.worker, worker0,
-            "Worker 1's remote score should be ignored because its base score is outside the local gap"
+            "Worker 1's remote benefit should be ignored because its base score is outside the local gap"
         );
     }
 
@@ -769,7 +884,8 @@ mod tests {
             pinned_worker: None,
             allowed_worker_ids: None,
             shared_cache_hits: None,
-            remote_g2_score_blocks: Default::default(),
+            remote_g2_cost_blocks: Default::default(),
+            remote_g2_benefit_blocks: Default::default(),
             remote_g2_score_multiplier: 0.0,
             remote_g2_score_max_local_gap_blocks: None,
             resp_tx: Some(tx),

@@ -1,10 +1,14 @@
 // SPDX-FileCopyrightText: Copyright (c) 2024-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
+use std::collections::HashMap;
+
 use serde::{Deserialize, Serialize};
 
 use crate::indexer::TieredMatchDetails;
-use crate::protocols::{DpRank, LocalBlockHash, StorageTier, WorkerId, WorkerWithDpRank};
+use crate::protocols::{
+    DpRank, LocalBlockHash, StorageTier, WorkerConfigLike, WorkerId, WorkerWithDpRank,
+};
 
 pub const REMOTE_KV_REUSE_PLAN_EXTRA_ARGS_KEY: &str = "remote_kv_reuse_plan";
 pub const REMOTE_KV_REUSE_NO_PLAN_REASON_EXTRA_ARGS_KEY: &str = "remote_kv_reuse_no_plan_reason";
@@ -18,9 +22,17 @@ pub struct RemoteKvReusePlan {
     pub target_dp_rank: DpRank,
     pub source_worker_id: WorkerId,
     pub source_dp_rank: DpRank,
+    /// Source route copied from the selected source worker's registered runtime
+    /// metadata after target selection.
     pub source_host: String,
+    /// Bootstrap port paired with `source_host` by the source worker's runtime
+    /// metadata. The candidate query never receives arbitrary endpoints.
     pub source_bootstrap_port: u16,
     pub source_tier: StorageTier,
+    /// Router-computed token block hashes for the contiguous planned request
+    /// interval. These identify the route and request alignment, and they may
+    /// differ in value from `engine_block_hashes` because the engine can use a
+    /// different sequence hash.
     pub router_block_hashes: Vec<LocalBlockHash>,
     /// Position in the request's prefix where `router_block_hashes[0]` lives.
     /// Equals the source worker's device-tier match count at plan time.
@@ -32,9 +44,10 @@ pub struct RemoteKvReusePlan {
     pub created_at_ms: u64,
     pub expires_at_ms: u64,
     pub plan_version: u32,
-    /// Parallel to `router_block_hashes`, carrying each block's framework
-    /// KV-event hash. The source framework uses these values to look up actual
-    /// HostPinned blocks; `router_block_hashes` remains the plan identity.
+    /// Parallel to `router_block_hashes` once a plan is attached to the request,
+    /// carrying each block's framework KV-event hash. The source framework uses
+    /// these values to look up actual HostPinned blocks; `router_block_hashes`
+    /// remains the router-visible plan identity.
     pub engine_block_hashes: Vec<u64>,
 }
 
@@ -106,6 +119,227 @@ pub struct RemoteKvReuseCandidate {
     pub planned_prefix_blocks: usize,
     pub incremental_blocks: usize,
 }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RemoteG2ScoredCandidate {
+    pub candidate: RemoteKvReuseCandidate,
+    /// Transfer benefit before fixed/per-block cost. This is capped by
+    /// `score_cap_blocks` when configured.
+    pub benefit_blocks: u32,
+    /// Estimated transfer cost charged after the scheduler weights
+    /// `benefit_blocks`. The query boundary keeps the cost attached to the same
+    /// candidate that may later become the plan.
+    pub cost_blocks: u32,
+    /// Candidate benefit after cost/cap before applying the shared-cache
+    /// multiplier. This remains useful for metrics and zero-score accounting.
+    pub score_blocks: u32,
+}
+
+/// Direct G2 analogue of a shared-cache lookup.
+///
+/// The router first queries device/lower-tier availability, then this query
+/// derives per-target Direct G2 candidates plus an estimated transfer cost. The
+/// scheduler consumes benefit and cost maps; after target selection the router
+/// reuses the selected candidate to attach the actual transfer plan.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct RemoteG2CandidateQueryResult {
+    pub scored_candidates: HashMap<WorkerWithDpRank, RemoteG2ScoredCandidate>,
+    pub benefit_blocks_by_target: HashMap<WorkerWithDpRank, u32>,
+    pub cost_blocks_by_target: HashMap<WorkerWithDpRank, u32>,
+    pub score_blocks_by_target: HashMap<WorkerWithDpRank, u32>,
+}
+
+impl RemoteG2CandidateQueryResult {
+    pub fn from_scored_candidates(
+        scored_candidates: HashMap<WorkerWithDpRank, RemoteG2ScoredCandidate>,
+    ) -> Self {
+        let benefit_blocks_by_target = scored_candidates
+            .iter()
+            .filter_map(|(target, candidate)| {
+                (candidate.benefit_blocks > 0).then_some((*target, candidate.benefit_blocks))
+            })
+            .collect();
+        let cost_blocks_by_target = scored_candidates
+            .iter()
+            .filter_map(|(target, candidate)| {
+                (candidate.benefit_blocks > 0).then_some((*target, candidate.cost_blocks))
+            })
+            .collect();
+        let score_blocks_by_target = scored_candidates
+            .iter()
+            .filter_map(|(target, candidate)| {
+                (candidate.score_blocks > 0).then_some((*target, candidate.score_blocks))
+            })
+            .collect();
+        Self {
+            scored_candidates,
+            benefit_blocks_by_target,
+            cost_blocks_by_target,
+            score_blocks_by_target,
+        }
+    }
+
+    pub fn selected_candidate(&self, target: WorkerWithDpRank) -> Option<RemoteG2ScoredCandidate> {
+        self.scored_candidates.get(&target).copied()
+    }
+
+    pub fn scored_candidate_count(&self) -> usize {
+        self.scored_candidates.len()
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum RemoteG2CostModel {
+    FixedPlusPerBlock { fixed_blocks: u32, per_block: f64 },
+}
+
+impl RemoteG2CostModel {
+    pub const fn fixed_blocks(blocks: u32) -> Self {
+        Self::FixedPlusPerBlock {
+            fixed_blocks: blocks,
+            per_block: 0.0,
+        }
+    }
+
+    pub const fn fixed_plus_per_block(fixed_blocks: u32, per_block: f64) -> Self {
+        Self::FixedPlusPerBlock {
+            fixed_blocks,
+            per_block,
+        }
+    }
+
+    fn estimate_blocks_for_candidate(
+        &self,
+        _target: WorkerWithDpRank,
+        _request_blocks: usize,
+        _tiered_matches: &TieredMatchDetails,
+        candidate: &RemoteKvReuseCandidate,
+    ) -> u32 {
+        match self {
+            Self::FixedPlusPerBlock {
+                fixed_blocks,
+                per_block,
+            } => {
+                let variable_cost = if per_block.is_finite() && *per_block > 0.0 {
+                    ((*per_block * candidate.incremental_blocks as f64).ceil() as u64)
+                        .min(u32::MAX as u64) as u32
+                } else {
+                    0
+                };
+                fixed_blocks.saturating_add(variable_cost)
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct RemoteG2CandidateQueryPolicy {
+    pub cost_model: RemoteG2CostModel,
+    pub score_cap_blocks: Option<u32>,
+}
+
+impl RemoteG2CandidateQueryPolicy {
+    pub const fn fixed_cost(fixed_cost_blocks: u32, score_cap_blocks: Option<u32>) -> Self {
+        Self {
+            cost_model: RemoteG2CostModel::fixed_blocks(fixed_cost_blocks),
+            score_cap_blocks,
+        }
+    }
+
+    pub const fn fixed_plus_per_block_cost(
+        fixed_cost_blocks: u32,
+        per_block_cost: f64,
+        score_cap_blocks: Option<u32>,
+    ) -> Self {
+        Self {
+            cost_model: RemoteG2CostModel::fixed_plus_per_block(fixed_cost_blocks, per_block_cost),
+            score_cap_blocks,
+        }
+    }
+
+    pub const fn fixed(fixed_cost_blocks: u32, score_cap_blocks: Option<u32>) -> Self {
+        Self::fixed_cost(fixed_cost_blocks, score_cap_blocks)
+    }
+
+    fn score_blocks_for_candidate(
+        &self,
+        target: WorkerWithDpRank,
+        request_blocks: usize,
+        tiered_matches: &TieredMatchDetails,
+        candidate: &RemoteKvReuseCandidate,
+    ) -> (u32, u32, u32) {
+        let cost_blocks = self.cost_model.estimate_blocks_for_candidate(
+            target,
+            request_blocks,
+            tiered_matches,
+            candidate,
+        );
+        let benefit_blocks: u32 = candidate.incremental_blocks.try_into().unwrap_or(u32::MAX);
+        let benefit_blocks = match self.score_cap_blocks.filter(|cap| *cap > 0) {
+            Some(cap) => benefit_blocks.min(cap),
+            None => benefit_blocks,
+        };
+        let score_blocks = benefit_blocks.saturating_sub(cost_blocks);
+        (cost_blocks, benefit_blocks, score_blocks)
+    }
+
+    pub fn scored_candidate_for_target(
+        &self,
+        target: WorkerWithDpRank,
+        request_blocks: usize,
+        tiered_matches: &TieredMatchDetails,
+    ) -> Option<RemoteG2ScoredCandidate> {
+        let candidate =
+            best_remote_g2_candidate_for_target(target, request_blocks, tiered_matches)?;
+        let (cost_blocks, benefit_blocks, score_blocks) =
+            self.score_blocks_for_candidate(target, request_blocks, tiered_matches, &candidate);
+        Some(RemoteG2ScoredCandidate {
+            candidate,
+            benefit_blocks,
+            cost_blocks,
+            score_blocks,
+        })
+    }
+
+    pub fn scored_candidates_by_target<C: WorkerConfigLike>(
+        &self,
+        workers: &HashMap<WorkerId, C>,
+        request_blocks: usize,
+        tiered_matches: &TieredMatchDetails,
+    ) -> HashMap<WorkerWithDpRank, RemoteG2ScoredCandidate> {
+        let mut candidates = HashMap::new();
+
+        for (&worker_id, config) in workers {
+            let dp_start = config.data_parallel_start_rank();
+            let dp_end = dp_start.saturating_add(config.data_parallel_size());
+            for dp_rank in dp_start..dp_end {
+                let target = WorkerWithDpRank::new(worker_id, dp_rank);
+                if let Some(candidate) =
+                    self.scored_candidate_for_target(target, request_blocks, tiered_matches)
+                {
+                    candidates.insert(target, candidate);
+                }
+            }
+        }
+
+        candidates
+    }
+
+    pub fn query_candidates_by_target<C: WorkerConfigLike>(
+        &self,
+        workers: &HashMap<WorkerId, C>,
+        request_blocks: usize,
+        tiered_matches: &TieredMatchDetails,
+    ) -> RemoteG2CandidateQueryResult {
+        RemoteG2CandidateQueryResult::from_scored_candidates(self.scored_candidates_by_target(
+            workers,
+            request_blocks,
+            tiered_matches,
+        ))
+    }
+}
+
+pub type RemoteG2ScoringPolicy = RemoteG2CandidateQueryPolicy;
 
 fn device_match_blocks(tiered_matches: &TieredMatchDetails, worker: WorkerWithDpRank) -> usize {
     tiered_matches
@@ -241,55 +475,86 @@ pub fn remote_g2_score_blocks_for_target(
     tax_blocks: u32,
     cap_blocks: Option<u32>,
 ) -> u32 {
-    if local_prefix_blocks(tiered_matches, target, request_blocks) == 0 {
-        return 0;
-    }
-    let Some(candidate) =
-        best_remote_g2_candidate_for_target(target, request_blocks, tiered_matches)
-    else {
-        return 0;
-    };
-    let score_blocks: u32 = candidate
-        .incremental_blocks
-        .saturating_sub(tax_blocks as usize)
-        .try_into()
-        .unwrap_or(u32::MAX);
-    match cap_blocks.filter(|cap| *cap > 0) {
-        Some(cap) => score_blocks.min(cap),
-        None => score_blocks,
-    }
+    RemoteG2CandidateQueryPolicy::fixed_cost(tax_blocks, cap_blocks)
+        .scored_candidate_for_target(target, request_blocks, tiered_matches)
+        .map(|candidate| candidate.score_blocks)
+        .unwrap_or(0)
 }
 
-pub fn select_remote_g2_reuse_plan(
-    input: RemoteKvReuseSelectionInput<'_>,
-) -> RemoteKvReuseDecision {
-    let stats = RemoteKvReuseSelectionStats {
-        rejected_g1_candidates: input
-            .tiered_matches
+pub fn remote_g2_scored_candidates_by_target<C: WorkerConfigLike>(
+    workers: &HashMap<WorkerId, C>,
+    request_blocks: usize,
+    tiered_matches: &TieredMatchDetails,
+    tax_blocks: u32,
+    cap_blocks: Option<u32>,
+) -> HashMap<WorkerWithDpRank, RemoteG2ScoredCandidate> {
+    RemoteG2CandidateQueryPolicy::fixed_cost(tax_blocks, cap_blocks).scored_candidates_by_target(
+        workers,
+        request_blocks,
+        tiered_matches,
+    )
+}
+
+pub fn remote_g2_scored_candidate_for_target(
+    target: WorkerWithDpRank,
+    request_blocks: usize,
+    tiered_matches: &TieredMatchDetails,
+    tax_blocks: u32,
+    cap_blocks: Option<u32>,
+) -> Option<RemoteG2ScoredCandidate> {
+    RemoteG2CandidateQueryPolicy::fixed_cost(tax_blocks, cap_blocks).scored_candidate_for_target(
+        target,
+        request_blocks,
+        tiered_matches,
+    )
+}
+
+pub fn remote_g2_candidate_query_by_target<C: WorkerConfigLike>(
+    workers: &HashMap<WorkerId, C>,
+    request_blocks: usize,
+    tiered_matches: &TieredMatchDetails,
+    tax_blocks: u32,
+    cap_blocks: Option<u32>,
+) -> RemoteG2CandidateQueryResult {
+    remote_g2_candidate_query_by_target_with_cost(
+        workers,
+        request_blocks,
+        tiered_matches,
+        tax_blocks,
+        cap_blocks,
+        0.0,
+    )
+}
+
+pub fn remote_g2_candidate_query_by_target_with_cost<C: WorkerConfigLike>(
+    workers: &HashMap<WorkerId, C>,
+    request_blocks: usize,
+    tiered_matches: &TieredMatchDetails,
+    tax_blocks: u32,
+    cap_blocks: Option<u32>,
+    cost_per_block: f64,
+) -> RemoteG2CandidateQueryResult {
+    RemoteG2CandidateQueryPolicy::fixed_plus_per_block_cost(tax_blocks, cost_per_block, cap_blocks)
+        .query_candidates_by_target(workers, request_blocks, tiered_matches)
+}
+
+fn remote_g2_selection_stats(tiered_matches: &TieredMatchDetails) -> RemoteKvReuseSelectionStats {
+    RemoteKvReuseSelectionStats {
+        rejected_g1_candidates: tiered_matches
             .device
             .overlap_scores
             .scores
             .values()
             .filter(|&&overlap| overlap > 0)
             .count() as u32,
-    };
+    }
+}
 
-    let request_blocks = input.block_hashes.len();
-    let saw_remote_candidate =
-        has_remote_g2_candidate(input.target, request_blocks, input.tiered_matches);
-    let Some(best) =
-        best_remote_g2_candidate_for_target(input.target, request_blocks, input.tiered_matches)
-    else {
-        return RemoteKvReuseDecision::NoPlan {
-            reason: if saw_remote_candidate {
-                RemoteKvReuseNoPlanReason::NoContiguousPrefix
-            } else {
-                RemoteKvReuseNoPlanReason::NoRemoteG2Candidate
-            },
-            stats,
-        };
-    };
-
+fn remote_g2_plan_from_candidate(
+    input: RemoteKvReuseSelectionInput<'_>,
+    best: RemoteKvReuseCandidate,
+    stats: RemoteKvReuseSelectionStats,
+) -> RemoteKvReuseDecision {
     // Continuation candidates start where the source worker's Device chain ended.
     // Write-through candidates start at root because their HostPinned copy mirrors
     // blocks that are also still present in the source worker's Device tier.
@@ -334,15 +599,52 @@ pub fn select_remote_g2_reuse_plan(
     }
 }
 
+pub fn select_remote_g2_reuse_plan_from_candidate(
+    input: RemoteKvReuseSelectionInput<'_>,
+    candidate: RemoteKvReuseCandidate,
+) -> RemoteKvReuseDecision {
+    let stats = remote_g2_selection_stats(input.tiered_matches);
+    remote_g2_plan_from_candidate(input, candidate, stats)
+}
+
+pub fn select_remote_g2_reuse_plan(
+    input: RemoteKvReuseSelectionInput<'_>,
+) -> RemoteKvReuseDecision {
+    let stats = remote_g2_selection_stats(input.tiered_matches);
+
+    let request_blocks = input.block_hashes.len();
+    let saw_remote_candidate =
+        has_remote_g2_candidate(input.target, request_blocks, input.tiered_matches);
+    let Some(best) =
+        best_remote_g2_candidate_for_target(input.target, request_blocks, input.tiered_matches)
+    else {
+        return RemoteKvReuseDecision::NoPlan {
+            reason: if saw_remote_candidate {
+                RemoteKvReuseNoPlanReason::NoContiguousPrefix
+            } else {
+                RemoteKvReuseNoPlanReason::NoRemoteG2Candidate
+            },
+            stats,
+        };
+    };
+
+    remote_g2_plan_from_candidate(input, best, stats)
+}
+
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
+
     use crate::indexer::{LowerTierMatchDetails, MatchDetails, TieredMatchDetails};
     use crate::protocols::{LocalBlockHash, OverlapScores, StorageTier, WorkerWithDpRank};
     use crate::remote_g2_plan::{
-        REMOTE_KV_REUSE_PLAN_VERSION, RemoteKvReuseDecision, RemoteKvReuseNoPlanReason,
-        RemoteKvReusePlan, RemoteKvReuseSelectionInput, remote_g2_score_blocks_for_target,
-        select_remote_g2_reuse_plan,
+        REMOTE_KV_REUSE_PLAN_VERSION, RemoteG2CandidateQueryPolicy, RemoteKvReuseDecision,
+        RemoteKvReuseNoPlanReason, RemoteKvReusePlan, RemoteKvReuseSelectionInput,
+        remote_g2_candidate_query_by_target, remote_g2_score_blocks_for_target,
+        remote_g2_scored_candidates_by_target, select_remote_g2_reuse_plan,
+        select_remote_g2_reuse_plan_from_candidate,
     };
+    use crate::test_utils::SimpleWorkerConfig;
 
     fn test_plan() -> RemoteKvReusePlan {
         RemoteKvReusePlan {
@@ -661,6 +963,113 @@ mod tests {
     }
 
     #[test]
+    fn remote_g2_scored_candidates_are_returned_by_target() {
+        let target0 = WorkerWithDpRank::new(9, 0);
+        let target1 = WorkerWithDpRank::new(9, 1);
+        let source = WorkerWithDpRank::new(7, 0);
+        let workers = HashMap::from([(
+            9,
+            SimpleWorkerConfig {
+                data_parallel_start_rank: 0,
+                data_parallel_size: 2,
+                ..Default::default()
+            },
+        )]);
+        let matches = tiered_matches(&[(target0, 2), (target1, 4), (source, 2)], &[(source, 8)]);
+
+        let candidates = remote_g2_scored_candidates_by_target(&workers, 10, &matches, 2, None);
+
+        assert_eq!(candidates.len(), 2);
+        let candidate0 = candidates.get(&target0).unwrap();
+        assert_eq!(candidate0.candidate.source, source);
+        assert_eq!(candidate0.candidate.start_block_index, 2);
+        assert_eq!(candidate0.candidate.incremental_blocks, 8);
+        assert_eq!(candidate0.benefit_blocks, 8);
+        assert_eq!(candidate0.cost_blocks, 2);
+        assert_eq!(candidate0.score_blocks, 6);
+
+        let candidate1 = candidates.get(&target1).unwrap();
+        assert_eq!(candidate1.candidate.source, source);
+        assert_eq!(candidate1.candidate.incremental_blocks, 6);
+        assert_eq!(candidate1.benefit_blocks, 6);
+        assert_eq!(candidate1.score_blocks, 4);
+    }
+
+    #[test]
+    fn remote_g2_candidate_query_keeps_zero_score_candidate_out_of_score_map() {
+        let target0 = WorkerWithDpRank::new(9, 0);
+        let target1 = WorkerWithDpRank::new(9, 1);
+        let source = WorkerWithDpRank::new(7, 0);
+        let workers = HashMap::from([(
+            9,
+            SimpleWorkerConfig {
+                data_parallel_start_rank: 0,
+                data_parallel_size: 2,
+                ..Default::default()
+            },
+        )]);
+        let matches = tiered_matches(&[(target0, 2), (target1, 8), (source, 2)], &[(source, 8)]);
+
+        let result = remote_g2_candidate_query_by_target(&workers, 10, &matches, 2, None);
+
+        assert_eq!(result.scored_candidates.len(), 2);
+        assert_eq!(
+            result.scored_candidates.get(&target0).unwrap().score_blocks,
+            6
+        );
+        assert_eq!(
+            result.scored_candidates.get(&target1).unwrap().score_blocks,
+            0
+        );
+        assert_eq!(result.benefit_blocks_by_target.get(&target0), Some(&8));
+        assert_eq!(result.cost_blocks_by_target.get(&target0), Some(&2));
+        assert_eq!(result.benefit_blocks_by_target.get(&target1), Some(&2));
+        assert_eq!(result.cost_blocks_by_target.get(&target1), Some(&2));
+        assert_eq!(result.score_blocks_by_target.get(&target0), Some(&6));
+        assert!(!result.score_blocks_by_target.contains_key(&target1));
+    }
+
+    #[test]
+    fn remote_g2_query_candidate_materializes_only_for_selected_target() {
+        let target0 = WorkerWithDpRank::new(9, 0);
+        let target1 = WorkerWithDpRank::new(9, 1);
+        let source = WorkerWithDpRank::new(7, 0);
+        let workers = HashMap::from([(
+            9,
+            SimpleWorkerConfig {
+                data_parallel_start_rank: 0,
+                data_parallel_size: 2,
+                ..Default::default()
+            },
+        )]);
+        let hashes = block_hashes(10);
+        let matches = tiered_matches(&[(target0, 2), (target1, 4), (source, 2)], &[(source, 8)]);
+
+        let result = remote_g2_candidate_query_by_target(&workers, hashes.len(), &matches, 2, None);
+        let selected = result
+            .selected_candidate(target1)
+            .expect("expected selected target candidate");
+
+        let decision = select_remote_g2_reuse_plan_from_candidate(
+            selection_input(target1, &hashes, &matches),
+            selected.candidate,
+        );
+
+        match decision {
+            RemoteKvReuseDecision::Plan { plan, .. } => {
+                assert_eq!(plan.target_worker_id, target1.worker_id);
+                assert_eq!(plan.target_dp_rank, target1.dp_rank);
+                assert_eq!(plan.source_worker_id, source.worker_id);
+                assert_eq!(plan.source_dp_rank, source.dp_rank);
+                assert_eq!(plan.start_block_index, 2);
+                assert_eq!(plan.planned_prefix_blocks, 8);
+                assert_eq!(plan.router_block_hashes, hashes[2..10].to_vec());
+            }
+            other => panic!("expected selected-target plan, got {other:?}"),
+        }
+    }
+
+    #[test]
     fn remote_g2_score_caps_incremental_blocks_after_tax() {
         let target = WorkerWithDpRank::new(9, 0);
         let source = WorkerWithDpRank::new(7, 0);
@@ -668,7 +1077,7 @@ mod tests {
 
         assert_eq!(
             remote_g2_score_blocks_for_target(target, 10, &matches, 1, Some(3)),
-            3
+            2
         );
         assert_eq!(
             remote_g2_score_blocks_for_target(target, 10, &matches, 1, Some(0)),
@@ -677,7 +1086,44 @@ mod tests {
     }
 
     #[test]
-    fn remote_g2_score_does_not_credit_cold_target_root_transfer() {
+    fn remote_g2_candidate_query_policy_caps_benefit_before_cost() {
+        let target = WorkerWithDpRank::new(9, 0);
+        let source = WorkerWithDpRank::new(7, 0);
+        let matches = tiered_matches(&[(target, 2), (source, 2)], &[(source, 8)]);
+        let policy = RemoteG2CandidateQueryPolicy::fixed_cost(2, Some(3));
+
+        let candidate = policy
+            .scored_candidate_for_target(target, 10, &matches)
+            .expect("expected scored candidate");
+
+        assert_eq!(candidate.candidate.source, source);
+        assert_eq!(candidate.candidate.incremental_blocks, 8);
+        assert_eq!(candidate.benefit_blocks, 3);
+        assert_eq!(candidate.cost_blocks, 2);
+        assert_eq!(candidate.score_blocks, 1);
+    }
+
+    #[test]
+    fn remote_g2_candidate_query_policy_charges_per_incremental_block_cost() {
+        let target = WorkerWithDpRank::new(9, 0);
+        let source = WorkerWithDpRank::new(7, 0);
+        let matches = tiered_matches(&[(target, 4), (source, 2)], &[(source, 8)]);
+        let policy = RemoteG2CandidateQueryPolicy::fixed_plus_per_block_cost(2, 0.5, None);
+
+        let candidate = policy
+            .scored_candidate_for_target(target, 10, &matches)
+            .expect("expected scored candidate");
+
+        assert_eq!(candidate.candidate.source, source);
+        assert_eq!(candidate.candidate.planned_prefix_blocks, 8);
+        assert_eq!(candidate.candidate.incremental_blocks, 6);
+        assert_eq!(candidate.benefit_blocks, 6);
+        assert_eq!(candidate.cost_blocks, 5);
+        assert_eq!(candidate.score_blocks, 1);
+    }
+
+    #[test]
+    fn remote_g2_score_credits_cold_target_root_transfer() {
         let target = WorkerWithDpRank::new(9, 0);
         let source = WorkerWithDpRank::new(7, 0);
         let matches = tiered_matches(&[(source, 5)], &[(source, 0)]);
@@ -693,7 +1139,7 @@ mod tests {
         }
         assert_eq!(
             remote_g2_score_blocks_for_target(target, 8, &matches, 0, None),
-            0
+            5
         );
     }
 }

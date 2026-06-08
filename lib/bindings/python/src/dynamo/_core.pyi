@@ -1285,6 +1285,8 @@ class KvRouterConfig:
     def __init__(
         self,
         overlap_score_weight: float = 1.0,
+        host_cache_hit_weight: float = 0.75,
+        disk_cache_hit_weight: float = 0.25,
         router_temperature: float = 0.0,
         use_kv_events: bool = True,
         durable_kv_events: bool = False,
@@ -1300,6 +1302,16 @@ class KvRouterConfig:
         router_queue_threshold: Optional[float] = 4.0,
         router_event_threads: int = 4,
         router_queue_policy: str = "fcfs",
+        use_remote_indexer: bool = False,
+        serve_indexer: bool = False,
+        shared_cache_multiplier: float = 0.0,
+        shared_cache_type: str = "none",
+        remote_g2_reuse_enabled: bool = False,
+        remote_g2_min_planned_blocks: int = 0,
+        remote_g2_score_tax_blocks: int = 64,
+        remote_g2_score_cost_per_block: float = 0.0,
+        remote_g2_score_cap_blocks: Optional[int] = None,
+        remote_g2_score_max_local_gap_blocks: Optional[float] = None,
     ) -> None:
         """
         Create a KV router configuration.
@@ -1337,6 +1349,12 @@ class KvRouterConfig:
                 "fcfs": first-come first-served with priority bumps — optimizes tail TTFT.
                 "lcfs": last-come first-served with priority bumps — intentionally worsens tail behavior for policy comparisons.
                 "wspt": weighted shortest processing time (Smith's rule) — optimizes average TTFT.
+            remote_g2_reuse_enabled: Enable Direct G2 remote KV reuse plans (default: False).
+            remote_g2_min_planned_blocks: Minimum planned blocks before attaching a Direct G2 plan.
+            remote_g2_score_tax_blocks: Fixed Direct G2 transfer cost in router blocks.
+            remote_g2_score_cost_per_block: Additional Direct G2 transfer cost per incremental transferred block.
+            remote_g2_score_cap_blocks: Optional cap on Direct G2 transfer benefit before applying cost.
+            remote_g2_score_max_local_gap_blocks: Optional base-score gap gate for Direct G2 score credit.
         """
         ...
 

@@ -58,7 +58,7 @@ def add_argument(
     parser: argparse.ArgumentParser | argparse._ArgumentGroup,
     *,
     flag_name: str,
-    env_var: str,
+    env_var: Optional[str] = None,
     default: Any,
     help: str,
     obsolete_flag: Optional[str] = None,
@@ -71,7 +71,7 @@ def add_argument(
     Args:
         parser: ArgumentParser or argument group
         flag_name: Primary flag (must start with '--', e.g., "--foo")
-        env_var: Environment variable name (e.g., "DYN_FOO")
+        env_var: Optional environment variable name (e.g., "DYN_FOO")
         default: Default value
         help: Help text
         alias: Optional alias for the flag (must start with '--')
@@ -86,7 +86,11 @@ def add_argument(
         value_type_for_env = arg_type
     if isinstance(default, list) and (arg_type is None or arg_type is str):
         value_type_for_env = None
-    default_with_env = env_or_default(env_var, default, value_type=value_type_for_env)
+    default_with_env = (
+        env_or_default(env_var, default, value_type=value_type_for_env)
+        if env_var is not None
+        else default
+    )
 
     names = [flag_name]
 
@@ -112,7 +116,7 @@ def add_negatable_bool_argument(
     parser: Any,
     *,
     flag_name: str,
-    env_var: str,
+    env_var: Optional[str] = None,
     default: bool,
     help: str,
     dest: Optional[str] = None,
@@ -124,7 +128,7 @@ def add_negatable_bool_argument(
     Args:
         parser: ArgumentParser or argument group
         flag_name: Primary flag (must start with '--', e.g. "--enable-feature")
-        env_var: Environment variable name (e.g., "DYN_ENABLE_FEATURE")
+        env_var: Optional environment variable name (e.g., "DYN_ENABLE_FEATURE")
         default: Default value
         help: Help text
         dest: Optional destination name for the parsed value
@@ -144,14 +148,15 @@ def add_negatable_bool_argument(
 
 
 def _build_help_message(
-    help_text: str, env_var: str, default: Any, obsolete_flag: Optional[str] = None
+    help_text: str, env_var: Optional[str], default: Any, obsolete_flag: Optional[str] = None
 ) -> str:
     """
     Build help message with env var and default value.
     """
+    env_help = f"env var: {env_var} | " if env_var is not None else ""
     if obsolete_flag:
-        return f"{help_text}\nenv var: {env_var} | default: {default}\ndeprecating flag: {obsolete_flag}"
-    return f"{help_text}\nenv var: {env_var} | default: {default}"
+        return f"{help_text}\n{env_help}default: {default}\ndeprecating flag: {obsolete_flag}"
+    return f"{help_text}\n{env_help}default: {default}"
 
 
 def _get_dest_name(flag_name: str, dest: Optional[str] = None) -> str:

@@ -269,15 +269,24 @@ pub struct KvRouterConfig {
     pub shared_cache_multiplier: f64,
 
     /// Minimum Direct G2 planned blocks required before the router attaches a
-    /// remote reuse plan.
+    /// remote reuse plan. Defaults to 0 so Direct G2 follows the same scoring
+    /// surface as shared-cache routing; deployments may raise this if transfer
+    /// overhead dominates small plans.
     pub remote_g2_min_planned_blocks: u32,
 
-    /// Conservative fixed transfer tax, in router blocks, charged before Direct
-    /// G2 remote blocks contribute to worker scoring. Target-local top-up plans
-    /// must also exceed this incremental-block tax before being attached.
+    /// Fixed transfer cost, in router blocks, subtracted after Direct G2
+    /// benefit is weighted by the shared-cache multiplier. Target-local top-up
+    /// plans must also exceed this incremental-block tax before being attached.
     pub remote_g2_score_tax_blocks: u32,
 
-    /// Optional cap, in router blocks, on Direct G2 score credit per target.
+    /// Additional Direct G2 transfer cost, in router blocks, charged per
+    /// incremental transferred block and subtracted after Direct G2 benefit is
+    /// weighted by the shared-cache multiplier.
+    #[validate(range(min = 0.0))]
+    pub remote_g2_score_cost_per_block: f64,
+
+    /// Optional cap, in router blocks, on Direct G2 transfer benefit per target
+    /// before applying cost.
     pub remote_g2_score_cap_blocks: Option<u32>,
 
     /// Optional maximum normal-router score gap, in blocks, within which Direct
@@ -288,6 +297,9 @@ pub struct KvRouterConfig {
     /// Type of external shared KV cache to query during routing.
     /// "none" (default): disabled. "hicache": query sglang workers for L3 cache state.
     pub shared_cache_type: SharedCacheType,
+
+    /// Whether Direct G2 remote KV reuse plans may be generated.
+    pub remote_g2_reuse_enabled: bool,
 }
 
 impl Default for KvRouterConfig {
@@ -315,11 +327,13 @@ impl Default for KvRouterConfig {
             use_remote_indexer: false,
             serve_indexer: false,
             shared_cache_multiplier: 0.0,
-            remote_g2_min_planned_blocks: 64,
-            remote_g2_score_tax_blocks: 8192,
-            remote_g2_score_cap_blocks: Some(64),
-            remote_g2_score_max_local_gap_blocks: Some(64.0),
+            remote_g2_min_planned_blocks: 0,
+            remote_g2_score_tax_blocks: 64,
+            remote_g2_score_cost_per_block: 0.0,
+            remote_g2_score_cap_blocks: None,
+            remote_g2_score_max_local_gap_blocks: None,
             shared_cache_type: SharedCacheType::default(),
+            remote_g2_reuse_enabled: false,
         }
     }
 }
@@ -361,6 +375,11 @@ fn validate_kv_router_config(config: &KvRouterConfig) -> Result<(), ValidationEr
     if config.serve_indexer && config.overlap_score_weight == 0.0 {
         return Err(ValidationError::new(
             "serve_indexer requires overlap_score_weight > 0",
+        ));
+    }
+    if !config.remote_g2_score_cost_per_block.is_finite() {
+        return Err(ValidationError::new(
+            "remote_g2_score_cost_per_block must be finite",
         ));
     }
     Ok(())
@@ -542,9 +561,27 @@ mod tests {
     #[test]
     fn test_kv_router_config_defaults_bound_remote_g2_scoring() {
         let config = KvRouterConfig::default();
-        assert_eq!(config.remote_g2_min_planned_blocks, 64);
-        assert_eq!(config.remote_g2_score_tax_blocks, 8192);
-        assert_eq!(config.remote_g2_score_cap_blocks, Some(64));
-        assert_eq!(config.remote_g2_score_max_local_gap_blocks, Some(64.0));
+        assert_eq!(config.remote_g2_min_planned_blocks, 0);
+        assert_eq!(config.remote_g2_score_tax_blocks, 64);
+        assert_eq!(config.remote_g2_score_cost_per_block, 0.0);
+        assert_eq!(config.remote_g2_score_cap_blocks, None);
+        assert_eq!(config.remote_g2_score_max_local_gap_blocks, None);
+        assert!(!config.remote_g2_reuse_enabled);
+
+        let json = serde_json::to_value(config).unwrap();
+        assert_eq!(json["remote_g2_reuse_enabled"], false);
+        assert_eq!(json["remote_g2_score_tax_blocks"], 64);
+        assert_eq!(json["remote_g2_score_cost_per_block"], 0.0);
+    }
+
+    #[test]
+    fn test_kv_router_config_rejects_invalid_remote_g2_per_block_cost() {
+        for remote_g2_score_cost_per_block in [-0.1, f64::INFINITY, f64::NAN] {
+            let config = KvRouterConfig {
+                remote_g2_score_cost_per_block,
+                ..Default::default()
+            };
+            assert!(config.validate().is_err());
+        }
     }
 }

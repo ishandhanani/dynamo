@@ -3,7 +3,6 @@
 
 use std::{
     collections::{HashMap, HashSet},
-    env,
     sync::Arc,
     time::{Instant, SystemTime, UNIX_EPOCH},
 };
@@ -16,13 +15,14 @@ use dynamo_kv_router::{
     protocols::KV_EVENT_SUBJECT,
     protocols::{
         BlockExtraInfo, BlockHashOptions, DpRank, LocalBlockHash, PrefillLoadHint, RouterEvent,
-        RouterRequest, RouterResponse, TokensWithHashes, WorkerConfigLike, WorkerId,
-        WorkerWithDpRank, compute_block_hash_for_seq,
+        RouterRequest, RouterResponse, TokensWithHashes, WorkerId, WorkerWithDpRank,
+        compute_block_hash_for_seq,
     },
     remote_g2_plan::{
-        RemoteKvReuseDecision, RemoteKvReuseNoPlanReason, RemoteKvReusePlan,
-        RemoteKvReuseSelectionInput, RemoteKvReuseSelectionStats,
-        remote_g2_score_blocks_for_target, select_remote_g2_reuse_plan,
+        RemoteG2CandidateQueryResult, RemoteKvReuseDecision, RemoteKvReuseNoPlanReason,
+        RemoteKvReusePlan, RemoteKvReuseSelectionInput, RemoteKvReuseSelectionStats,
+        remote_g2_candidate_query_by_target_with_cost, select_remote_g2_reuse_plan,
+        select_remote_g2_reuse_plan_from_candidate,
     },
     scheduling::TierOverlapBlocks,
 };
@@ -114,7 +114,6 @@ struct CacheHitEstimates {
 }
 
 const REMOTE_KV_REUSE_PLAN_TTL_MS: u64 = 30_000;
-const REMOTE_G2_REUSE_ENABLED_ENV: &str = "DYN_REMOTE_G2_REUSE_ENABLED";
 const REMOTE_G2_TRACE_ENV: &str = "DYN_REMOTE_G2_TRACE";
 const SGLANG_SHARED_HICACHE_RUNTIME_KEY: &str = "sglang_shared_hicache";
 
@@ -172,6 +171,17 @@ fn remote_g2_top_up_below_score_tax(
         && remote_g2_plan_incremental_blocks(plan, target_local_prefix_blocks) <= tax_blocks
 }
 
+fn remote_g2_selected_below_scored_benefit(
+    pinned_worker: Option<WorkerWithDpRank>,
+    scoring_active: bool,
+    selected_effective_score_blocks: f64,
+) -> bool {
+    pinned_worker.is_none()
+        && (!scoring_active
+            || !selected_effective_score_blocks.is_finite()
+            || selected_effective_score_blocks <= 0.0)
+}
+
 #[derive(Debug, Clone)]
 pub(crate) struct BestMatchDetails {
     pub worker: WorkerWithDpRank,
@@ -186,17 +196,8 @@ fn unix_epoch_ms() -> u64 {
         .unwrap_or_default()
 }
 
-fn remote_g2_reuse_enabled() -> bool {
-    env::var(REMOTE_G2_REUSE_ENABLED_ENV)
-        .map(|value| {
-            let normalized = value.trim().to_ascii_lowercase();
-            !matches!(normalized.as_str(), "0" | "false" | "no" | "off")
-        })
-        .unwrap_or(true)
-}
-
 fn remote_g2_trace_enabled() -> bool {
-    env::var(REMOTE_G2_TRACE_ENV)
+    std::env::var(REMOTE_G2_TRACE_ENV)
         .map(|value| {
             let normalized = value.trim().to_ascii_lowercase();
             !matches!(normalized.as_str(), "0" | "false" | "no" | "off")
@@ -344,36 +345,6 @@ fn tier_overlap_blocks_from_tiered_matches(
     }
 
     tier_overlap_blocks
-}
-
-fn remote_g2_score_blocks_by_target<C: WorkerConfigLike>(
-    workers: &HashMap<WorkerId, C>,
-    request_blocks: usize,
-    tiered_matches: &indexer::TieredMatchDetails,
-    tax_blocks: u32,
-    cap_blocks: Option<u32>,
-) -> HashMap<WorkerWithDpRank, u32> {
-    let mut score_blocks = HashMap::new();
-
-    for (&worker_id, config) in workers {
-        let dp_start = config.data_parallel_start_rank();
-        let dp_end = dp_start.saturating_add(config.data_parallel_size());
-        for dp_rank in dp_start..dp_end {
-            let target = WorkerWithDpRank::new(worker_id, dp_rank);
-            let blocks = remote_g2_score_blocks_for_target(
-                target,
-                request_blocks,
-                tiered_matches,
-                tax_blocks,
-                cap_blocks,
-            );
-            if blocks > 0 {
-                score_blocks.insert(target, blocks);
-            }
-        }
-    }
-
-    score_blocks
 }
 
 /// Generates a dp_rank-specific endpoint name for the worker KV indexer query service.
@@ -717,19 +688,23 @@ where
         let sc_hits_for_metrics = shared_cache_hits.clone();
         let remote_g2_score_multiplier =
             shared_cache_multiplier_for_request(&self.kv_router_config, router_config_override);
-        let remote_g2_score_blocks =
-            if remote_g2_reuse_enabled() && remote_g2_score_multiplier > 0.0 {
+        let remote_g2_reuse_enabled = self.kv_router_config.remote_g2_reuse_enabled;
+        let remote_g2_candidate_query =
+            if remote_g2_reuse_enabled && remote_g2_score_multiplier > 0.0 {
                 let workers = self.workers_with_configs.borrow();
-                remote_g2_score_blocks_by_target(
+                remote_g2_candidate_query_by_target_with_cost(
                     &workers,
                     block_hashes.len(),
                     &tiered_matches,
                     self.kv_router_config.remote_g2_score_tax_blocks,
                     self.kv_router_config.remote_g2_score_cap_blocks,
+                    self.kv_router_config.remote_g2_score_cost_per_block,
                 )
             } else {
-                HashMap::new()
+                RemoteG2CandidateQueryResult::default()
             };
+        let remote_g2_benefit_blocks = remote_g2_candidate_query.benefit_blocks_by_target.clone();
+        let remote_g2_cost_blocks = remote_g2_candidate_query.cost_blocks_by_target.clone();
 
         let response = self
             .scheduler
@@ -747,7 +722,8 @@ where
                 expected_output_tokens,
                 pinned_worker,
                 allowed_worker_ids,
-                remote_g2_score_blocks.clone(),
+                remote_g2_cost_blocks.clone(),
+                remote_g2_benefit_blocks.clone(),
                 remote_g2_score_multiplier,
                 self.kv_router_config.remote_g2_score_max_local_gap_blocks,
                 shared_cache_hits,
@@ -757,9 +733,38 @@ where
         let created_at_ms = unix_epoch_ms();
         let min_remote_g2_planned_blocks = self.kv_router_config.remote_g2_min_planned_blocks;
         let remote_g2_score_tax_blocks = self.kv_router_config.remote_g2_score_tax_blocks;
+        let remote_g2_score_cost_per_block = self.kv_router_config.remote_g2_score_cost_per_block;
         let target_local_prefix_blocks = response.effective_overlap_blocks.round().max(0.0) as u32;
-        let mut remote_kv_reuse = if remote_g2_reuse_enabled() {
-            select_remote_g2_reuse_plan(RemoteKvReuseSelectionInput {
+        let selected_remote_g2_scored_candidate =
+            remote_g2_candidate_query.selected_candidate(response.best_worker);
+        let selected_remote_g2_score_blocks = selected_remote_g2_scored_candidate
+            .map(|candidate| candidate.score_blocks)
+            .unwrap_or(0);
+        let selected_remote_g2_cost_blocks = selected_remote_g2_scored_candidate
+            .map(|candidate| candidate.cost_blocks)
+            .unwrap_or(0);
+        let selected_remote_g2_candidate_source_worker_id = selected_remote_g2_scored_candidate
+            .map(|candidate| candidate.candidate.source.worker_id);
+        let selected_remote_g2_candidate_source_dp_rank =
+            selected_remote_g2_scored_candidate.map(|candidate| candidate.candidate.source.dp_rank);
+        let selected_remote_g2_candidate_start_block_index = selected_remote_g2_scored_candidate
+            .map(|candidate| candidate.candidate.start_block_index);
+        let selected_remote_g2_candidate_planned_prefix_blocks =
+            selected_remote_g2_scored_candidate
+                .map(|candidate| candidate.candidate.planned_prefix_blocks);
+        let selected_remote_g2_candidate_incremental_blocks = selected_remote_g2_scored_candidate
+            .map(|candidate| candidate.candidate.incremental_blocks);
+        let selected_remote_g2_effective_score_blocks = selected_remote_g2_scored_candidate
+            .map(|candidate| {
+                (remote_g2_score_multiplier * candidate.benefit_blocks as f64
+                    - candidate.cost_blocks as f64)
+                    .max(0.0)
+            })
+            .unwrap_or(0.0);
+        let remote_g2_scoring_active =
+            remote_g2_score_multiplier.is_finite() && remote_g2_score_multiplier > 0.0;
+        let mut remote_kv_reuse = if remote_g2_reuse_enabled {
+            let selection_input = || RemoteKvReuseSelectionInput {
                 request_id: context_id.unwrap_or_default(),
                 target: response.best_worker,
                 block_hashes: &block_hashes,
@@ -767,7 +772,14 @@ where
                 tiered_matches: &tiered_matches,
                 created_at_ms,
                 expires_at_ms: created_at_ms.saturating_add(REMOTE_KV_REUSE_PLAN_TTL_MS),
-            })
+            };
+            match selected_remote_g2_scored_candidate {
+                Some(candidate) => select_remote_g2_reuse_plan_from_candidate(
+                    selection_input(),
+                    candidate.candidate,
+                ),
+                None => select_remote_g2_reuse_plan(selection_input()),
+            }
         } else {
             RemoteKvReuseDecision::NoPlan {
                 reason: RemoteKvReuseNoPlanReason::Disabled,
@@ -775,6 +787,18 @@ where
             }
         };
 
+        if let RemoteKvReuseDecision::Plan { stats, .. } = &remote_kv_reuse
+            && remote_g2_selected_below_scored_benefit(
+                pinned_worker,
+                remote_g2_scoring_active,
+                selected_remote_g2_effective_score_blocks,
+            )
+        {
+            remote_kv_reuse = RemoteKvReuseDecision::NoPlan {
+                reason: RemoteKvReuseNoPlanReason::BelowScoreTax,
+                stats: *stats,
+            };
+        }
         if let RemoteKvReuseDecision::Plan { plan, stats } = &remote_kv_reuse
             && min_remote_g2_planned_blocks > 0
             && plan.planned_prefix_blocks < min_remote_g2_planned_blocks
@@ -857,6 +881,16 @@ where
                             reason: RemoteKvReuseNoPlanReason::BelowMinPlannedBlocks,
                             stats: stats_copy,
                         };
+                    } else if remote_g2_selected_below_scored_benefit(
+                        pinned_worker,
+                        remote_g2_scoring_active,
+                        selected_remote_g2_effective_score_blocks,
+                    ) {
+                        let stats_copy = *plan_stats;
+                        remote_kv_reuse = RemoteKvReuseDecision::NoPlan {
+                            reason: RemoteKvReuseNoPlanReason::BelowScoreTax,
+                            stats: stats_copy,
+                        };
                     } else if remote_g2_top_up_below_score_tax(
                         plan,
                         target_local_prefix_blocks,
@@ -919,8 +953,26 @@ where
                 cached_tokens = response.cached_tokens,
                 ?device_hits,
                 ?host_pinned_hits,
-                ?remote_g2_score_blocks,
+                ?remote_g2_benefit_blocks,
+                ?remote_g2_cost_blocks,
+                remote_g2_scored_candidate_count =
+                    remote_g2_candidate_query.scored_candidate_count(),
                 remote_g2_score_multiplier,
+                remote_g2_score_tax_blocks,
+                remote_g2_score_cost_per_block,
+                remote_g2_selected_score_blocks = selected_remote_g2_score_blocks,
+                remote_g2_selected_effective_score_blocks =
+                    selected_remote_g2_effective_score_blocks,
+                remote_g2_selected_cost_blocks = selected_remote_g2_cost_blocks,
+                remote_g2_selected_source_worker_id =
+                    selected_remote_g2_candidate_source_worker_id,
+                remote_g2_selected_source_dp_rank = selected_remote_g2_candidate_source_dp_rank,
+                remote_g2_selected_start_block_index =
+                    selected_remote_g2_candidate_start_block_index,
+                remote_g2_selected_planned_prefix_blocks =
+                    selected_remote_g2_candidate_planned_prefix_blocks,
+                remote_g2_selected_incremental_blocks =
+                    selected_remote_g2_candidate_incremental_blocks,
                 decision = ?remote_kv_reuse,
                 "REMOTE_G2_TRACE planner decision"
             );
@@ -950,6 +1002,13 @@ where
         }
 
         if let Some(m) = metrics::RouterRequestMetrics::get() {
+            m.observe_remote_g2_candidate_query(
+                &remote_g2_candidate_query,
+                selected_remote_g2_scored_candidate,
+                selected_remote_g2_scored_candidate
+                    .is_some()
+                    .then_some(selected_remote_g2_effective_score_blocks),
+            );
             m.observe_remote_g2_decision(&remote_kv_reuse, self.block_size);
         }
 
@@ -1325,6 +1384,36 @@ mod tests {
     }
 
     #[test]
+    fn remote_g2_source_route_rejects_missing_or_invalid_runtime_config() {
+        assert!(shared_hicache_source_route_from_config(&ModelRuntimeConfig::new()).is_none());
+
+        for metadata in [
+            serde_json::json!({
+                "source_host": "",
+                "source_bootstrap_port": 41000,
+            }),
+            serde_json::json!({
+                "source_host": "   ",
+                "source_bootstrap_port": 41000,
+            }),
+            serde_json::json!({
+                "source_host": "10.0.0.7",
+                "source_bootstrap_port": 0,
+            }),
+            serde_json::json!({
+                "source_host": "10.0.0.7",
+                "source_bootstrap_port": "41000",
+            }),
+        ] {
+            let mut config = ModelRuntimeConfig::new();
+            config
+                .set_engine_specific(SGLANG_SHARED_HICACHE_RUNTIME_KEY, metadata)
+                .unwrap();
+            assert!(shared_hicache_source_route_from_config(&config).is_none());
+        }
+    }
+
+    #[test]
     fn weighted_cache_hit_estimates_include_lower_tiers() {
         let worker_1 = WorkerWithDpRank::new(1, 0);
         let worker_2 = WorkerWithDpRank::new(2, 0);
@@ -1593,6 +1682,15 @@ mod tests {
         assert_eq!(remote_g2_plan_incremental_blocks(&plan, 384), 128);
         assert!(remote_g2_top_up_below_score_tax(&plan, 384, 64, 2048));
         assert!(!remote_g2_top_up_below_score_tax(&plan, 384, 64, 64));
+    }
+
+    #[test]
+    fn remote_g2_attachment_requires_selected_scored_benefit() {
+        let pinned = Some(WorkerWithDpRank::new(1, 0));
+        assert!(remote_g2_selected_below_scored_benefit(None, true, 0.0));
+        assert!(remote_g2_selected_below_scored_benefit(None, false, 8.0));
+        assert!(!remote_g2_selected_below_scored_benefit(None, true, 8.0));
+        assert!(!remote_g2_selected_below_scored_benefit(pinned, false, 0.0));
     }
 
     #[test]

@@ -102,6 +102,29 @@ class TestEnvOrDefault:
 class TestAddArgument:
     """Test add_argument function."""
 
+    def test_optional_env_var_uses_cli_only_default(self, monkeypatch):
+        """Test env_var=None creates a CLI-only argument."""
+        monkeypatch.setenv("TEST_SCORE_TAX", "1024")
+        parser = argparse.ArgumentParser()
+
+        add_argument(
+            parser,
+            flag_name="--score-tax",
+            default=64,
+            help="Score tax",
+            arg_type=int,
+        )
+
+        args = parser.parse_args([])
+        assert args.score_tax == 64
+
+        args = parser.parse_args(["--score-tax", "512"])
+        assert args.score_tax == 512
+
+        help_text = parser.format_help()
+        assert "env var:" not in help_text
+        assert "default: 64" in help_text
+
     def test_callable_type_with_none_default_uses_env_and_validates(self, monkeypatch):
         """Test callable arg_type works when default is None and env var is set."""
         monkeypatch.setenv("TEST_MODEL_NAME", "  model-A  ")
@@ -173,6 +196,28 @@ class TestAddArgument:
 
 class TestAddNegatableBool:
     """Test add_negatable_bool function."""
+
+    def test_optional_env_var_uses_cli_only_default(self, monkeypatch):
+        """Test env_var=None creates a CLI-only negatable bool."""
+        monkeypatch.setenv("TEST_ENABLE", "false")
+        parser = argparse.ArgumentParser()
+
+        add_negatable_bool_argument(
+            parser,
+            flag_name="--enable-feature",
+            default=True,
+            help="Enable feature",
+        )
+
+        args = parser.parse_args([])
+        assert args.enable_feature is True
+
+        args = parser.parse_args(["--no-enable-feature"])
+        assert args.enable_feature is False
+
+        help_text = parser.format_help()
+        assert "env var:" not in help_text
+        assert "default: True" in help_text
 
     def test_positive_flag(self):
         """Test that --flag added."""

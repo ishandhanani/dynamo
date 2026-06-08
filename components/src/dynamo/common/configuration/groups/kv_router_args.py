@@ -38,6 +38,12 @@ _KV_ROUTER_FIELDS: tuple[str, ...] = (
     "serve_indexer",
     "shared_cache_multiplier",
     "shared_cache_type",
+    "remote_g2_reuse_enabled",
+    "remote_g2_min_planned_blocks",
+    "remote_g2_score_tax_blocks",
+    "remote_g2_score_cost_per_block",
+    "remote_g2_score_cap_blocks",
+    "remote_g2_score_max_local_gap_blocks",
 )
 
 
@@ -64,6 +70,12 @@ class KvRouterConfigBase(ConfigBase):
     serve_indexer: bool = False
     shared_cache_multiplier: float = 0.0
     shared_cache_type: str = "none"
+    remote_g2_reuse_enabled: bool = False
+    remote_g2_min_planned_blocks: int = 0
+    remote_g2_score_tax_blocks: int = 64
+    remote_g2_score_cost_per_block: float = 0.0
+    remote_g2_score_cap_blocks: Optional[int] = None
+    remote_g2_score_max_local_gap_blocks: Optional[float] = None
 
     def kv_router_kwargs(self) -> dict:
         """Return a dict suitable for ``KvRouterConfig(**kwargs)``."""
@@ -308,4 +320,70 @@ class KvRouterArgGroup(ArgGroup):
             ),
             arg_type=str,
             choices=["none", "hicache"],
+        )
+        add_negatable_bool_argument(
+            g,
+            flag_name="--remote-g2-reuse",
+            default=False,
+            dest="remote_g2_reuse_enabled",
+            help=(
+                "[EXPERIMENTAL] KV Router: Enable Direct G2 remote KV reuse plan "
+                "generation. Disabled by default; use --remote-g2-reuse for "
+                "benchmark treatment runs."
+            ),
+        )
+        add_argument(
+            g,
+            flag_name="--remote-g2-min-planned-blocks",
+            default=0,
+            help=(
+                "[EXPERIMENTAL] KV Router: Minimum Direct G2 planned blocks required "
+                "before attaching a remote reuse plan. Default 0."
+            ),
+            arg_type=int,
+        )
+        add_argument(
+            g,
+            flag_name="--remote-g2-score-tax-blocks",
+            default=64,
+            help=(
+                "[EXPERIMENTAL] KV Router: Fixed Direct G2 transfer cost, in router "
+                "blocks, subtracted after remote benefit is weighted by the shared "
+                "cache multiplier. "
+                "Default 64."
+            ),
+            arg_type=int,
+        )
+        add_argument(
+            g,
+            flag_name="--remote-g2-score-cost-per-block",
+            default=0.0,
+            help=(
+                "[EXPERIMENTAL] KV Router: Additional Direct G2 transfer cost, "
+                "in router blocks, charged per incremental transferred block and "
+                "subtracted after remote benefit is weighted by the shared cache "
+                "multiplier. Default 0.0."
+            ),
+            arg_type=float,
+        )
+        add_argument(
+            g,
+            flag_name="--remote-g2-score-cap-blocks",
+            default=None,
+            help=(
+                "[EXPERIMENTAL] KV Router: Optional cap, in router blocks, on Direct "
+                "G2 transfer benefit per target before applying cost. Default None."
+            ),
+            arg_type=int,
+        )
+        add_argument(
+            g,
+            flag_name="--remote-g2-score-max-local-gap-blocks",
+            default=None,
+            help=(
+                "[EXPERIMENTAL] KV Router: Optional maximum normal-router score gap, "
+                "in blocks, within which Direct G2 score may affect target selection. "
+                "Default None."
+            ),
+            arg_type=float,
         )

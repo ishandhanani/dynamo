@@ -60,7 +60,9 @@ use dynamo_runtime::traits::DistributedRuntimeProvider;
 use prometheus::{HistogramOpts, IntCounter, IntCounterVec, IntGaugeVec, Opts};
 
 use crate::http::service::metrics::generate_log_buckets;
-use dynamo_kv_router::remote_g2_plan::RemoteKvReuseDecision;
+use dynamo_kv_router::remote_g2_plan::{
+    RemoteG2CandidateQueryResult, RemoteG2ScoredCandidate, RemoteKvReuseDecision,
+};
 
 /// Buckets for CPU-bound compute phases (block hashing, sequence hashing).
 fn compute_overhead_buckets() -> Vec<f64> {
@@ -517,6 +519,15 @@ pub struct RouterRequestMetrics {
     pub remote_g2_planned_tokens: prometheus::IntCounter,
     pub remote_g2_rejected_g1_candidates_total: prometheus::IntCounter,
     pub remote_g2_no_plan_total: IntCounterVec,
+    pub remote_g2_candidate_count: prometheus::Histogram,
+    pub remote_g2_selected_benefit_blocks: prometheus::Histogram,
+    pub remote_g2_selected_score_blocks: prometheus::Histogram,
+    pub remote_g2_selected_effective_score_blocks: prometheus::Histogram,
+    pub remote_g2_selected_cost_blocks: prometheus::Histogram,
+    pub remote_g2_selected_incremental_blocks: prometheus::Histogram,
+    pub remote_g2_selected_planned_prefix_blocks: prometheus::Histogram,
+    pub remote_g2_zero_score_candidate_count: prometheus::Histogram,
+    pub remote_g2_zero_score_incremental_blocks: prometheus::Histogram,
 }
 
 static ROUTER_REQUEST_METRICS: OnceLock<Arc<RouterRequestMetrics>> = OnceLock::new();
@@ -641,6 +652,78 @@ impl RouterRequestMetrics {
                         extra_labels,
                     )
                     .expect("failed to create router_remote_g2_no_plan_total");
+                let remote_g2_candidate_count = metrics
+                    .create_histogram(
+                        &router_metric("remote_g2_candidate_count"),
+                        "Direct G2 scored candidate count per routing request",
+                        extra_labels,
+                        Some(prometheus::exponential_buckets(1.0, 2.0, 10).unwrap()),
+                    )
+                    .expect("failed to create router_remote_g2_candidate_count");
+                let remote_g2_selected_score_blocks = metrics
+                    .create_histogram(
+                        &router_metric("remote_g2_selected_score_blocks"),
+                        "Direct G2 score blocks after cost but before shared-cache multiplier for the selected target",
+                        extra_labels,
+                        Some(prometheus::exponential_buckets(1.0, 2.0, 16).unwrap()),
+                    )
+                    .expect("failed to create router_remote_g2_selected_score_blocks");
+                let remote_g2_selected_benefit_blocks = metrics
+                    .create_histogram(
+                        &router_metric("remote_g2_selected_benefit_blocks"),
+                        "Direct G2 benefit blocks before cost for the selected target",
+                        extra_labels,
+                        Some(prometheus::exponential_buckets(1.0, 2.0, 16).unwrap()),
+                    )
+                    .expect("failed to create router_remote_g2_selected_benefit_blocks");
+                let remote_g2_selected_effective_score_blocks = metrics
+                    .create_histogram(
+                        &router_metric("remote_g2_selected_effective_score_blocks"),
+                        "Direct G2 effective scheduler score blocks after multiplier and cost for the selected target",
+                        extra_labels,
+                        Some(prometheus::exponential_buckets(1.0, 2.0, 16).unwrap()),
+                    )
+                    .expect("failed to create router_remote_g2_selected_effective_score_blocks");
+                let remote_g2_selected_cost_blocks = metrics
+                    .create_histogram(
+                        &router_metric("remote_g2_selected_cost_blocks"),
+                        "Estimated Direct G2 cost blocks for the selected target",
+                        extra_labels,
+                        Some(prometheus::exponential_buckets(1.0, 2.0, 16).unwrap()),
+                    )
+                    .expect("failed to create router_remote_g2_selected_cost_blocks");
+                let remote_g2_selected_incremental_blocks = metrics
+                    .create_histogram(
+                        &router_metric("remote_g2_selected_incremental_blocks"),
+                        "Incremental Direct G2 reusable blocks beyond the selected target's local prefix",
+                        extra_labels,
+                        Some(prometheus::exponential_buckets(1.0, 2.0, 16).unwrap()),
+                    )
+                    .expect("failed to create router_remote_g2_selected_incremental_blocks");
+                let remote_g2_selected_planned_prefix_blocks = metrics
+                    .create_histogram(
+                        &router_metric("remote_g2_selected_planned_prefix_blocks"),
+                        "Direct G2 planned source prefix blocks for the selected target",
+                        extra_labels,
+                        Some(prometheus::exponential_buckets(1.0, 2.0, 16).unwrap()),
+                    )
+                    .expect("failed to create router_remote_g2_selected_planned_prefix_blocks");
+                let remote_g2_zero_score_candidate_count = metrics
+                    .create_histogram(
+                        &router_metric("remote_g2_zero_score_candidate_count"),
+                        "Direct G2 candidates per routing request that are available but receive zero score after cost",
+                        extra_labels,
+                        Some(prometheus::exponential_buckets(1.0, 2.0, 10).unwrap()),
+                    )
+                    .expect("failed to create router_remote_g2_zero_score_candidate_count");
+                let remote_g2_zero_score_incremental_blocks = metrics
+                    .create_histogram(
+                        &router_metric("remote_g2_zero_score_incremental_blocks"),
+                        "Sum of incremental Direct G2 blocks available from zero-score candidates per routing request",
+                        extra_labels,
+                        Some(prometheus::exponential_buckets(1.0, 2.0, 16).unwrap()),
+                    )
+                    .expect("failed to create router_remote_g2_zero_score_incremental_blocks");
                 Arc::new(Self {
                     requests_total,
                     time_to_first_token_seconds,
@@ -655,9 +738,61 @@ impl RouterRequestMetrics {
                     remote_g2_planned_tokens,
                     remote_g2_rejected_g1_candidates_total,
                     remote_g2_no_plan_total,
+                    remote_g2_candidate_count,
+                    remote_g2_selected_benefit_blocks,
+                    remote_g2_selected_score_blocks,
+                    remote_g2_selected_effective_score_blocks,
+                    remote_g2_selected_cost_blocks,
+                    remote_g2_selected_incremental_blocks,
+                    remote_g2_selected_planned_prefix_blocks,
+                    remote_g2_zero_score_candidate_count,
+                    remote_g2_zero_score_incremental_blocks,
                 })
             })
             .clone()
+    }
+
+    pub fn observe_remote_g2_candidate_query(
+        &self,
+        query: &RemoteG2CandidateQueryResult,
+        selected_candidate: Option<RemoteG2ScoredCandidate>,
+        selected_effective_score_blocks: Option<f64>,
+    ) {
+        self.remote_g2_candidate_count
+            .observe(query.scored_candidate_count() as f64);
+
+        let mut zero_score_candidate_count = 0usize;
+        let mut zero_score_incremental_blocks = 0usize;
+        for candidate in query.scored_candidates.values() {
+            if candidate.score_blocks == 0 {
+                zero_score_candidate_count += 1;
+                zero_score_incremental_blocks = zero_score_incremental_blocks
+                    .saturating_add(candidate.candidate.incremental_blocks);
+            }
+        }
+        self.remote_g2_zero_score_candidate_count
+            .observe(zero_score_candidate_count as f64);
+        self.remote_g2_zero_score_incremental_blocks
+            .observe(zero_score_incremental_blocks as f64);
+
+        if let Some(candidate) = selected_candidate {
+            self.remote_g2_selected_benefit_blocks
+                .observe(candidate.benefit_blocks as f64);
+            self.remote_g2_selected_score_blocks
+                .observe(candidate.score_blocks as f64);
+            if let Some(effective_score_blocks) =
+                selected_effective_score_blocks.filter(|value| value.is_finite())
+            {
+                self.remote_g2_selected_effective_score_blocks
+                    .observe(effective_score_blocks);
+            }
+            self.remote_g2_selected_cost_blocks
+                .observe(candidate.cost_blocks as f64);
+            self.remote_g2_selected_incremental_blocks
+                .observe(candidate.candidate.incremental_blocks as f64);
+            self.remote_g2_selected_planned_prefix_blocks
+                .observe(candidate.candidate.planned_prefix_blocks as f64);
+        }
     }
 
     pub fn observe_remote_g2_decision(&self, decision: &RemoteKvReuseDecision, block_size: u32) {
@@ -736,6 +871,14 @@ impl RemoteIndexerMetrics {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::HashMap;
+
+    use dynamo_kv_router::{
+        protocols::WorkerWithDpRank,
+        remote_g2_plan::{
+            RemoteG2CandidateQueryResult, RemoteG2ScoredCandidate, RemoteKvReuseCandidate,
+        },
+    };
     use prometheus::{Encoder, TextEncoder};
 
     fn gather_pef(registry: &prometheus::Registry) -> String {
@@ -950,6 +1093,132 @@ dynamo_frontend_router_queue_pending_requests{worker_type=\"decode\"} 5
             "22",
         ] {
             assert!(!output.contains(forbidden));
+        }
+    }
+
+    #[test]
+    fn remote_g2_candidate_query_metrics_capture_selected_and_zero_score_candidates() {
+        let registry = prometheus::Registry::new();
+        let make_hist = |name: &str| {
+            let hist = prometheus::Histogram::with_opts(
+                prometheus::HistogramOpts::new(name, "test").buckets(vec![1.0, 2.0, 4.0, 8.0]),
+            )
+            .unwrap();
+            registry.register(Box::new(hist.clone())).unwrap();
+            hist
+        };
+        let make_counter =
+            |name: &str| prometheus::IntCounter::new(name, "test").expect("test counter");
+
+        let metrics = RouterRequestMetrics {
+            requests_total: make_counter("test_requests_total"),
+            time_to_first_token_seconds: make_hist("test_time_to_first_token_seconds"),
+            inter_token_latency_seconds: make_hist("test_inter_token_latency_seconds"),
+            input_sequence_tokens: make_hist("test_input_sequence_tokens"),
+            output_sequence_tokens: make_hist("test_output_sequence_tokens"),
+            kv_hit_rate: make_hist("test_kv_hit_rate"),
+            kv_transfer_estimated_latency_seconds: make_hist(
+                "test_kv_transfer_estimated_latency_seconds",
+            ),
+            shared_cache_hit_rate: make_hist("test_shared_cache_hit_rate"),
+            shared_cache_beyond_blocks: make_hist("test_shared_cache_beyond_blocks"),
+            remote_g2_plans_total: make_counter("test_remote_g2_plans_total"),
+            remote_g2_planned_tokens: make_counter("test_remote_g2_planned_tokens"),
+            remote_g2_rejected_g1_candidates_total: make_counter(
+                "test_remote_g2_rejected_g1_candidates_total",
+            ),
+            remote_g2_no_plan_total: IntCounterVec::new(
+                Opts::new("test_remote_g2_no_plan_total", "test"),
+                &["reason"],
+            )
+            .unwrap(),
+            remote_g2_candidate_count: make_hist("test_remote_g2_candidate_count"),
+            remote_g2_selected_benefit_blocks: make_hist("test_remote_g2_selected_benefit_blocks"),
+            remote_g2_selected_score_blocks: make_hist("test_remote_g2_selected_score_blocks"),
+            remote_g2_selected_effective_score_blocks: make_hist(
+                "test_remote_g2_selected_effective_score_blocks",
+            ),
+            remote_g2_selected_cost_blocks: make_hist("test_remote_g2_selected_cost_blocks"),
+            remote_g2_selected_incremental_blocks: make_hist(
+                "test_remote_g2_selected_incremental_blocks",
+            ),
+            remote_g2_selected_planned_prefix_blocks: make_hist(
+                "test_remote_g2_selected_planned_prefix_blocks",
+            ),
+            remote_g2_zero_score_candidate_count: make_hist(
+                "test_remote_g2_zero_score_candidate_count",
+            ),
+            remote_g2_zero_score_incremental_blocks: make_hist(
+                "test_remote_g2_zero_score_incremental_blocks",
+            ),
+        };
+
+        let selected_target = WorkerWithDpRank::new(1, 0);
+        let zero_score_target = WorkerWithDpRank::new(2, 0);
+        let capped_out_target = WorkerWithDpRank::new(3, 0);
+        let selected_candidate = RemoteG2ScoredCandidate {
+            candidate: RemoteKvReuseCandidate {
+                source: WorkerWithDpRank::new(9, 0),
+                start_block_index: 2,
+                planned_prefix_blocks: 8,
+                incremental_blocks: 6,
+            },
+            benefit_blocks: 6,
+            cost_blocks: 2,
+            score_blocks: 4,
+        };
+        let query = RemoteG2CandidateQueryResult::from_scored_candidates(HashMap::from([
+            (selected_target, selected_candidate),
+            (
+                zero_score_target,
+                RemoteG2ScoredCandidate {
+                    candidate: RemoteKvReuseCandidate {
+                        source: WorkerWithDpRank::new(9, 1),
+                        start_block_index: 3,
+                        planned_prefix_blocks: 3,
+                        incremental_blocks: 3,
+                    },
+                    benefit_blocks: 3,
+                    cost_blocks: 8,
+                    score_blocks: 0,
+                },
+            ),
+            (
+                capped_out_target,
+                RemoteG2ScoredCandidate {
+                    candidate: RemoteKvReuseCandidate {
+                        source: WorkerWithDpRank::new(9, 2),
+                        start_block_index: 4,
+                        planned_prefix_blocks: 5,
+                        incremental_blocks: 5,
+                    },
+                    benefit_blocks: 5,
+                    cost_blocks: 7,
+                    score_blocks: 0,
+                },
+            ),
+        ]));
+
+        metrics.observe_remote_g2_candidate_query(&query, Some(selected_candidate), Some(1.0));
+
+        let output = gather_pef(&registry);
+        for expected in [
+            "test_remote_g2_candidate_count_count 1",
+            "test_remote_g2_candidate_count_sum 3",
+            "test_remote_g2_selected_benefit_blocks_sum 6",
+            "test_remote_g2_selected_score_blocks_count 1",
+            "test_remote_g2_selected_score_blocks_sum 4",
+            "test_remote_g2_selected_effective_score_blocks_sum 1",
+            "test_remote_g2_selected_cost_blocks_sum 2",
+            "test_remote_g2_selected_incremental_blocks_sum 6",
+            "test_remote_g2_selected_planned_prefix_blocks_sum 8",
+            "test_remote_g2_zero_score_candidate_count_sum 2",
+            "test_remote_g2_zero_score_incremental_blocks_sum 8",
+        ] {
+            assert!(
+                output.contains(expected),
+                "PEF missing {expected}; output:\n{output}"
+            );
         }
     }
 

@@ -67,7 +67,8 @@ pub struct SchedulingRequest {
     pub effective_overlap_blocks: HashMap<WorkerWithDpRank, f64>,
     pub effective_cached_tokens: HashMap<WorkerWithDpRank, usize>,
     pub shared_cache_hits: Option<SharedCacheHits>,
-    pub remote_g2_score_blocks: HashMap<WorkerWithDpRank, u32>,
+    pub remote_g2_cost_blocks: HashMap<WorkerWithDpRank, u32>,
+    pub remote_g2_benefit_blocks: HashMap<WorkerWithDpRank, u32>,
     pub remote_g2_score_multiplier: f64,
     pub remote_g2_score_max_local_gap_blocks: Option<f64>,
 
