@@ -67,7 +67,8 @@ fn scheduler_error_status(error: &KvSchedulerError) -> StatusCode {
         KvSchedulerError::AllEligibleWorkersOverloaded
         | KvSchedulerError::PinnedWorkerOverloaded { .. } => StatusCode::TOO_MANY_REQUESTS,
         KvSchedulerError::QueueRejected(_) => StatusCode::SERVICE_UNAVAILABLE,
-        KvSchedulerError::PinnedWorkerNotAllowed { .. } => StatusCode::BAD_REQUEST,
+        KvSchedulerError::PinnedWorkerNotAllowed { .. }
+        | KvSchedulerError::InvalidRouterConfig(_) => StatusCode::BAD_REQUEST,
         KvSchedulerError::BookingFailed(_) => StatusCode::CONFLICT,
     }
 }
