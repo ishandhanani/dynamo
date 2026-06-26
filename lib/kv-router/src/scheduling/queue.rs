@@ -980,6 +980,7 @@ mod tests {
                 };
                 let potential_decode_blocks = load.potential_decode_blocks();
                 let key = (
+                    load.active_requests,
                     potential_prefill_tokens,
                     potential_decode_blocks,
                     worker.worker_id,

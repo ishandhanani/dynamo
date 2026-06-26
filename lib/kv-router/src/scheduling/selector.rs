@@ -11,6 +11,10 @@ use super::filter::{RoutingEligibility, WorkerEligibilityError};
 use super::types::{KvSchedulerError, SchedulingRequest};
 use crate::protocols::{WorkerConfigLike, WorkerId, WorkerSelectionResult, WorkerWithDpRank};
 
+const TWO_STAGE_CACHE_THRESHOLD: f64 = 0.3;
+const TWO_STAGE_BALANCE_ABS_THRESHOLD: usize = 64;
+const TWO_STAGE_BALANCE_REL_THRESHOLD: f64 = 1.5;
+
 /// A trait that users can implement to define custom selection logic.
 ///
 /// Generic over `C` so that the scheduling layer does not depend on a concrete config type.
@@ -118,23 +122,7 @@ impl DefaultWorkerSelector {
     ) -> f64 {
         let block_size_f64 = block_size as f64;
         let effective_overlap_blocks = request.effective_overlap_blocks_for(worker);
-        let has_tier_overlap_blocks = !request.overlap.tier_overlap_blocks.device.is_empty()
-            || !request.overlap.tier_overlap_blocks.host_pinned.is_empty()
-            || !request.overlap.tier_overlap_blocks.disk.is_empty();
-        let device_overlap_blocks = request
-            .overlap
-            .tier_overlap_blocks
-            .device
-            .get(&worker)
-            .copied()
-            .map(|blocks| blocks as f64)
-            .unwrap_or_else(|| {
-                if has_tier_overlap_blocks {
-                    0.0
-                } else {
-                    effective_overlap_blocks
-                }
-            });
+        let device_overlap_blocks = request.device_overlap_blocks_for(worker);
         // `shared_cache_hits::hits_beyond` expects an integer block count, so
         // use the unweighted device prefix depth for this comparison.
         let device_overlap_blocks_u32 = device_overlap_blocks.round().max(0.0) as u32;
@@ -236,6 +224,114 @@ impl DefaultWorkerSelector {
 
         logit
     }
+
+    fn select_two_stage<C: WorkerConfigLike>(
+        &self,
+        workers: &HashMap<WorkerId, C>,
+        request: &SchedulingRequest,
+        eligibility: RoutingEligibility<'_>,
+        request_blocks: u64,
+    ) -> WorkerSelectionResult {
+        let request_blocks_f64 = request_blocks as f64;
+        let mut min_active = usize::MAX;
+        let mut max_active = 0usize;
+        let mut best_overlap = f64::NEG_INFINITY;
+        let mut best_overlap_min_active = usize::MAX;
+
+        eligibility.for_each_eligible_worker_rank(workers, |worker, _| {
+            let active = request.worker_load_for(worker).active_requests;
+            min_active = min_active.min(active);
+            max_active = max_active.max(active);
+
+            let overlap = request
+                .device_overlap_blocks_for(worker)
+                .min(request_blocks_f64);
+            if overlap > best_overlap {
+                best_overlap = overlap;
+                best_overlap_min_active = active;
+            } else if overlap == best_overlap {
+                best_overlap_min_active = best_overlap_min_active.min(active);
+            }
+        });
+
+        debug_assert_ne!(min_active, usize::MAX);
+        debug_assert!(best_overlap.is_finite());
+        let match_ratio = best_overlap / request_blocks_f64;
+        let imbalanced = max_active.saturating_sub(min_active) > TWO_STAGE_BALANCE_ABS_THRESHOLD
+            && (max_active as f64) > TWO_STAGE_BALANCE_REL_THRESHOLD * min_active as f64;
+        let use_affinity = !imbalanced && match_ratio > TWO_STAGE_CACHE_THRESHOLD;
+        let target_active = if use_affinity {
+            best_overlap_min_active
+        } else {
+            min_active
+        };
+
+        let mut selected = None;
+        let mut tie_count = 0usize;
+        let mut best_preference = f64::INFINITY;
+        let mut rng = rand::rng();
+        eligibility.for_each_eligible_worker_rank(workers, |worker, config| {
+            let load = request.worker_load_for(worker);
+            if load.active_requests != target_active {
+                return;
+            }
+            if use_affinity
+                && request
+                    .device_overlap_blocks_for(worker)
+                    .min(request_blocks_f64)
+                    != best_overlap
+            {
+                return;
+            }
+
+            let preference = request
+                .routing_constraints
+                .preferred_taint_multiplier(config.taints())
+                .unwrap_or(1.0);
+            if preference < best_preference {
+                best_preference = preference;
+                selected = Some(worker);
+                tie_count = 1;
+            } else if preference == best_preference {
+                tie_count += 1;
+                if rng.random_range(0..tie_count) == 0 {
+                    selected = Some(worker);
+                }
+            }
+        });
+
+        let worker = selected.expect("two-stage candidate non-empty");
+        let selection_branch = if imbalanced {
+            "imbalance_least_active"
+        } else if use_affinity {
+            "affinity"
+        } else {
+            "cold_least_active"
+        };
+        let effective_overlap_blocks = request.effective_overlap_blocks_for(worker);
+        let cached_tokens = request.effective_cached_tokens_for(worker);
+        tracing::info!(
+            router_mode = "kv",
+            worker_id = worker.worker_id,
+            worker_type = %self.worker_type,
+            dp_rank = ?worker.dp_rank,
+            selection_policy = "two_stage",
+            selection_branch,
+            match_ratio,
+            active_requests_selected = target_active,
+            active_requests_min = min_active,
+            active_requests_max = max_active,
+            effective_cached_blocks = effective_overlap_blocks,
+            "Selected worker"
+        );
+
+        WorkerSelectionResult {
+            worker,
+            required_blocks: request_blocks,
+            effective_overlap_blocks,
+            cached_tokens,
+        }
+    }
 }
 
 impl<C: WorkerConfigLike> WorkerSelector<C> for DefaultWorkerSelector {
@@ -328,6 +424,20 @@ impl<C: WorkerConfigLike> WorkerSelector<C> for DefaultWorkerSelector {
                 effective_overlap_blocks,
                 cached_tokens,
             });
+        }
+
+        if self.kv_router_config.two_stage_aware {
+            if request
+                .router_config_override
+                .as_ref()
+                .and_then(|config| config.router_temperature)
+                .is_some_and(|temperature| temperature != 0.0)
+            {
+                return Err(KvSchedulerError::InvalidRouterConfig(
+                    "two-stage worker selection requires router_temperature=0".to_string(),
+                ));
+            }
+            return Ok(self.select_two_stage(workers, request, eligibility, request_blocks));
         }
 
         let temperature = request
@@ -425,6 +535,7 @@ impl<C: WorkerConfigLike> WorkerSelector<C> for DefaultWorkerSelector {
                 worker_id = best_worker.worker_id,
                 worker_type = %self.worker_type,
                 dp_rank = ?best_worker.dp_rank,
+                selection_policy = "cost",
                 logit = best_logit,
                 host_pinned_blocks = best_host_pinned_overlap_blocks,
                 disk_blocks = best_disk_overlap_blocks,
@@ -453,6 +564,7 @@ impl<C: WorkerConfigLike> WorkerSelector<C> for DefaultWorkerSelector {
             worker_id = best_worker.worker_id,
             worker_type = %self.worker_type,
             dp_rank = ?best_worker.dp_rank,
+            selection_policy = "cost",
             logit = best_logit,
             effective_cached_blocks = best_overlap,
             host_pinned_blocks = best_host_pinned_overlap_blocks,
@@ -548,6 +660,220 @@ mod tests {
                 )
             })
             .collect()
+    }
+
+    fn two_stage_selector() -> DefaultWorkerSelector {
+        DefaultWorkerSelector::new(
+            Some(KvRouterConfig {
+                two_stage_aware: true,
+                ..Default::default()
+            }),
+            "test",
+        )
+    }
+
+    fn set_two_stage_worker(
+        request: &mut SchedulingRequest,
+        worker: WorkerWithDpRank,
+        device_overlap_blocks: usize,
+        active_requests: usize,
+    ) {
+        request
+            .overlap
+            .tier_overlap_blocks
+            .device
+            .insert(worker, device_overlap_blocks);
+        request
+            .overlap
+            .effective_overlap_blocks
+            .insert(worker, device_overlap_blocks as f64);
+        request
+            .overlap
+            .effective_cached_tokens
+            .insert(worker, device_overlap_blocks * 16);
+        request.worker_loads.insert(
+            worker,
+            crate::sequences::WorkerLoadProjection {
+                active_requests,
+                ..Default::default()
+            },
+        );
+    }
+
+    #[test]
+    fn test_two_stage_branches_and_strict_gates() {
+        use crate::test_utils::SimpleWorkerConfig;
+
+        let selector = two_stage_selector();
+        let workers = HashMap::from([
+            (0, SimpleWorkerConfig::default()),
+            (1, SimpleWorkerConfig::default()),
+        ]);
+        let worker0 = WorkerWithDpRank::from_worker_id(0);
+        let worker1 = WorkerWithDpRank::from_worker_id(1);
+
+        for (name, active0, active1, overlap0, overlap1, expected) in [
+            ("cold", 4, 1, 2, 0, worker1),
+            ("affinity", 4, 1, 4, 0, worker0),
+            ("exact_threshold_is_cold", 4, 1, 3, 0, worker1),
+            ("both_imbalance_gates", 100, 0, 10, 0, worker1),
+            ("absolute_gate_only", 265, 200, 10, 0, worker0),
+            ("relative_gate_only", 2, 1, 10, 0, worker0),
+        ] {
+            let mut request = base_request(160);
+            set_two_stage_worker(&mut request, worker0, overlap0, active0);
+            set_two_stage_worker(&mut request, worker1, overlap1, active1);
+
+            let result = selector
+                .select_worker(&workers, &request, request.eligibility(), 16)
+                .unwrap();
+            assert_eq!(result.worker, expected, "case {name}");
+        }
+    }
+
+    #[test]
+    fn test_two_stage_equal_prefix_owners_prefer_least_active_and_randomize_ties() {
+        use crate::test_utils::SimpleWorkerConfig;
+
+        let selector = two_stage_selector();
+        let workers: HashMap<_, _> = (0..3)
+            .map(|worker_id| (worker_id, SimpleWorkerConfig::default()))
+            .collect();
+        let mut request = base_request(160);
+        for (worker_id, active_requests) in [(0, 3), (1, 1), (2, 1)] {
+            set_two_stage_worker(
+                &mut request,
+                WorkerWithDpRank::from_worker_id(worker_id),
+                4,
+                active_requests,
+            );
+        }
+
+        let mut selected = [false; 3];
+        for _ in 0..120 {
+            let worker = selector
+                .select_worker(&workers, &request, request.eligibility(), 16)
+                .unwrap()
+                .worker;
+            selected[worker.worker_id as usize] = true;
+        }
+
+        assert!(
+            !selected[0],
+            "more-active prefix owner must not be selected"
+        );
+        assert!(
+            selected[1] && selected[2],
+            "least-active ties must be uniform"
+        );
+    }
+
+    #[test]
+    fn test_two_stage_uses_device_overlap_and_legacy_fallback() {
+        use crate::test_utils::SimpleWorkerConfig;
+
+        let selector = two_stage_selector();
+        let workers = HashMap::from([
+            (0, SimpleWorkerConfig::default()),
+            (1, SimpleWorkerConfig::default()),
+        ]);
+        let worker0 = WorkerWithDpRank::from_worker_id(0);
+        let worker1 = WorkerWithDpRank::from_worker_id(1);
+        let mut tiered = base_request(160);
+        tiered
+            .overlap
+            .effective_overlap_blocks
+            .insert(worker0, 10.0);
+        tiered
+            .overlap
+            .tier_overlap_blocks
+            .host_pinned
+            .insert(worker0, 10);
+        set_two_stage_worker(&mut tiered, worker1, 4, 0);
+        tiered.worker_loads.insert(worker0, Default::default());
+
+        let selected = selector
+            .select_worker(&workers, &tiered, tiered.eligibility(), 16)
+            .unwrap();
+        assert_eq!(selected.worker, worker1);
+
+        let mut legacy = base_request(160);
+        legacy.overlap.effective_overlap_blocks.insert(worker0, 4.0);
+        legacy.overlap.effective_overlap_blocks.insert(worker1, 0.0);
+        legacy.worker_loads.insert(worker0, Default::default());
+        legacy.worker_loads.insert(worker1, Default::default());
+        let selected = selector
+            .select_worker(&workers, &legacy, legacy.eligibility(), 16)
+            .unwrap();
+        assert_eq!(selected.worker, worker0);
+    }
+
+    #[test]
+    fn test_two_stage_compares_dp_ranks_independently() {
+        use crate::test_utils::SimpleWorkerConfig;
+
+        let selector = two_stage_selector();
+        let workers = HashMap::from([(
+            7,
+            SimpleWorkerConfig {
+                data_parallel_size: 2,
+                ..Default::default()
+            },
+        )]);
+        let rank0 = WorkerWithDpRank::new(7, 0);
+        let rank1 = WorkerWithDpRank::new(7, 1);
+        let mut request = base_request(160);
+        set_two_stage_worker(&mut request, rank0, 0, 5);
+        set_two_stage_worker(&mut request, rank1, 0, 0);
+
+        let selected = selector
+            .select_worker(&workers, &request, request.eligibility(), 16)
+            .unwrap();
+        assert_eq!(selected.worker, rank1);
+    }
+
+    #[test]
+    fn test_two_stage_uses_preferred_taints_as_final_tie_breaker() {
+        let selector = two_stage_selector();
+        let workers = HashMap::from([
+            (
+                10,
+                TaintedWorkerConfig {
+                    taints: HashSet::from(["mdc-a".to_string()]),
+                },
+            ),
+            (20, TaintedWorkerConfig::default()),
+        ]);
+        let worker10 = WorkerWithDpRank::from_worker_id(10);
+        let worker20 = WorkerWithDpRank::from_worker_id(20);
+        let mut request = base_request(160);
+        set_two_stage_worker(&mut request, worker10, 0, 0);
+        set_two_stage_worker(&mut request, worker20, 0, 0);
+        request.routing_constraints.preferred_taints = HashMap::from([("mdc-a".to_string(), 1.0)]);
+
+        let selected = selector
+            .select_worker(&workers, &request, request.eligibility(), 16)
+            .unwrap();
+        assert_eq!(selected.worker, worker10);
+    }
+
+    #[test]
+    fn test_two_stage_rejects_request_temperature_override() {
+        use crate::test_utils::SimpleWorkerConfig;
+
+        let selector = two_stage_selector();
+        let workers = HashMap::from([(0, SimpleWorkerConfig::default())]);
+        let mut request = base_request(160);
+        request.router_config_override = Some(crate::config::RouterConfigOverride {
+            router_temperature: Some(0.1),
+            ..Default::default()
+        });
+
+        let result = selector.select_worker(&workers, &request, request.eligibility(), 16);
+        assert!(matches!(
+            result,
+            Err(KvSchedulerError::InvalidRouterConfig(_))
+        ));
     }
 
     #[test]
@@ -727,6 +1053,7 @@ mod tests {
             Some(KvRouterConfig {
                 overlap_score_credit: 1.0,
                 router_temperature: 0.0,
+                two_stage_aware: true,
                 ..Default::default()
             }),
             "test",
@@ -760,7 +1087,7 @@ mod tests {
     fn test_all_eligible_workers_overloaded_returns_overload_error() {
         use crate::test_utils::SimpleWorkerConfig;
 
-        let selector = DefaultWorkerSelector::new(Some(KvRouterConfig::default()), "test");
+        let selector = two_stage_selector();
         let workers = HashMap::from([
             (0, SimpleWorkerConfig::default()),
             (1, SimpleWorkerConfig::default()),
@@ -785,7 +1112,7 @@ mod tests {
     fn test_overloaded_pinned_worker_is_not_rerouted() {
         use crate::test_utils::SimpleWorkerConfig;
 
-        let selector = DefaultWorkerSelector::new(Some(KvRouterConfig::default()), "test");
+        let selector = two_stage_selector();
         let workers = HashMap::from([
             (0, SimpleWorkerConfig::default()),
             (1, SimpleWorkerConfig::default()),
@@ -1256,6 +1583,7 @@ mod tests {
             crate::sequences::WorkerLoadProjection {
                 active_prefill_tokens: 16,
                 active_decode_blocks: 2,
+                active_requests: 0,
                 additional_active_blocks: 3,
             },
         );

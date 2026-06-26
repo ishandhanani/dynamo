@@ -21,6 +21,16 @@ const fn default_track_prefill_tokens() -> bool {
 }
 
 pub const DYN_ROUTER_MIN_INITIAL_WORKERS: &str = "DYN_ROUTER_MIN_INITIAL_WORKERS";
+pub const DYN_TWO_STAGE_AWARE: &str = "DYN_TWO_STAGE_AWARE";
+
+pub fn two_stage_aware_from_env() -> bool {
+    env::var(DYN_TWO_STAGE_AWARE).is_ok_and(|value| {
+        matches!(
+            value.to_ascii_lowercase().as_str(),
+            "true" | "1" | "yes" | "on"
+        )
+    })
+}
 
 pub fn min_initial_workers_from_env() -> anyhow::Result<usize> {
     match env::var(DYN_ROUTER_MIN_INITIAL_WORKERS) {
@@ -99,6 +109,7 @@ pub fn kv_router_config_from_dynamo_env() -> KvRouterConfig {
         overlap_score_credit_decay = config.overlap_score_credit_decay,
         prefill_load_scale = config.prefill_load_scale,
         router_temperature = config.router_temperature,
+        two_stage_aware = config.two_stage_aware,
         use_kv_events = config.use_kv_events,
         router_replica_sync = config.router_replica_sync,
         router_track_active_blocks = config.router_track_active_blocks,
@@ -152,6 +163,9 @@ fn kv_router_config_from_lookup(get_env: impl Fn(&str) -> Option<String>) -> KvR
     }
     if let Some(value) = parse_f64(&get_env, "DYN_ROUTER_TEMPERATURE") {
         config.router_temperature = value;
+    }
+    if let Some(value) = parse_bool(&get_env, DYN_TWO_STAGE_AWARE) {
+        config.two_stage_aware = value;
     }
     if let Some(value) = parse_bool(&get_env, "DYN_USE_KV_EVENTS") {
         config.use_kv_events = value;
@@ -480,6 +494,11 @@ pub struct KvRouterConfig {
     #[validate(range(min = 0.0))]
     pub router_temperature: f64,
 
+    /// Hidden POC switch for SMG-shaped two-stage worker selection.
+    #[doc(hidden)]
+    #[serde(skip)]
+    pub two_stage_aware: bool,
+
     pub use_kv_events: bool,
 
     /// **Deprecated:** Enable durable KV events using NATS JetStream instead of the default event plane.
@@ -597,6 +616,7 @@ impl Default for KvRouterConfig {
             host_cache_hit_weight: default_host_cache_hit_weight(),
             disk_cache_hit_weight: default_disk_cache_hit_weight(),
             router_temperature: 0.0,
+            two_stage_aware: false,
             use_kv_events: true,
             durable_kv_events: false, // default to NATS Core (local indexer mode)
             router_replica_sync: false,
@@ -646,6 +666,7 @@ impl TryFrom<KvRouterConfigSerde> for KvRouterConfig {
             host_cache_hit_weight: compat.host_cache_hit_weight,
             disk_cache_hit_weight: compat.disk_cache_hit_weight,
             router_temperature: compat.router_temperature,
+            two_stage_aware: false,
             use_kv_events: compat.use_kv_events,
             durable_kv_events: compat.durable_kv_events,
             router_replica_sync: compat.router_replica_sync,
@@ -708,6 +729,11 @@ fn validate_kv_router_config(config: &KvRouterConfig) -> Result<(), ValidationEr
     if config.router_predicted_ttl_secs.is_some() && !config.use_kv_events {
         return Err(ValidationError::new(
             "router_predicted_ttl_secs requires use_kv_events=true",
+        ));
+    }
+    if config.two_stage_aware && config.router_temperature != 0.0 {
+        return Err(ValidationError::new(
+            "two-stage worker selection requires router_temperature=0",
         ));
     }
     if let Err(error) = config.loaded_policy_config() {
@@ -842,12 +868,12 @@ impl KvRouterConfig {
     ///
     /// Returns false if:
     /// - KV events are disabled (`use_kv_events=false`)
-    /// - Overlap scoring is disabled (`overlap_score_credit=0`)
+    /// - Overlap scoring is disabled (`overlap_score_credit=0`) and two-stage routing is off
     ///
     /// When false, the router skips starting the KV event subscription entirely,
     /// avoiding the need to query workers for their local indexer state.
     pub fn should_subscribe_to_kv_events(&self) -> bool {
-        self.use_kv_events && self.overlap_score_credit > 0.0
+        self.use_kv_events && (self.overlap_score_credit > 0.0 || self.two_stage_aware)
     }
 }
 
@@ -911,6 +937,34 @@ mod tests {
         ]);
         assert_eq!(disabled.overlap_score_credit, 0.0);
         assert_eq!(disabled.prefill_load_scale, 0.0);
+    }
+
+    #[test]
+    fn dynamo_env_config_enables_two_stage_poc() {
+        assert!(!config_from_values(&[]).two_stage_aware);
+        let config = config_from_values(&[(DYN_TWO_STAGE_AWARE, "1")]);
+        assert!(config.two_stage_aware);
+        assert!(config.validate_config().is_ok());
+        assert!(
+            !serde_json::to_string(&config)
+                .unwrap()
+                .contains("two_stage")
+        );
+        assert!(
+            serde_json::from_str::<KvRouterConfig>(r#"{"two_stage_aware":true}"#).is_err(),
+            "the POC switch must remain env-only"
+        );
+    }
+
+    #[test]
+    fn two_stage_poc_rejects_router_temperature() {
+        let config = KvRouterConfig {
+            two_stage_aware: true,
+            router_temperature: 0.1,
+            ..Default::default()
+        };
+
+        assert!(config.validate_config().is_err());
     }
 
     #[test]
@@ -1337,6 +1391,18 @@ models:
         };
 
         assert!(!config.should_subscribe_to_kv_events());
+    }
+
+    #[test]
+    fn test_two_stage_subscribes_with_overlap_credit_zero() {
+        let config = KvRouterConfig {
+            overlap_score_credit: 0.0,
+            use_kv_events: true,
+            two_stage_aware: true,
+            ..Default::default()
+        };
+
+        assert!(config.should_subscribe_to_kv_events());
     }
 
     #[test]

@@ -12,7 +12,7 @@ use pyo3_async_runtimes::TaskLocals;
 
 use dynamo_kv_router::config::{
     KvRouterConfig as RsKvRouterConfig, RouterPrefillLoadModel as RsRouterPrefillLoadModel,
-    apply_deprecated_overlap_score_weight_override,
+    apply_deprecated_overlap_score_weight_override, two_stage_aware_from_env,
 };
 use dynamo_llm::discovery::LoadThresholdConfig as RsLoadThresholdConfig;
 use dynamo_llm::entrypoint::EngineConfig as RsEngineConfig;
@@ -278,6 +278,7 @@ impl KvRouterConfig {
             host_cache_hit_weight,
             disk_cache_hit_weight,
             router_temperature,
+            two_stage_aware: two_stage_aware_from_env(),
             use_kv_events,
             durable_kv_events,
             router_replica_sync,
@@ -310,9 +311,10 @@ impl KvRouterConfig {
 
     #[staticmethod]
     fn from_json(config_json: &str) -> PyResult<Self> {
-        let inner = serde_json::from_str::<RsKvRouterConfig>(config_json).map_err(|e| {
+        let mut inner = serde_json::from_str::<RsKvRouterConfig>(config_json).map_err(|e| {
             PyValueError::new_err(format!("Failed to parse KvRouterConfig JSON: {e}"))
         })?;
+        inner.two_stage_aware = two_stage_aware_from_env();
         validate_kv_router_config(&inner)?;
         Ok(KvRouterConfig { inner })
     }

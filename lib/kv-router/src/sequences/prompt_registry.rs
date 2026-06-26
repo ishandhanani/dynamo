@@ -30,6 +30,7 @@ use crate::protocols::WorkerWithDpRank;
 pub struct WorkerLoadProjection {
     pub active_prefill_tokens: usize,
     pub active_decode_blocks: usize,
+    pub active_requests: usize,
     /// Request blocks not already shared with active sequences on this worker.
     ///
     /// These blocks may still exist in an inactive cache; this field describes
@@ -331,6 +332,7 @@ impl PromptRegistry {
                 WorkerLoadProjection {
                     active_prefill_tokens: load.active_tokens(decay_now),
                     active_decode_blocks: load.active_blocks,
+                    active_requests: load.active_requests,
                     additional_active_blocks: query_len.saturating_sub(overlap_depth),
                 },
             );

@@ -58,6 +58,9 @@ pub enum KvSchedulerError {
 
     #[error("failed to initialize event publisher: {0}")]
     InitFailed(String),
+
+    #[error("invalid router configuration: {0}")]
+    InvalidRouterConfig(String),
 }
 
 impl KvSchedulerError {
@@ -250,6 +253,24 @@ impl SchedulingRequest {
             .get(&worker)
             .copied()
             .unwrap_or(0.0)
+    }
+
+    pub(crate) fn device_overlap_blocks_for(&self, worker: WorkerWithDpRank) -> f64 {
+        let tiers = &self.overlap.tier_overlap_blocks;
+        let has_tier_overlap =
+            !tiers.device.is_empty() || !tiers.host_pinned.is_empty() || !tiers.disk.is_empty();
+        tiers
+            .device
+            .get(&worker)
+            .copied()
+            .map(|blocks| blocks as f64)
+            .unwrap_or_else(|| {
+                if has_tier_overlap {
+                    0.0
+                } else {
+                    self.effective_overlap_blocks_for(worker)
+                }
+            })
     }
 
     pub fn worker_load_for(&self, worker: WorkerWithDpRank) -> WorkerLoadProjection {
