@@ -12,7 +12,8 @@ use super::types::{KvSchedulerError, SchedulingRequest};
 use crate::protocols::{WorkerConfigLike, WorkerId, WorkerSelectionResult, WorkerWithDpRank};
 
 const TWO_STAGE_CACHE_THRESHOLD: f64 = 0.3;
-const TWO_STAGE_BALANCE_ABS_THRESHOLD: usize = 64;
+// ponytail: build-only ablation; usize::MAX makes the imbalance escape unreachable.
+const TWO_STAGE_BALANCE_ABS_THRESHOLD: usize = usize::MAX;
 const TWO_STAGE_BALANCE_REL_THRESHOLD: f64 = 1.5;
 
 /// A trait that users can implement to define custom selection logic.
@@ -716,7 +717,7 @@ mod tests {
             ("cold", 4, 1, 2, 0, worker1),
             ("affinity", 4, 1, 4, 0, worker0),
             ("exact_threshold_is_cold", 4, 1, 3, 0, worker1),
-            ("both_imbalance_gates", 100, 0, 10, 0, worker1),
+            ("imbalance_gate_disabled", 100, 0, 10, 0, worker0),
             ("absolute_gate_only", 265, 200, 10, 0, worker0),
             ("relative_gate_only", 2, 1, 10, 0, worker0),
         ] {
