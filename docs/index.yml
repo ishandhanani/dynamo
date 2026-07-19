@@ -432,6 +432,10 @@ navigation:
                 path: components/router/router-concepts.md
               - page: Configuration and Tuning
                 path: components/router/router-configuration.md
+              - page: Worker Selector Plugins
+                path: components/router/worker-selector-plugins.md
+              - page: Worker Selector Signal Reference
+                path: components/router/worker-selector-signals.md
               - page: Deficit Round Robin Queue Scheduling
                 path: components/router/deficit-round-robin.md
               - page: Priority Scheduling

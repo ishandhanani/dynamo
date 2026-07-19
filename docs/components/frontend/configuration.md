@@ -41,6 +41,15 @@ explains when to adjust these settings.
 | `--router-session-affinity-ttl-secs` | `DYN_ROUTER_SESSION_AFFINITY_TTL_SECS` | unset | Enable session affinity and best-effort binding sync with this router-local idle TTL |
 | `--decode-fallback` / `--no-decode-fallback` | `DYN_DECODE_FALLBACK` | `false` | Fall back to aggregated mode when prefill workers are unavailable |
 
+### Runtime Worker Selector Plugin
+
+**Experimental.** Available since v1.3.0. See [Worker Selector Plugins](../router/worker-selector-plugins.md) for the authoring and loading walkthrough.
+
+| Env Var | Default | Description |
+|---------|---------|-------------|
+| `DYN_ROUTER_WORKER_SELECTOR_PLUGIN` | unset | Absolute path to a trusted worker selector `cdylib`. When unset, Dynamo uses the built-in selector |
+| `DYN_ROUTER_WORKER_SELECTOR_CONFIG` | empty | UTF-8 configuration string passed to each plugin state. Requires `DYN_ROUTER_WORKER_SELECTOR_PLUGIN` |
+
 ### KV Scoring and Cache Locality
 
 | CLI Argument | Env Var | Default | Description |

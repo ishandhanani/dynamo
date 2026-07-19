@@ -61,6 +61,8 @@ For basic model registration without KV routing, use `--router-mode round-robin`
 - **[Router Filtering](router-filtering.md)**: Candidate eligibility, DP-rank filtering, and busy-threshold overload handling
 - **[Frontend Configuration Reference](../frontend/configuration.md#router)**: Canonical embedded-router flags and environment variables
 - **[Configuration and Tuning](router-configuration.md)**: Router behavior, transport modes, and tuning guidance
+- **[Worker Selector Plugins](worker-selector-plugins.md)**: Build and load a Rust worker-selection strategy
+- **[Worker Selector Signal Reference](worker-selector-signals.md)**: Candidate columns and their Dynamo sources
 - **[Deficit Round Robin Queue Scheduling](deficit-round-robin.md)**: Weighted policy-class arbitration, cursor movement, and bulk virtual rounds
 - **[Priority Scheduling](priority-scheduling.md)**: Router queue, backend engine, and cache priority behavior
 - **[Disaggregated Serving](router-disaggregated-serving.md)**: Prefill and decode routing setups
