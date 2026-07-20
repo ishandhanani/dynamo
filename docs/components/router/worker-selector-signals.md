@@ -11,7 +11,7 @@ This reference maps the safe Rust worker selector API to the NVIDIA Dynamo KV ro
 
 ## Request Signals
 
-Request signals are available without declaring a candidate signal group.
+Request signals are available without declaring candidate inputs.
 
 | `SelectionInput` accessor | Type | Dynamo value |
 |---|---|---|
@@ -23,7 +23,7 @@ Request signals are available without declaring a candidate signal group.
 | `selection_mode()` | `SelectionMode` | `QueryOnly`, `Tracked`, or `TrackedWithAdmission` scheduling mode |
 | `request_id()` | `Option<&str>` | Request ID when the scheduling mode carries one |
 | `session_id()` | `Option<&str>` | Session ID when supplied by the caller |
-| `candidate_groups()` | `CandidateSignalGroups` | Groups materialized for this callback, including automatically added `IDENTITY` |
+| `candidate_inputs()` | `CandidateInputs` | Inputs materialized for this callback, including automatically added `IDENTITY` |
 | `candidate_count()` | `usize` | Number of aligned entries in each provided candidate column |
 | `is_empty()` | `bool` | Whether `candidate_count()` is zero |
 
@@ -33,9 +33,9 @@ For unpinned requests, Dynamo expands every eligible worker into its published d
 
 Candidate order is not stable. Every provided column has `candidate_count()` entries and uses the same index. An index and all borrowed data remain valid only for the current `select` callback. Dynamo validates a selected worker and rank again before recording request accounting.
 
-Any nonempty group declaration automatically includes `IDENTITY`. Declaring `NONE` avoids the plugin candidate scan and column materialization, so `candidate_count()` is zero. `Selection::UseDefault` can still invoke the built-in selector. Missing per-candidate map entries use the defaults listed below.
+Any nonempty input declaration automatically includes `IDENTITY`. Declaring `NONE` avoids the plugin candidate scan and column materialization, so `candidate_count()` is zero. `Selection::UseDefault` can still invoke the built-in selector. Missing per-candidate map entries use the defaults listed below.
 
-## Candidate Signal Groups
+## Candidate Inputs
 
 ### Identity
 
@@ -104,19 +104,29 @@ Use the methods on `WorkerSelectorCapacityV1` instead of interpreting the raw `C
 
 Required taints are hard eligibility constraints and are applied before the plugin. Preferred taints remain soft input through `preferred_taint_multiplier`; values below `1.0` reduce stock cost, values above `1.0` increase it, and `1.0` is neutral.
 
-## Group Selection
+### Derived Default-Cost Inputs
 
-Combine groups with `|` in `required_candidate_groups`:
+| Accessor | Type | Dynamo source |
+|---|---|---|
+| `default_costs()` | `Option<&[f64]>` | Complete configured worker cost, including prefill load, weighted KV overlap, decode load, and preferred-taint adjustment; lower is better |
+| `kv_overlaps()` | `Option<&[f64]>` | Weighted KV overlap credit subtracted by the default cost, including configured device decay and host, disk, and shared-cache weights; higher is better |
+| `decode_loads()` | `Option<&[u64]>` | Active decode blocks plus the incoming request's additional active blocks; lower is better |
+
+`default_costs()` is evaluated before temperature sampling. These values come from the same calculation used by Dynamo's built-in selector rather than a plugin-side copy.
+
+## Input Selection
+
+Combine inputs with `|` in `required_candidate_inputs`:
 
 ```rust
-fn required_candidate_groups(&self) -> CandidateSignalGroups {
-    CandidateSignalGroups::CACHED_TOKENS
-        | CandidateSignalGroups::LOAD
-        | CandidateSignalGroups::ROUTING
+fn required_candidate_inputs(&self) -> CandidateInputs {
+    CandidateInputs::CACHED_TOKENS
+        | CandidateInputs::LOAD
+        | CandidateInputs::ROUTING
 }
 ```
 
-Dynamo calls this method once for each configured decode or prefill plugin state. The returned set cannot vary per request. Accessors for undeclared optional groups return `None`.
+Dynamo calls this method once for each configured decode or prefill plugin state. The returned set cannot vary per request. Accessors for undeclared optional inputs return `None`.
 
 ## Selection Results
 

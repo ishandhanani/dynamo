@@ -58,7 +58,7 @@ dynamo-worker-selector-plugin-api = "1.3.0"
 use std::cmp::Reverse;
 
 use dynamo_worker_selector_plugin_api::{
-    CandidateSignalGroups, RouterRole, Selection, SelectionInput, WorkerSelectorPlugin,
+    CandidateInputs, RouterRole, Selection, SelectionInput, WorkerSelectorPlugin,
     export_worker_selector_plugin,
 };
 
@@ -73,8 +73,8 @@ impl WorkerSelectorPlugin for CacheFirst {
         }
     }
 
-    fn required_candidate_groups(&self) -> CandidateSignalGroups {
-        CandidateSignalGroups::CACHED_TOKENS | CandidateSignalGroups::LOAD
+    fn required_candidate_inputs(&self) -> CandidateInputs {
+        CandidateInputs::CACHED_TOKENS | CandidateInputs::LOAD
     }
 
     fn select(&mut self, input: SelectionInput<'_>) -> Result<Selection, String> {
@@ -123,7 +123,7 @@ Dynamo creates independent plugin state for each decode or prefill router it con
 
 ## Choose Candidate Signals
 
-Return the smallest `CandidateSignalGroups` set that implements the decision. Dynamo evaluates `required_candidate_groups` once after `from_config`, caches the result, and materializes only those columns for each selection.
+Return the smallest `CandidateInputs` set that implements the decision. Dynamo evaluates `required_candidate_inputs` once after `from_config`, caches the result, and materializes only those columns for each selection.
 
 - Use `IDENTITY` for algorithms based only on worker ID and data-parallel rank.
 - Use `CACHED_TOKENS` for effective cache locality.
@@ -131,6 +131,9 @@ Return the smallest `CandidateSignalGroups` set that implements the decision. Dy
 - Use `LOAD` for projected active prefill and decode work.
 - Use `CAPACITY` to normalize work by published worker limits.
 - Use `ROUTING` for stable worker identity and preferred-taint cost adjustment.
+- Use `DEFAULT_COST` to layer logic on Dynamo's complete configured worker cost.
+- Use `KV_OVERLAP` for only the weighted cache-overlap component of that cost.
+- Use `DECODE_LOAD` for only the projected decode-block component.
 
 Dynamo automatically adds `IDENTITY` to any nonempty set. `NONE` skips plugin candidate scanning and materialization and exposes zero candidates; use it for a strategy that always returns `Selection::UseDefault`. The built-in selector then performs its own selection work.
 
