@@ -109,8 +109,8 @@ Required taints are hard eligibility constraints and are applied before the plug
 | Accessor | Type | Dynamo source |
 |---|---|---|
 | `default_costs()` | `Option<&[f64]>` | Complete configured worker cost, including prefill load, weighted KV overlap, decode load, and preferred-taint adjustment; lower is better |
-| `kv_overlaps()` | `Option<&[f64]>` | Weighted KV overlap credit subtracted by the default cost, including configured device decay and host, disk, and shared-cache weights; higher is better |
-| `decode_loads()` | `Option<&[u64]>` | Active decode blocks plus the incoming request's additional active blocks; lower is better |
+| `default_kv_overlaps()` | `Option<&[f64]>` | Weighted KV overlap credit subtracted by the default cost, including configured device decay and host, disk, and shared-cache weights; higher is better |
+| `default_decode_loads()` | `Option<&[u64]>` | Active decode blocks plus the incoming request's additional active blocks; lower is better |
 
 `default_costs()` is evaluated before temperature sampling. These values come from the same calculation used by Dynamo's built-in selector rather than a plugin-side copy.
 

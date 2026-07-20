@@ -132,8 +132,8 @@ Return the smallest `CandidateInputs` set that implements the decision. Dynamo e
 - Use `CAPACITY` to normalize work by published worker limits.
 - Use `ROUTING` for stable worker identity and preferred-taint cost adjustment.
 - Use `DEFAULT_COST` to layer logic on Dynamo's complete configured worker cost.
-- Use `KV_OVERLAP` for only the weighted cache-overlap component of that cost.
-- Use `DECODE_LOAD` for only the projected decode-block component.
+- Use `DEFAULT_KV_OVERLAP` for only the weighted cache-overlap component of that cost.
+- Use `DEFAULT_DECODE_LOAD` for only the projected decode-block component.
 
 Dynamo automatically adds `IDENTITY` to any nonempty set. `NONE` skips plugin candidate scanning and materialization and exposes zero candidates; use it for a strategy that always returns `Selection::UseDefault`. The built-in selector then performs its own selection work.
 

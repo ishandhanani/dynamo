@@ -87,8 +87,8 @@ struct CandidateScratch {
     capacities: Vec<WorkerSelectorCapacityV1>,
     routing: Vec<WorkerSelectorRoutingV1>,
     default_costs: Vec<f64>,
-    kv_overlaps: Vec<f64>,
-    decode_loads: Vec<u64>,
+    default_kv_overlaps: Vec<f64>,
+    default_decode_loads: Vec<u64>,
 }
 
 impl CandidateScratch {
@@ -101,8 +101,8 @@ impl CandidateScratch {
         self.capacities.clear();
         self.routing.clear();
         self.default_costs.clear();
-        self.kv_overlaps.clear();
-        self.decode_loads.clear();
+        self.default_kv_overlaps.clear();
+        self.default_decode_loads.clear();
     }
 }
 
@@ -236,9 +236,9 @@ impl<C: WorkerConfigLike> TargetWorkerSelector<C> for RuntimePluginSelector {
         let needs_capacity = inputs.contains(CandidateInputs::CAPACITY);
         let needs_routing = inputs.contains(CandidateInputs::ROUTING);
         let needs_default_cost = inputs.contains(CandidateInputs::DEFAULT_COST);
-        let needs_kv_overlap = inputs.contains(CandidateInputs::KV_OVERLAP);
-        let needs_decode_load = inputs.contains(CandidateInputs::DECODE_LOAD);
-        let needs_cost = needs_default_cost || needs_kv_overlap;
+        let needs_default_kv_overlap = inputs.contains(CandidateInputs::DEFAULT_KV_OVERLAP);
+        let needs_default_decode_load = inputs.contains(CandidateInputs::DEFAULT_DECODE_LOAD);
+        let needs_cost = needs_default_cost || needs_default_kv_overlap;
         let cost_weights = needs_cost.then(|| self.default_fallback.logit_weights(request));
         let min_active_prefill_tokens = cost_weights.map_or(0, |weights| {
             self.default_fallback
@@ -308,11 +308,11 @@ impl<C: WorkerConfigLike> TargetWorkerSelector<C> for RuntimePluginSelector {
                             .unwrap_or(0),
                     });
                 }
-                if needs_load || needs_decode_load {
+                if needs_load || needs_default_decode_load {
                     let load = request.worker_load_for(worker);
-                    if needs_decode_load {
+                    if needs_default_decode_load {
                         scratch
-                            .decode_loads
+                            .default_decode_loads
                             .push(to_u64(load.potential_decode_blocks()));
                     }
                     if needs_load {
@@ -355,8 +355,8 @@ impl<C: WorkerConfigLike> TargetWorkerSelector<C> for RuntimePluginSelector {
                     if needs_default_cost {
                         scratch.default_costs.push(signals.default_cost);
                     }
-                    if needs_kv_overlap {
-                        scratch.kv_overlaps.push(signals.kv_overlap_blocks);
+                    if needs_default_kv_overlap {
+                        scratch.default_kv_overlaps.push(signals.kv_overlap_blocks);
                     }
                 }
             });
@@ -373,8 +373,12 @@ impl<C: WorkerConfigLike> TargetWorkerSelector<C> for RuntimePluginSelector {
         debug_assert!(!needs_capacity || scratch.capacities.len() == candidate_count);
         debug_assert!(!needs_routing || scratch.routing.len() == candidate_count);
         debug_assert!(!needs_default_cost || scratch.default_costs.len() == candidate_count);
-        debug_assert!(!needs_kv_overlap || scratch.kv_overlaps.len() == candidate_count);
-        debug_assert!(!needs_decode_load || scratch.decode_loads.len() == candidate_count);
+        debug_assert!(
+            !needs_default_kv_overlap || scratch.default_kv_overlaps.len() == candidate_count
+        );
+        debug_assert!(
+            !needs_default_decode_load || scratch.default_decode_loads.len() == candidate_count
+        );
 
         let columns = WorkerSelectorCandidateColumnsV1 {
             struct_size: size_of::<WorkerSelectorCandidateColumnsV1>() as u32,
@@ -388,8 +392,8 @@ impl<C: WorkerConfigLike> TargetWorkerSelector<C> for RuntimePluginSelector {
             capacities: ptr_if(needs_capacity, &scratch.capacities),
             routing: ptr_if(needs_routing, &scratch.routing),
             default_costs: ptr_if(needs_default_cost, &scratch.default_costs),
-            kv_overlaps: ptr_if(needs_kv_overlap, &scratch.kv_overlaps),
-            decode_loads: ptr_if(needs_decode_load, &scratch.decode_loads),
+            default_kv_overlaps: ptr_if(needs_default_kv_overlap, &scratch.default_kv_overlaps),
+            default_decode_loads: ptr_if(needs_default_decode_load, &scratch.default_decode_loads),
         };
 
         let mut flags = 0;

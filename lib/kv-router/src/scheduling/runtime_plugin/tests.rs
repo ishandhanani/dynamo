@@ -258,8 +258,8 @@ fn loads_real_plugin_and_delegates_to_default() {
         assert_eq!(scratch.capacities.capacity(), 0);
         assert_eq!(scratch.routing.capacity(), 0);
         assert_eq!(scratch.default_costs.capacity(), 0);
-        assert_eq!(scratch.kv_overlaps.capacity(), 0);
-        assert_eq!(scratch.decode_loads.capacity(), 0);
+        assert_eq!(scratch.default_kv_overlaps.capacity(), 0);
+        assert_eq!(scratch.default_decode_loads.capacity(), 0);
         (
             scratch.worker_ids.as_ptr(),
             scratch.cached_tokens.as_ptr(),
@@ -303,8 +303,8 @@ fn loads_real_plugin_and_delegates_to_default() {
     selector.candidate_inputs = CandidateInputs::IDENTITY
         | CandidateInputs::CACHED_TOKENS
         | CandidateInputs::DEFAULT_COST
-        | CandidateInputs::KV_OVERLAP
-        | CandidateInputs::DECODE_LOAD;
+        | CandidateInputs::DEFAULT_KV_OVERLAP
+        | CandidateInputs::DEFAULT_DECODE_LOAD;
     selector
         .select_worker(&workers, &request, request.eligibility(), 16)
         .unwrap();
@@ -313,10 +313,10 @@ fn loads_real_plugin_and_delegates_to_default() {
     let warm = scratch.worker_ids.iter().position(|&id| id == 20).unwrap();
     assert_eq!(scratch.default_costs[cold], 4.0625);
     assert_eq!(scratch.default_costs[warm], 2.0625);
-    assert_eq!(scratch.kv_overlaps[cold], 0.0);
-    assert_eq!(scratch.kv_overlaps[warm], 4.0);
-    assert_eq!(scratch.decode_loads[cold], 0);
-    assert_eq!(scratch.decode_loads[warm], 2);
+    assert_eq!(scratch.default_kv_overlaps[cold], 0.0);
+    assert_eq!(scratch.default_kv_overlaps[warm], 4.0);
+    assert_eq!(scratch.default_decode_loads[cold], 0);
+    assert_eq!(scratch.default_decode_loads[warm], 2);
     drop(scratch);
 
     let default_config = KvRouterConfig {
@@ -346,6 +346,6 @@ fn loads_real_plugin_and_delegates_to_default() {
     assert_eq!(scratch.capacities.capacity(), 0);
     assert_eq!(scratch.routing.capacity(), 0);
     assert_eq!(scratch.default_costs.capacity(), 0);
-    assert_eq!(scratch.kv_overlaps.capacity(), 0);
-    assert_eq!(scratch.decode_loads.capacity(), 0);
+    assert_eq!(scratch.default_kv_overlaps.capacity(), 0);
+    assert_eq!(scratch.default_decode_loads.capacity(), 0);
 }
