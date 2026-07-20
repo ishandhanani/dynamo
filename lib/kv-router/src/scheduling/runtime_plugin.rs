@@ -20,16 +20,15 @@ use std::{
 use anyhow::{Context, bail, ensure};
 use dynamo_worker_selector_plugin_api::{
     ABI_VERSION_V1, ByteSliceV1, CANDIDATE_FORMAT_COLUMNAR_V1, CAPACITY_UNAVAILABLE,
-    CandidateSignalGroups, ENTRYPOINT_SYMBOL_V1, INPUT_HAS_EXPECTED_OUTPUT_TOKENS,
-    INPUT_HAS_REQUEST_ID, INPUT_HAS_SESSION_ID, INPUT_HAS_SHARED_CACHE_HITS,
-    INPUT_TRACKS_PREFILL_TOKENS, ROUTER_ROLE_DECODE, ROUTER_ROLE_PREFILL,
-    SELECTION_MODE_QUERY_ONLY, SELECTION_MODE_TRACKED, SELECTION_MODE_TRACKED_WITH_ADMISSION,
-    STATUS_ERROR, STATUS_OK, STATUS_USE_DEFAULT, WorkerSelectorCacheTiersV1,
-    WorkerSelectorCandidateColumnsV1, WorkerSelectorCapacityV1, WorkerSelectorCreateV1,
-    WorkerSelectorDestroyV1, WorkerSelectorEntrypointV1, WorkerSelectorErrorBufferV1,
-    WorkerSelectorInputV1, WorkerSelectorLoadV1, WorkerSelectorPluginHeaderV1,
-    WorkerSelectorPluginV1, WorkerSelectorRequiredCandidateGroupsV1, WorkerSelectorRoutingV1,
-    WorkerSelectorSelectV1,
+    CandidateInputs, ENTRYPOINT_SYMBOL_V1, INPUT_HAS_EXPECTED_OUTPUT_TOKENS, INPUT_HAS_REQUEST_ID,
+    INPUT_HAS_SESSION_ID, INPUT_HAS_SHARED_CACHE_HITS, INPUT_TRACKS_PREFILL_TOKENS,
+    ROUTER_ROLE_DECODE, ROUTER_ROLE_PREFILL, SELECTION_MODE_QUERY_ONLY, SELECTION_MODE_TRACKED,
+    SELECTION_MODE_TRACKED_WITH_ADMISSION, STATUS_ERROR, STATUS_OK, STATUS_USE_DEFAULT,
+    WorkerSelectorCacheTiersV1, WorkerSelectorCandidateColumnsV1, WorkerSelectorCapacityV1,
+    WorkerSelectorCreateV1, WorkerSelectorDestroyV1, WorkerSelectorEntrypointV1,
+    WorkerSelectorErrorBufferV1, WorkerSelectorInputV1, WorkerSelectorLoadV1,
+    WorkerSelectorPluginHeaderV1, WorkerSelectorPluginV1, WorkerSelectorRequiredCandidateInputsV1,
+    WorkerSelectorRoutingV1, WorkerSelectorSelectV1,
 };
 use libloading::Library;
 
@@ -75,7 +74,7 @@ struct PluginCallbacks {
     create: WorkerSelectorCreateV1,
     select: WorkerSelectorSelectV1,
     destroy: WorkerSelectorDestroyV1,
-    required_candidate_groups: WorkerSelectorRequiredCandidateGroupsV1,
+    required_candidate_inputs: WorkerSelectorRequiredCandidateInputsV1,
 }
 
 #[derive(Default)]
@@ -87,6 +86,9 @@ struct CandidateScratch {
     loads: Vec<WorkerSelectorLoadV1>,
     capacities: Vec<WorkerSelectorCapacityV1>,
     routing: Vec<WorkerSelectorRoutingV1>,
+    default_costs: Vec<f64>,
+    kv_overlaps: Vec<f64>,
+    decode_loads: Vec<u64>,
 }
 
 impl CandidateScratch {
@@ -98,6 +100,9 @@ impl CandidateScratch {
         self.loads.clear();
         self.capacities.clear();
         self.routing.clear();
+        self.default_costs.clear();
+        self.kv_overlaps.clear();
+        self.decode_loads.clear();
     }
 }
 
@@ -155,7 +160,7 @@ impl RuntimePluginConfig {
 pub struct RuntimePluginSelector {
     state: NonNull<c_void>,
     candidate_scratch: RefCell<CandidateScratch>,
-    candidate_groups: CandidateSignalGroups,
+    candidate_inputs: CandidateInputs,
     callbacks: PluginCallbacks,
     _library: Library,
     path: PathBuf,
@@ -178,13 +183,13 @@ impl RuntimePluginSelector {
     ) -> anyhow::Result<Self> {
         let path = path.to_path_buf();
         let (library, callbacks) = unsafe { load_plugin(&path) }?;
-        let (state, candidate_groups) =
+        let (state, candidate_inputs) =
             unsafe { initialize_plugin_state(callbacks, config, router_role, &path) }?;
 
         Ok(Self {
             state,
             candidate_scratch: RefCell::new(CandidateScratch::default()),
-            candidate_groups,
+            candidate_inputs,
             callbacks,
             _library: library,
             path,
@@ -223,13 +228,22 @@ impl<C: WorkerConfigLike> TargetWorkerSelector<C> for RuntimePluginSelector {
         eligibility: RoutingEligibility<'_>,
         block_size: u32,
     ) -> Result<WorkerWithDpRank, KvSchedulerError> {
-        let groups = self.candidate_groups;
-        let needs_identity = groups.contains(CandidateSignalGroups::IDENTITY);
-        let needs_cached_tokens = groups.contains(CandidateSignalGroups::CACHED_TOKENS);
-        let needs_cache_tiers = groups.contains(CandidateSignalGroups::CACHE_TIERS);
-        let needs_load = groups.contains(CandidateSignalGroups::LOAD);
-        let needs_capacity = groups.contains(CandidateSignalGroups::CAPACITY);
-        let needs_routing = groups.contains(CandidateSignalGroups::ROUTING);
+        let inputs = self.candidate_inputs;
+        let needs_identity = inputs.contains(CandidateInputs::IDENTITY);
+        let needs_cached_tokens = inputs.contains(CandidateInputs::CACHED_TOKENS);
+        let needs_cache_tiers = inputs.contains(CandidateInputs::CACHE_TIERS);
+        let needs_load = inputs.contains(CandidateInputs::LOAD);
+        let needs_capacity = inputs.contains(CandidateInputs::CAPACITY);
+        let needs_routing = inputs.contains(CandidateInputs::ROUTING);
+        let needs_default_cost = inputs.contains(CandidateInputs::DEFAULT_COST);
+        let needs_kv_overlap = inputs.contains(CandidateInputs::KV_OVERLAP);
+        let needs_decode_load = inputs.contains(CandidateInputs::DECODE_LOAD);
+        let needs_cost = needs_default_cost || needs_kv_overlap;
+        let cost_weights = needs_cost.then(|| self.default_fallback.logit_weights(request));
+        let min_active_prefill_tokens = cost_weights.map_or(0, |weights| {
+            self.default_fallback
+                .min_active_prefill_tokens(workers, request, eligibility, weights)
+        });
         let has_tier_overlap = needs_cache_tiers
             && (!request.overlap.tier_overlap_blocks.device.is_empty()
                 || !request.overlap.tier_overlap_blocks.host_pinned.is_empty()
@@ -294,17 +308,20 @@ impl<C: WorkerConfigLike> TargetWorkerSelector<C> for RuntimePluginSelector {
                             .unwrap_or(0),
                     });
                 }
-                if needs_load {
-                    let load = request
-                        .worker_loads
-                        .get(&worker)
-                        .copied()
-                        .unwrap_or_default();
-                    scratch.loads.push(WorkerSelectorLoadV1 {
-                        active_prefill_tokens: to_u64(load.active_prefill_tokens),
-                        active_decode_blocks: to_u64(load.active_decode_blocks),
-                        additional_active_blocks: to_u64(load.additional_active_blocks),
-                    });
+                if needs_load || needs_decode_load {
+                    let load = request.worker_load_for(worker);
+                    if needs_decode_load {
+                        scratch
+                            .decode_loads
+                            .push(to_u64(load.potential_decode_blocks()));
+                    }
+                    if needs_load {
+                        scratch.loads.push(WorkerSelectorLoadV1 {
+                            active_prefill_tokens: to_u64(load.active_prefill_tokens),
+                            active_decode_blocks: to_u64(load.active_decode_blocks),
+                            additional_active_blocks: to_u64(load.additional_active_blocks),
+                        });
+                    }
                 }
                 if needs_capacity {
                     scratch.capacities.push(WorkerSelectorCapacityV1 {
@@ -326,6 +343,22 @@ impl<C: WorkerConfigLike> TargetWorkerSelector<C> for RuntimePluginSelector {
                             .unwrap_or(1.0),
                     });
                 }
+                if let Some(weights) = cost_weights {
+                    let signals = self.default_fallback.candidate_cost(
+                        request,
+                        worker,
+                        Some(config),
+                        block_size,
+                        min_active_prefill_tokens,
+                        weights,
+                    );
+                    if needs_default_cost {
+                        scratch.default_costs.push(signals.default_cost);
+                    }
+                    if needs_kv_overlap {
+                        scratch.kv_overlaps.push(signals.kv_overlap_blocks);
+                    }
+                }
             });
         }
         if needs_identity && scratch.worker_ids.is_empty() {
@@ -339,11 +372,14 @@ impl<C: WorkerConfigLike> TargetWorkerSelector<C> for RuntimePluginSelector {
         debug_assert!(!needs_load || scratch.loads.len() == candidate_count);
         debug_assert!(!needs_capacity || scratch.capacities.len() == candidate_count);
         debug_assert!(!needs_routing || scratch.routing.len() == candidate_count);
+        debug_assert!(!needs_default_cost || scratch.default_costs.len() == candidate_count);
+        debug_assert!(!needs_kv_overlap || scratch.kv_overlaps.len() == candidate_count);
+        debug_assert!(!needs_decode_load || scratch.decode_loads.len() == candidate_count);
 
         let columns = WorkerSelectorCandidateColumnsV1 {
             struct_size: size_of::<WorkerSelectorCandidateColumnsV1>() as u32,
             _reserved: 0,
-            provided_groups: groups.bits(),
+            provided_inputs: inputs.bits(),
             worker_ids: ptr_if(needs_identity, &scratch.worker_ids),
             dp_ranks: ptr_if(needs_identity, &scratch.dp_ranks),
             cached_tokens: ptr_if(needs_cached_tokens, &scratch.cached_tokens),
@@ -351,6 +387,9 @@ impl<C: WorkerConfigLike> TargetWorkerSelector<C> for RuntimePluginSelector {
             loads: ptr_if(needs_load, &scratch.loads),
             capacities: ptr_if(needs_capacity, &scratch.capacities),
             routing: ptr_if(needs_routing, &scratch.routing),
+            default_costs: ptr_if(needs_default_cost, &scratch.default_costs),
+            kv_overlaps: ptr_if(needs_kv_overlap, &scratch.kv_overlaps),
+            decode_loads: ptr_if(needs_decode_load, &scratch.decode_loads),
         };
 
         let mut flags = 0;
@@ -448,28 +487,28 @@ unsafe fn load_plugin(path: &Path) -> anyhow::Result<(Library, PluginCallbacks)>
     Ok((library, callbacks))
 }
 
-unsafe fn required_candidate_groups(
+unsafe fn required_candidate_inputs(
     callbacks: PluginCallbacks,
     state: NonNull<c_void>,
     path: &Path,
-) -> anyhow::Result<CandidateSignalGroups> {
-    let mut raw_groups = u64::MAX;
+) -> anyhow::Result<CandidateInputs> {
+    let mut raw_inputs = u64::MAX;
     let mut error_bytes = [MaybeUninit::uninit(); ERROR_BUFFER_SIZE];
     let mut error = error_buffer(&mut error_bytes);
     let status = unsafe {
-        (callbacks.required_candidate_groups)(state.as_ptr(), &mut raw_groups, &mut error)
+        (callbacks.required_candidate_inputs)(state.as_ptr(), &mut raw_inputs, &mut error)
     };
     if status != STATUS_OK {
         bail!(
-            "worker-selector plugin {path:?} failed to declare candidate groups (status {status}): {}",
+            "worker-selector plugin {path:?} failed to declare candidate inputs (status {status}): {}",
             error_message(&error_bytes, &error)
         );
     }
-    CandidateSignalGroups::from_bits(raw_groups)
-        .map(CandidateSignalGroups::with_identity)
+    CandidateInputs::from_bits(raw_inputs)
+        .map(CandidateInputs::with_identity)
         .with_context(|| {
             format!(
-                "worker-selector plugin {path:?} declared unknown candidate group bits {raw_groups:#x}"
+                "worker-selector plugin {path:?} declared unknown candidate input bits {raw_inputs:#x}"
             )
         })
 }
@@ -479,7 +518,7 @@ unsafe fn initialize_plugin_state(
     config: &[u8],
     router_role: RuntimePluginRouterRole,
     path: &Path,
-) -> anyhow::Result<(NonNull<c_void>, CandidateSignalGroups)> {
+) -> anyhow::Result<(NonNull<c_void>, CandidateInputs)> {
     let mut state = std::ptr::null_mut();
     let mut error_bytes = [MaybeUninit::uninit(); ERROR_BUFFER_SIZE];
     let mut error = error_buffer(&mut error_bytes);
@@ -499,8 +538,8 @@ unsafe fn initialize_plugin_state(
     }
     let state = NonNull::new(state)
         .with_context(|| format!("worker-selector plugin {path:?} returned a null state"))?;
-    match unsafe { required_candidate_groups(callbacks, state, path) } {
-        Ok(groups) => Ok((state, groups)),
+    match unsafe { required_candidate_inputs(callbacks, state, path) } {
+        Ok(inputs) => Ok((state, inputs)),
         Err(error) => {
             unsafe { (callbacks.destroy)(state.as_ptr()) };
             Err(error)
@@ -547,9 +586,9 @@ unsafe fn validate_descriptor(
         destroy: descriptor
             .destroy
             .context("plugin is missing its destroy callback")?,
-        required_candidate_groups: descriptor
-            .required_candidate_groups
-            .context("plugin is missing its required-candidate-groups callback")?,
+        required_candidate_inputs: descriptor
+            .required_candidate_inputs
+            .context("plugin is missing its required-candidate-inputs callback")?,
     })
 }
 

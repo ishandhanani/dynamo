@@ -182,11 +182,17 @@ pub struct DefaultWorkerSelector {
 }
 
 #[derive(Debug, Clone, Copy)]
-struct LogitWeights {
+pub(crate) struct LogitWeights {
     overlap_score_credit: f64,
     overlap_score_credit_decay: f64,
     prefill_load_scale: f64,
     shared_cache_multiplier: f64,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct DefaultCostSignals {
+    pub default_cost: f64,
+    pub kv_overlap_blocks: f64,
 }
 
 impl DefaultWorkerSelector {
@@ -197,6 +203,77 @@ impl DefaultWorkerSelector {
         }
     }
 
+    #[inline]
+    pub(crate) fn logit_weights(&self, request: &SchedulingRequest) -> LogitWeights {
+        LogitWeights {
+            overlap_score_credit: request
+                .router_config_override
+                .as_ref()
+                .and_then(|cfg| cfg.overlap_score_credit)
+                .unwrap_or(self.kv_router_config.overlap_score_credit),
+            overlap_score_credit_decay: self.kv_router_config.overlap_score_credit_decay,
+            prefill_load_scale: request
+                .router_config_override
+                .as_ref()
+                .and_then(|cfg| cfg.prefill_load_scale)
+                .unwrap_or(self.kv_router_config.prefill_load_scale),
+            shared_cache_multiplier: request
+                .router_config_override
+                .as_ref()
+                .and_then(|cfg| cfg.shared_cache_multiplier)
+                .unwrap_or(self.kv_router_config.shared_cache_multiplier),
+        }
+    }
+
+    #[inline]
+    pub(crate) fn min_active_prefill_tokens<C: WorkerConfigLike>(
+        &self,
+        workers: &HashMap<WorkerId, C>,
+        request: &SchedulingRequest,
+        eligibility: RoutingEligibility<'_>,
+        weights: LogitWeights,
+    ) -> usize {
+        if !request.track_prefill_tokens || weights.overlap_score_credit_decay <= 0.0 {
+            return 0;
+        }
+
+        let mut minimum = usize::MAX;
+        eligibility.for_each_eligible_worker_rank(workers, |worker, _| {
+            minimum = minimum.min(request.worker_load_for(worker).active_prefill_tokens);
+        });
+        debug_assert_ne!(minimum, usize::MAX);
+        minimum
+    }
+
+    #[inline]
+    pub(crate) fn candidate_cost<C: WorkerConfigLike>(
+        &self,
+        request: &SchedulingRequest,
+        worker: WorkerWithDpRank,
+        config: Option<&C>,
+        block_size: u32,
+        min_active_prefill_tokens: usize,
+        weights: LogitWeights,
+    ) -> DefaultCostSignals {
+        let mut signals = self.worker_logit(
+            request,
+            worker,
+            block_size,
+            min_active_prefill_tokens,
+            weights,
+            "Formula",
+        );
+        if let Some(multiplier) = config.and_then(|config| {
+            request
+                .routing_constraints
+                .preferred_taint_multiplier(config.taints())
+        }) {
+            signals.default_cost *= multiplier;
+        }
+        signals
+    }
+
+    #[inline]
     fn worker_logit(
         &self,
         request: &SchedulingRequest,
@@ -205,7 +282,7 @@ impl DefaultWorkerSelector {
         min_active_prefill_tokens: usize,
         weights: LogitWeights,
         formula_name: &'static str,
-    ) -> f64 {
+    ) -> DefaultCostSignals {
         let block_size_f64 = block_size as f64;
         let effective_overlap_blocks = request.effective_overlap_blocks_for(worker);
         let has_tier_overlap_blocks = !request.overlap.tier_overlap_blocks.device.is_empty()
@@ -324,7 +401,10 @@ impl DefaultWorkerSelector {
             );
         }
 
-        logit
+        DefaultCostSignals {
+            default_cost: logit,
+            kv_overlap_blocks: overlap_credit_blocks,
+        }
     }
 }
 
@@ -361,24 +441,7 @@ impl<C: WorkerConfigLike> WorkerSelector<C> for DefaultWorkerSelector {
 
         let request_blocks = request.request_blocks(block_size);
 
-        let weights = LogitWeights {
-            overlap_score_credit: request
-                .router_config_override
-                .as_ref()
-                .and_then(|cfg| cfg.overlap_score_credit)
-                .unwrap_or(self.kv_router_config.overlap_score_credit),
-            overlap_score_credit_decay: self.kv_router_config.overlap_score_credit_decay,
-            prefill_load_scale: request
-                .router_config_override
-                .as_ref()
-                .and_then(|cfg| cfg.prefill_load_scale)
-                .unwrap_or(self.kv_router_config.prefill_load_scale),
-            shared_cache_multiplier: request
-                .router_config_override
-                .as_ref()
-                .and_then(|cfg| cfg.shared_cache_multiplier)
-                .unwrap_or(self.kv_router_config.shared_cache_multiplier),
-        };
+        let weights = self.logit_weights(request);
 
         if let Some(worker) = pinned_worker {
             match eligibility.validate_worker_rank(workers, worker) {
@@ -392,14 +455,16 @@ impl<C: WorkerConfigLike> WorkerSelector<C> for DefaultWorkerSelector {
             }
 
             let min_active_prefill_tokens = request.worker_load_for(worker).active_prefill_tokens;
-            let logit = self.worker_logit(
-                request,
-                worker,
-                block_size,
-                min_active_prefill_tokens,
-                weights,
-                "Pinned formula",
-            );
+            let logit = self
+                .worker_logit(
+                    request,
+                    worker,
+                    block_size,
+                    min_active_prefill_tokens,
+                    weights,
+                    "Pinned formula",
+                )
+                .default_cost;
             let effective_overlap_blocks = request.effective_overlap_blocks_for(worker);
             let cached_tokens = request.effective_cached_tokens_for(worker);
 
@@ -426,37 +491,19 @@ impl<C: WorkerConfigLike> WorkerSelector<C> for DefaultWorkerSelector {
             .and_then(|cfg| cfg.router_temperature)
             .unwrap_or(self.kv_router_config.router_temperature);
         let min_active_prefill_tokens =
-            if request.track_prefill_tokens && weights.overlap_score_credit_decay > 0.0 {
-                let mut minimum = usize::MAX;
-                eligibility.for_each_eligible_worker_rank(workers, |worker, _| {
-                    minimum = minimum.min(request.worker_load_for(worker).active_prefill_tokens);
-                });
-                debug_assert_ne!(minimum, usize::MAX);
-                minimum
-            } else {
-                0
-            };
+            self.min_active_prefill_tokens(workers, request, eligibility, weights);
         let get_score = |worker: WorkerWithDpRank| -> f64 {
-            let base_score = self.worker_logit(
+            // NOTE: The multiplicative preferred-taint bias assumes a non-negative score.
+            // Negative overlap scores expose its pre-existing sign sensitivity; keep it for now.
+            self.candidate_cost(
                 request,
                 worker,
+                workers.get(&worker.worker_id),
                 block_size,
                 min_active_prefill_tokens,
                 weights,
-                "Formula",
-            );
-            let Some(config) = workers.get(&worker.worker_id) else {
-                return base_score;
-            };
-            match request
-                .routing_constraints
-                .preferred_taint_multiplier(config.taints())
-            {
-                // NOTE: This multiplicative bias assumes a non-negative score. Negative
-                // overlap scores expose its pre-existing sign sensitivity; keep it for now.
-                Some(multiplier) => base_score * multiplier,
-                None => base_score,
-            }
+            )
+            .default_cost
         };
 
         let (best_worker, best_logit) = if temperature == 0.0 {
@@ -1512,13 +1559,17 @@ mod tests {
         };
 
         assert_eq!(
-            selector.worker_logit(&request, worker, 16, 0, weights, "test"),
+            selector
+                .worker_logit(&request, worker, 16, 0, weights, "test")
+                .default_cost,
             7.0
         );
 
         request.track_prefill_tokens = false;
         assert_eq!(
-            selector.worker_logit(&request, worker, 16, 0, weights, "test"),
+            selector
+                .worker_logit(&request, worker, 16, 0, weights, "test")
+                .default_cost,
             -7.0
         );
     }

@@ -35,12 +35,12 @@ unsafe extern "C" fn select(
 
 unsafe extern "C" fn destroy(_state: *mut c_void) {}
 
-unsafe extern "C" fn required_candidate_groups(
+unsafe extern "C" fn required_candidate_inputs(
     _state: *mut c_void,
-    groups_out: *mut u64,
+    inputs_out: *mut u64,
     _error_out: *mut WorkerSelectorErrorBufferV1,
 ) -> i32 {
-    unsafe { groups_out.write(CandidateSignalGroups::NONE.bits()) };
+    unsafe { inputs_out.write(CandidateInputs::NONE.bits()) };
     STATUS_OK
 }
 
@@ -51,7 +51,7 @@ fn descriptor() -> WorkerSelectorPluginV1 {
         create: Some(create),
         select: Some(select),
         destroy: Some(destroy),
-        required_candidate_groups: Some(required_candidate_groups),
+        required_candidate_inputs: Some(required_candidate_inputs),
     }
 }
 
@@ -80,7 +80,7 @@ fn descriptor_validation_rejects_incompatible_plugins() {
     assert!(unsafe { validate_descriptor(&invalid) }.is_err());
 
     let mut invalid = descriptor();
-    invalid.required_candidate_groups = None;
+    invalid.required_candidate_inputs = None;
     assert!(unsafe { validate_descriptor(&invalid) }.is_err());
 }
 
@@ -96,12 +96,12 @@ unsafe extern "C" fn create_non_null_state(
     STATUS_OK
 }
 
-unsafe extern "C" fn unknown_candidate_groups(
+unsafe extern "C" fn unknown_candidate_inputs(
     _state: *mut c_void,
-    groups_out: *mut u64,
+    inputs_out: *mut u64,
     _error_out: *mut WorkerSelectorErrorBufferV1,
 ) -> i32 {
-    unsafe { groups_out.write(1 << 63) };
+    unsafe { inputs_out.write(1 << 63) };
     STATUS_OK
 }
 
@@ -110,13 +110,13 @@ unsafe extern "C" fn record_destroy(_state: *mut c_void) {
 }
 
 #[test]
-fn invalid_candidate_groups_destroy_initialized_state() {
+fn invalid_candidate_inputs_destroy_initialized_state() {
     DESTROYED_AFTER_INVALID_GROUPS.store(false, Ordering::SeqCst);
     let callbacks = PluginCallbacks {
         create: create_non_null_state,
         select,
         destroy: record_destroy,
-        required_candidate_groups: unknown_candidate_groups,
+        required_candidate_inputs: unknown_candidate_inputs,
     };
     let error = unsafe {
         initialize_plugin_state(
@@ -127,7 +127,7 @@ fn invalid_candidate_groups_destroy_initialized_state() {
         )
     }
     .unwrap_err();
-    assert!(error.to_string().contains("unknown candidate group bits"));
+    assert!(error.to_string().contains("unknown candidate input bits"));
     assert!(DESTROYED_AFTER_INVALID_GROUPS.load(Ordering::SeqCst));
 }
 
@@ -230,9 +230,14 @@ fn loads_real_plugin_and_delegates_to_default() {
         .effective_overlap_blocks
         .insert(warm_worker, 4.0);
 
-    let selector =
-        unsafe { plugin(b"").load(RuntimePluginRouterRole::Decode, KvRouterConfig::default()) }
-            .unwrap();
+    let signal_config = KvRouterConfig {
+        overlap_score_credit: 1.0,
+        overlap_score_credit_decay: 0.0,
+        prefill_load_scale: 1.0,
+        ..Default::default()
+    };
+    let mut selector =
+        unsafe { plugin(b"").load(RuntimePluginRouterRole::Decode, signal_config) }.unwrap();
     assert_eq!(
         selector
             .select_worker(&workers, &request, request.eligibility(), 16)
@@ -240,8 +245,8 @@ fn loads_real_plugin_and_delegates_to_default() {
         warm_worker
     );
     assert_eq!(
-        selector.candidate_groups,
-        CandidateSignalGroups::IDENTITY | CandidateSignalGroups::CACHED_TOKENS
+        selector.candidate_inputs,
+        CandidateInputs::IDENTITY | CandidateInputs::CACHED_TOKENS
     );
     let (worker_ids_ptr, cached_tokens_ptr, worker_ids_capacity, cached_tokens_capacity) = {
         let scratch = selector.candidate_scratch.borrow();
@@ -252,6 +257,9 @@ fn loads_real_plugin_and_delegates_to_default() {
         assert_eq!(scratch.loads.capacity(), 0);
         assert_eq!(scratch.capacities.capacity(), 0);
         assert_eq!(scratch.routing.capacity(), 0);
+        assert_eq!(scratch.default_costs.capacity(), 0);
+        assert_eq!(scratch.kv_overlaps.capacity(), 0);
+        assert_eq!(scratch.decode_loads.capacity(), 0);
         (
             scratch.worker_ids.as_ptr(),
             scratch.cached_tokens.as_ptr(),
@@ -292,6 +300,25 @@ fn loads_real_plugin_and_delegates_to_default() {
             ..Default::default()
         },
     );
+    selector.candidate_inputs = CandidateInputs::IDENTITY
+        | CandidateInputs::CACHED_TOKENS
+        | CandidateInputs::DEFAULT_COST
+        | CandidateInputs::KV_OVERLAP
+        | CandidateInputs::DECODE_LOAD;
+    selector
+        .select_worker(&workers, &request, request.eligibility(), 16)
+        .unwrap();
+    let scratch = selector.candidate_scratch.borrow();
+    let cold = scratch.worker_ids.iter().position(|&id| id == 10).unwrap();
+    let warm = scratch.worker_ids.iter().position(|&id| id == 20).unwrap();
+    assert_eq!(scratch.default_costs[cold], 4.0625);
+    assert_eq!(scratch.default_costs[warm], 2.0625);
+    assert_eq!(scratch.kv_overlaps[cold], 0.0);
+    assert_eq!(scratch.kv_overlaps[warm], 4.0);
+    assert_eq!(scratch.decode_loads[cold], 0);
+    assert_eq!(scratch.decode_loads[warm], 2);
+    drop(scratch);
+
     let default_config = KvRouterConfig {
         overlap_score_credit: 0.0,
         ..Default::default()
@@ -309,7 +336,7 @@ fn loads_real_plugin_and_delegates_to_default() {
             .unwrap(),
         expected
     );
-    assert_eq!(selector.candidate_groups, CandidateSignalGroups::NONE);
+    assert_eq!(selector.candidate_inputs, CandidateInputs::NONE);
     let scratch = selector.candidate_scratch.borrow();
     assert_eq!(scratch.worker_ids.capacity(), 0);
     assert_eq!(scratch.dp_ranks.capacity(), 0);
@@ -318,4 +345,7 @@ fn loads_real_plugin_and_delegates_to_default() {
     assert_eq!(scratch.loads.capacity(), 0);
     assert_eq!(scratch.capacities.capacity(), 0);
     assert_eq!(scratch.routing.capacity(), 0);
+    assert_eq!(scratch.default_costs.capacity(), 0);
+    assert_eq!(scratch.kv_overlaps.capacity(), 0);
+    assert_eq!(scratch.decode_loads.capacity(), 0);
 }
