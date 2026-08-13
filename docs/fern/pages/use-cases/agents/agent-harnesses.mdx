@@ -217,9 +217,11 @@ An agent harness can compact older conversation history into a summary when its 
 
 For Codex, Dynamo preserves the optional `trigger`, `reason`, `implementation`, `phase`, and `strategy` values. The object appears only on the inference request that creates the summary. Invalid JSON and other request kinds leave it unset.
 
-Workers receive the field in `AgentContext` but do not act on it.
+Workers receive the field in `AgentContext`. Worker selection does not use the compaction details.
 
-Compaction metadata is passive. It does not rotate `session_id`, change request routing, or evict KV cache blocks. See [Agent Tracing](agent-tracing.md#compaction-metadata) for the request-trace format.
+Compaction keeps `session_id` and request routing stable. For a selected SGLang worker that advertises `kv_hint.deref.v1`, Dynamo sends `kv_hints.deref.apply_on=next_success`. SGLang registers the summary KV and defers the action. After the next request finishes successfully, SGLang releases the old session references and rotates the session generation before it protects the new leaf. An aborted request does not apply the action. SGLang does not delete KV blocks immediately. Unreferenced blocks remain available until normal memory pressure evicts them. Other backends do not receive the action.
+
+Set `DYN_DISABLE_AGENT_COMPACTION_DEREF=1` on the frontend to keep compaction metadata but suppress the `deref` action. Use this switch for controlled comparisons. See [Agent Tracing](agent-tracing.md#compaction-metadata) for the request-trace format.
 
 ## See Also
 

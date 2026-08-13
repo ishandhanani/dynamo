@@ -655,6 +655,19 @@ where
         })
     }
 
+    pub(crate) fn filter_kv_hints_for_worker(
+        &self,
+        worker_id: WorkerId,
+        mut hints: KvHints,
+    ) -> Option<KvHints> {
+        let configs = self.workers_with_configs.borrow();
+        let config = configs.get(&worker_id)?;
+        hints
+            .actions
+            .retain(|action| config.supports_kv_hint(action.required_capability()));
+        (!hints.is_empty()).then_some(hints)
+    }
+
     fn transfer_hint_for_selection(
         &self,
         target: WorkerWithDpRank,

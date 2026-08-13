@@ -4,6 +4,7 @@
 use std::{sync::Arc, time::Duration};
 
 use dynamo_kv_router::{
+    kv_hints::KvHints,
     protocols::{TokensWithHashes, WorkerWithDpRank},
     selector::WorkerSelector,
 };
@@ -380,7 +381,20 @@ where
 
         let (mut backend_input, context) = request.into_parts();
         backend_input.routing_mut().dp_rank = Some(selection.worker.dp_rank);
-        backend_input.kv_hints = selection.kv_hints;
+        let mut actions = backend_input
+            .kv_hints
+            .take()
+            .map(|hints| hints.actions)
+            .unwrap_or_default();
+        if let Some(hints) = selection.kv_hints {
+            actions.extend(hints.actions);
+        }
+        backend_input.kv_hints = (!actions.is_empty())
+            .then(|| KvHints::new(&context_id, actions))
+            .and_then(|hints| {
+                self.chooser
+                    .filter_kv_hints_for_worker(selection.worker.worker_id, hints)
+            });
         let updated_request = context.map(|_| backend_input);
         guard.record_prefill_start();
 

@@ -1,11 +1,16 @@
 // SPDX-FileCopyrightText: Copyright (c) 2024-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-use std::collections::{HashMap, HashSet};
+use std::{
+    collections::{HashMap, HashSet},
+    sync::LazyLock,
+};
 
 use axum::http::HeaderMap;
 use derive_builder::Builder;
+use dynamo_kv_router::kv_hints::{DerefApplyOn, KvDerefPayload, KvHintAction, KvHints};
 use dynamo_protocols::types::StopReason;
+use dynamo_runtime::config::{env_is_truthy, environment_names::llm as env_llm};
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
@@ -292,6 +297,39 @@ pub const HEADER_DP_RANK_ALIAS: &str = "x-dp-rank";
 pub const HEADER_DATA_PARALLEL_RANK_ALIAS: &str = "x-data-parallel-rank";
 pub const HEADER_PREFILL_DP_RANK_ALIAS: &str = "x-prefill-dp-rank";
 const UNSET_DP_RANK_SENTINEL: u32 = u32::MAX;
+static COMPACTION_DEREF_DISABLED: LazyLock<bool> =
+    LazyLock::new(|| env_is_truthy(env_llm::DYN_DISABLE_AGENT_COMPACTION_DEREF));
+
+pub fn kv_hints_from_agent_context(
+    context: &AgentContext,
+    message_id: impl Into<String>,
+) -> Option<KvHints> {
+    let apply_on = deref_apply_on(
+        context.session_final,
+        context.compaction.is_some(),
+        *COMPACTION_DEREF_DISABLED,
+    );
+    apply_on.map(|apply_on| {
+        KvHints::new(
+            message_id,
+            vec![KvHintAction::deref("deref", KvDerefPayload { apply_on })],
+        )
+    })
+}
+
+fn deref_apply_on(
+    session_final: Option<bool>,
+    has_compaction: bool,
+    compaction_deref_disabled: bool,
+) -> Option<DerefApplyOn> {
+    if session_final == Some(true) {
+        Some(DerefApplyOn::CurrentSuccess)
+    } else if has_compaction && !compaction_deref_disabled {
+        Some(DerefApplyOn::NextSuccess)
+    } else {
+        None
+    }
+}
 
 impl From<AgentContextHeaderValues> for AgentContext {
     fn from(values: AgentContextHeaderValues) -> Self {
@@ -1112,6 +1150,7 @@ mod tests {
                 expected_parent_session_id
             );
             assert_eq!(agent_context.session_final, None);
+            assert_eq!(kv_hints_from_agent_context(&agent_context, "msg"), None);
         }
     }
 
@@ -1357,10 +1396,26 @@ mod tests {
             Some("generic-parent")
         );
         assert_eq!(agent_context.session_final, Some(true));
+        assert_eq!(
+            kv_hints_from_agent_context(&agent_context, "msg-final"),
+            Some(KvHints::new(
+                "msg-final",
+                vec![KvHintAction::deref(
+                    "deref",
+                    KvDerefPayload {
+                        apply_on: DerefApplyOn::CurrentSuccess,
+                    },
+                )],
+            ))
+        );
+
         headers.insert(HEADER_DYNAMO_SESSION_FINAL, "false".parse().unwrap());
         assert_eq!(
-            agent_context_from_headers(&headers).unwrap().session_final,
-            Some(false)
+            kv_hints_from_agent_context(
+                &agent_context_from_headers(&headers).unwrap(),
+                "msg-final",
+            ),
+            None
         );
     }
 

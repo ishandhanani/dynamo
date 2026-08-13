@@ -368,6 +368,10 @@ pub mod llm {
     /// Accepted values: "reasoning_content" (default) or "reasoning".
     pub const DYN_REASONING_FIELD_NAME: &str = "DYN_REASONING_FIELD_NAME";
 
+    /// Disable the one-shot DEREF hint derived from agent compaction metadata.
+    /// Unset or false keeps the hint enabled.
+    pub const DYN_DISABLE_AGENT_COMPACTION_DEREF: &str = "DYN_DISABLE_AGENT_COMPACTION_DEREF";
+
     /// \[EXPERIMENTAL\] Route supported tool-call families (Qwen3-Coder, DeepSeek-V4)
     /// through the `dynamo-parsers-v2` streaming parser for BOTH the batch and the
     /// streaming path, bypassing the v1 tool-call jail. Off by default; when set, the
@@ -905,6 +909,7 @@ mod tests {
             llm::DYN_ENABLE_STREAMING_TOOL_DISPATCH,
             llm::DYN_ENABLE_STREAMING_REASONING_DISPATCH,
             llm::DYN_REASONING_FIELD_NAME,
+            llm::DYN_DISABLE_AGENT_COMPACTION_DEREF,
             llm::DYN_ENABLE_EXPERIMENTAL_PARSERS_V2,
             llm::DYN_LORA_ALLOCATION_ENABLED,
             llm::DYN_LORA_ALLOCATION_ALGORITHM,

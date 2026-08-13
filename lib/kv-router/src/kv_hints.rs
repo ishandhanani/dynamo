@@ -9,6 +9,8 @@ use crate::protocols::{ExternalSequenceBlockHash, WorkerWithDpRank};
 
 /// The selected worker can consume a `TRANSFER` hint with the v1 payload.
 pub const KV_HINT_TRANSFER_CAPABILITY_KEY: &str = "kv_hint.transfer.v1";
+/// The selected worker can consume a `DEREF` hint with the v1 payload.
+pub const KV_HINT_DEREF_CAPABILITY_KEY: &str = "kv_hint.deref.v1";
 
 /// Worker runtime-data keys used to build transfer hints.
 pub const KV_HINT_TRANSFER_WORKER_TYPE_RUNTIME_KEY: &str = "kv_hint_transfer_worker_type";
@@ -27,6 +29,25 @@ pub enum KvSourceLocationsActionVersion {
     V1_0,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub enum KvDerefActionVersion {
+    #[serde(rename = "1.0")]
+    V1_0,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum DerefApplyOn {
+    CurrentSuccess,
+    NextSuccess,
+}
+
+/// Typed payload for the `kv.deref@1.0` action.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct KvDerefPayload {
+    pub apply_on: DerefApplyOn,
+}
+
 /// Typed payload for the `kv.source_locations@1.0` point-to-point action.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct KvSourceLocationsPayload {
@@ -40,6 +61,12 @@ pub struct KvSourceLocationsPayload {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "action_type")]
 pub enum KvHintAction {
+    #[serde(rename = "kv.deref")]
+    Deref {
+        action_id: String,
+        action_version: KvDerefActionVersion,
+        payload: KvDerefPayload,
+    },
     #[serde(rename = "kv.source_locations")]
     SourceLocations {
         action_id: String,
@@ -49,6 +76,14 @@ pub enum KvHintAction {
 }
 
 impl KvHintAction {
+    pub fn deref(action_id: impl Into<String>, payload: KvDerefPayload) -> Self {
+        Self::Deref {
+            action_id: action_id.into(),
+            action_version: KvDerefActionVersion::V1_0,
+            payload,
+        }
+    }
+
     pub fn source_locations(
         action_id: impl Into<String>,
         payload: KvSourceLocationsPayload,
@@ -57,6 +92,13 @@ impl KvHintAction {
             action_id: action_id.into(),
             action_version: KvSourceLocationsActionVersion::V1_0,
             payload,
+        }
+    }
+
+    pub fn required_capability(&self) -> &'static str {
+        match self {
+            Self::Deref { .. } => KV_HINT_DEREF_CAPABILITY_KEY,
+            Self::SourceLocations { .. } => KV_HINT_TRANSFER_CAPABILITY_KEY,
         }
     }
 }
@@ -76,6 +118,10 @@ impl KvHints {
             message_id: message_id.into(),
             actions,
         }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.actions.is_empty()
     }
 }
 
@@ -143,6 +189,35 @@ mod tests {
                     "payload": {
                         "source_control_endpoint": "tcp://127.0.0.1:23280",
                         "block_hashes": [11, 22],
+                    },
+                }],
+            })
+        );
+    }
+
+    #[test]
+    fn serializes_versioned_deref_action() {
+        let hints = KvHints::new(
+            "msg-123",
+            vec![KvHintAction::deref(
+                "deref",
+                KvDerefPayload {
+                    apply_on: DerefApplyOn::NextSuccess,
+                },
+            )],
+        );
+
+        assert_eq!(
+            serde_json::to_value(hints).unwrap(),
+            serde_json::json!({
+                "protocol_version": "0.1",
+                "message_id": "msg-123",
+                "actions": [{
+                    "action_id": "deref",
+                    "action_type": "kv.deref",
+                    "action_version": "1.0",
+                    "payload": {
+                        "apply_on": "next_success",
                     },
                 }],
             })

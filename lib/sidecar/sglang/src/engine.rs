@@ -9,9 +9,9 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use dynamo_backend_common::{
-    AsyncEngineContext, DisaggregationMode, DynamoError, EngineConfig, GenerateContext, LLMEngine,
-    LLMEngineOutput, LLMEngineOutputExt, LlmRegistration, ModelInput, PreprocessedRequest,
-    WorkerConfig, usage,
+    AsyncEngineContext, DisaggregationMode, DynamoError, EngineConfig, GenerateContext,
+    KV_HINT_DEREF_CAPABILITY_KEY, LLMEngine, LLMEngineOutput, LLMEngineOutputExt, LlmRegistration,
+    ModelInput, PreprocessedRequest, WorkerConfig, usage,
 };
 use dynamo_sidecar_common::{GrpcEndpoint, GrpcTransportConfig};
 use futures::stream::BoxStream;
@@ -612,6 +612,18 @@ fn build_engine_config(
         "grpc_service".to_string(),
         Value::String("sglang.runtime.v1.SglangService".to_string()),
     );
+    let kv_hint_capabilities = discovery
+        .server_info
+        .get("kv_hint_capabilities")
+        .and_then(Value::as_array);
+    for capability in kv_hint_capabilities.into_iter().flatten() {
+        let Some(capability) = capability.as_str() else {
+            continue;
+        };
+        if capability == KV_HINT_DEREF_CAPABILITY_KEY {
+            runtime_data.insert(capability.to_string(), Value::Bool(true));
+        }
+    }
 
     Ok(EngineConfig {
         model: discovery.model_path.clone(),
@@ -735,6 +747,25 @@ mod tests {
 
         assert_eq!(registration.data_parallel_start_rank, Some(0));
         assert_eq!(registration.data_parallel_size, Some(16));
+    }
+
+    #[test]
+    fn registers_only_supported_kv_hint_capabilities() {
+        let config = build_engine_config(
+            &discovery(json!({
+                "kv_hint_capabilities": ["kv_hint.deref.v1", "kv_hint.transfer.v1"],
+            })),
+            DisaggregationMode::Decode,
+            None,
+            None,
+        )
+        .unwrap();
+
+        assert_eq!(
+            config.runtime_data.get("kv_hint.deref.v1"),
+            Some(&json!(true))
+        );
+        assert!(!config.runtime_data.contains_key("kv_hint.transfer.v1"));
     }
 
     #[test]
