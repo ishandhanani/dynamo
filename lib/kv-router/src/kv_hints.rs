@@ -9,6 +9,8 @@ use crate::protocols::{ExternalSequenceBlockHash, WorkerWithDpRank};
 
 /// The selected worker can consume a `TRANSFER` hint with the v1 payload.
 pub const KV_HINT_TRANSFER_CAPABILITY_KEY: &str = "kv_hint.transfer.v1";
+/// The selected worker can consume a `DEREF` hint with the v1 payload.
+pub const KV_HINT_DEREF_CAPABILITY_KEY: &str = "kv_hint.deref.v1";
 
 /// Worker runtime-data keys used to build transfer hints.
 pub const KV_HINT_TRANSFER_WORKER_TYPE_RUNTIME_KEY: &str = "kv_hint_transfer_worker_type";
@@ -23,6 +25,18 @@ pub struct TransferHint {
     pub block_hashes: Vec<ExternalSequenceBlockHash>,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum DerefApplyOn {
+    CurrentSuccess,
+    NextSuccess,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DerefHint {
+    pub apply_on: DerefApplyOn,
+}
+
 /// Typed hints for the selected backend request.
 ///
 /// Engines advertise support with one versioned capability key per hint.
@@ -32,12 +46,14 @@ pub struct TransferHint {
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct KvHints {
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub deref: Option<DerefHint>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub transfer: Option<TransferHint>,
 }
 
 impl KvHints {
     pub fn is_empty(&self) -> bool {
-        self.transfer.is_none()
+        self.deref.is_none() && self.transfer.is_none()
     }
 }
 

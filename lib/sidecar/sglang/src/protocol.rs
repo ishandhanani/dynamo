@@ -6,8 +6,8 @@
 use std::collections::HashMap;
 
 use dynamo_backend_common::{
-    DisaggregationMode, DynamoError, LLMEngineOutput, LLMEngineOutputExt, PreprocessedRequest,
-    StopReason, TopLogprob, usage,
+    DerefApplyOn, DisaggregationMode, DynamoError, LLMEngineOutput, LLMEngineOutputExt,
+    PreprocessedRequest, StopReason, TopLogprob, usage,
 };
 use serde_json::{Map, Value};
 
@@ -119,6 +119,12 @@ pub(crate) fn build_generate_request(
         .routing
         .as_ref()
         .and_then(|routing| routing.lora_name.clone());
+    let session_id = request
+        .agent_context
+        .as_ref()
+        .map(|context| context.session_id.clone())
+        .filter(|session_id| !session_id.is_empty());
+    let kv_hints = kv_hints_to_proto(request);
 
     let mut trace_headers = HashMap::new();
     dynamo_runtime::logging::inject_trace_headers_into_map(&mut trace_headers);
@@ -135,14 +141,27 @@ pub(crate) fn build_generate_request(
         routing_key: request.mdc_sum.clone(),
         routed_dp_rank,
         trace_headers,
-        session_id: None,
+        session_id,
         disaggregated_params: resolve_disaggregated_params(
             request,
             mode,
             bootstrap_host,
             bootstrap_port,
         )?,
+        kv_hints,
     })
+}
+
+fn kv_hints_to_proto(request: &PreprocessedRequest) -> Option<pb::KvHints> {
+    let hints = request.kv_hints.as_ref()?;
+    let deref = hints.deref.as_ref().map(|deref| pb::DerefHint {
+        apply_on: match deref.apply_on {
+            DerefApplyOn::CurrentSuccess => pb::DerefApplyOn::CurrentSuccess as i32,
+            DerefApplyOn::NextSuccess => pb::DerefApplyOn::NextSuccess as i32,
+        },
+    });
+    deref.as_ref()?;
+    Some(pb::KvHints { deref })
 }
 
 fn validate_request(request: &PreprocessedRequest) -> Result<(), DynamoError> {
@@ -578,10 +597,12 @@ mod tests {
     use std::collections::HashMap;
 
     use dynamo_backend_common::{
-        BootstrapInfo, DisaggregationMode, FinishReason, OutputOptions, PrefillResult,
-        PreprocessedRequest, SamplingOptions, StopConditions,
+        BootstrapInfo, DerefApplyOn, DerefHint, DisaggregationMode, FinishReason, KvHints,
+        OutputOptions, PrefillResult, PreprocessedRequest, SamplingOptions, StopConditions,
     };
     use serde_json::json;
+
+    use crate::proto as pb;
 
     use super::{
         build_generate_request, disaggregated_params_to_json, engine_data_from_meta,
@@ -620,6 +641,34 @@ mod tests {
         assert_eq!(
             mapped.disaggregated_params.unwrap().bootstrap_room,
             i64::MAX
+        );
+    }
+
+    #[test]
+    fn request_maps_session_identity_and_deref_hint() {
+        let mut request = request();
+        request.agent_context =
+            Some(serde_json::from_value(json!({"session_id": "session-a"})).unwrap());
+        request.kv_hints = Some(KvHints {
+            deref: Some(DerefHint {
+                apply_on: DerefApplyOn::NextSuccess,
+            }),
+            transfer: None,
+        });
+
+        let mapped = build_generate_request(
+            &request,
+            "rid-hint",
+            DisaggregationMode::Aggregated,
+            None,
+            None,
+        )
+        .unwrap();
+
+        assert_eq!(mapped.session_id.as_deref(), Some("session-a"));
+        assert_eq!(
+            mapped.kv_hints.unwrap().deref.unwrap().apply_on,
+            pb::DerefApplyOn::NextSuccess as i32
         );
     }
 

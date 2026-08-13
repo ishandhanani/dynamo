@@ -5,7 +5,10 @@ use std::collections::HashSet;
 use std::sync::{Arc, Mutex, OnceLock};
 
 use derive_builder::Builder;
-pub use dynamo_kv_router::kv_hints::{KV_HINT_TRANSFER_CAPABILITY_KEY, KvHints, TransferHint};
+pub use dynamo_kv_router::kv_hints::{
+    DerefApplyOn, DerefHint, KV_HINT_DEREF_CAPABILITY_KEY, KV_HINT_TRANSFER_CAPABILITY_KEY,
+    KvHints, TransferHint,
+};
 use dynamo_kv_router::{
     config::RouterConfigOverride,
     protocols::{BlockExtraInfo, RoutingConstraints, WorkerId},
@@ -522,7 +525,7 @@ mod tests {
     #[test]
     fn attach_kv_hints_sets_typed_envelope() {
         use dynamo_kv_router::{
-            kv_hints::{KvHints, TransferHint},
+            kv_hints::{DerefApplyOn, DerefHint, KvHints, TransferHint},
             protocols::ExternalSequenceBlockHash,
         };
 
@@ -535,6 +538,9 @@ mod tests {
             .build()
             .unwrap();
         let hints = KvHints {
+            deref: Some(DerefHint {
+                apply_on: DerefApplyOn::NextSuccess,
+            }),
             transfer: Some(TransferHint {
                 source_control_endpoint: "tcp://127.0.0.1:23280".to_string(),
                 block_hashes: vec![ExternalSequenceBlockHash(11), ExternalSequenceBlockHash(22)],
@@ -546,6 +552,9 @@ mod tests {
         assert_eq!(
             serde_json::to_value(&req).unwrap()["kv_hints"],
             serde_json::json!({
+                "deref": {
+                    "apply_on": "next_success",
+                },
                 "transfer": {
                     "source_control_endpoint": "tcp://127.0.0.1:23280",
                     "block_hashes": [11, 22],

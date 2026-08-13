@@ -56,6 +56,23 @@ message DisaggregatedParams
   int64 bootstrap_room = 3;
 }
 
+// Versioned KV-cache actions attached by an upstream dispatcher.
+message KvHints
+{
+  optional DerefHint deref = 1;
+}
+
+enum DerefApplyOn {
+  DEREF_APPLY_ON_UNSPECIFIED = 0;
+  DEREF_APPLY_ON_CURRENT_SUCCESS = 1;
+  DEREF_APPLY_ON_NEXT_SUCCESS = 2;
+}
+
+message DerefHint
+{
+  DerefApplyOn apply_on = 1;
+}
+
 // Sampling parameters shared across text and tokenized RPCs.
 message SamplingParams
 {
@@ -94,6 +111,7 @@ message TextGenerateRequest
   map<string, string> trace_headers = 12;
   optional string session_id = 13;
   optional DisaggregatedParams disaggregated_params = 14;
+  optional KvHints kv_hints = 18;
 }
 
 message TextGenerateResponse
@@ -120,6 +138,7 @@ message GenerateRequest
   map<string, string> trace_headers = 11;
   optional string session_id = 12;
   optional DisaggregatedParams disaggregated_params = 13;
+  optional KvHints kv_hints = 17;
 }
 
 message GenerateResponse

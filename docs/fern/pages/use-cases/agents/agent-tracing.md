@@ -199,7 +199,7 @@ For example, a Codex compaction request can produce:
 }
 ```
 
-Use `session_id` to group requests before, during, and after compaction. Compaction does not create a new session ID or change request placement. See [Agent Harnesses](agent-harnesses.mdx#compaction-signals) for current harness support.
+Use `session_id` to group requests before, during, and after compaction. Dynamo derives the worker-facing `kv_hints.deref.apply_on=next_success` action from compaction metadata, but the action is not part of `agent_context` in the trace. SGLang releases the old session references after the next successful request. Compaction does not create a new session ID or change request placement. When `DYN_DISABLE_AGENT_COMPACTION_DEREF=1`, the compaction object remains in the trace but Dynamo suppresses the action. See [Agent Harnesses](agent-harnesses.mdx#compaction-signals) for current harness support and KV behavior.
 
 For chat streams, Dynamo records finish metadata after parser and jail rewrites. Completion streams record the final OpenAI-compatible completion finish reason.
 

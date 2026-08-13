@@ -380,8 +380,16 @@ where
 
         let (mut backend_input, context) = request.into_parts();
         backend_input.routing_mut().dp_rank = Some(selection.worker.dp_rank);
-        backend_input.kv_hints = None;
-        if let Some(kv_hints) = selection.kv_hints {
+        let request_deref = backend_input.kv_hints.take().and_then(|hints| hints.deref);
+        let mut selected_kv_hints = selection.kv_hints;
+        if let Some(deref) = request_deref {
+            selected_kv_hints.get_or_insert_default().deref = Some(deref);
+        }
+        let selected_kv_hints = selected_kv_hints.and_then(|hints| {
+            self.chooser
+                .filter_kv_hints_for_worker(selection.worker.worker_id, hints)
+        });
+        if let Some(kv_hints) = selected_kv_hints {
             backend_input.attach_kv_hints(kv_hints);
         }
         let updated_request = context.map(|_| backend_input);
