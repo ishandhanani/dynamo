@@ -6670,8 +6670,8 @@ mod tests {
             serde_json::json!("manual")
         );
         assert_eq!(
-            wire["kv_hints"]["actions"][0]["payload"]["apply_on"],
-            serde_json::json!("next_success")
+            wire["kv_hints"]["actions"][0]["action_type"],
+            serde_json::json!("kv.deref")
         );
     }
 

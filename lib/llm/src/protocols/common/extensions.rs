@@ -8,7 +8,7 @@ use std::{
 
 use axum::http::HeaderMap;
 use derive_builder::Builder;
-use dynamo_kv_router::kv_hints::{DerefApplyOn, KvDerefPayload, KvHintAction, KvHints};
+use dynamo_kv_router::kv_hints::{KvHintAction, KvHints};
 use dynamo_protocols::types::StopReason;
 use dynamo_runtime::config::{env_is_truthy, environment_names::llm as env_llm};
 use serde::{Deserialize, Serialize};
@@ -304,31 +304,20 @@ pub fn kv_hints_from_agent_context(
     context: &AgentContext,
     message_id: impl Into<String>,
 ) -> Option<KvHints> {
-    let apply_on = deref_apply_on(
+    should_deref(
         context.session_final,
         context.compaction.is_some(),
         *COMPACTION_DEREF_DISABLED,
-    );
-    apply_on.map(|apply_on| {
-        KvHints::new(
-            message_id,
-            vec![KvHintAction::deref("deref", KvDerefPayload { apply_on })],
-        )
-    })
+    )
+    .then(|| KvHints::new(message_id, vec![KvHintAction::deref("deref")]))
 }
 
-fn deref_apply_on(
+fn should_deref(
     session_final: Option<bool>,
     has_compaction: bool,
     compaction_deref_disabled: bool,
-) -> Option<DerefApplyOn> {
-    if session_final == Some(true) {
-        Some(DerefApplyOn::CurrentSuccess)
-    } else if has_compaction && !compaction_deref_disabled {
-        Some(DerefApplyOn::NextSuccess)
-    } else {
-        None
-    }
+) -> bool {
+    session_final == Some(true) || (has_compaction && !compaction_deref_disabled)
 }
 
 impl From<AgentContextHeaderValues> for AgentContext {
@@ -1400,12 +1389,7 @@ mod tests {
             kv_hints_from_agent_context(&agent_context, "msg-final"),
             Some(KvHints::new(
                 "msg-final",
-                vec![KvHintAction::deref(
-                    "deref",
-                    KvDerefPayload {
-                        apply_on: DerefApplyOn::CurrentSuccess,
-                    },
-                )],
+                vec![KvHintAction::deref("deref")],
             ))
         );
 

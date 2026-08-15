@@ -6,8 +6,8 @@
 use std::collections::HashMap;
 
 use dynamo_backend_common::{
-    DerefApplyOn, DisaggregationMode, DynamoError, KvHintAction, LLMEngineOutput,
-    LLMEngineOutputExt, PreprocessedRequest, StopReason, TopLogprob, usage,
+    DisaggregationMode, DynamoError, KvHintAction, LLMEngineOutput, LLMEngineOutputExt,
+    PreprocessedRequest, StopReason, TopLogprob, usage,
 };
 use serde_json::{Map, Value};
 
@@ -155,12 +155,7 @@ pub(crate) fn build_generate_request(
 fn kv_hints_to_proto(request: &PreprocessedRequest) -> Option<pb::KvHints> {
     let hints = request.kv_hints.as_ref()?;
     let deref = hints.actions.iter().find_map(|action| match action {
-        KvHintAction::Deref { payload, .. } => Some(pb::DerefHint {
-            apply_on: match payload.apply_on {
-                DerefApplyOn::CurrentSuccess => pb::DerefApplyOn::CurrentSuccess as i32,
-                DerefApplyOn::NextSuccess => pb::DerefApplyOn::NextSuccess as i32,
-            },
-        }),
+        KvHintAction::Deref { .. } => Some(pb::DerefHint {}),
         KvHintAction::SourceLocations { .. } => None,
     })?;
     Some(pb::KvHints { deref: Some(deref) })
@@ -599,13 +594,10 @@ mod tests {
     use std::collections::HashMap;
 
     use dynamo_backend_common::{
-        BootstrapInfo, DerefApplyOn, DisaggregationMode, FinishReason, KvDerefPayload,
-        KvHintAction, KvHints, OutputOptions, PrefillResult, PreprocessedRequest, SamplingOptions,
-        StopConditions,
+        BootstrapInfo, DisaggregationMode, FinishReason, KvHintAction, KvHints, OutputOptions,
+        PrefillResult, PreprocessedRequest, SamplingOptions, StopConditions,
     };
     use serde_json::json;
-
-    use crate::proto as pb;
 
     use super::{
         build_generate_request, disaggregated_params_to_json, engine_data_from_meta,
@@ -652,15 +644,7 @@ mod tests {
         let mut request = request();
         request.agent_context =
             Some(serde_json::from_value(json!({"session_id": "session-a"})).unwrap());
-        request.kv_hints = Some(KvHints::new(
-            "msg-hint",
-            vec![KvHintAction::deref(
-                "deref",
-                KvDerefPayload {
-                    apply_on: DerefApplyOn::NextSuccess,
-                },
-            )],
-        ));
+        request.kv_hints = Some(KvHints::new("msg-hint", vec![KvHintAction::deref("deref")]));
 
         let mapped = build_generate_request(
             &request,
@@ -672,10 +656,7 @@ mod tests {
         .unwrap();
 
         assert_eq!(mapped.session_id.as_deref(), Some("session-a"));
-        assert_eq!(
-            mapped.kv_hints.unwrap().deref.unwrap().apply_on,
-            pb::DerefApplyOn::NextSuccess as i32
-        );
+        assert!(mapped.kv_hints.unwrap().deref.is_some());
     }
 
     #[test]

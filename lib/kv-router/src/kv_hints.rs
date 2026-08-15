@@ -35,19 +35,6 @@ pub enum KvDerefActionVersion {
     V1_0,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum DerefApplyOn {
-    CurrentSuccess,
-    NextSuccess,
-}
-
-/// Typed payload for the `kv.deref@1.0` action.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct KvDerefPayload {
-    pub apply_on: DerefApplyOn,
-}
-
 /// Typed payload for the `kv.source_locations@1.0` point-to-point action.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct KvSourceLocationsPayload {
@@ -65,7 +52,6 @@ pub enum KvHintAction {
     Deref {
         action_id: String,
         action_version: KvDerefActionVersion,
-        payload: KvDerefPayload,
     },
     #[serde(rename = "kv.source_locations")]
     SourceLocations {
@@ -76,11 +62,10 @@ pub enum KvHintAction {
 }
 
 impl KvHintAction {
-    pub fn deref(action_id: impl Into<String>, payload: KvDerefPayload) -> Self {
+    pub fn deref(action_id: impl Into<String>) -> Self {
         Self::Deref {
             action_id: action_id.into(),
             action_version: KvDerefActionVersion::V1_0,
-            payload,
         }
     }
 
@@ -197,15 +182,7 @@ mod tests {
 
     #[test]
     fn serializes_versioned_deref_action() {
-        let hints = KvHints::new(
-            "msg-123",
-            vec![KvHintAction::deref(
-                "deref",
-                KvDerefPayload {
-                    apply_on: DerefApplyOn::NextSuccess,
-                },
-            )],
-        );
+        let hints = KvHints::new("msg-123", vec![KvHintAction::deref("deref")]);
 
         assert_eq!(
             serde_json::to_value(hints).unwrap(),
@@ -216,9 +193,6 @@ mod tests {
                     "action_id": "deref",
                     "action_type": "kv.deref",
                     "action_version": "1.0",
-                    "payload": {
-                        "apply_on": "next_success",
-                    },
                 }],
             })
         );
