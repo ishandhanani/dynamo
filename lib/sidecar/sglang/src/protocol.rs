@@ -155,7 +155,9 @@ pub(crate) fn build_generate_request(
 fn kv_hints_to_proto(request: &PreprocessedRequest) -> Option<pb::KvHints> {
     let hints = request.kv_hints.as_ref()?;
     let deref = hints.actions.iter().find_map(|action| match action {
-        KvHintAction::Deref { .. } => Some(pb::DerefHint {}),
+        KvHintAction::Deref { action_id, .. } => Some(pb::DerefHint {
+            action_id: action_id.clone(),
+        }),
         KvHintAction::SourceLocations { .. } => None,
     })?;
     Some(pb::KvHints { deref: Some(deref) })
@@ -656,7 +658,7 @@ mod tests {
         .unwrap();
 
         assert_eq!(mapped.session_id.as_deref(), Some("session-a"));
-        assert!(mapped.kv_hints.unwrap().deref.is_some());
+        assert_eq!(mapped.kv_hints.unwrap().deref.unwrap().action_id, "deref");
     }
 
     #[test]

@@ -83,6 +83,10 @@ pub enum InputTrigger {
 /// Fields are optional because harnesses may expose different levels of detail.
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq)]
 pub struct AgentCompaction {
+    /// Stable identifier for one compaction operation within an agent session.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub operation_id: Option<String>,
+
     /// How the compaction was initiated, such as `manual` or `automatic`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub trigger: Option<String>,
@@ -304,12 +308,21 @@ pub fn kv_hints_from_agent_context(
     context: &AgentContext,
     message_id: impl Into<String>,
 ) -> Option<KvHints> {
+    let message_id = message_id.into();
     should_deref(
         context.session_final,
         context.compaction.is_some(),
         *COMPACTION_DEREF_DISABLED,
     )
-    .then(|| KvHints::new(message_id, vec![KvHintAction::deref("deref")]))
+    .then(|| {
+        let action_id = context
+            .compaction
+            .as_ref()
+            .and_then(|compaction| compaction.operation_id.as_deref())
+            .map(|operation_id| format!("{}:{operation_id}", context.session_id))
+            .unwrap_or_else(|| message_id.clone());
+        KvHints::new(message_id, vec![KvHintAction::deref(action_id)])
+    })
 }
 
 fn should_deref(
@@ -1149,7 +1162,7 @@ mod tests {
         headers.insert(HEADER_CODEX_THREAD_ID, "codex-thread".parse().unwrap());
         headers.insert(
             HEADER_CODEX_TURN_METADATA,
-            r#"{"request_kind":"compaction","compaction":{"trigger":"manual","reason":"user_requested","implementation":"responses_compact","phase":"standalone_turn","strategy":"memento"}}"#
+            r#"{"turn_id":"codex-turn","window_id":"codex-window","request_kind":"compaction","compaction":{"trigger":"manual","reason":"user_requested","implementation":"responses_compact","phase":"standalone_turn","strategy":"memento"}}"#
                 .parse()
                 .unwrap(),
         );
@@ -1158,6 +1171,7 @@ mod tests {
         assert_eq!(
             agent_context.compaction,
             Some(AgentCompaction {
+                operation_id: Some("codex-turn:codex-window".to_string()),
                 trigger: Some("manual".to_string()),
                 reason: Some("user_requested".to_string()),
                 implementation: Some("responses_compact".to_string()),

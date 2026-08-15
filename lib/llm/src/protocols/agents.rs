@@ -60,6 +60,8 @@ pub(crate) struct AgentContextHeaderValues {
 #[derive(Deserialize)]
 struct CodexTurnMetadata {
     request_kind: Option<String>,
+    turn_id: Option<String>,
+    window_id: Option<String>,
     compaction: Option<AgentCompaction>,
 }
 
@@ -118,8 +120,14 @@ pub(crate) fn agent_context_header_values(headers: &HeaderMap) -> Option<AgentCo
 fn codex_compaction_header_value(headers: &HeaderMap) -> Option<AgentCompaction> {
     let raw = borrowed_header_value(headers, HEADER_CODEX_TURN_METADATA)?;
     let metadata: CodexTurnMetadata = serde_json::from_str(raw).ok()?;
-    (metadata.request_kind.as_deref() == Some("compaction"))
-        .then(|| metadata.compaction.unwrap_or_default())
+    (metadata.request_kind.as_deref() == Some("compaction")).then(|| {
+        let mut compaction = metadata.compaction.unwrap_or_default();
+        compaction.operation_id = metadata
+            .turn_id
+            .zip(metadata.window_id)
+            .map(|(turn_id, window_id)| format!("{turn_id}:{window_id}"));
+        compaction
+    })
 }
 
 pub(crate) fn session_affinity_header_value(headers: &HeaderMap) -> Option<String> {

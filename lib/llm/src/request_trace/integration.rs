@@ -369,6 +369,7 @@ mod tests {
             parent_session_id: None,
             session_final: None,
             compaction: Some(AgentCompaction {
+                operation_id: None,
                 trigger: Some("manual".to_string()),
                 reason: Some("user_requested".to_string()),
                 implementation: Some("responses_compact".to_string()),
