@@ -13,6 +13,7 @@
 use dynamo_runtime::logging::DistributedTraceContext;
 pub use dynamo_runtime::pipeline::AsyncEngineContext;
 use dynamo_runtime::pipeline::context::Controller;
+use dynamo_llm::protocols::common::extensions::AgentContext;
 use opentelemetry::global::BoxedSpan;
 use opentelemetry::trace::{Span as OtelSpan, Status, TraceContextExt, Tracer};
 use opentelemetry::{KeyValue, global};
@@ -61,6 +62,7 @@ fn warn_bridge_missing_once(method: &str) {
 pub struct Context {
     inner: Arc<dyn AsyncEngineContext>,
     trace_context: Option<DistributedTraceContext>,
+    agent_context: Option<AgentContext>,
     /// First-token signal for decode-mode disagg. `None` on aggregated /
     /// prefill requests.
     first_token: Option<watch::Sender<bool>>,
@@ -176,12 +178,14 @@ impl Context {
     pub fn new(
         inner: Arc<dyn AsyncEngineContext>,
         trace_context: Option<DistributedTraceContext>,
+        agent_context: Option<AgentContext>,
         first_token: Option<watch::Sender<bool>>,
         metadata: BTreeMap<String, String>,
     ) -> Self {
         Self {
             inner,
             trace_context,
+            agent_context,
             first_token,
             metadata: Arc::new(Mutex::new(metadata)),
             span: None,
@@ -198,6 +202,10 @@ impl Context {
 
     pub fn trace_context(&self) -> Option<&DistributedTraceContext> {
         self.trace_context.as_ref()
+    }
+
+    pub fn agent_context(&self) -> Option<&AgentContext> {
+        self.agent_context.as_ref()
     }
 
     pub fn inner(&self) -> Arc<dyn AsyncEngineContext> {
@@ -256,6 +264,7 @@ impl Context {
         Self {
             inner: Arc::new(controller),
             trace_context: None,
+            agent_context: None,
             first_token: None,
             metadata: Arc::new(Mutex::new(metadata.unwrap_or_default())),
             span: None,
@@ -273,6 +282,7 @@ impl Context {
         Self {
             inner: Arc::new(Controller::new(id)),
             trace_context: self.trace_context.clone(),
+            agent_context: self.agent_context.clone(),
             first_token: None,
             metadata: Arc::new(Mutex::new(self.metadata_snapshot())),
             span: self.span.clone(),

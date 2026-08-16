@@ -18,6 +18,9 @@ use tokio_util::sync::CancellationToken;
 
 use dynamo_runtime::error::{BackendError, DynamoError, ErrorType};
 use dynamo_runtime::logging::get_distributed_tracing_context;
+use dynamo_llm::protocols::common::extensions::{
+    AGENT_CONTEXT_CONTEXT_KEY, AgentContext,
+};
 pub use dynamo_runtime::{
     pipeline::{
         AsyncEngine, AsyncEngineContext, AsyncEngineContextProvider, Data, DataStream, ManyOut,
@@ -302,14 +305,22 @@ where
 
     let current_trace_context = get_distributed_tracing_context();
     let metadata = context.metadata().clone();
+    let agent_context = context
+        .get::<AgentContext>(AGENT_CONTEXT_CONTEXT_KEY)
+        .ok()
+        .map(|agent_context| agent_context.as_ref().clone());
     let stream = invoke_generator(
         engine.generator.clone(),
         engine.event_loop.clone(),
         move |py| to_python_input(py, request),
         engine.has_context.then_some({
             let ctx = ctx.clone();
+            let agent_context = agent_context.clone();
             move |py: Python<'_>| {
-                Py::new(py, Context::new(ctx, current_trace_context, None, metadata))
+                Py::new(
+                    py,
+                    Context::new(ctx, current_trace_context, agent_context, None, metadata),
+                )
                     .map(|context| context.into_any())
             }
         }),
@@ -707,8 +718,11 @@ impl AsyncEngine<ManyIn<PythonPayload>, ManyOut<PythonResponseItem>, Error>
             self.has_context.then_some({
                 let ctx = ctx.clone();
                 move |py: Python<'_>| {
-                    Py::new(py, Context::new(ctx, current_trace_context, None, metadata))
-                        .map(|c| c.into_any())
+                    Py::new(
+                        py,
+                        Context::new(ctx, current_trace_context, None, None, metadata),
+                    )
+                    .map(|c| c.into_any())
                 }
             }),
         )

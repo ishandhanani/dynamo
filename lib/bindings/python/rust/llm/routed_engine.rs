@@ -36,10 +36,16 @@ impl RoutedEngine {
         preprocessed: PyObject,
         context: Option<crate::context::Context>,
     ) -> PyResult<Bound<'p, PyAny>> {
-        let request: PreprocessedRequest = depythonize(preprocessed.bind(py)).map_err(to_pyerr)?;
+        let mut request: PreprocessedRequest = depythonize(preprocessed.bind(py)).map_err(to_pyerr)?;
         let request_context = if let Some(parent_context) = context.as_ref() {
             let parent_metadata = parent_context.metadata_snapshot();
             let parent_context = parent_context.inner();
+            if let Some(agent_context) = context
+                .as_ref()
+                .and_then(crate::context::Context::agent_context)
+            {
+                request.attach_agent_context(agent_context.clone(), parent_context.id());
+            }
             let child_context = SingleIn::with_id_and_metadata(
                 request,
                 parent_context.id().to_string(),
