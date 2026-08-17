@@ -1403,7 +1403,7 @@ mod tests {
             kv_hints_from_agent_context(&agent_context, "msg-final"),
             Some(KvHints::new(
                 "msg-final",
-                vec![KvHintAction::deref("deref")],
+                vec![KvHintAction::deref("msg-final")],
             ))
         );
 

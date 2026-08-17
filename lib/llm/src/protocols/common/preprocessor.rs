@@ -442,19 +442,6 @@ where
 }
 
 impl PreprocessedRequest {
-    /// Attach agent state carried out-of-band by the frontend request context.
-    ///
-    /// Native preprocessors and Python-backed processors both use this path so
-    /// session identity and its derived KV actions stay identical on the wire.
-    pub fn attach_agent_context(
-        &mut self,
-        agent_context: AgentContext,
-        message_id: impl Into<String>,
-    ) {
-        self.kv_hints = super::extensions::kv_hints_from_agent_context(&agent_context, message_id);
-        self.agent_context = Some(agent_context);
-    }
-
     pub fn has_annotation(&self, annotation: &str) -> bool {
         self.annotations.contains(&annotation.to_string())
     }

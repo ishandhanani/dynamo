@@ -621,7 +621,11 @@ fn attach_agent_context_from_context(
     if let Ok(agent_context) = context.get::<crate::protocols::common::extensions::AgentContext>(
         crate::protocols::common::extensions::AGENT_CONTEXT_CONTEXT_KEY,
     ) {
-        request.attach_agent_context(agent_context.as_ref().clone(), context.id());
+        request.kv_hints = crate::protocols::common::extensions::kv_hints_from_agent_context(
+            &agent_context,
+            context.id(),
+        );
+        request.agent_context = Some(agent_context.as_ref().clone());
     }
 }
 
