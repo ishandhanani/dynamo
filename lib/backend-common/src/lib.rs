@@ -34,8 +34,10 @@ pub use dynamo_llm::model_type::ModelInput;
 pub use engine::{
     AsyncEngineContext, BootstrapInfo, CompletionUsage, ComponentSnapshot, EngineConfig,
     FinishReason, GenerateContext, GuidedDecodingOptions, HEALTH_CHECK_KEY,
-    KV_HINT_DEREF_CAPABILITY_KEY, KV_HINT_TRANSFER_CAPABILITY_KEY, KvDerefActionVersion,
-    KvEventPublisher, KvEventSource, KvHintAction, KvHints, KvSourceLocationsPayload, LLMEngine,
+    KV_HINT_DEMOTE_CAPABILITY_KEY, KV_HINT_DEREF_CAPABILITY_KEY, KV_HINT_PREFETCH_CAPABILITY_KEY,
+    KV_HINT_TRANSFER_CAPABILITY_KEY, KvDemoteActionVersion, KvDemotePayload, KvDerefActionVersion,
+    KvDerefPayload, KvEventPublisher, KvEventSource, KvHintAction, KvHintProtocolVersion, KvHints,
+    KvPrefetchActionVersion, KvPrefetchPayload, KvSourceLocationsPayload, LLMEngine,
     LLMEngineOutput, LLMEngineOutputExt, LlmRegistration, LogProbs, Metrics, MetricsBindings,
     MetricsCtx, MultimodalData, OnPublisherReady, OnSnapshotPublisherReady, OutputOptions,
     PrefillResult, PreprocessedRequest, RawEngine, SamplingOptions, StopConditions, StopReason,

@@ -154,13 +154,44 @@ pub(crate) fn build_generate_request(
 
 fn kv_hints_to_proto(request: &PreprocessedRequest) -> Option<pb::KvHints> {
     let hints = request.kv_hints.as_ref()?;
-    let deref = hints.actions.iter().find_map(|action| match action {
-        KvHintAction::Deref { action_id, .. } => Some(pb::DerefHint {
-            action_id: action_id.clone(),
-        }),
-        KvHintAction::SourceLocations { .. } => None,
-    })?;
-    Some(pb::KvHints { deref: Some(deref) })
+    let actions = hints
+        .actions
+        .iter()
+        .filter_map(|action| match action {
+            KvHintAction::Deref { action_id, .. } => Some(pb::KvHintAction {
+                action_id: action_id.clone(),
+                action_type: "kv.deref".to_string(),
+                action_version: "1.0".to_string(),
+                payload: Some(pb::kv_hint_action::Payload::Deref(pb::KvDerefPayload {})),
+            }),
+            KvHintAction::Demote {
+                action_id, payload, ..
+            } => Some(pb::KvHintAction {
+                action_id: action_id.clone(),
+                action_type: "kv.demote".to_string(),
+                action_version: "1.0".to_string(),
+                payload: Some(pb::kv_hint_action::Payload::Demote(pb::KvDemotePayload {
+                    session_id: payload.session_id.clone(),
+                    session_generation: payload.session_generation,
+                })),
+            }),
+            KvHintAction::Prefetch { action_id, .. } => Some(pb::KvHintAction {
+                action_id: action_id.clone(),
+                action_type: "kv.prefetch".to_string(),
+                action_version: "1.0".to_string(),
+                payload: Some(pb::kv_hint_action::Payload::Prefetch(
+                    pb::KvPrefetchPayload {},
+                )),
+            }),
+            KvHintAction::SourceLocations { .. } => None,
+        })
+        .collect::<Vec<_>>();
+
+    (!actions.is_empty()).then(|| pb::KvHints {
+        protocol_version: "0.1".to_string(),
+        message_id: hints.message_id.clone(),
+        actions,
+    })
 }
 
 fn validate_request(request: &PreprocessedRequest) -> Result<(), DynamoError> {
@@ -596,10 +627,12 @@ mod tests {
     use std::collections::HashMap;
 
     use dynamo_backend_common::{
-        BootstrapInfo, DisaggregationMode, FinishReason, KvHintAction, KvHints, OutputOptions,
-        PrefillResult, PreprocessedRequest, SamplingOptions, StopConditions,
+        BootstrapInfo, DisaggregationMode, FinishReason, KvDemotePayload, KvHintAction, KvHints,
+        OutputOptions, PrefillResult, PreprocessedRequest, SamplingOptions, StopConditions,
     };
     use serde_json::json;
+
+    use crate::proto as pb;
 
     use super::{
         build_generate_request, disaggregated_params_to_json, engine_data_from_meta,
@@ -642,11 +675,24 @@ mod tests {
     }
 
     #[test]
-    fn request_maps_session_identity_and_deref_hint() {
+    fn request_maps_session_identity_and_supported_kv_hints() {
         let mut request = request();
         request.agent_context =
             Some(serde_json::from_value(json!({"session_id": "session-a"})).unwrap());
-        request.kv_hints = Some(KvHints::new("msg-hint", vec![KvHintAction::deref("deref")]));
+        request.kv_hints = Some(KvHints::new(
+            "msg-hint",
+            vec![
+                KvHintAction::deref("deref"),
+                KvHintAction::demote(
+                    "demote",
+                    KvDemotePayload {
+                        session_id: "session-a".to_string(),
+                        session_generation: Some(7),
+                    },
+                ),
+                KvHintAction::prefetch("prefetch"),
+            ],
+        ));
 
         let mapped = build_generate_request(
             &request,
@@ -658,7 +704,22 @@ mod tests {
         .unwrap();
 
         assert_eq!(mapped.session_id.as_deref(), Some("session-a"));
-        assert_eq!(mapped.kv_hints.unwrap().deref.unwrap().action_id, "deref");
+        let hints = mapped.kv_hints.unwrap();
+        assert_eq!(hints.protocol_version, "0.1");
+        assert_eq!(hints.message_id, "msg-hint");
+        assert_eq!(hints.actions.len(), 3);
+        assert!(matches!(
+            hints.actions[0].payload,
+            Some(pb::kv_hint_action::Payload::Deref(_))
+        ));
+        assert!(matches!(
+            hints.actions[1].payload,
+            Some(pb::kv_hint_action::Payload::Demote(_))
+        ));
+        assert!(matches!(
+            hints.actions[2].payload,
+            Some(pb::kv_hint_action::Payload::Prefetch(_))
+        ));
     }
 
     #[test]

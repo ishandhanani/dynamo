@@ -11,6 +11,10 @@ use crate::protocols::{ExternalSequenceBlockHash, WorkerWithDpRank};
 pub const KV_HINT_TRANSFER_CAPABILITY_KEY: &str = "kv_hint.transfer.v1";
 /// The selected worker can consume a `DEREF` hint with the v1 payload.
 pub const KV_HINT_DEREF_CAPABILITY_KEY: &str = "kv_hint.deref.v1";
+/// The selected worker can persist a session-owned KV prefix to its configured storage tier.
+pub const KV_HINT_DEMOTE_CAPABILITY_KEY: &str = "kv_hint.demote.v1";
+/// The selected worker can prepare the current request's prefix from its configured storage tier.
+pub const KV_HINT_PREFETCH_CAPABILITY_KEY: &str = "kv_hint.prefetch.v1";
 
 /// Worker runtime-data keys used to build transfer hints.
 pub const KV_HINT_TRANSFER_WORKER_TYPE_RUNTIME_KEY: &str = "kv_hint_transfer_worker_type";
@@ -35,6 +39,18 @@ pub enum KvDerefActionVersion {
     V1_0,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub enum KvDemoteActionVersion {
+    #[serde(rename = "1.0")]
+    V1_0,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub enum KvPrefetchActionVersion {
+    #[serde(rename = "1.0")]
+    V1_0,
+}
+
 /// Typed payload for the `kv.source_locations@1.0` point-to-point action.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct KvSourceLocationsPayload {
@@ -44,6 +60,33 @@ pub struct KvSourceLocationsPayload {
     pub block_hashes: Vec<ExternalSequenceBlockHash>,
 }
 
+/// Typed payload for `kv.deref@1.0`.
+///
+/// The successful request releases only the session's logical references. Shared
+/// leaves remain protected by their other owners; physical eviction remains an
+/// engine-local allocator decision.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct KvDerefPayload {}
+
+/// Typed payload for `kv.demote@1.0`.
+///
+/// The target engine writes this session's owned prefix to its configured storage
+/// tier, verifies the write, then releases only unshared device leaves. The
+/// action id is the idempotency key; do not duplicate it in this payload.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct KvDemotePayload {
+    pub session_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub session_generation: Option<u64>,
+}
+
+/// Typed payload for `kv.prefetch@1.0`.
+///
+/// The target derives the exact prefix from the request it is already processing.
+/// This is not an autonomous router-side fetch.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct KvPrefetchPayload {}
+
 /// One typed action in a [`KvHints`] envelope.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "action_type")]
@@ -52,6 +95,19 @@ pub enum KvHintAction {
     Deref {
         action_id: String,
         action_version: KvDerefActionVersion,
+        payload: KvDerefPayload,
+    },
+    #[serde(rename = "kv.demote")]
+    Demote {
+        action_id: String,
+        action_version: KvDemoteActionVersion,
+        payload: KvDemotePayload,
+    },
+    #[serde(rename = "kv.prefetch")]
+    Prefetch {
+        action_id: String,
+        action_version: KvPrefetchActionVersion,
+        payload: KvPrefetchPayload,
     },
     #[serde(rename = "kv.source_locations")]
     SourceLocations {
@@ -66,6 +122,23 @@ impl KvHintAction {
         Self::Deref {
             action_id: action_id.into(),
             action_version: KvDerefActionVersion::V1_0,
+            payload: KvDerefPayload::default(),
+        }
+    }
+
+    pub fn demote(action_id: impl Into<String>, payload: KvDemotePayload) -> Self {
+        Self::Demote {
+            action_id: action_id.into(),
+            action_version: KvDemoteActionVersion::V1_0,
+            payload,
+        }
+    }
+
+    pub fn prefetch(action_id: impl Into<String>) -> Self {
+        Self::Prefetch {
+            action_id: action_id.into(),
+            action_version: KvPrefetchActionVersion::V1_0,
+            payload: KvPrefetchPayload::default(),
         }
     }
 
@@ -83,6 +156,8 @@ impl KvHintAction {
     pub fn required_capability(&self) -> &'static str {
         match self {
             Self::Deref { .. } => KV_HINT_DEREF_CAPABILITY_KEY,
+            Self::Demote { .. } => KV_HINT_DEMOTE_CAPABILITY_KEY,
+            Self::Prefetch { .. } => KV_HINT_PREFETCH_CAPABILITY_KEY,
             Self::SourceLocations { .. } => KV_HINT_TRANSFER_CAPABILITY_KEY,
         }
     }
@@ -193,7 +268,50 @@ mod tests {
                     "action_id": "deref",
                     "action_type": "kv.deref",
                     "action_version": "1.0",
+                    "payload": {},
                 }],
+            })
+        );
+    }
+
+    #[test]
+    fn serializes_versioned_storage_actions_without_repeating_action_identity() {
+        let hints = KvHints::new(
+            "msg-123",
+            vec![
+                KvHintAction::demote(
+                    "demote-1",
+                    KvDemotePayload {
+                        session_id: "session-a".to_string(),
+                        session_generation: Some(7),
+                    },
+                ),
+                KvHintAction::prefetch("prefetch-1"),
+            ],
+        );
+
+        assert_eq!(
+            serde_json::to_value(hints).unwrap(),
+            serde_json::json!({
+                "protocol_version": "0.1",
+                "message_id": "msg-123",
+                "actions": [
+                    {
+                        "action_id": "demote-1",
+                        "action_type": "kv.demote",
+                        "action_version": "1.0",
+                        "payload": {
+                            "session_id": "session-a",
+                            "session_generation": 7,
+                        },
+                    },
+                    {
+                        "action_id": "prefetch-1",
+                        "action_type": "kv.prefetch",
+                        "action_version": "1.0",
+                        "payload": {},
+                    },
+                ],
             })
         );
     }

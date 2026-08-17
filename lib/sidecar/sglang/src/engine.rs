@@ -10,8 +10,9 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use dynamo_backend_common::{
     AsyncEngineContext, DisaggregationMode, DynamoError, EngineConfig, GenerateContext,
-    KV_HINT_DEREF_CAPABILITY_KEY, LLMEngine, LLMEngineOutput, LLMEngineOutputExt, LlmRegistration,
-    ModelInput, PreprocessedRequest, WorkerConfig, usage,
+    KV_HINT_DEMOTE_CAPABILITY_KEY, KV_HINT_DEREF_CAPABILITY_KEY, KV_HINT_PREFETCH_CAPABILITY_KEY,
+    LLMEngine, LLMEngineOutput, LLMEngineOutputExt, LlmRegistration, ModelInput,
+    PreprocessedRequest, WorkerConfig, usage,
 };
 use dynamo_sidecar_common::{GrpcEndpoint, GrpcTransportConfig};
 use futures::stream::BoxStream;
@@ -620,7 +621,13 @@ fn build_engine_config(
         let Some(capability) = capability.as_str() else {
             continue;
         };
-        if capability == KV_HINT_DEREF_CAPABILITY_KEY {
+        if [
+            KV_HINT_DEREF_CAPABILITY_KEY,
+            KV_HINT_DEMOTE_CAPABILITY_KEY,
+            KV_HINT_PREFETCH_CAPABILITY_KEY,
+        ]
+        .contains(&capability)
+        {
             runtime_data.insert(capability.to_string(), Value::Bool(true));
         }
     }
@@ -753,7 +760,12 @@ mod tests {
     fn registers_only_supported_kv_hint_capabilities() {
         let config = build_engine_config(
             &discovery(json!({
-                "kv_hint_capabilities": ["kv_hint.deref.v1", "kv_hint.transfer.v1"],
+                "kv_hint_capabilities": [
+                    "kv_hint.deref.v1",
+                    "kv_hint.demote.v1",
+                    "kv_hint.prefetch.v1",
+                    "kv_hint.transfer.v1",
+                ],
             })),
             DisaggregationMode::Decode,
             None,
@@ -763,6 +775,14 @@ mod tests {
 
         assert_eq!(
             config.runtime_data.get("kv_hint.deref.v1"),
+            Some(&json!(true))
+        );
+        assert_eq!(
+            config.runtime_data.get("kv_hint.demote.v1"),
+            Some(&json!(true))
+        );
+        assert_eq!(
+            config.runtime_data.get("kv_hint.prefetch.v1"),
             Some(&json!(true))
         );
         assert!(!config.runtime_data.contains_key("kv_hint.transfer.v1"));
