@@ -2427,6 +2427,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d0881ea181b1df73ff77ffaaf9c7544ecc11e82fba9b5f27b262a3c73a332555"
 
 [[package]]
+name = "dynamo-agent-protocol-host"
+version = "1.5.0"
+dependencies = [
+ "dynamo-protocols",
+ "futures",
+ "thiserror 2.0.18",
+]
+
+[[package]]
 name = "dynamo-backend-common"
 version = "1.5.0"
 dependencies = [
@@ -2679,6 +2688,7 @@ dependencies = [
  "derive-getters",
  "derive_builder",
  "dialoguer",
+ "dynamo-agent-protocol-host",
  "dynamo-bench",
  "dynamo-kv-router",
  "dynamo-memory",

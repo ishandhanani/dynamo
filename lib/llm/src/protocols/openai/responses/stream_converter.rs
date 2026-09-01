@@ -71,6 +71,23 @@ pub struct ResponseStreamConverter {
     output_limit_reached: bool,
 }
 
+enum ResponseEventSink<'a> {
+    Sse {
+        events: &'a mut Vec<Result<Event, anyhow::Error>>,
+        serializer: ResponseEventSerializer,
+    },
+    Typed(&'a mut Vec<ResponseStreamEvent>),
+}
+
+impl ResponseEventSink<'_> {
+    fn push(&mut self, event: ResponseStreamEvent) {
+        match self {
+            Self::Sse { events, serializer } => events.push(serializer.serialize(&event)),
+            Self::Typed(events) => events.push(event),
+        }
+    }
+}
+
 struct FunctionCallState {
     item_id: String,
     call_id: String,
@@ -209,17 +226,26 @@ impl ResponseStreamConverter {
 
     /// Append the initial lifecycle events: created + in_progress.
     pub fn append_start_events(&mut self, events: &mut Vec<Result<Event, anyhow::Error>>) {
+        let serializer = ResponseEventSerializer::new(&self.params);
+        self.append_start_events_to(&mut ResponseEventSink::Sse { events, serializer });
+    }
+
+    pub(crate) fn append_start_typed_events(&mut self, events: &mut Vec<ResponseStreamEvent>) {
+        self.append_start_events_to(&mut ResponseEventSink::Typed(events));
+    }
+
+    fn append_start_events_to(&mut self, events: &mut ResponseEventSink<'_>) {
         let created = ResponseStreamEvent::ResponseCreated(ResponseCreatedEvent {
             sequence_number: self.next_seq(),
             response: self.make_response(Status::InProgress, vec![]),
         });
-        events.push(self.make_sse_event(&created));
+        events.push(created);
 
         let in_progress = ResponseStreamEvent::ResponseInProgress(ResponseInProgressEvent {
             sequence_number: self.next_seq(),
             response: self.make_response(Status::InProgress, vec![]),
         });
-        events.push(self.make_sse_event(&in_progress));
+        events.push(in_progress);
     }
 
     /// Process a single chat completion stream chunk and return zero or more SSE events.
@@ -237,6 +263,23 @@ impl ResponseStreamConverter {
         &mut self,
         chunk: &NvCreateChatCompletionStreamResponse,
         events: &mut Vec<Result<Event, anyhow::Error>>,
+    ) {
+        let serializer = ResponseEventSerializer::new(&self.params);
+        self.append_chunk_events_to(chunk, &mut ResponseEventSink::Sse { events, serializer });
+    }
+
+    pub(crate) fn append_chunk_typed_events(
+        &mut self,
+        chunk: &NvCreateChatCompletionStreamResponse,
+        events: &mut Vec<ResponseStreamEvent>,
+    ) {
+        self.append_chunk_events_to(chunk, &mut ResponseEventSink::Typed(events));
+    }
+
+    fn append_chunk_events_to(
+        &mut self,
+        chunk: &NvCreateChatCompletionStreamResponse,
+        events: &mut ResponseEventSink<'_>,
     ) {
         // Capture usage stats from the final chunk (sent when stream_options.include_usage=true)
         if let Some(ref u) = chunk.inner.usage {
@@ -294,7 +337,7 @@ impl ResponseStreamConverter {
                             }),
                         },
                     );
-                    events.push(self.make_sse_event(&item_added));
+                    events.push(item_added);
 
                     let part_added = ResponseStreamEvent::ResponseReasoningSummaryPartAdded(
                         ResponseReasoningSummaryPartAddedEvent {
@@ -307,7 +350,7 @@ impl ResponseStreamConverter {
                             }),
                         },
                     );
-                    events.push(self.make_sse_event(&part_added));
+                    events.push(part_added);
                 }
 
                 let reasoning_delta = ResponseStreamEvent::ResponseReasoningSummaryTextDelta(
@@ -319,7 +362,7 @@ impl ResponseStreamConverter {
                         delta: reasoning.to_string(),
                     },
                 );
-                events.push(self.make_sse_event(&reasoning_delta));
+                events.push(reasoning_delta);
             }
 
             // Handle text content deltas — extract text from the enum
@@ -359,7 +402,7 @@ impl ResponseStreamConverter {
                             }),
                         },
                     );
-                    events.push(self.make_sse_event(&item_added));
+                    events.push(item_added);
 
                     let part_added = ResponseStreamEvent::ResponseContentPartAdded(
                         ResponseContentPartAddedEvent {
@@ -374,7 +417,7 @@ impl ResponseStreamConverter {
                             }),
                         },
                     );
-                    events.push(self.make_sse_event(&part_added));
+                    events.push(part_added);
                 }
 
                 // Emit text delta
@@ -388,7 +431,7 @@ impl ResponseStreamConverter {
                         delta: content.to_string(),
                         logprobs: Some(vec![]),
                     });
-                events.push(self.make_sse_event(&text_delta));
+                events.push(text_delta);
             }
 
             // Handle tool call deltas
@@ -507,7 +550,7 @@ impl ResponseStreamConverter {
                                 }),
                             },
                         );
-                        events.push(self.make_sse_event(&item_added));
+                        events.push(item_added);
                     }
 
                     if let Some((item_id, output_index)) = argument_target {
@@ -521,7 +564,7 @@ impl ResponseStreamConverter {
                                         delta,
                                     },
                                 );
-                            events.push(self.make_sse_event(&args_delta));
+                            events.push(args_delta);
                         }
                     }
                 }
@@ -554,7 +597,7 @@ impl ResponseStreamConverter {
 
     fn append_reasoning_done_events(
         &mut self,
-        events: &mut Vec<Result<Event, anyhow::Error>>,
+        events: &mut ResponseEventSink<'_>,
         output_status: OutputStatus,
     ) {
         if self.reasoning_done {
@@ -575,7 +618,7 @@ impl ResponseStreamConverter {
                 text: self.accumulated_reasoning.clone(),
             },
         );
-        events.push(self.make_sse_event(&text_done));
+        events.push(text_done);
 
         let summary = SummaryPart::SummaryText(SummaryTextContent {
             text: self.accumulated_reasoning.clone(),
@@ -589,7 +632,7 @@ impl ResponseStreamConverter {
                 part: summary.clone(),
             },
         );
-        events.push(self.make_sse_event(&part_done));
+        events.push(part_done);
 
         let item_done = ResponseStreamEvent::ResponseOutputItemDone(ResponseOutputItemDoneEvent {
             sequence_number: self.next_seq(),
@@ -602,12 +645,12 @@ impl ResponseStreamConverter {
                 status: Some(output_status),
             }),
         });
-        events.push(self.make_sse_event(&item_done));
+        events.push(item_done);
     }
 
     fn append_pending_function_call_done_events(
         &mut self,
-        events: &mut Vec<Result<Event, anyhow::Error>>,
+        events: &mut ResponseEventSink<'_>,
         output_status: OutputStatus,
     ) {
         // `started` is set only after `has_identity()` observes both required
@@ -641,7 +684,7 @@ impl ResponseStreamConverter {
                     name: Some(fc_name.clone()),
                 },
             );
-            events.push(self.make_sse_event(&args_done));
+            events.push(args_done);
 
             let item_done =
                 ResponseStreamEvent::ResponseOutputItemDone(ResponseOutputItemDoneEvent {
@@ -656,7 +699,7 @@ impl ResponseStreamConverter {
                         status: Some(output_status),
                     }),
                 });
-            events.push(self.make_sse_event(&item_done));
+            events.push(item_done);
         }
     }
 
@@ -737,7 +780,7 @@ impl ResponseStreamConverter {
 
     fn close_open_message_item(
         &mut self,
-        events: &mut Vec<Result<Event, anyhow::Error>>,
+        events: &mut ResponseEventSink<'_>,
         output_status: OutputStatus,
     ) {
         if !self.message_started {
@@ -752,7 +795,7 @@ impl ResponseStreamConverter {
             text: self.accumulated_text.clone(),
             logprobs: Some(vec![]),
         });
-        events.push(self.make_sse_event(&text_done));
+        events.push(text_done);
 
         let part_done =
             ResponseStreamEvent::ResponseContentPartDone(ResponseContentPartDoneEvent {
@@ -766,14 +809,14 @@ impl ResponseStreamConverter {
                     logprobs: Some(vec![]),
                 }),
             });
-        events.push(self.make_sse_event(&part_done));
+        events.push(part_done);
 
         let item_done = ResponseStreamEvent::ResponseOutputItemDone(ResponseOutputItemDoneEvent {
             sequence_number: self.next_seq(),
             output_index: self.message_output_index,
             item: OutputItem::Message(self.message_output(output_status)),
         });
-        events.push(self.make_sse_event(&item_done));
+        events.push(item_done);
     }
 
     /// Emit remaining output completion events and `response.completed` at stream end.
@@ -785,6 +828,15 @@ impl ResponseStreamConverter {
 
     /// Append remaining output completion events and `response.completed` at stream end.
     pub fn append_end_events(&mut self, events: &mut Vec<Result<Event, anyhow::Error>>) {
+        let serializer = ResponseEventSerializer::new(&self.params);
+        self.append_end_events_to(&mut ResponseEventSink::Sse { events, serializer });
+    }
+
+    pub(crate) fn append_end_typed_events(&mut self, events: &mut Vec<ResponseStreamEvent>) {
+        self.append_end_events_to(&mut ResponseEventSink::Typed(events));
+    }
+
+    fn append_end_events_to(&mut self, events: &mut ResponseEventSink<'_>) {
         let output_status = self.output_status();
         // Without a later output item, the response finish reason determines
         // whether the still-open reasoning item completed or was truncated.
@@ -808,7 +860,7 @@ impl ResponseStreamConverter {
                 response,
             })
         };
-        events.push(self.make_sse_event(&terminal));
+        events.push(terminal);
     }
 
     /// Emit error events when the stream ends due to a backend error.
@@ -826,6 +878,26 @@ impl ResponseStreamConverter {
         error: ErrorObject,
         events: &mut Vec<Result<Event, anyhow::Error>>,
     ) -> Result<Event, anyhow::Error> {
+        let serializer = ResponseEventSerializer::new(&self.params);
+        let failed =
+            self.append_error_events_to(error, &mut ResponseEventSink::Sse { events, serializer });
+        ResponseEventSerializer::new(&self.params).serialize(&failed)
+    }
+
+    pub(crate) fn append_error_typed_events(
+        &mut self,
+        error: ErrorObject,
+        events: &mut Vec<ResponseStreamEvent>,
+    ) {
+        let failed = self.append_error_events_to(error, &mut ResponseEventSink::Typed(events));
+        events.push(failed);
+    }
+
+    fn append_error_events_to(
+        &mut self,
+        error: ErrorObject,
+        events: &mut ResponseEventSink<'_>,
+    ) -> ResponseStreamEvent {
         let output_status = OutputStatus::Incomplete;
         self.append_reasoning_done_events(events, output_status);
         self.close_open_message_item(events, output_status);
@@ -834,20 +906,30 @@ impl ResponseStreamConverter {
         let mut response =
             self.make_response(Status::Failed, self.output_with_status(output_status));
         response.error = Some(error);
-        let failed = ResponseStreamEvent::ResponseFailed(ResponseFailedEvent {
+        ResponseStreamEvent::ResponseFailed(ResponseFailedEvent {
             sequence_number: self.next_seq(),
             response,
-        });
-        self.make_sse_event(&failed)
+        })
     }
 }
 
-impl ResponseStreamConverter {
-    /// Serialize a stream event, patching any embedded `response` object to
-    /// satisfy the OpenResponses schema. Takes `&self` so spec-required
-    /// sampling params can be sourced from the originating request via
-    /// `self.params` rather than hardcoded at each emit site.
-    fn make_sse_event(&self, event: &ResponseStreamEvent) -> Result<Event, anyhow::Error> {
+#[derive(Clone, Copy)]
+pub(crate) struct ResponseEventSerializer {
+    spec: ResponseSpecFields,
+}
+
+impl ResponseEventSerializer {
+    pub(crate) fn new(params: &ResponseParams) -> Self {
+        Self {
+            spec: ResponseSpecFields {
+                presence_penalty: params.presence_penalty.unwrap_or(0.0),
+                frequency_penalty: params.frequency_penalty.unwrap_or(0.0),
+                store: params.store.unwrap_or(false),
+            },
+        }
+    }
+
+    pub(crate) fn serialize(&self, event: &ResponseStreamEvent) -> Result<Event, anyhow::Error> {
         let event_type = get_event_type(event);
         let data = self.serialize_event_data(event)?;
         Ok(Event::default().event(event_type).data(data))
@@ -857,19 +939,13 @@ impl ResponseStreamConverter {
         &self,
         event: &ResponseStreamEvent,
     ) -> Result<String, serde_json::Error> {
-        let spec = ResponseSpecFields {
-            presence_penalty: self.params.presence_penalty.unwrap_or(0.0),
-            frequency_penalty: self.params.frequency_penalty.unwrap_or(0.0),
-            store: self.params.store.unwrap_or(false),
-        };
-
         match event {
             ResponseStreamEvent::ResponseCreated(event) => {
                 serde_json::to_string(&ResponseEventForSpec::new(
                     "response.created",
                     event.sequence_number,
                     &event.response,
-                    spec,
+                    self.spec,
                 ))
             }
             ResponseStreamEvent::ResponseInProgress(event) => {
@@ -877,7 +953,7 @@ impl ResponseStreamConverter {
                     "response.in_progress",
                     event.sequence_number,
                     &event.response,
-                    spec,
+                    self.spec,
                 ))
             }
             ResponseStreamEvent::ResponseCompleted(event) => {
@@ -885,7 +961,7 @@ impl ResponseStreamConverter {
                     "response.completed",
                     event.sequence_number,
                     &event.response,
-                    spec,
+                    self.spec,
                 ))
             }
             ResponseStreamEvent::ResponseFailed(event) => {
@@ -893,7 +969,7 @@ impl ResponseStreamConverter {
                     "response.failed",
                     event.sequence_number,
                     &event.response,
-                    spec,
+                    self.spec,
                 ))
             }
             ResponseStreamEvent::ResponseIncomplete(event) => {
@@ -901,7 +977,7 @@ impl ResponseStreamConverter {
                     "response.incomplete",
                     event.sequence_number,
                     &event.response,
-                    spec,
+                    self.spec,
                 ))
             }
             ResponseStreamEvent::ResponseQueued(event) => {
@@ -909,7 +985,7 @@ impl ResponseStreamConverter {
                     "response.queued",
                     event.sequence_number,
                     &event.response,
-                    spec,
+                    self.spec,
                 ))
             }
             _ => serde_json::to_string(event),
@@ -1336,7 +1412,12 @@ mod tests {
         converter: &ResponseStreamConverter,
         event: &ResponseStreamEvent,
     ) -> serde_json::Value {
-        serde_json::from_str(&converter.serialize_event_data(event).unwrap()).unwrap()
+        serde_json::from_str(
+            &ResponseEventSerializer::new(&converter.params)
+                .serialize_event_data(event)
+                .unwrap(),
+        )
+        .unwrap()
     }
 
     /// Parseable arguments remain open until an explicit tool-call finish reason.

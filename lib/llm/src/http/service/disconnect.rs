@@ -71,6 +71,106 @@ pub struct ConnectionHandle {
     on_drop: ConnectionStatus,
 }
 
+pub(super) enum TypedStreamTerminal {
+    Success,
+    Error(ErrorType),
+}
+
+/// Apply Dynamo's cancellation, inactivity, and accounting lifecycle to a
+/// typed protocol stream without introducing HTTP/SSE framing.
+pub(super) fn monitor_typed_stream<T, S, C>(
+    stream: S,
+    context: Arc<dyn AsyncEngineContext>,
+    mut inflight_guard: InflightGuard,
+    mut stream_handle: ConnectionHandle,
+    inactivity_timeout: Option<Duration>,
+    mut activity_rx: Option<mpsc::UnboundedReceiver<()>>,
+    classify_terminal: C,
+) -> impl Stream<Item = T>
+where
+    T: Send + 'static,
+    S: Stream<Item = T> + Send + 'static,
+    C: Fn(&T) -> Option<TypedStreamTerminal> + Send + 'static,
+{
+    stream_handle.arm();
+    inflight_guard.mark_error(ErrorType::Cancelled);
+
+    async_stream::stream! {
+        tokio::pin!(stream);
+        let stopped = context.stopped();
+        tokio::pin!(stopped);
+        let mut saw_terminal = false;
+        let mut inactivity_deadline =
+            inactivity_timeout.map(|timeout| tokio::time::Instant::now() + timeout);
+        loop {
+            tokio::select! {
+                biased;
+                event = stream.next() => {
+                    let Some(event) = event else {
+                        if !saw_terminal {
+                            inflight_guard.mark_error(ErrorType::Internal);
+                        }
+                        stream_handle.disarm();
+                        break;
+                    };
+                    inactivity_deadline = inactivity_timeout
+                        .map(|timeout| tokio::time::Instant::now() + timeout);
+                    match classify_terminal(&event) {
+                        Some(TypedStreamTerminal::Success) => {
+                            saw_terminal = true;
+                            inflight_guard.mark_ok();
+                            stream_handle.disarm();
+                        }
+                        Some(TypedStreamTerminal::Error(error_type)) => {
+                            saw_terminal = true;
+                            inflight_guard.mark_error(error_type);
+                            stream_handle.disarm();
+                        }
+                        None => {}
+                    }
+                    yield event;
+                }
+                _ = &mut stopped => {
+                    inflight_guard.mark_error(ErrorType::Cancelled);
+                    break;
+                }
+                activity = async {
+                    match activity_rx.as_mut() {
+                        Some(rx) => rx.recv().await,
+                        None => std::future::pending::<Option<()>>().await,
+                    }
+                } => {
+                    if activity.is_some() {
+                        inactivity_deadline = inactivity_timeout
+                            .map(|timeout| tokio::time::Instant::now() + timeout);
+                    } else {
+                        activity_rx = None;
+                    }
+                }
+                _ = async {
+                    match inactivity_deadline {
+                        Some(deadline) => tokio::time::sleep_until(deadline).await,
+                        None => std::future::pending::<()>().await,
+                    }
+                } => {
+                    inflight_guard.mark_error(ErrorType::ResponseTimeout);
+                    stream_handle.disarm();
+                    tracing::warn!(
+                        request_id = %inflight_guard.request_id(),
+                        model = %inflight_guard.model(),
+                        endpoint = %inflight_guard.endpoint(),
+                        request_type = %inflight_guard.request_type(),
+                        timeout_secs = ?inactivity_timeout.map(|duration| duration.as_secs()),
+                        "backend typed stream inactivity timeout; killing engine context"
+                    );
+                    context.kill();
+                    break;
+                }
+            }
+        }
+    }
+}
+
 /// One-shot application error reported by an SSE producer.
 ///
 /// The producer records the error when it is detected, then marks the terminal

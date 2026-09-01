@@ -571,6 +571,9 @@ pub enum Endpoint {
     /// Anthropic Messages
     AnthropicMessages,
 
+    /// A model invocation made by a hosted protocol runtime.
+    AgentInference,
+
     /// Tensor
     Tensor,
 
@@ -1690,6 +1693,7 @@ impl std::fmt::Display for Endpoint {
             Endpoint::Audios => write!(f, "audios"),
             Endpoint::Responses => write!(f, "responses"),
             Endpoint::AnthropicMessages => write!(f, "anthropic_messages"),
+            Endpoint::AgentInference => write!(f, "agent_inference"),
             Endpoint::Tensor => write!(f, "tensor"),
             Endpoint::Generate => write!(f, "generate"),
         }
@@ -1709,6 +1713,7 @@ impl Endpoint {
             Endpoint::Audios => "audios",
             Endpoint::Responses => "responses",
             Endpoint::AnthropicMessages => "anthropic_messages",
+            Endpoint::AgentInference => "agent_inference",
             Endpoint::Tensor => "tensor",
             Endpoint::Generate => "generate",
         }

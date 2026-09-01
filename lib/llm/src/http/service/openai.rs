@@ -35,13 +35,14 @@ use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use super::{
     RouteDoc, apply_request_tool_call_parsing_options,
     disconnect::{
-        ConnectionHandle, StreamErrorSignal, create_connection_monitor, monitor_for_disconnects,
-        monitor_for_disconnects_with_activity, monitor_for_disconnects_with_error_signal,
+        ConnectionHandle, StreamErrorSignal, TypedStreamTerminal, backend_stream_timeout,
+        create_connection_monitor, monitor_for_disconnects, monitor_for_disconnects_with_activity,
+        monitor_for_disconnects_with_error_signal, monitor_typed_stream,
     },
     error::{HttpError, invalid_argument},
     metadata::{attach_x_request_id, extract_metadata_from_http},
     metrics::{
-        CancellationLabels, Endpoint, ErrorType, EventConverter,
+        CancellationLabels, Endpoint, ErrorType, EventConverter, InflightGuard,
         process_chat_response_and_observe_metrics,
         process_chat_response_using_event_converter_and_observe_metrics,
         process_response_and_observe_metrics,
@@ -3280,18 +3281,6 @@ async fn handler_responses(
     let body = read_json_request_body(&headers, body).await?;
     let mut request: NvCreateResponse = parse_json_request("responses", &body)?;
 
-    // return a 503 if the service or model is not ready.
-    // Resolve the templated model first so empty/missing `model` fields
-    // don't bypass the gate.
-    check_ready(&state)?;
-    let resolved_model = resolve_request_model(
-        request.inner.model.as_deref().unwrap_or(""),
-        template.as_ref(),
-    );
-    if !resolved_model.is_empty() {
-        check_model_serving_ready(&state, resolved_model)?;
-    }
-
     if !state.nvext_enabled() {
         warn_nvext_disabled(
             "responses",
@@ -3330,6 +3319,16 @@ async fn handler_responses(
             captured,
         );
     }
+    if let Some(response) = super::protocol_extension::try_responses(
+        state.clone(),
+        template.clone(),
+        &headers,
+        &request,
+    )
+    .await?
+    {
+        return Ok(response);
+    }
     let context = request.context();
 
     // create the connection handles
@@ -3357,16 +3356,132 @@ async fn handler_responses(
     response
 }
 
-#[tracing::instrument(level = "debug", skip_all, fields(request_id = %request.id()))]
+pub(super) type NativeResponsesStream = std::pin::Pin<
+    Box<dyn futures::Stream<Item = dynamo_protocols::types::responses::ResponseStreamEvent> + Send>,
+>;
+
+enum ResponsesOutput {
+    Unary(Box<NvResponse>),
+    Streaming(Box<ResponsesStream>),
+}
+
+struct ResponsesStream {
+    events: NativeResponsesStream,
+    context: Arc<dyn dynamo_runtime::engine::AsyncEngineContext>,
+    inflight_guard: InflightGuard,
+    stream_handle: ConnectionHandle,
+    error_signal: StreamErrorSignal,
+    params: ResponseParams,
+    keep_alive_required: bool,
+}
+
+fn native_responses_stream(
+    stream: impl futures::Stream<Item = dynamo_protocols::types::responses::ResponseStreamEvent>
+    + Send
+    + 'static,
+    context: Arc<dyn dynamo_runtime::engine::AsyncEngineContext>,
+    inflight_guard: InflightGuard,
+    stream_handle: ConnectionHandle,
+) -> NativeResponsesStream {
+    use dynamo_protocols::types::responses::ResponseStreamEvent;
+
+    Box::pin(monitor_typed_stream(
+        stream,
+        context,
+        inflight_guard,
+        stream_handle,
+        backend_stream_timeout(),
+        None,
+        |event| match event {
+            ResponseStreamEvent::ResponseCompleted(_)
+            | ResponseStreamEvent::ResponseIncomplete(_) => Some(TypedStreamTerminal::Success),
+            ResponseStreamEvent::ResponseFailed(_) | ResponseStreamEvent::ResponseError(_) => {
+                Some(TypedStreamTerminal::Error(ErrorType::Internal))
+            }
+            _ => None,
+        },
+    ))
+}
+
 async fn responses(
+    state: Arc<service_v2::State>,
+    template: Option<RequestTemplate>,
+    request: Context<NvCreateResponse>,
+    stream_handle: ConnectionHandle,
+) -> Result<Response, ErrorResponse> {
+    let keep_alive_state = state.clone();
+    match responses_inner(state, template, request, stream_handle, Endpoint::Responses).await? {
+        ResponsesOutput::Unary(response) => Ok(Json(*response).into_response()),
+        ResponsesOutput::Streaming(output) => {
+            use crate::protocols::openai::responses::stream_converter::ResponseEventSerializer;
+
+            let serializer = ResponseEventSerializer::new(&output.params);
+            let terminal_error_signal = output.error_signal.clone();
+            let stream = output.events.map(move |event| {
+                use dynamo_protocols::types::responses::ResponseStreamEvent;
+
+                let terminal_failure = matches!(&event, ResponseStreamEvent::ResponseFailed(_));
+                let serialized = serializer.serialize(&event).map_err(axum::Error::new);
+                if terminal_failure && serialized.is_ok() {
+                    terminal_error_signal.mark_terminal_event_emitted();
+                }
+                serialized
+            });
+            let stream = monitor_for_disconnects_with_error_signal(
+                stream,
+                output.context,
+                output.inflight_guard,
+                output.stream_handle,
+                output.error_signal,
+            );
+            let mut response = Sse::new(stream);
+            if let Some(keep_alive) =
+                keep_alive_state.sse_keep_alive_for_response(output.keep_alive_required)
+            {
+                response = response.keep_alive(KeepAlive::default().interval(keep_alive));
+            }
+            Ok(response.into_response())
+        }
+    }
+}
+
+pub(super) async fn responses_native(
+    state: Arc<service_v2::State>,
+    template: Option<RequestTemplate>,
+    request: Context<NvCreateResponse>,
+    stream_handle: ConnectionHandle,
+) -> Result<dynamo_agent_protocol_host::ResponsesProtocolOutput, ErrorResponse> {
+    match responses_inner(
+        state,
+        template,
+        request,
+        stream_handle,
+        Endpoint::AgentInference,
+    )
+    .await?
+    {
+        ResponsesOutput::Unary(response) => Ok(dynamo_agent_protocol_host::ProtocolOutput::Unary(
+            response.inner,
+        )),
+        ResponsesOutput::Streaming(output) => Ok(
+            dynamo_agent_protocol_host::ProtocolOutput::Streaming(native_responses_stream(
+                output.events,
+                output.context,
+                output.inflight_guard,
+                output.stream_handle,
+            )),
+        ),
+    }
+}
+
+#[tracing::instrument(level = "debug", skip_all, fields(request_id = %request.id()))]
+async fn responses_inner(
     state: Arc<service_v2::State>,
     template: Option<RequestTemplate>,
     mut request: Context<NvCreateResponse>,
     stream_handle: ConnectionHandle,
-) -> Result<Response, ErrorResponse> {
-    // return a 503 if the service is not ready
-    check_ready(&state)?;
-
+    endpoint: Endpoint,
+) -> Result<ResponsesOutput, ErrorResponse> {
     // Apply template values if present. When no template and no client-supplied
     // max_output_tokens, leave it as None for response echoing and let the
     // backend adapter compute the dynamic generation cap from its effective
@@ -3394,6 +3509,10 @@ async fn responses(
         request.inner.model = Some(canonical.clone());
     }
     let model = canonical;
+    check_ready(&state)?;
+    if !model.is_empty() {
+        check_model_serving_ready(&state, &model)?;
+    }
     let streaming = request.inner.stream.unwrap_or(false);
     let metric_model = state.manager().metric_model_for(&model).to_string();
 
@@ -3401,7 +3520,7 @@ async fn responses(
     let http_queue_guard = state.metrics_clone().create_http_queue_guard(&metric_model);
     let mut inflight_guard = state.metrics_clone().create_inflight_guard(
         &metric_model,
-        Endpoint::Responses,
+        endpoint,
         streaming,
         request.id(),
     );
@@ -3411,7 +3530,7 @@ async fn responses(
     // and early return a 501 NOT_IMPLEMENTED status code.
     if let Some(resp) = validate_response_unsupported_fields(&request) {
         inflight_guard.mark_error(ErrorType::NotImplemented);
-        return Ok(resp.into_response());
+        return Err(resp);
     }
 
     // Validate sampling and output parameters
@@ -3422,34 +3541,7 @@ async fn responses(
 
     // Extract request parameters before into_parts() consumes the request.
     // These are echoed back in the Response object per the OpenAI spec.
-    let response_params = ResponseParams {
-        model: request.inner.model.clone(),
-        temperature: request.inner.temperature,
-        top_p: request.inner.top_p,
-        max_output_tokens: request.inner.max_output_tokens,
-        parallel_tool_calls: request.inner.parallel_tool_calls,
-        store: request.inner.store,
-        tools: request.inner.tools.clone(),
-        tool_choice: request.inner.tool_choice.clone(),
-        instructions: request.inner.instructions.clone(),
-        reasoning: request.inner.reasoning.clone(),
-        text: request.inner.text.clone(),
-        service_tier: request.inner.service_tier,
-        include: request.inner.include.clone(),
-        truncation: request.inner.truncation,
-        // Upstream `CreateResponse` doesn't carry these yet; plumbed through so
-        // the response serializer can default to 0.0 without hardcoding at the
-        // build site. When upstream (or our shadow) adds the fields, sourcing
-        // from the request becomes a one-line change here.
-        presence_penalty: None,
-        frequency_penalty: None,
-        // Pass-through metadata — accepted on the request, echoed back on the
-        // response so the caller can confirm receipt. Dynamo doesn't act on
-        // these; see `validate_response_unsupported_fields` for rationale.
-        prompt_cache_key: request.inner.prompt_cache_key.clone(),
-        prompt_cache_retention: request.inner.prompt_cache_retention,
-        safety_identifier: request.inner.safety_identifier.clone(),
-    };
+    let response_params = ResponseParams::from_create_response(&request.inner);
     let request_id = request.id().to_string();
     let (orig_request, context) = request.into_parts();
 
@@ -3588,14 +3680,15 @@ async fn responses(
                 >,
         };
 
-        // Streaming path: convert chat completion stream chunks to Responses API SSE events.
-        // The engine yields Annotated<NvCreateChatCompletionStreamResponse>. We extract the
-        // inner stream response data and convert it to Responses API events.
+        // Convert backend chunks to native Responses events before choosing a
+        // typed consumer or the public SSE serializer.
         use crate::protocols::openai::responses::stream_converter::ResponseStreamConverter;
 
         let mut converter = match responses_ctx {
-            Some(ctx) => ResponseStreamConverter::with_context(model.clone(), response_params, ctx),
-            None => ResponseStreamConverter::new(model.clone(), response_params),
+            Some(ctx) => {
+                ResponseStreamConverter::with_context(model.clone(), response_params.clone(), ctx)
+            }
+            None => ResponseStreamConverter::new(model.clone(), response_params.clone()),
         };
 
         let mut http_queue_guard = Some(http_queue_guard);
@@ -3603,11 +3696,11 @@ async fn responses(
         let producer_error_signal = error_signal.clone();
 
         let mut engine_stream = Box::pin(engine_stream);
-        let full_stream = async_stream::stream! {
+        let typed_stream = async_stream::stream! {
             let mut events = Vec::with_capacity(4);
-            converter.append_start_events(&mut events);
+            converter.append_start_typed_events(&mut events);
             for event in events.drain(..) {
-                yield event.map_err(axum::Error::new);
+                yield event;
             }
 
             // Preserve the first backend error for the terminal Responses event.
@@ -3637,47 +3730,34 @@ async fn responses(
                     continue;
                 };
 
-                converter.append_chunk_events(&stream_resp, &mut events);
+                converter.append_chunk_typed_events(&stream_resp, &mut events);
                 for event in events.drain(..) {
-                    yield event.map_err(axum::Error::new);
+                    yield event;
                 }
             }
 
             if let Some(error) = backend_error {
-                let terminal_event = converter.append_error_events(error, &mut events);
+                converter.append_error_typed_events(error, &mut events);
                 for event in events.drain(..) {
-                    yield event.map_err(axum::Error::new);
+                    yield event;
                 }
-                if terminal_event.is_ok() {
-                    // From this yield onward, response.failed is sufficient for
-                    // a client to stop consuming without being a disconnect.
-                    producer_error_signal.mark_terminal_event_emitted();
-                }
-                yield terminal_event.map_err(axum::Error::new);
             } else {
-                converter.append_end_events(&mut events);
+                converter.append_end_typed_events(&mut events);
                 for event in events.drain(..) {
-                    yield event.map_err(axum::Error::new);
+                    yield event;
                 }
             }
         };
 
-        // Wrap with disconnect monitoring: detects client disconnects, cancels generation,
-        // and defers inflight_guard.mark_ok() until the stream completes.
-        let stream = monitor_for_disconnects_with_error_signal(
-            full_stream,
-            ctx,
+        Ok(ResponsesOutput::Streaming(Box::new(ResponsesStream {
+            events: Box::pin(typed_stream),
+            context: ctx,
             inflight_guard,
             stream_handle,
             error_signal,
-        );
-
-        let mut sse_stream = Sse::new(stream);
-        if let Some(keep_alive) = state.sse_keep_alive_for_response(stream_can_defer_all_output) {
-            sse_stream = sse_stream.keep_alive(KeepAlive::default().interval(keep_alive));
-        }
-
-        Ok(sse_stream.into_response())
+            params: response_params,
+            keep_alive_required: stream_can_defer_all_output,
+        })))
     } else {
         // Non-streaming path: aggregate stream into single response
 
@@ -3733,15 +3813,13 @@ async fn responses(
             inflight_guard.mark_error(ErrorType::Cancelled);
         }
 
-        Ok(Json(response).into_response())
+        Ok(ResponsesOutput::Unary(Box::new(response)))
     }
 }
 
 /// Checks for unsupported fields in the request.
 /// Returns Some(response) if unsupported fields are present.
-pub fn validate_response_unsupported_fields(
-    request: &NvCreateResponse,
-) -> Option<impl IntoResponse> {
+pub fn validate_response_unsupported_fields(request: &NvCreateResponse) -> Option<ErrorResponse> {
     let inner = &request.inner;
 
     if let Some(field) = request

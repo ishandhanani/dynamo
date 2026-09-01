@@ -30,21 +30,21 @@ pub mod generate;
 pub mod health;
 pub mod metrics;
 pub mod openapi_docs;
+mod protocol_extension;
 pub mod realtime;
 pub mod service_v2;
 pub mod sglang_generate;
 
+use crate::{
+    preprocessor::OpenAIPreprocessor,
+    protocols::openai::{ParsingOptions, chat_completions::NvCreateChatCompletionRequest},
+};
 pub use axum;
 pub use frontend_extension::{
     FrontendExtensionContext, FrontendRouteExtension, FrontendRouteSet,
     validate_extension_route_path,
 };
 pub use metrics::Metrics;
-
-use crate::{
-    preprocessor::OpenAIPreprocessor,
-    protocols::openai::{ParsingOptions, chat_completions::NvCreateChatCompletionRequest},
-};
 
 use dynamo_protocols::types::ChatCompletionToolChoiceOption;
 use dynamo_runtime::error::DynamoError;

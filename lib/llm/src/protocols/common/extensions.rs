@@ -344,6 +344,20 @@ pub const HEADER_DATA_PARALLEL_RANK_ALIAS: &str = "x-data-parallel-rank";
 pub const HEADER_PREFILL_DP_RANK_ALIAS: &str = "x-prefill-dp-rank";
 const UNSET_DP_RANK_SENTINEL: u32 = u32::MAX;
 
+pub(crate) const ROUTING_HEADER_NAMES: [&str; 11] = [
+    HEADER_WORKER_INSTANCE_ID,
+    HEADER_WORKER_INSTANCE_ID_ALIAS,
+    HEADER_PREFILL_INSTANCE_ID,
+    HEADER_PREFILL_INSTANCE_ID_ALIAS,
+    HEADER_DP_RANK,
+    HEADER_DP_RANK_ALIAS,
+    HEADER_DATA_PARALLEL_RANK_ALIAS,
+    HEADER_PREFILL_DP_RANK,
+    HEADER_PREFILL_DP_RANK_ALIAS,
+    HEADER_REQUEST_PRIORITY,
+    HEADER_REQUEST_STRICT_PRIORITY,
+];
+
 /// Return the last non-empty value after trimming surrounding whitespace.
 pub fn last_non_empty_trimmed_value<'a>(values: impl Iterator<Item = &'a str>) -> Option<&'a str> {
     values
@@ -356,21 +370,9 @@ pub fn last_non_empty_trimmed_value<'a>(values: impl Iterator<Item = &'a str>) -
 
 /// Return true when the request contains a routing header disabled by the NvExt switch.
 pub fn has_non_cache_salt_routing_headers(headers: &HeaderMap) -> bool {
-    [
-        HEADER_WORKER_INSTANCE_ID,
-        HEADER_WORKER_INSTANCE_ID_ALIAS,
-        HEADER_PREFILL_INSTANCE_ID,
-        HEADER_PREFILL_INSTANCE_ID_ALIAS,
-        HEADER_DP_RANK,
-        HEADER_DP_RANK_ALIAS,
-        HEADER_DATA_PARALLEL_RANK_ALIAS,
-        HEADER_PREFILL_DP_RANK,
-        HEADER_PREFILL_DP_RANK_ALIAS,
-        HEADER_REQUEST_PRIORITY,
-        HEADER_REQUEST_STRICT_PRIORITY,
-    ]
-    .iter()
-    .any(|header| headers.contains_key(*header))
+    ROUTING_HEADER_NAMES
+        .iter()
+        .any(|header| headers.contains_key(*header))
 }
 
 impl From<AgentContextHeaderValues> for AgentContext {

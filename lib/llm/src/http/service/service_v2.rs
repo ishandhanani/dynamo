@@ -34,6 +34,7 @@ use crate::request_template::RequestTemplate;
 use anyhow::Result;
 use axum_server::tls_rustls::RustlsConfig;
 use derive_builder::Builder;
+use dynamo_agent_protocol_host::ProtocolInterceptor;
 use dynamo_runtime::DistributedRuntime;
 use dynamo_runtime::config::env_is_truthy;
 use dynamo_runtime::config::environment_names::llm as env_llm;
@@ -145,6 +146,7 @@ pub struct State {
     frontend_api_config: FrontendApiConfig,
     nvext_enabled: bool,
     sse_keep_alive: Option<Duration>,
+    protocol_interceptor: Option<Arc<dyn ProtocolInterceptor>>,
 }
 
 /// Typed config needed only to construct HTTP shared state.
@@ -156,6 +158,7 @@ struct StateConfig {
     frontend_api_config: FrontendApiConfig,
     nvext_enabled: bool,
     sse_keep_alive: Option<Duration>,
+    protocol_interceptor: Option<Arc<dyn ProtocolInterceptor>>,
 }
 
 fn parse_sse_keep_alive(value: Result<String, std::env::VarError>) -> Option<Duration> {
@@ -489,12 +492,17 @@ impl State {
             cancel_token,
             frontend_api_config: config.frontend_api_config,
             sse_keep_alive: config.sse_keep_alive,
+            protocol_interceptor: config.protocol_interceptor,
         }
     }
 
     /// Get the Prometheus [`Metrics`] object which tracks request counts and inflight requests
     pub fn metrics_clone(&self) -> Arc<Metrics> {
         self.metrics.clone()
+    }
+
+    pub(super) fn protocol_interceptor(&self) -> Option<&Arc<dyn ProtocolInterceptor>> {
+        self.protocol_interceptor.as_ref()
     }
 
     pub fn manager(&self) -> &ModelManager {
@@ -663,6 +671,10 @@ pub struct HttpServiceConfig {
     /// Each extension is invoked with a read-only [`FrontendExtensionContext`].
     #[builder(default)]
     frontend_route_extensions: Vec<FrontendRouteExtension>,
+
+    /// Optional typed interceptor for Responses and Anthropic Messages.
+    #[builder(default = "None")]
+    protocol_interceptor: Option<Arc<dyn ProtocolInterceptor>>,
 
     #[builder(default = "false")]
     enable_chat_endpoints: bool,
@@ -1093,6 +1105,22 @@ fn append_route_docs(
 }
 
 impl HttpServiceConfigBuilder {
+    pub fn with_protocol_interceptor<I>(mut self, interceptor: I) -> Self
+    where
+        I: ProtocolInterceptor,
+    {
+        self.protocol_interceptor = Some(Some(Arc::new(interceptor)));
+        self
+    }
+
+    pub fn with_protocol_interceptor_arc(
+        mut self,
+        interceptor: Arc<dyn ProtocolInterceptor>,
+    ) -> Self {
+        self.protocol_interceptor = Some(Some(interceptor));
+        self
+    }
+
     pub fn add_frontend_route_extension<F>(mut self, extension: F) -> Self
     where
         F: Fn(FrontendExtensionContext) -> anyhow::Result<FrontendRouteSet> + Send + Sync + 'static,
@@ -1154,6 +1182,7 @@ impl HttpServiceConfigBuilder {
                 frontend_api_config,
                 nvext_enabled,
                 sse_keep_alive: config.sse_keep_alive,
+                protocol_interceptor: config.protocol_interceptor,
             },
         ));
         state

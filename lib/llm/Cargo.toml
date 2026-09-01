@@ -72,6 +72,7 @@ required-features = ["media-ffmpeg"]
 
 [dependencies]
 # repo
+dynamo-agent-protocol-host = { workspace = true }
 dynamo-kv-router = { workspace = true, features = ["metrics", "runtime-protocols"] }
 dynamo-memory = { workspace = true }
 dynamo-mocker = { workspace = true, features = ["zmq-events"] }

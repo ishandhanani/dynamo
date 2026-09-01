@@ -4,6 +4,11 @@
 use anyhow::Error;
 use async_stream::stream;
 use base64::Engine as _;
+use dynamo_agent_protocol_host::{
+    AnthropicInference, AnthropicProtocolOutput, ProtocolExtensionError,
+    ProtocolExtensionErrorKind, ProtocolFuture, ProtocolInterceptor, ProtocolRequestContext,
+    ResponsesInference, ResponsesProtocolOutput,
+};
 use dynamo_llm::protocols::{
     Annotated,
     codec::SseLineCodec,
@@ -53,6 +58,54 @@ mod ports;
 use ports::bind_random_port;
 
 struct CounterEngine {}
+
+struct RejectingProtocolInterceptor;
+
+impl ProtocolInterceptor for RejectingProtocolInterceptor {
+    fn intercept_responses(
+        &self,
+        _request: &dynamo_protocols::types::responses::CreateResponse,
+        _context: &ProtocolRequestContext,
+    ) -> bool {
+        true
+    }
+
+    fn responses<'a>(
+        &'a self,
+        _request: dynamo_protocols::types::responses::CreateResponse,
+        _context: ProtocolRequestContext,
+        _inference: ResponsesInference,
+    ) -> ProtocolFuture<'a, Result<ResponsesProtocolOutput, ProtocolExtensionError>> {
+        Box::pin(async {
+            Err(ProtocolExtensionError::new(
+                ProtocolExtensionErrorKind::NotFound,
+                "turn not found",
+            ))
+        })
+    }
+
+    fn intercept_anthropic(
+        &self,
+        _request: &dynamo_protocols::types::anthropic::AnthropicCreateMessageRequest,
+        _context: &ProtocolRequestContext,
+    ) -> bool {
+        true
+    }
+
+    fn anthropic<'a>(
+        &'a self,
+        _request: dynamo_protocols::types::anthropic::AnthropicCreateMessageRequest,
+        _context: ProtocolRequestContext,
+        _inference: AnthropicInference,
+    ) -> ProtocolFuture<'a, Result<AnthropicProtocolOutput, ProtocolExtensionError>> {
+        Box::pin(async {
+            Err(ProtocolExtensionError::new(
+                ProtocolExtensionErrorKind::Conflict,
+                "turn is active",
+            ))
+        })
+    }
+}
 
 #[derive(Default)]
 struct NvExtCaptureEngine {
@@ -572,6 +625,7 @@ fn compute_index(endpoint: &Endpoint, request_type: &RequestType, status: &Statu
         Endpoint::Pooling => todo!(),
         Endpoint::Responses => todo!(),
         Endpoint::AnthropicMessages => todo!(),
+        Endpoint::AgentInference => todo!(),
         Endpoint::Tensor => todo!(),
         Endpoint::Images => todo!(),
         Endpoint::Videos => todo!(),
@@ -1728,6 +1782,51 @@ async fn test_nvext_disabled_strips_request_and_response() {
         !body.contains("\"nvext\""),
         "nvext gate off: response must not contain an `nvext` field, got: {body}"
     );
+
+    cancel_token.cancel();
+    task.await.unwrap().unwrap();
+}
+
+#[tokio::test]
+async fn test_protocol_interceptor_runs_before_inference() {
+    let (listener, port) = bind_random_port().await;
+    let service = HttpService::builder()
+        .port(port)
+        .enable_chat_endpoints(true)
+        .enable_anthropic_endpoints(true)
+        .with_protocol_interceptor(RejectingProtocolInterceptor)
+        .build()
+        .unwrap();
+    let token = CancellationToken::new();
+    let cancel_token = token.clone();
+    let task = tokio::spawn(async move { service.run_with_listener(token, listener).await });
+    wait_for_service_ready(port).await;
+
+    let response = reqwest::Client::new()
+        .post(format!("http://localhost:{port}/v1/responses"))
+        .header("idempotency-key", "turn-17")
+        .json(&serde_json::json!({
+            "model": "intercepted-model",
+            "input": "hello"
+        }))
+        .send()
+        .await
+        .expect("POST /v1/responses");
+
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    assert!(response.text().await.unwrap().contains("turn not found"));
+    let response = reqwest::Client::new()
+        .post(format!("http://localhost:{port}/v1/messages"))
+        .json(&serde_json::json!({
+            "model": "intercepted-model",
+            "messages": [{"role": "user", "content": "hello"}],
+            "max_tokens": 16
+        }))
+        .send()
+        .await
+        .expect("POST /v1/messages");
+    assert_eq!(response.status(), StatusCode::CONFLICT);
+    assert!(response.text().await.unwrap().contains("turn is active"));
 
     cancel_token.cancel();
     task.await.unwrap().unwrap();
