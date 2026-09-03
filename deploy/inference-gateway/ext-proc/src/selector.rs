@@ -85,10 +85,54 @@ impl Selector {
         kv_router_config: KvRouterConfig,
         policy_registry: WorkerSelectionPolicyRegistry,
     ) -> Result<Self> {
+        Self::build(
+            cfg,
+            kv_router_config,
+            policy_registry,
+            WorkerType::Aggregated,
+            &[WorkerType::Aggregated],
+            true,
+        )
+        .await
+    }
+
+    /// A selector for one pool of a disaggregated deployment. `worker_type`
+    /// selects the prefill or decode scheduling policy; `served` lists every
+    /// worker type the EPP serves so unserved-policy warnings are accurate.
+    /// Peer replication is only wired for the decode pool.
+    pub async fn new_for_pool(
+        cfg: &EppStandaloneConfig,
+        kv_router_config: KvRouterConfig,
+        policy_registry: WorkerSelectionPolicyRegistry,
+        worker_type: WorkerType,
+        served: &[WorkerType],
+    ) -> Result<Self> {
+        Self::build(
+            cfg,
+            kv_router_config,
+            policy_registry,
+            worker_type,
+            served,
+            worker_type == WorkerType::Decode,
+        )
+        .await
+    }
+
+    async fn build(
+        cfg: &EppStandaloneConfig,
+        kv_router_config: KvRouterConfig,
+        policy_registry: WorkerSelectionPolicyRegistry,
+        worker_type: WorkerType,
+        served: &[WorkerType],
+        allow_peer_replication: bool,
+    ) -> Result<Self> {
         Self::validate_queueing_worker_capacity(cfg, &kv_router_config)?;
 
-        warn_for_unserved_worker_selection_policies(&kv_router_config, &[WorkerType::Aggregated])?;
-        let peer_replication = cfg.peer_replication.as_ref();
+        warn_for_unserved_worker_selection_policies(&kv_router_config, served)?;
+        let peer_replication = cfg
+            .peer_replication
+            .as_ref()
+            .filter(|_| allow_peer_replication);
         let peer_client = if peer_replication.is_some() {
             Some(
                 Client::try_default()
@@ -108,7 +152,7 @@ impl Selector {
         }
 
         let mut builder =
-            SelectionServiceBuilder::new(kv_router_config, WorkerType::Aggregated, policy_registry)
+            SelectionServiceBuilder::new(kv_router_config, worker_type, policy_registry)
                 .indexer_threads(cfg.selector_threads);
         if let Some(peer_replication) = peer_replication {
             builder = builder.replica_sync(peer_replication.sync_port, Vec::new());
@@ -138,10 +182,16 @@ impl Selector {
         }
         tracing::info!(
             replicated = peer_replication.is_some(),
+            %worker_type,
             "Initialized in-process selection service"
         );
 
         Ok(Self { service, cancel })
+    }
+
+    /// The underlying service, for coordinators that book across pools.
+    pub fn service(&self) -> Arc<SelectionService> {
+        Arc::clone(&self.service)
     }
 
     fn validate_queueing_worker_capacity(
@@ -328,6 +378,9 @@ models:
             max_num_batched_tokens: Some(8192),
             max_inflight_requests: 1024,
             session_affinity_ttl_secs: None,
+            prefill_inference_pool_name: None,
+            disagg_order: dynamo_kv_router::services::selection::CoordinationOrder::DecodeAnchored,
+            disagg_prefill_failure: Default::default(),
         }
     }
 

@@ -152,6 +152,9 @@ mod tests {
             max_num_batched_tokens: Some(8192),
             max_inflight_requests: 1024,
             session_affinity_ttl_secs: None,
+            prefill_inference_pool_name: None,
+            disagg_order: dynamo_kv_router::services::selection::CoordinationOrder::DecodeAnchored,
+            disagg_prefill_failure: Default::default(),
         }
     }
 

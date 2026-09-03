@@ -10,6 +10,7 @@
 //! [`EppStandaloneConfig::from_env`] reads envs, applies defaults, and calls
 //! [`EppStandaloneConfig::validate_config`] for field and cross-field checks.
 
+use dynamo_kv_router::services::selection::CoordinationOrder;
 use validator::Validate;
 use validator::ValidationError;
 
@@ -170,6 +171,51 @@ pub struct EppStandaloneConfig {
     /// long after its last request (`DYN_EPP_SESSION_AFFINITY_TTL_SECS`).
     /// `None` disables session affinity.
     pub session_affinity_ttl_secs: Option<f64>,
+    /// Optional second `InferencePool` holding prefill workers. When set, the
+    /// EPP runs disaggregated coordination: `inference_pool_name` is the decode
+    /// pool and this pool supplies prefill workers.
+    pub prefill_inference_pool_name: Option<String>,
+    /// Which pool the coordinator books first (`DYN_EPP_DISAGG_ORDER`:
+    /// `decode-anchored`, the default, or `prefill-anchored`).
+    pub disagg_order: CoordinationOrder,
+    /// Compensation when the prefill booking fails after decode is booked
+    /// (decode-anchored order only).
+    pub disagg_prefill_failure: DisaggPrefillFailure,
+}
+
+fn parse_disagg_order(value: &str) -> anyhow::Result<CoordinationOrder> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "decode-anchored" | "decode_anchored" => Ok(CoordinationOrder::DecodeAnchored),
+        "prefill-anchored" | "prefill_anchored" => Ok(CoordinationOrder::PrefillAnchored),
+        other => anyhow::bail!(
+            "DYN_EPP_DISAGG_ORDER must be `decode-anchored` or `prefill-anchored`, got `{other}`"
+        ),
+    }
+}
+
+/// What the coordinator does when prefill cannot be booked after decode was
+/// (`DYN_EPP_DISAGG_PREFILL_FAILURE`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum DisaggPrefillFailure {
+    /// Free the decode booking and fail the request.
+    #[default]
+    FreeDecode,
+    /// Keep decode and run prefill there (aggregated for this request).
+    BypassOnDecode,
+}
+
+impl std::str::FromStr for DisaggPrefillFailure {
+    type Err = anyhow::Error;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "free-decode" | "free_decode" => Ok(Self::FreeDecode),
+            "bypass-on-decode" | "bypass_on_decode" => Ok(Self::BypassOnDecode),
+            other => anyhow::bail!(
+                "DYN_EPP_DISAGG_PREFILL_FAILURE must be `free-decode` or `bypass-on-decode`, got `{other}`"
+            ),
+        }
+    }
 }
 
 impl EppStandaloneConfig {
@@ -234,6 +280,15 @@ impl EppStandaloneConfig {
             max_inflight_requests: opt_parse::<usize>(get, "DYN_EPP_MAX_INFLIGHT_REQUESTS")?
                 .unwrap_or(DEFAULT_MAX_INFLIGHT_REQUESTS),
             session_affinity_ttl_secs: opt_parse::<f64>(get, "DYN_EPP_SESSION_AFFINITY_TTL_SECS")?,
+            prefill_inference_pool_name: trimmed(get("DYN_EPP_PREFILL_INFERENCE_POOL_NAME")),
+            disagg_order: trimmed(get("DYN_EPP_DISAGG_ORDER"))
+                .map(|value| parse_disagg_order(&value))
+                .transpose()?
+                .unwrap_or(CoordinationOrder::DecodeAnchored),
+            disagg_prefill_failure: trimmed(get("DYN_EPP_DISAGG_PREFILL_FAILURE"))
+                .map(|value| value.parse())
+                .transpose()?
+                .unwrap_or_default(),
         })
     }
 
@@ -241,7 +296,24 @@ impl EppStandaloneConfig {
     pub fn validate_config(&self) -> anyhow::Result<()> {
         self.validate()
             .map_err(|e| anyhow::anyhow!("invalid {STANDALONE_MODE} EPP config: {e}"))?;
+        if let Some(prefill_pool) = &self.prefill_inference_pool_name {
+            if prefill_pool.is_empty() {
+                anyhow::bail!(
+                    "invalid {STANDALONE_MODE} EPP config: DYN_EPP_PREFILL_INFERENCE_POOL_NAME must not be empty when set"
+                );
+            }
+            if *prefill_pool == self.inference_pool_name {
+                anyhow::bail!(
+                    "invalid {STANDALONE_MODE} EPP config: DYN_EPP_PREFILL_INFERENCE_POOL_NAME must name a different InferencePool than DYN_EPP_INFERENCE_POOL_NAME"
+                );
+            }
+        }
         Ok(())
+    }
+
+    /// Whether decode-first disaggregated coordination is configured.
+    pub fn disaggregated(&self) -> bool {
+        self.prefill_inference_pool_name.is_some()
     }
 }
 
