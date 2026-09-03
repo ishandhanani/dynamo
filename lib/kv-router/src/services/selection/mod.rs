@@ -22,7 +22,8 @@ mod tests;
 
 pub use crate::WorkerSelectionPolicyFactory;
 pub use crate::services::common::replica_sync::{
-    ReplicaPeerError, SchedulerLoadSink, ScopedSequencePublisher,
+    HostReplicaChannels, HostReplicaSyncFactory, ReplicaPeerError, SchedulerLoadSink,
+    ScopedSequencePublisher,
 };
 pub use coordinator::{
     BypassDecision, CoordinatorError, DecodeSignals, DisaggCoordinator, DisaggPlan, DisaggRequest,
