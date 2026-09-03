@@ -21,7 +21,7 @@ use dynamo_kv_router::config::KvRouterConfig;
 use dynamo_kv_router::protocols::WorkerId;
 use dynamo_kv_router::services::selection::{
     PromptRequest, SelectAndReserveRequest, SelectionService, SelectionServiceBuilder,
-    WorkerRequest, WorkerSelectionPolicyRegistry,
+    WorkerRequest,
 };
 use dynamo_kv_router::{DEFAULT_ROUTING_GROUP, WorkerType};
 use dynamo_runtime::pipeline::{
@@ -91,7 +91,7 @@ impl StaticDirectEngine {
         let mut builder = SelectionServiceBuilder::new(
             args.kv_router_config,
             WorkerType::Aggregated,
-            WorkerSelectionPolicyRegistry::default(),
+            super::embedded::worker_selection_policy_registry(),
         )
         .indexer_threads(1)
         .initial_workers(workers.clone());
