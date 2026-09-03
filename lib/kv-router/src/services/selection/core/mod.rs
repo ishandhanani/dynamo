@@ -157,9 +157,25 @@ pub struct SelectionServiceConfig {
     pub selection_cache: SelectionCacheConfig,
 }
 
+type SelectionEntries = RwLock<HashMap<RoutingPartitionId, Arc<OnceCell<Arc<SelectionEntry>>>>>;
+
+/// `selection_id` -> partition that holds its booking.
+///
+/// Lifecycle calls (`prefill_complete`, `free`, `add_output_block`) arrive with
+/// only a selection id, so without this index every call scans every partition
+/// scheduler. Selection ids are caller-controlled strings, so this stays on the
+/// standard hasher. Entries are removed on `free`, on a `RequestNotFound` from
+/// the indexed scheduler, and by a periodic sweep that drops ids whose booking
+/// expired underneath them.
+type ReservationIndex = RwLock<HashMap<String, RoutingPartitionId>>;
+
 pub struct SelectionCore {
     catalog: WorkerCatalog,
-    entries: RwLock<HashMap<RoutingPartitionId, Arc<OnceCell<Arc<SelectionEntry>>>>>,
+    entries: Arc<SelectionEntries>,
+    reservation_index: Arc<ReservationIndex>,
+    /// Sweep task is started lazily from the first `ensure_entry`, which always
+    /// runs inside the host runtime; construction itself may not.
+    reservation_sweep_started: OnceCell<()>,
     indexer_registry: Arc<WorkerRegistry>,
     kv_router_config: crate::config::KvRouterConfig,
     worker_selection_policy_factory: Option<WorkerSelectionPolicyFactory>,
@@ -259,7 +275,9 @@ impl SelectionCore {
         }
         Self {
             catalog: WorkerCatalog::default(),
-            entries: RwLock::new(HashMap::new()),
+            entries: Arc::new(RwLock::new(HashMap::new())),
+            reservation_index: Arc::new(RwLock::new(HashMap::new())),
+            reservation_sweep_started: OnceCell::new(),
             indexer_registry,
             kv_router_config,
             worker_selection_policy_factory,
@@ -489,6 +507,13 @@ impl SelectionCore {
             .ok_or_else(|| SelectionError::BadRequest("block_size is required".to_string()))?;
         let is_eagle = record.is_eagle.unwrap_or(false);
         let key = record.key();
+        self.reservation_sweep_started.get_or_init(|| {
+            spawn_reservation_index_sweep(
+                Arc::clone(&self.entries),
+                Arc::clone(&self.reservation_index),
+                self.cancel_token.child_token(),
+            );
+        });
 
         let entry_cell = { self.entries.read().get(&key).cloned() };
         let entry_cell = entry_cell.unwrap_or_else(|| {
@@ -870,6 +895,10 @@ impl SelectionCore {
 
         let effective_prefill = effective_prefill_tokens(isl_tokens, response.cached_tokens);
 
+        if book && let Some(selection_id) = selection_id.as_deref() {
+            self.record_reservation(selection_id, &key);
+        }
+
         if let Some((cache_id, sequence_hashes, lora_name, track_prefill_tokens)) = cached_inputs {
             self.selection_cache.insert(
                 cache_id,
@@ -1091,6 +1120,7 @@ impl SelectionCore {
                 lora_name,
             })
             .await?;
+        self.record_reservation(&selection_id, &key);
 
         Ok(ReservationResponse {
             selection_id,
@@ -1102,32 +1132,65 @@ impl SelectionCore {
         })
     }
 
+    fn record_reservation(&self, selection_id: &str, key: &RoutingPartitionId) {
+        self.reservation_index
+            .write()
+            .insert(selection_id.to_string(), key.clone());
+    }
+
+    fn forget_reservation(&self, selection_id: &str) {
+        self.reservation_index.write().remove(selection_id);
+    }
+
+    /// Entries to try for a lifecycle call on `selection_id`: the indexed
+    /// partition first, then every other initialized partition. The fallback
+    /// covers bookings mirrored from replica peers, which never pass through
+    /// this core's booking paths.
+    fn lifecycle_entries(&self, selection_id: &str) -> Vec<Arc<SelectionEntry>> {
+        let indexed = self
+            .reservation_index
+            .read()
+            .get(selection_id)
+            .cloned()
+            .and_then(|key| self.entry(&key));
+        let mut entries = self.initialized_entries();
+        if let Some(indexed) = indexed {
+            entries.retain(|entry| !Arc::ptr_eq(entry, &indexed));
+            entries.insert(0, indexed);
+        }
+        entries
+    }
+
     pub async fn prefill_complete(&self, selection_id: &str) -> Result<(), SelectionError> {
-        let entries = self.initialized_entries();
-        for entry in entries {
+        for entry in self.lifecycle_entries(selection_id) {
             match entry.scheduler.mark_prefill_completed(selection_id).await {
                 Ok(()) => return Ok(()),
                 Err(SequenceError::RequestNotFound { .. }) => continue,
                 Err(error) => return Err(error.into()),
             }
         }
+        self.forget_reservation(selection_id);
         Err(SelectionError::NotFound(format!(
             "reservation {selection_id} not found"
         )))
     }
 
     pub async fn free_reservation(&self, selection_id: &str) -> Result<(), SelectionError> {
-        let entries = self.initialized_entries();
-        for entry in entries {
-            match entry.scheduler.free(selection_id).await {
-                Ok(()) => return Ok(()),
-                Err(SequenceError::RequestNotFound { .. }) => continue,
-                Err(error) => return Err(error.into()),
+        let result = async {
+            for entry in self.lifecycle_entries(selection_id) {
+                match entry.scheduler.free(selection_id).await {
+                    Ok(()) => return Ok(()),
+                    Err(SequenceError::RequestNotFound { .. }) => continue,
+                    Err(error) => return Err(error.into()),
+                }
             }
+            Err(SelectionError::NotFound(format!(
+                "reservation {selection_id} not found"
+            )))
         }
-        Err(SelectionError::NotFound(format!(
-            "reservation {selection_id} not found"
-        )))
+        .await;
+        self.forget_reservation(selection_id);
+        result
     }
 
     pub fn add_output_block(
@@ -1143,8 +1206,7 @@ impl SelectionCore {
             ));
         }
 
-        let entries = self.initialized_entries();
-        for entry in entries {
+        for entry in self.lifecycle_entries(selection_id) {
             match entry
                 .scheduler
                 .add_output_block(selection_id, decay_fraction)
@@ -1154,6 +1216,7 @@ impl SelectionCore {
                 Err(error) => return Err(error.into()),
             }
         }
+        self.forget_reservation(selection_id);
         Err(SelectionError::NotFound(format!(
             "reservation {selection_id} not found"
         )))
@@ -1319,6 +1382,65 @@ impl SelectionCore {
         }
         workers
     }
+}
+
+/// Drop index entries whose booking no longer exists in its partition
+/// scheduler (expired by the periodic force-expiry, or freed through a path
+/// that bypassed this core). Returns the number of entries removed.
+fn sweep_reservation_index(entries: &SelectionEntries, index: &ReservationIndex) -> usize {
+    let snapshot: Vec<(String, RoutingPartitionId)> = index
+        .read()
+        .iter()
+        .map(|(id, key)| (id.clone(), key.clone()))
+        .collect();
+    if snapshot.is_empty() {
+        return 0;
+    }
+    let stale: Vec<String> = {
+        let entries = entries.read();
+        snapshot
+            .into_iter()
+            .filter(|(id, key)| {
+                entries
+                    .get(key)
+                    .and_then(|cell| cell.get())
+                    .is_none_or(|entry| !entry.scheduler.has_request(id))
+            })
+            .map(|(id, _)| id)
+            .collect()
+    };
+    if stale.is_empty() {
+        return 0;
+    }
+    let mut index = index.write();
+    stale
+        .iter()
+        .filter(|id| index.remove(id.as_str()).is_some())
+        .count()
+}
+
+fn spawn_reservation_index_sweep(
+    entries: Arc<SelectionEntries>,
+    index: Arc<ReservationIndex>,
+    cancel_token: CancellationToken,
+) {
+    let period = crate::sequences::active_request_expiry_duration();
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(period);
+        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        interval.tick().await;
+        loop {
+            tokio::select! {
+                _ = cancel_token.cancelled() => break,
+                _ = interval.tick() => {
+                    let removed = sweep_reservation_index(&entries, &index);
+                    if removed > 0 {
+                        tracing::debug!(removed, "Swept stale selection reservation index entries");
+                    }
+                }
+            }
+        }
+    });
 }
 
 fn tracking_scope(entry: &SelectionEntry) -> TrackingHashScope<'_> {
@@ -2060,6 +2182,107 @@ mod tests {
             core.add_output_block("later-entry-reservation", None),
             Err(SelectionError::NotFound(_))
         ));
+    }
+
+    #[tokio::test]
+    async fn reservation_index_tracks_bookings_until_freed() {
+        let core = SelectionCore::new_local(
+            test_config(false),
+            1,
+            CancellationToken::new(),
+            SelectionCacheConfig::default(),
+        );
+        for (worker_id, routing_group) in [(1, "group-a"), (2, "group-b")] {
+            let mut request = worker(worker_id);
+            request.routing_group = routing_group.to_string();
+            core.upsert_worker(request).await.expect("worker upsert");
+        }
+        let key_b = RoutingPartitionId::new("model", "group-b");
+
+        // select_and_reserve records the booking's partition.
+        let mut request = reserve_request("booked");
+        request.routing_group = "group-b".to_string();
+        core.select_and_reserve(request).await.expect("reserve");
+        assert_eq!(core.reservation_index.read().get("booked"), Some(&key_b));
+        assert_eq!(
+            core.lifecycle_entries("booked")[0].key,
+            key_b,
+            "indexed partition is tried first"
+        );
+
+        // The explicit reservation path records too.
+        let mut request = select_request();
+        request.routing_group = "group-b".to_string();
+        request.selection_id = Some("cached".to_string());
+        core.select(request).await.expect("select");
+        assert!(core.reservation_index.read().get("cached").is_none());
+        core.create_reservation(ReservationRequest {
+            model_name: "model".to_string(),
+            routing_group: "group-b".to_string(),
+            selection_id: "cached".to_string(),
+            worker_id: None,
+            dp_rank: None,
+            prompt: PromptRequest::default(),
+            router_config_override: None,
+            expected_output_tokens: None,
+            effective_prefill_tokens: None,
+            track_prefill_tokens: None,
+        })
+        .await
+        .expect("cached reservation");
+        assert_eq!(core.reservation_index.read().get("cached"), Some(&key_b));
+
+        // Lifecycle calls still resolve, and free drops the index entry.
+        core.prefill_complete("booked")
+            .await
+            .expect("prefill complete");
+        core.free_reservation("booked").await.expect("free");
+        assert!(core.reservation_index.read().get("booked").is_none());
+        core.free_reservation("cached").await.expect("free");
+        assert!(core.reservation_index.read().is_empty());
+
+        // Unknown ids fall back to the full scan and stay unindexed.
+        assert!(matches!(
+            core.prefill_complete("never-booked").await,
+            Err(SelectionError::NotFound(_))
+        ));
+        assert!(core.reservation_index.read().is_empty());
+    }
+
+    #[tokio::test]
+    async fn reservation_index_sweep_drops_bookings_released_out_of_band() {
+        let core = SelectionCore::new_local(
+            test_config(false),
+            1,
+            CancellationToken::new(),
+            SelectionCacheConfig::default(),
+        );
+        core.upsert_worker(worker(1)).await.expect("worker upsert");
+        core.select_and_reserve(reserve_request("live"))
+            .await
+            .expect("reserve live");
+        core.select_and_reserve(reserve_request("stale"))
+            .await
+            .expect("reserve stale");
+        assert_eq!(core.reservation_index.read().len(), 2);
+        assert_eq!(
+            sweep_reservation_index(&core.entries, &core.reservation_index),
+            0
+        );
+
+        // Release directly through the scheduler, as force-expiry would.
+        let entry = core
+            .entry(&RoutingPartitionId::new("model", "default"))
+            .expect("entry");
+        entry.scheduler.free("stale").await.expect("scheduler free");
+
+        assert_eq!(
+            sweep_reservation_index(&core.entries, &core.reservation_index),
+            1
+        );
+        let index = core.reservation_index.read();
+        assert_eq!(index.len(), 1);
+        assert!(index.contains_key("live"));
     }
 
     #[tokio::test(flavor = "current_thread")]
