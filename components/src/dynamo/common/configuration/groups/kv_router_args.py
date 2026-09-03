@@ -203,7 +203,7 @@ class KvRouterConfigBase(ConfigBase):
     router_temperature: float
     use_kv_events: bool
     router_replica_sync: bool
-    router_embedded_selection: bool = False
+    router_embedded_selection: bool = True
     router_disagg_decode_first: bool = False
     router_disagg_bypass_on_prefill_failure: bool = False
     router_track_active_blocks: bool
@@ -433,12 +433,13 @@ class KvRouterArgGroup(ArgGroup):
             g,
             flag_name="--router-embedded-selection",
             env_var="DYN_ROUTER_EMBEDDED_SELECTION",
-            default=False,
+            default=True,
             dest="router_embedded_selection",
             help=(
                 "KV Router: Run scheduling and active-sequence accounting on an "
-                "embedded selection-service partition instead of the runtime-bound "
-                "scheduler. Experimental; the KV indexer and request transport are unchanged."
+                "embedded selection-service partition (default). "
+                "--no-router-embedded-selection selects the deprecated runtime-bound "
+                "scheduler, kept for one release as a rollback."
             ),
         )
         add_negatable_bool_argument(

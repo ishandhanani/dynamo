@@ -1782,7 +1782,7 @@ class KvRouterConfig:
         use_kv_events: bool = True,
         *,
         router_replica_sync: bool = False,
-        router_embedded_selection: bool = False,
+        router_embedded_selection: bool = True,
         router_disagg_decode_first: bool = False,
         router_disagg_bypass_on_prefill_failure: bool = False,
         router_track_active_blocks: bool = True,
@@ -1831,7 +1831,8 @@ class KvRouterConfig:
             use_kv_events: Whether to use KV events from workers (default: True)
             router_replica_sync: Enable replica synchronization (default: False)
             router_embedded_selection: Run scheduling on an embedded selection-service
-                partition instead of the runtime-bound scheduler (default: False). Experimental.
+                partition (default: True). False selects the deprecated runtime-bound
+                scheduler, kept for one release as a rollback.
             router_disagg_decode_first: Book the decode worker before prefill and constrain
                 prefill to its KV-transfer domain (default: False). Experimental.
             router_disagg_bypass_on_prefill_failure: With decode-first, run prefill on the

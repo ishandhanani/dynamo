@@ -129,7 +129,7 @@ shared-filesystem VM group:
 | Discovery | `DYN_DISCOVERY_BACKEND=file` (+ `DYN_FILE_KV=<shared dir>`) or `mem` | Registrations live in files (or in-process); no etcd. |
 | Request | `DYN_REQUEST_PLANE=tcp` (default) | Frontend to worker over TCP; no NATS. With direct dispatch, straight to the engine's gRPC. |
 | Event | `DYN_EVENT_PLANE=zmq` (default) | Workers publish KV events over ZMQ; the router subscribes directly. |
-| Selection | `DYN_ROUTER_EMBEDDED_SELECTION=1` | Scheduling on the embedded selection partition, whose replica sync is ZMQ. |
+| Selection | `DYN_ROUTER_EMBEDDED_SELECTION=1` (default) | Scheduling on the embedded selection partition, whose replica sync is ZMQ. |
 
 Validated locally with `dynamo.frontend --router-mode kv` and two
 `dynamo.mocker` workers under exactly these settings, with no etcd or NATS
