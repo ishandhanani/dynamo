@@ -451,6 +451,7 @@ impl WorkerRegistry {
             );
             IndexerEntry {
                 indexer: create_indexer_with_policy(
+                    &key,
                     block_size,
                     self.num_threads,
                     self.indexer_metrics.clone(),
@@ -758,6 +759,7 @@ impl WorkerRegistry {
             );
             IndexerEntry {
                 indexer: create_indexer_with_policy(
+                    &key,
                     block_size,
                     self.num_threads,
                     self.indexer_metrics.clone(),

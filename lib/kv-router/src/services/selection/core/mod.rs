@@ -156,6 +156,10 @@ pub struct SelectionServiceConfig {
     pub port: u16,
     pub threads: usize,
     pub indexer_peers: Vec<String>,
+    /// Base URL of a standalone indexer that serves the primary KV index.
+    /// When set, this service does not listen for worker KV events and
+    /// `indexer_peers` recovery is skipped.
+    pub remote_indexer_url: Option<String>,
     pub replica_sync_port: Option<u16>,
     pub replica_sync_peers: Vec<String>,
     pub kv_router_config: crate::config::KvRouterConfig,
@@ -181,6 +185,10 @@ pub struct SelectionCore {
     /// Sweep task is started lazily from the first `ensure_entry`, which always
     /// runs inside the host runtime; construction itself may not.
     reservation_sweep_started: OnceCell<()>,
+    /// Whether this core subscribes to worker KV events itself. False when
+    /// events are disabled or when the primary indexer is a remote service
+    /// that workers publish to directly.
+    listens_for_kv_events: bool,
     indexer_registry: Arc<WorkerRegistry>,
     kv_router_config: crate::config::KvRouterConfig,
     worker_selection_policy_factory: Option<WorkerSelectionPolicyFactory>,
@@ -278,6 +286,7 @@ impl SelectionCore {
             indexer_threads,
             cancel_token.clone(),
         ));
+        let listens_for_kv_events = kv_router_config.use_kv_events && !indexer_policy.is_remote();
         indexer_registry.set_indexer_policy(indexer_policy);
         if signal_indexer_ready {
             indexer_registry.signal_ready();
@@ -287,6 +296,7 @@ impl SelectionCore {
             entries: Arc::new(RwLock::new(HashMap::new())),
             reservation_index: Arc::new(RwLock::new(HashMap::new())),
             reservation_sweep_started: OnceCell::new(),
+            listens_for_kv_events,
             indexer_registry,
             kv_router_config,
             worker_selection_policy_factory,
@@ -460,8 +470,8 @@ impl SelectionCore {
             .kv_router_config
             .queueing_enabled(Some(&record.model_name))
             .map_err(|error| SelectionError::BadRequest(error.to_string()))?;
-        let reasons = record
-            .missing_schedulable_metadata(queueing_enabled, self.kv_router_config.use_kv_events);
+        let reasons =
+            record.missing_schedulable_metadata(queueing_enabled, self.listens_for_kv_events);
         if !reasons.is_empty() {
             let updated = self
                 .catalog
@@ -474,7 +484,7 @@ impl SelectionCore {
         if let Err(error) = self.ensure_entry(&record) {
             return self.mark_incomplete_after_reconcile_error(worker_id, record.key(), error);
         }
-        if self.kv_router_config.use_kv_events
+        if self.listens_for_kv_events
             && let Err(error) = self.register_indexer_listeners(&record).await
         {
             self.cleanup_indexer_registration(&record).await;
@@ -658,7 +668,7 @@ impl SelectionCore {
     }
 
     async fn cleanup_indexer_registration(&self, record: &WorkerCatalogRecord) {
-        if self.kv_router_config.use_kv_events {
+        if self.listens_for_kv_events {
             if let Err(error) = self
                 .indexer_registry
                 .deregister(record.worker_id, &record.model_name, &record.routing_group)
@@ -1878,6 +1888,74 @@ mod tests {
         })
         .await;
         assert_eq!(credited.worker_id, 1);
+    }
+
+    #[tokio::test]
+    async fn remote_indexer_serves_selection_without_local_kv_listeners() {
+        use crate::indexer::KvIndexerInterface;
+        use crate::protocols::{BlockHashOptions, StorageTier, compute_block_hash_for_seq};
+        use crate::services::indexer::registry::WorkerRegistry;
+        use crate::services::indexer::server::spawn_test_indexer_server;
+
+        // The standalone indexer holds worker 2's cache for the test prompt.
+        let key = RoutingPartitionId::new("model", "default");
+        let served = Arc::new(WorkerRegistry::new(1));
+        let served_indexer = served.get_or_create_indexer(key.clone(), 4);
+        let hashes: Vec<u64> =
+            compute_block_hash_for_seq(&[1, 2, 3, 4], 4, BlockHashOptions::default())
+                .into_iter()
+                .map(|hash| hash.0)
+                .collect();
+        served_indexer
+            .apply_event_routed(store_event(2, 0, 1, &[], &hashes, StorageTier::Device))
+            .await
+            .unwrap();
+        if let Indexer::Single { primary, .. } = &served_indexer {
+            let _ = primary.flush().await;
+        }
+        let (base_url, server) = spawn_test_indexer_server(served).await;
+
+        // use_kv_events=true, but the primary is remote: workers need no
+        // kv_events endpoints and no ZMQ listener is started here.
+        let config = test_config(true);
+        let tracking_hash = Arc::new(
+            TrackingHashContext::from_config(&config).expect("valid tracking hash configuration"),
+        );
+        let indexer_policy = IndexerPolicy::from_router_config(&config)
+            .expect("indexer policy")
+            .with_remote_indexer(base_url)
+            .expect("remote policy");
+        let core = SelectionCore::new_inner(
+            config,
+            1,
+            CancellationToken::new(),
+            None,
+            None,
+            SelectionHostHooks::default(),
+            WorkerType::Aggregated,
+            true,
+            SelectionCacheConfig::default(),
+            tracking_hash,
+            indexer_policy,
+        );
+        assert!(!core.listens_for_kv_events);
+        for worker_id in [1, 2] {
+            let record = core
+                .upsert_worker(worker(worker_id))
+                .await
+                .expect("worker upsert");
+            assert_eq!(record.lifecycle, WorkerLifecycle::Schedulable, "{record:?}");
+        }
+
+        let response = core.select(select_request()).await.expect("select");
+        assert_eq!(
+            response.worker_id, 2,
+            "remote cache credit steers selection"
+        );
+        assert_eq!(response.overlap.longest_matched, 4);
+
+        core.delete_worker(2).await.expect("delete worker");
+        server.abort();
     }
 
     #[tokio::test]

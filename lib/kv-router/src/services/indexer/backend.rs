@@ -4,25 +4,27 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use async_trait::async_trait;
+use serde::{Deserialize, Serialize};
 use tokio_util::sync::CancellationToken;
 
 use crate::ConcurrentRadixTreeCompressed;
 use crate::ThreadPoolIndexer;
 use crate::approx::PruneConfig;
 use crate::config::{ApproximateCachePolicyKind, KvRouterConfig};
+use crate::identity::RoutingPartitionId;
 use crate::indexer::{
     ApproximateRetentionConfig, KvIndexer, KvIndexerInterface, KvIndexerMetrics, KvRouterError,
     LowerTierIndexers, MatchDetails, RoutingDecisionHashes, SyncIndexer, TieredMatchDetails,
-    TieredMatchProvider, query_lower_tiers,
+    TieredMatchProvider, WireTieredMatchDetails, query_lower_tiers,
 };
 use crate::protocols::{
     KvCacheEventData, LocalBlockHash, OverlapScores, RouterEvent, WorkerId, WorkerWithDpRank,
 };
 
 /// How the device-tier primary is populated.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PrimaryRetention {
     /// Engine KV events are the only writer.
     EventDriven,
@@ -30,6 +32,115 @@ pub enum PrimaryRetention {
     /// expire after the TTL. This is the frontend's `use_kv_events=false`
     /// approximate mode.
     ApproximateTtl(Duration),
+    /// The primary lives in a standalone indexer service reached over HTTP.
+    /// Workers publish their KV events to that service, not to this process.
+    Remote(Arc<RemoteIndexerTransport>),
+}
+
+/// Connection to a standalone indexer service, shared by every partition's
+/// [`RemoteIndexerClient`].
+#[derive(Debug)]
+pub struct RemoteIndexerTransport {
+    base_url: String,
+    client: reqwest::Client,
+}
+
+impl PartialEq for RemoteIndexerTransport {
+    fn eq(&self, other: &Self) -> bool {
+        self.base_url == other.base_url
+    }
+}
+
+impl Eq for RemoteIndexerTransport {}
+
+impl RemoteIndexerTransport {
+    pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(5);
+
+    pub fn new(base_url: impl Into<String>) -> Result<Self> {
+        Self::new_with_timeout(base_url, Self::DEFAULT_TIMEOUT)
+    }
+
+    pub fn new_with_timeout(base_url: impl Into<String>, timeout: Duration) -> Result<Self> {
+        let base_url = base_url.into().trim_end_matches('/').to_string();
+        if !(base_url.starts_with("http://") || base_url.starts_with("https://")) {
+            anyhow::bail!("remote indexer URL must start with http:// or https://: {base_url}");
+        }
+        let client = reqwest::Client::builder()
+            .timeout(timeout)
+            .build()
+            .context("failed to build remote indexer HTTP client")?;
+        Ok(Self { base_url, client })
+    }
+
+    pub fn base_url(&self) -> &str {
+        &self.base_url
+    }
+}
+
+/// Request body of the standalone indexer's `POST /query_tiered_by_hash`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TieredQueryByHashRequest {
+    pub block_hashes: Vec<i64>,
+    pub model_name: String,
+    pub routing_group: String,
+}
+
+/// Response body of the standalone indexer's `POST /query_tiered_by_hash`:
+/// the lossless tiered match shape a remote primary needs, as opposed to the
+/// Mooncake score summary `/query_by_hash` returns.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TieredQueryResponse {
+    pub block_size: u32,
+    pub tiered: WireTieredMatchDetails,
+}
+
+/// Per-partition view of a remote primary indexer.
+#[derive(Debug)]
+pub struct RemoteIndexerClient {
+    transport: Arc<RemoteIndexerTransport>,
+    key: RoutingPartitionId,
+}
+
+impl RemoteIndexerClient {
+    pub fn new(transport: Arc<RemoteIndexerTransport>, key: RoutingPartitionId) -> Self {
+        Self { transport, key }
+    }
+
+    pub async fn find_tiered_matches(
+        &self,
+        sequence: &[LocalBlockHash],
+    ) -> std::result::Result<TieredMatchDetails, KvRouterError> {
+        if sequence.is_empty() {
+            return Ok(TieredMatchDetails::default());
+        }
+        let request = TieredQueryByHashRequest {
+            block_hashes: sequence.iter().map(|hash| hash.0 as i64).collect(),
+            model_name: self.key.model_name.clone(),
+            routing_group: self.key.routing_group.clone(),
+        };
+        let url = format!("{}/query_tiered_by_hash", self.transport.base_url);
+        let response = self
+            .transport
+            .client
+            .post(&url)
+            .json(&request)
+            .send()
+            .await
+            .map_err(|error| {
+                tracing::warn!(%error, url, "Remote indexer query failed");
+                KvRouterError::IndexerOffline
+            })?;
+        let status = response.status();
+        if !status.is_success() {
+            tracing::warn!(%status, url, "Remote indexer query returned an error status");
+            return Err(KvRouterError::IndexerOffline);
+        }
+        let body: TieredQueryResponse = response.json().await.map_err(|error| {
+            tracing::warn!(%error, url, "Remote indexer query returned an invalid body");
+            KvRouterError::IndexerOffline
+        })?;
+        Ok(body.tiered.into())
+    }
 }
 
 /// Indexer shape derived from router configuration, mirroring the frontend
@@ -55,6 +166,27 @@ impl IndexerPolicy {
             primary: PrimaryRetention::EventDriven,
             side_ttl: None,
         }
+    }
+
+    /// Whether the primary is served by a remote indexer service. Such a
+    /// service does not listen for worker KV events itself.
+    pub fn is_remote(&self) -> bool {
+        matches!(self.primary, PrimaryRetention::Remote(_))
+    }
+
+    /// Replace an event-driven primary with a remote one at `base_url`.
+    ///
+    /// An approximate primary cannot be remote: the standalone indexer has no
+    /// routing-decision write path, so `use_kv_events=false` is rejected.
+    pub fn with_remote_indexer(mut self, base_url: impl Into<String>) -> Result<Self> {
+        match self.primary {
+            PrimaryRetention::EventDriven | PrimaryRetention::Remote(_) => {}
+            PrimaryRetention::ApproximateTtl(_) => anyhow::bail!(
+                "a remote indexer requires use_kv_events=true; the standalone indexer does not record routing decisions"
+            ),
+        }
+        self.primary = PrimaryRetention::Remote(Arc::new(RemoteIndexerTransport::new(base_url)?));
+        Ok(self)
     }
 
     /// Resolve the indexer shape for `config`.
@@ -252,13 +384,26 @@ pub enum Indexer {
         approx: Option<SideIndexer>,
         primary_records_routing_decisions: bool,
     },
+    /// Primary served by a standalone indexer over HTTP. Lower tiers are the
+    /// remote service's concern and arrive in its tiered response; only the
+    /// side indexer is local.
+    Remote {
+        primary: Arc<RemoteIndexerClient>,
+        approx: Option<SideIndexer>,
+    },
 }
 
 impl Indexer {
     fn approx(&self) -> Option<&SideIndexer> {
         match self {
-            Self::Single { approx, .. } | Self::Concurrent { approx, .. } => approx.as_ref(),
+            Self::Single { approx, .. }
+            | Self::Concurrent { approx, .. }
+            | Self::Remote { approx, .. } => approx.as_ref(),
         }
+    }
+
+    pub fn is_remote(&self) -> bool {
+        matches!(self, Self::Remote { .. })
     }
 
     /// Whether booked routing decisions should be written into this indexer.
@@ -274,13 +419,14 @@ impl Indexer {
                 primary_records_routing_decisions,
                 ..
             } => approx.is_some() || *primary_records_routing_decisions,
+            Self::Remote { approx, .. } => approx.is_some(),
         }
     }
 
-    /// Router-hint chain retention needs a primary whose hashes come only from
-    /// engine events.
+    /// Router-hint chain retention needs a local primary whose hashes come
+    /// only from engine events.
     pub fn supports_router_hint_chain_retention(&self) -> bool {
-        !self.records_routing_decisions()
+        !self.is_remote() && !self.records_routing_decisions()
     }
 
     /// Record a booked routing decision. Writes to the side indexer when one
@@ -320,7 +466,7 @@ impl Indexer {
                     )
                     .await
             }
-            Self::Single { .. } | Self::Concurrent { .. } => Ok(()),
+            Self::Single { .. } | Self::Concurrent { .. } | Self::Remote { .. } => Ok(()),
         }
     }
 
@@ -331,6 +477,9 @@ impl Indexer {
         match self {
             Indexer::Single { primary, .. } => primary.apply_event(event).await,
             Indexer::Concurrent { primary, .. } => primary.apply_event(event).await,
+            Indexer::Remote { .. } => {
+                tracing::trace!("Dropping KV event: the primary indexer is remote");
+            }
         }
     }
 
@@ -346,6 +495,7 @@ impl Indexer {
                     Self::Single { lower_tier, .. } | Self::Concurrent { lower_tier, .. } => {
                         lower_tier.record_unsupported_residency_event(&event);
                     }
+                    Self::Remote { .. } => {}
                 }
                 return Ok(());
             }
@@ -414,6 +564,9 @@ impl Indexer {
                         .await;
                 }
             }
+            Indexer::Remote { .. } => {
+                tracing::trace!("Dropping KV event: the primary indexer is remote");
+            }
         }
         Ok(())
     }
@@ -443,6 +596,7 @@ impl Indexer {
                 }
                 primary.remove_worker(worker_id).await;
             }
+            Indexer::Remote { .. } => {}
         }
     }
 
@@ -471,6 +625,7 @@ impl Indexer {
                 }
                 primary.remove_worker_dp_rank(worker_id, dp_rank).await;
             }
+            Indexer::Remote { .. } => {}
         }
     }
 
@@ -481,6 +636,13 @@ impl Indexer {
         let primary = match self {
             Indexer::Single { primary, .. } => primary.find_matches(hashes.clone()).await?,
             Indexer::Concurrent { primary, .. } => primary.find_matches(hashes.clone()).await?,
+            Indexer::Remote { primary, .. } => {
+                primary
+                    .find_tiered_matches(&hashes)
+                    .await?
+                    .device
+                    .overlap_scores
+            }
         };
         let Some(side) = self.approx() else {
             return Ok(primary);
@@ -521,6 +683,10 @@ impl Indexer {
                 let lt = query_lower_tiers(lower_tier, &sequence, &device);
                 (device, lt)
             }
+            Indexer::Remote { primary, .. } => {
+                let tiered = primary.find_tiered_matches(&sequence).await?;
+                (tiered.device, tiered.lower_tier)
+            }
         };
         let device = merge_side_or_warn(self.approx(), device, &sequence).await;
         Ok(TieredMatchDetails { device, lower_tier })
@@ -552,6 +718,9 @@ impl Indexer {
                 primary.dump_events().await.map_err(anyhow::Error::from)?,
                 lower_tier.entries(),
             ),
+            // The remote service owns the events; a peer recovers from it, not
+            // from this process.
+            Indexer::Remote { .. } => return Ok(Vec::new()),
         };
 
         let mut out = primary_events;
@@ -842,7 +1011,9 @@ mod tests {
                 lower_tier.get_or_create(StorageTier::HostPinned),
                 lower_tier.get_or_create(StorageTier::Disk),
             ),
-            Indexer::Concurrent { .. } => unreachable!("test creates the single indexer"),
+            Indexer::Concurrent { .. } | Indexer::Remote { .. } => {
+                unreachable!("test creates the single indexer")
+            }
         };
 
         indexer
@@ -879,11 +1050,24 @@ mod tests {
 
     fn policy_indexer(num_threads: usize, policy: IndexerPolicy) -> Indexer {
         create_indexer_with_policy(
+            &RoutingPartitionId::new("model", "default"),
             4,
             num_threads,
             Arc::new(KvIndexerMetrics::new_unregistered()),
             &policy,
         )
+    }
+
+    async fn flush_side(approx: &Option<SideIndexer>) {
+        match approx {
+            Some(SideIndexer::Single(side)) => {
+                let _ = side.flush().await;
+            }
+            Some(SideIndexer::Concurrent(side)) => {
+                let _ = side.flush().await;
+            }
+            None => {}
+        }
     }
 
     /// Wait until every locally enqueued event and routing decision is applied.
@@ -893,30 +1077,15 @@ mod tests {
                 primary, approx, ..
             } => {
                 let _ = primary.flush().await;
-                match approx {
-                    Some(SideIndexer::Single(side)) => {
-                        let _ = side.flush().await;
-                    }
-                    Some(SideIndexer::Concurrent(side)) => {
-                        let _ = side.flush().await;
-                    }
-                    None => {}
-                }
+                flush_side(approx).await;
             }
             Indexer::Concurrent {
                 primary, approx, ..
             } => {
                 let _ = primary.flush().await;
-                match approx {
-                    Some(SideIndexer::Single(side)) => {
-                        let _ = side.flush().await;
-                    }
-                    Some(SideIndexer::Concurrent(side)) => {
-                        let _ = side.flush().await;
-                    }
-                    None => {}
-                }
+                flush_side(approx).await;
             }
+            Indexer::Remote { approx, .. } => flush_side(approx).await,
         }
     }
 
@@ -1059,6 +1228,148 @@ mod tests {
         }
     }
 
+    #[tokio::test]
+    async fn remote_indexer_queries_the_standalone_service_and_merges_side_scores() {
+        use crate::services::indexer::registry::WorkerRegistry;
+        use crate::services::indexer::server::spawn_test_indexer_server;
+
+        let key = RoutingPartitionId::new("model", "default");
+        let served = Arc::new(WorkerRegistry::new(1));
+        let served_indexer = served.get_or_create_indexer(key.clone(), 4);
+        let confirmed = WorkerWithDpRank::new(7, 0);
+        served_indexer
+            .apply_event_routed(store_event(7, 0, 1, &[], &[11, 12], StorageTier::Device))
+            .await
+            .unwrap();
+        served_indexer
+            .apply_event_routed(store_event(
+                7,
+                0,
+                2,
+                &[11, 12],
+                &[13],
+                StorageTier::HostPinned,
+            ))
+            .await
+            .unwrap();
+        flush(&served_indexer).await;
+        if let Indexer::Single { lower_tier, .. } = &served_indexer {
+            for inner in lower_tier.all() {
+                let _ = inner.dump_events().await.unwrap();
+            }
+        }
+        let (base_url, server) = spawn_test_indexer_server(served).await;
+
+        let policy = IndexerPolicy {
+            primary: PrimaryRetention::EventDriven,
+            side_ttl: Some(Duration::from_secs(60)),
+        }
+        .with_remote_indexer(base_url.clone())
+        .unwrap();
+        assert!(policy.is_remote());
+        let indexer = create_indexer_with_policy(
+            &key,
+            4,
+            1,
+            Arc::new(KvIndexerMetrics::new_unregistered()),
+            &policy,
+        );
+        assert!(indexer.is_remote());
+        assert!(indexer.records_routing_decisions());
+        assert!(!indexer.supports_router_hint_chain_retention());
+
+        // Local events are dropped: the remote service owns the primary.
+        indexer
+            .apply_event_routed(store_event(
+                9,
+                0,
+                1,
+                &[],
+                &[11, 12, 13],
+                StorageTier::Device,
+            ))
+            .await
+            .unwrap();
+        assert!(indexer.dump_events().await.unwrap().is_empty());
+
+        // A routing decision lands in the local side indexer only.
+        let predicted = WorkerWithDpRank::new(8, 0);
+        indexer
+            .record_routing_decision(
+                predicted,
+                RoutingDecisionHashes::from_local_hashes(vec![LocalBlockHash(11)]),
+            )
+            .await
+            .unwrap();
+        flush(&indexer).await;
+
+        let sequence = vec![LocalBlockHash(11), LocalBlockHash(12), LocalBlockHash(13)];
+        let tiered = indexer.find_tiered_matches(sequence.clone()).await.unwrap();
+        let scores = &tiered.device.overlap_scores.scores;
+        assert_eq!(
+            scores.get(&confirmed).copied(),
+            Some(2),
+            "remote device match"
+        );
+        assert_eq!(scores.get(&predicted).copied(), Some(1), "local side match");
+        assert!(!scores.contains_key(&WorkerWithDpRank::new(9, 0)));
+        assert_eq!(
+            tiered
+                .lower_tier
+                .get(&StorageTier::HostPinned)
+                .and_then(|d| d.hits.get(&confirmed).copied()),
+            Some(1),
+            "remote lower tiers are carried through"
+        );
+        let flat = indexer.find_matches(sequence).await.unwrap();
+        assert_eq!(flat.scores.get(&confirmed).copied(), Some(2));
+        assert_eq!(flat.scores.get(&predicted).copied(), Some(1));
+
+        // Unknown partitions and an unreachable service degrade to offline.
+        let other = create_indexer_with_policy(
+            &RoutingPartitionId::new("other", "default"),
+            4,
+            1,
+            Arc::new(KvIndexerMetrics::new_unregistered()),
+            &policy,
+        );
+        assert!(matches!(
+            other.find_tiered_matches(vec![LocalBlockHash(11)]).await,
+            Err(KvRouterError::IndexerOffline)
+        ));
+        server.abort();
+        let _ = server.await;
+        assert!(matches!(
+            indexer.find_tiered_matches(vec![LocalBlockHash(11)]).await,
+            Err(KvRouterError::IndexerOffline)
+        ));
+    }
+
+    #[test]
+    fn remote_indexer_rejects_approximate_primary_and_bad_urls() {
+        let approximate = IndexerPolicy {
+            primary: PrimaryRetention::ApproximateTtl(Duration::from_secs(1)),
+            side_ttl: None,
+        };
+        assert!(
+            approximate
+                .with_remote_indexer("http://indexer:8091")
+                .is_err()
+        );
+        assert!(
+            IndexerPolicy::event_driven()
+                .with_remote_indexer("indexer:8091")
+                .is_err()
+        );
+        let policy = IndexerPolicy::event_driven()
+            .with_remote_indexer("http://indexer:8091/")
+            .unwrap();
+        let PrimaryRetention::Remote(transport) = &policy.primary else {
+            panic!("expected a remote primary");
+        };
+        assert_eq!(transport.base_url(), "http://indexer:8091");
+    }
+
     #[test]
     fn indexer_policy_mirrors_frontend_resolution() {
         let event_driven = KvRouterConfig::default();
@@ -1162,6 +1473,7 @@ pub fn create_indexer_with_metrics(
     metrics: Arc<KvIndexerMetrics>,
 ) -> Indexer {
     create_indexer_with_policy(
+        &RoutingPartitionId::new("default", "default"),
         block_size,
         num_threads,
         metrics,
@@ -1170,21 +1482,28 @@ pub fn create_indexer_with_metrics(
 }
 
 pub fn create_indexer_with_policy(
+    key: &RoutingPartitionId,
     block_size: u32,
     num_threads: usize,
     metrics: Arc<KvIndexerMetrics>,
     policy: &IndexerPolicy,
 ) -> Indexer {
-    let retention = match policy.primary {
-        PrimaryRetention::EventDriven => None,
-        PrimaryRetention::ApproximateTtl(ttl) => {
-            Some(ApproximateRetentionConfig::Ttl(PruneConfig { ttl }))
-        }
-    };
-    let primary_records_routing_decisions = retention.is_some();
     let approx = policy
         .side_ttl
         .map(|ttl| SideIndexer::new(ttl, block_size, num_threads, Arc::clone(&metrics)));
+    let retention = match &policy.primary {
+        PrimaryRetention::EventDriven => None,
+        PrimaryRetention::ApproximateTtl(ttl) => {
+            Some(ApproximateRetentionConfig::Ttl(PruneConfig { ttl: *ttl }))
+        }
+        PrimaryRetention::Remote(transport) => {
+            return Indexer::Remote {
+                primary: Arc::new(RemoteIndexerClient::new(Arc::clone(transport), key.clone())),
+                approx,
+            };
+        }
+    };
+    let primary_records_routing_decisions = retention.is_some();
     if num_threads > 1 {
         Indexer::Concurrent {
             primary: Arc::new(
