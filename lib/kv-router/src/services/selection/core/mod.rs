@@ -33,7 +33,8 @@ use crate::sequences::{
     ActiveSequencesMultiWorker, ReplicaWorkerPolicy, SequenceError, SequenceRequest,
 };
 use crate::services::common::replica_sync::{
-    ReplicaSyncConfig, ScopedReplicaEvent, ScopedSequencePublisher, setup_scoped_replica_sync,
+    ReplicaSyncConfig, SchedulerLoadSink, ScopedReplicaEvent, ScopedSequencePublisher,
+    setup_scoped_replica_sync,
 };
 use crate::services::indexer::backend::{Indexer, IndexerPolicy};
 use crate::services::indexer::recovery;
@@ -201,6 +202,10 @@ pub struct SelectionHostHooks {
     /// that index so queued requests are re-scored against the index that
     /// scored them, or disables refresh when its index cannot serve it.
     pub overlap_refresh: OverlapRefreshSource,
+    /// Receives each partition's scheduler-owned load snapshots (active decode
+    /// blocks and prefill tokens per worker) so the host can run overload
+    /// detection on the numbers the scheduler books against.
+    pub scheduler_load_sink: Option<Arc<dyn SchedulerLoadSink>>,
 }
 
 /// Source of dequeue-time overlap refreshes for partition schedulers.
@@ -682,7 +687,9 @@ impl SelectionCore {
                     setup_scoped_replica_sync(self.replica_config.as_ref(), &key, block_size);
                 let worker_label = self.worker_type.as_str();
                 let slots = Arc::new(ActiveSequencesMultiWorker::new_with_replica_worker_policy(
-                    scoped_replica_sync.publisher,
+                    scoped_replica_sync
+                        .publisher
+                        .with_load_sink(self.host_hooks.scheduler_load_sink.clone()),
                     block_size as usize,
                     HashMap::new(),
                     scoped_replica_sync.enabled,
@@ -2470,6 +2477,7 @@ mod tests {
                 })),
                 lora_worker_filter: None,
                 overlap_refresh: OverlapRefreshSource::default(),
+                scheduler_load_sink: None,
             },
             Some(factory),
         );
@@ -2579,6 +2587,7 @@ mod tests {
             shared_cache: None,
             lora_worker_filter: None,
             overlap_refresh: OverlapRefreshSource::default(),
+            scheduler_load_sink: None,
         });
         core.upsert_worker(worker(1)).await.expect("worker upsert");
         core.upsert_worker(worker(2)).await.expect("worker upsert");
@@ -2601,6 +2610,7 @@ mod tests {
             shared_cache: None,
             lora_worker_filter: None,
             overlap_refresh: OverlapRefreshSource::default(),
+            scheduler_load_sink: None,
         });
         core.upsert_worker(worker(1)).await.expect("worker upsert");
         core.upsert_worker(worker(2)).await.expect("worker upsert");
