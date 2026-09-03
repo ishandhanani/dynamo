@@ -99,6 +99,19 @@ impl WorkerCatalog {
         })
     }
 
+    pub(super) fn schedulable_worker_ids_for_key(&self, key: &RoutingPartitionId) -> Vec<WorkerId> {
+        self.workers
+            .read()
+            .values()
+            .filter(|record| {
+                record.lifecycle == WorkerLifecycle::Schedulable
+                    && record.model_name == key.model_name
+                    && record.routing_group == key.routing_group
+            })
+            .map(|record| record.worker_id)
+            .collect()
+    }
+
     pub(super) fn scheduler_configs_for_key(
         &self,
         key: &RoutingPartitionId,

@@ -20,10 +20,10 @@ use crate::protocols::{
 use crate::scheduling::config::RouterConfigOverride;
 use crate::scheduling::selector::WorkerSelectionPolicy;
 use crate::scheduling::{
-    KvSchedulerError, LocalScheduler, OverlapAnalysis, OverlapSignals, OverloadedWorkerProvider,
-    PotentialLoad, PrefillLoadEstimator, ScheduleMode, ScheduleRequest, SessionContext,
-    TieredOverlapRefresher, WorkerAvailabilityProvider, effective_prefill_tokens,
-    prefill_load_hint_from_effective_tokens,
+    KvSchedulerError, LocalScheduler, LoraWorkerFilter, OverlapAnalysis, OverlapSignals,
+    OverloadedWorkerProvider, PotentialLoad, PrefillLoadEstimator, ScheduleMode, ScheduleRequest,
+    SessionContext, TieredOverlapRefresher, WorkerAvailabilityProvider, effective_prefill_tokens,
+    narrow_allowed_worker_ids_by_lora, prefill_load_hint_from_effective_tokens,
 };
 use crate::sequences::{
     ActiveSequencesMultiWorker, ReplicaWorkerPolicy, SequenceError, SequenceRequest,
@@ -119,6 +119,9 @@ pub struct SelectionHostHooks {
     /// Queried alongside the indexer for prompts that carry `token_ids`; a
     /// failed lookup is logged and selection proceeds without shared hits.
     pub shared_cache: Option<Arc<dyn SharedKvCache>>,
+    /// Narrows candidates to the workers that can serve the request's LoRA
+    /// adapter, strictly within the caller's `allowed_worker_ids`.
+    pub lora_worker_filter: Option<Arc<dyn LoraWorkerFilter>>,
 }
 
 impl std::fmt::Debug for SelectionHostHooks {
@@ -130,6 +133,7 @@ impl std::fmt::Debug for SelectionHostHooks {
                 &self.prefill_load_estimator.is_some(),
             )
             .field("shared_cache", &self.shared_cache.is_some())
+            .field("lora_worker_filter", &self.lora_worker_filter.is_some())
             .field(
                 "overloaded_worker_provider",
                 &self.overloaded_worker_provider.is_some(),
@@ -808,6 +812,16 @@ impl SelectionCore {
                 track_prefill_tokens,
             )
         });
+        let allowed_worker_ids = match self.host_hooks.lora_worker_filter.as_deref() {
+            Some(filter) => narrow_allowed_worker_ids_by_lora(
+                filter,
+                prompt.lora_name.as_deref(),
+                allowed_worker_ids,
+                pinned_worker.as_ref(),
+                || self.catalog.schedulable_worker_ids_for_key(&key),
+            ),
+            None => allowed_worker_ids,
+        };
         let response_sequence_hashes =
             book.then(|| sequence_hashes.iter().map(|hash| *hash as i64).collect());
         let response_isl_tokens = book.then_some(isl_tokens);
@@ -1597,6 +1611,57 @@ mod tests {
         }
     }
 
+    struct OnlyWorkerForLora {
+        worker_id: WorkerId,
+    }
+
+    impl LoraWorkerFilter for OnlyWorkerForLora {
+        fn filter_worker_ids_for_lora(
+            &self,
+            _lora_name: &str,
+            available: &[WorkerId],
+        ) -> Vec<WorkerId> {
+            available
+                .iter()
+                .copied()
+                .filter(|id| *id == self.worker_id)
+                .collect()
+        }
+    }
+
+    #[tokio::test]
+    async fn injected_lora_filter_narrows_candidates() {
+        let core = core_with_hooks(SelectionHostHooks {
+            lora_worker_filter: Some(Arc::new(OnlyWorkerForLora { worker_id: 2 })),
+            ..SelectionHostHooks::default()
+        });
+        core.upsert_worker(worker(1)).await.expect("worker upsert");
+        core.upsert_worker(worker(2)).await.expect("worker upsert");
+
+        // LoRA request: only the filter's worker is eligible.
+        for _ in 0..4 {
+            let mut request = select_request();
+            request.prompt.lora_name = Some("adapter-a".to_string());
+            let response = core.select(request).await.expect("select");
+            assert_eq!(response.worker_id, 2);
+        }
+
+        // The filter never widens the caller's allow-set: an allow-set that
+        // excludes the filter's worker is preserved as-is.
+        let mut request = select_request();
+        request.prompt.lora_name = Some("adapter-a".to_string());
+        request.allowed_worker_ids = Some(HashSet::from([1]));
+        let response = core.select(request).await.expect("select");
+        assert_eq!(response.worker_id, 1);
+
+        // A pinned worker inside the universe survives the filter.
+        let mut request = select_request();
+        request.prompt.lora_name = Some("adapter-a".to_string());
+        request.pinned_worker = Some(WorkerWithDpRank::new(1, 0));
+        let response = core.select(request).await.expect("select");
+        assert_eq!(response.worker_id, 1);
+    }
+
     #[tokio::test]
     async fn shared_cache_hits_reach_worker_selection() {
         let calls: SharedCacheCalls = Arc::new(parking_lot::Mutex::new(Vec::new()));
@@ -1609,6 +1674,7 @@ mod tests {
                 shared_cache: Some(Arc::new(RecordingSharedCache {
                     calls: Arc::clone(&calls),
                 })),
+                lora_worker_filter: None,
             },
             Some(factory),
         );
@@ -1716,6 +1782,7 @@ mod tests {
             overloaded_worker_provider: None,
             available_worker_provider: Some(Arc::new(move || provider_state.lock().clone())),
             shared_cache: None,
+            lora_worker_filter: None,
         });
         core.upsert_worker(worker(1)).await.expect("worker upsert");
         core.upsert_worker(worker(2)).await.expect("worker upsert");
@@ -1736,6 +1803,7 @@ mod tests {
             overloaded_worker_provider: Some(Arc::new(|| Some(HashSet::from([1])))),
             available_worker_provider: None,
             shared_cache: None,
+            lora_worker_filter: None,
         });
         core.upsert_worker(worker(1)).await.expect("worker upsert");
         core.upsert_worker(worker(2)).await.expect("worker upsert");
