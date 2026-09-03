@@ -29,8 +29,9 @@ pub use crate::services::common::replica_sync::{
     ScopedSequencePublisher,
 };
 pub use coordinator::{
-    BypassDecision, CoordinatorError, DecodeSignals, DisaggCoordinator, DisaggPlan, DisaggRequest,
-    LinkedBookingState, Pool, PoolBooking, PrefillFailurePolicy, SelectionPool,
+    BypassDecision, CoordinationOrder, CoordinatorError, DecodeSignals, DisaggCoordinator,
+    DisaggPlan, DisaggRequest, LinkedBookingState, Pool, PoolBooking, PrefillFailurePolicy,
+    SelectionPool,
 };
 pub use core::{
     HostCache, HostEligibility, HostLoad, HostReplication, HostTelemetry, KvIndexSource,

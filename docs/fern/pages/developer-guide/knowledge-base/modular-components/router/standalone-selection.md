@@ -59,12 +59,17 @@ To inject native Rust scorers and a picker while retaining those service-owned c
 ### Disaggregated coordination
 
 `DisaggCoordinator` books one request across a prefill and a decode
-`SelectionService` (or any `SelectionPool` implementation) with a fixed,
-decode-anchored order: advisory decode preview, optional advisory prefill busy
-read, conditional-disaggregation policy, decode commit pinned to the previewed
-worker, then prefill commit constrained to the decode worker's KV-transfer
-domain (`kv_transfer_domain` -> `dynamo.topology/<domain>=<value>` as a required
-or preferred taint per the worker's `kv_transfer_enforcement`).
+`SelectionService` (or any `SelectionPool` implementation). Which pool anchors
+the pair is a `CoordinationOrder`:
+
+| Order | Step 1 | Step 2 | When decode is booked |
+|---|---|---|---|
+| `PrefillAnchored` (default) | `plan_prefill`: prefill booked KV-aware on the prompt, honoring the request's pin, session-affinity target, and allow-set | `plan_decode`: decode booked load-only, constrained to the prefill worker's KV-transfer domain | When the host calls `plan_decode`: the frontend after the prefill handoff is known, the EPP immediately (`plan` runs both steps) |
+| `DecodeAnchored` | `plan`: advisory decode preview, optional advisory prefill busy read, conditional-disaggregation policy, decode commit pinned to the previewed worker | prefill commit constrained to the decode worker's KV-transfer domain | At plan time |
+
+KV-transfer constraints are derived from the anchor worker's catalog record:
+`kv_transfer_domain` becomes the `dynamo.topology/<domain>=<value>` taint,
+required or preferred per the worker's `kv_transfer_enforcement`.
 
 The two pools keep independent ledgers and the coordinator never holds a
 cross-pool lock; every partial state is compensated explicitly and recorded in
@@ -72,13 +77,14 @@ the plan's `LinkedBookingState` transitions:
 
 | Failure | Compensation |
 |---|---|
-| Decode preview or commit fails | Nothing is booked; the error is returned. |
-| Prefill commit fails after decode is booked | `PrefillFailurePolicy::FreeDecode` (default) frees decode and returns the error; `BypassOnDecode` keeps decode and runs prefill there. |
-| Prefill completes | `prefill_complete` frees the prefill booking early; decode stays booked. |
+| First booking fails (prefill in `PrefillAnchored`, decode preview or commit in `DecodeAnchored`) | Nothing is booked; the error is returned. |
+| `PrefillAnchored`: decode booking fails | The prefill booking, if still held, is freed (`Compensated`); the error is returned. |
+| `DecodeAnchored`: prefill commit fails after decode is booked | `PrefillFailurePolicy::FreeDecode` (default) frees decode and returns the error; `BypassOnDecode` keeps decode and runs prefill there. |
+| Prefill completes | `prefill_complete` frees the prefill booking early; a later `plan_decode` still constrains decode to that worker's domain. |
 | Request ends or fails | `release` frees whatever is still booked. |
 
-Decode-first greedy pairing is by design; joint prefill/decode optimization is
-out of scope. Selection ids are derived as `<id>/decode` and `<id>/prefill`.
+Greedy pairing in either order is by design; joint prefill/decode optimization
+is out of scope. Selection ids are derived as `<id>/decode` and `<id>/prefill`.
 
 The C and Go bindings do not currently expose `SelectionService`. An EPP
 integration requires separate FFI lifecycle, error-mapping, worker, and peer

@@ -3,26 +3,32 @@
 
 //! Disaggregated coordination over two selection pools.
 //!
-//! The coordinator books a request on a decode pool and, unless the
-//! conditional-disaggregation policy bypasses remote prefill, on a prefill pool
-//! constrained to the decode worker's KV-transfer domain. The two pools keep
-//! independent ledgers; the coordinator never holds a cross-pool lock and
-//! instead compensates every partial state explicitly (see
-//! [`LinkedBookingState`]). Decode-first greedy pairing is by design: joint
-//! prefill/decode optimization is out of scope.
+//! One request needs a prefill booking and a decode booking in two pools with
+//! independent ledgers. The coordinator never holds a cross-pool lock; it
+//! records every partial state in [`LinkedBookingState`] and compensates each
+//! one explicitly. Which pool anchors the pair is a [`CoordinationOrder`]:
 //!
-//! The coordinator is transport-agnostic. It only needs the selection API of
-//! each pool ([`SelectionPool`]), which the standalone service, an embedded
-//! service, and the EPP can all provide, so one implementation serves every
-//! host.
+//! - [`CoordinationOrder::PrefillAnchored`]: book prefill KV-aware on the
+//!   prompt, then decode load-only inside the prefill worker's KV-transfer
+//!   domain. The host decides when decode is booked ([`Self::plan_decode`]):
+//!   the frontend books it once prefill has handed off, the EPP immediately.
+//! - [`CoordinationOrder::DecodeAnchored`]: preview and book decode first,
+//!   then prefill inside the decode worker's domain, all in [`Self::plan`].
+//!
+//! Joint prefill/decode optimization is out of scope. The coordinator is
+//! transport-agnostic: it needs only [`SelectionPool`], which the standalone
+//! service, an embedded service, and the EPP all provide.
 
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use async_trait::async_trait;
 
 use crate::conditional_disagg::{ConditionalDisaggDecisionInput, ConditionalDisaggPolicy};
 use crate::config::{KvRouterConfig, RouterConfigOverride};
-use crate::protocols::{KvTransferEnforcement, RoutingConstraints, WorkerId, WorkerWithDpRank};
+use crate::protocols::{
+    KvTransferEnforcement, RoutingConstraints, WorkerAffinityTarget, WorkerId, WorkerWithDpRank,
+};
 
 use super::error::SelectionError;
 use super::input::PromptRequest;
@@ -80,6 +86,18 @@ impl SelectionPool for SelectionService {
     }
 }
 
+/// Which pool anchors a linked booking.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum CoordinationOrder {
+    /// Prefill first, KV-aware; decode later, load-only, constrained to the
+    /// prefill worker's KV-transfer domain. What the frontend does today.
+    #[default]
+    PrefillAnchored,
+    /// Decode first (preview, bypass decision, commit); prefill constrained to
+    /// the decode worker's domain.
+    DecodeAnchored,
+}
+
 /// Which pool a booking lives in.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Pool {
@@ -96,27 +114,28 @@ pub struct PoolBooking {
     pub endpoint: String,
 }
 
-/// The linked-booking state machine. Every transition the coordinator makes is
-/// recorded so a host can audit compensation, and tests can assert the exact
-/// path a request took.
+/// The linked-booking state machine. Every transition is recorded so a host
+/// can audit compensation and tests can assert the exact path a request took.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LinkedBookingState {
-    /// Nothing booked. Terminal when the decode commit failed.
+    /// Nothing booked. Terminal when the first booking failed.
     Idle,
     /// Decode previewed (query-only); nothing booked.
     DecodePreviewed,
     /// Decode booked; prefill not yet attempted.
     DecodeCommitted,
+    /// Prefill booked; decode not yet attempted.
+    PrefillCommitted,
     /// Decode booked and the policy chose to run prefill on it.
     Bypass,
     /// Decode and prefill both booked.
     Linked,
-    /// Prefill freed after it completed; decode still booked.
+    /// Prefill freed after it completed; decode booked, or not yet attempted.
     PrefillReleased,
     /// Prefill booking failed after decode was booked; decode kept and the
     /// request runs prefill on it (compensation by bypass).
     BypassAfterPrefillFailure,
-    /// Prefill booking failed after decode was booked; decode freed.
+    /// The second booking failed; the first was freed.
     Compensated,
     /// Every booking released.
     Released,
@@ -125,16 +144,34 @@ pub enum LinkedBookingState {
 /// What the coordinator decided and holds for one request.
 #[derive(Debug)]
 pub struct DisaggPlan {
-    pub decode: PoolBooking,
-    /// `None` when prefill runs on the decode worker.
-    pub prefill: Option<PoolBooking>,
-    pub decision: BypassDecision,
-    pub decode_signals: DecodeSignals,
+    request: DisaggRequest,
+    prefill: Option<PoolBooking>,
+    decode: Option<PoolBooking>,
+    /// Set by the decode-anchored order; the prefill-anchored host decides
+    /// bypass before it calls the coordinator.
+    decision: Option<BypassDecision>,
+    decode_signals: Option<DecodeSignals>,
+    /// Prefill worker after its booking was released, so a decode booked
+    /// afterwards is still constrained to its KV-transfer domain.
+    prefill_worker: Option<WorkerId>,
     state: LinkedBookingState,
     transitions: Vec<LinkedBookingState>,
 }
 
 impl DisaggPlan {
+    fn new(request: DisaggRequest) -> Self {
+        Self {
+            request,
+            prefill: None,
+            decode: None,
+            decision: None,
+            decode_signals: None,
+            prefill_worker: None,
+            state: LinkedBookingState::Idle,
+            transitions: vec![LinkedBookingState::Idle],
+        }
+    }
+
     pub fn state(&self) -> LinkedBookingState {
         self.state
     }
@@ -144,8 +181,28 @@ impl DisaggPlan {
         &self.transitions
     }
 
+    pub fn prefill(&self) -> Option<&PoolBooking> {
+        self.prefill.as_ref()
+    }
+
+    pub fn decode(&self) -> Option<&PoolBooking> {
+        self.decode.as_ref()
+    }
+
+    pub fn decision(&self) -> Option<&BypassDecision> {
+        self.decision.as_ref()
+    }
+
+    pub fn decode_signals(&self) -> Option<&DecodeSignals> {
+        self.decode_signals.as_ref()
+    }
+
+    /// Prefill runs on the decode worker.
     pub fn is_bypass(&self) -> bool {
-        self.prefill.is_none()
+        matches!(
+            self.state,
+            LinkedBookingState::Bypass | LinkedBookingState::BypassAfterPrefillFailure
+        )
     }
 
     fn transition(&mut self, state: LinkedBookingState) {
@@ -181,6 +238,11 @@ pub struct DisaggRequest {
     pub prompt: PromptRequest,
     pub expected_output_tokens: Option<u32>,
     pub session_context: Option<SelectionSessionContext>,
+    /// Session-affinity target the host resolved; advisory for both pools.
+    pub affinity_target: Option<WorkerAffinityTarget>,
+    /// Exact prefill pin (for example from an external router's headers).
+    pub pinned_prefill_worker: Option<WorkerWithDpRank>,
+    pub allowed_worker_ids: Option<HashSet<WorkerId>>,
     pub routing_constraints: RoutingConstraints,
     /// Override applied to the decode booking. The coordinator forces
     /// `track_prefill_tokens=false` and `assume_kv_reuse=false`; normal
@@ -195,25 +257,26 @@ pub enum CoordinatorError {
     DecodePreview(#[source] SelectionError),
     #[error("decode booking failed: {0}")]
     DecodeCommit(#[source] SelectionError),
-    /// Prefill booking failed; the decode booking was released.
-    #[error("prefill booking failed after decode was released: {0}")]
+    #[error("prefill booking failed: {0}")]
     PrefillCommit(#[source] SelectionError),
-    #[error(
-        "worker {worker_id} in the decode pool has kv_transfer_domain {domain:?} but no matching topology domain"
-    )]
+    #[error("plan is in state {state:?}; {operation} needs {expected}")]
+    InvalidState {
+        operation: &'static str,
+        expected: &'static str,
+        state: LinkedBookingState,
+    },
+    #[error("worker {worker_id} has kv_transfer_domain {domain:?} but no matching topology domain")]
     MissingTopologyDomain { worker_id: WorkerId, domain: String },
-    #[error(
-        "worker {worker_id} in the decode pool has kv_transfer_domain {domain:?} but no kv_transfer_enforcement"
-    )]
+    #[error("worker {worker_id} has kv_transfer_domain {domain:?} but no kv_transfer_enforcement")]
     MissingEnforcement { worker_id: WorkerId, domain: String },
     #[error(
-        "worker {worker_id} in the decode pool has preferred KV transfer enforcement but no kv_transfer_preferred_weight"
+        "worker {worker_id} has preferred KV transfer enforcement but no kv_transfer_preferred_weight"
     )]
     MissingPreferredWeight { worker_id: WorkerId },
 }
 
-/// How the coordinator compensates a prefill booking failure once decode is
-/// already booked.
+/// How the decode-anchored order compensates a prefill booking failure once
+/// decode is already booked.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum PrefillFailurePolicy {
     /// Free the decode booking and fail the request.
@@ -226,6 +289,7 @@ pub enum PrefillFailurePolicy {
 pub struct DisaggCoordinator<P: SelectionPool = SelectionService> {
     prefill: Arc<P>,
     decode: Arc<P>,
+    order: CoordinationOrder,
     policy: Arc<dyn ConditionalDisaggPolicy>,
     prefill_busy_threshold: Option<f64>,
     decode_busy_threshold: Option<f64>,
@@ -236,12 +300,14 @@ impl<P: SelectionPool> DisaggCoordinator<P> {
     pub fn new(
         prefill: Arc<P>,
         decode: Arc<P>,
+        order: CoordinationOrder,
         policy: Arc<dyn ConditionalDisaggPolicy>,
         config: &KvRouterConfig,
     ) -> Self {
         Self {
             prefill,
             decode,
+            order,
             policy,
             prefill_busy_threshold: config.conditional_disagg_prefill_busy_threshold,
             decode_busy_threshold: config.conditional_disagg_decode_busy_threshold,
@@ -254,19 +320,139 @@ impl<P: SelectionPool> DisaggCoordinator<P> {
         self
     }
 
-    /// Preview, decide, and commit bookings for one request.
+    pub fn order(&self) -> CoordinationOrder {
+        self.order
+    }
+
+    /// Book both pools for one request in this coordinator's order.
     ///
-    /// Order: decode preview (query-only, no booking) -> optional prefill busy
-    /// read (advisory, no booking) -> policy -> decode commit pinned to the
-    /// previewed worker -> prefill commit constrained to the decode worker's
-    /// KV-transfer domain. Every failure after the decode commit is compensated
-    /// per [`PrefillFailurePolicy`] before the error is returned.
+    /// Prefill-anchored: [`Self::plan_prefill`] then [`Self::plan_decode`]
+    /// back to back. Decode-anchored: decode preview (query-only) -> optional
+    /// prefill busy read (advisory) -> bypass policy -> decode commit pinned to
+    /// the previewed worker -> prefill commit constrained to the decode
+    /// worker's KV-transfer domain. Every failure after the first commit is
+    /// compensated before the error is returned.
     pub async fn plan(&self, request: DisaggRequest) -> Result<DisaggPlan, CoordinatorError> {
+        match self.order {
+            CoordinationOrder::PrefillAnchored => {
+                let mut plan = self.plan_prefill(request).await?;
+                self.plan_decode(&mut plan).await?;
+                Ok(plan)
+            }
+            CoordinationOrder::DecodeAnchored => self.plan_decode_anchored(request).await,
+        }
+    }
+
+    /// Prefill-anchored step 1: book prefill KV-aware on the prompt, honoring
+    /// the request's pin, affinity target, and allow-set. Nothing is booked on
+    /// failure.
+    pub async fn plan_prefill(
+        &self,
+        request: DisaggRequest,
+    ) -> Result<DisaggPlan, CoordinatorError> {
+        let mut plan = DisaggPlan::new(request);
+        let request = &plan.request;
+        let booked = self
+            .prefill
+            .select_and_reserve(SelectAndReserveRequest {
+                model_name: request.model_name.clone(),
+                routing_group: request.prefill_routing_group.clone(),
+                selection_id: Some(prefill_selection_id(&request.selection_id)),
+                prompt: request.prompt.clone(),
+                router_config_override: request.prefill_router_config_override.clone(),
+                expected_output_tokens: Some(1),
+                priority_jump: None,
+                strict_priority: None,
+                session_id: None,
+                session_context: request.session_context.clone(),
+                affinity_target: request.affinity_target,
+                pinned_worker: request.pinned_prefill_worker,
+                allowed_worker_ids: request.allowed_worker_ids.clone(),
+                routing_constraints: request.routing_constraints.clone(),
+            })
+            .await
+            .map_err(CoordinatorError::PrefillCommit)?;
+        plan.prefill = Some(booking(Pool::Prefill, booked));
+        plan.transition(LinkedBookingState::PrefillCommitted);
+        Ok(plan)
+    }
+
+    /// Prefill-anchored step 2: book decode load-only, constrained to the
+    /// prefill worker's KV-transfer domain. Valid once prefill is booked,
+    /// before or after [`Self::prefill_complete`]. On failure the prefill
+    /// booking, if still held, is freed (`Compensated`).
+    pub async fn plan_decode(&self, plan: &mut DisaggPlan) -> Result<(), CoordinatorError> {
+        let prefill_worker = match plan.state {
+            LinkedBookingState::PrefillCommitted | LinkedBookingState::PrefillReleased
+                if plan.decode.is_none() =>
+            {
+                plan.prefill
+                    .as_ref()
+                    .map(|prefill| prefill.worker.worker_id)
+                    .or(plan.prefill_worker)
+            }
+            state => {
+                return Err(CoordinatorError::InvalidState {
+                    operation: "plan_decode",
+                    expected: "a prefill booking and no decode booking",
+                    state,
+                });
+            }
+        };
+        let mut routing_constraints = plan.request.routing_constraints.clone();
+        if let Some(record) =
+            prefill_worker.and_then(|worker_id| self.prefill.worker_record(worker_id))
+            && let Err(error) = merge_kv_transfer_constraints(&mut routing_constraints, &record)
+        {
+            self.compensate_second_booking_failure(plan, Pool::Prefill)
+                .await;
+            return Err(error);
+        }
+        let request = &plan.request;
+        let decode_request = SelectAndReserveRequest {
+            model_name: request.model_name.clone(),
+            routing_group: request.decode_routing_group.clone(),
+            selection_id: Some(decode_selection_id(&request.selection_id)),
+            prompt: request.prompt.clone(),
+            router_config_override: Some(decode_override(
+                request.decode_router_config_override.clone(),
+                self.policy.is_enabled(),
+            )),
+            expected_output_tokens: request.expected_output_tokens,
+            priority_jump: None,
+            strict_priority: None,
+            session_id: None,
+            session_context: request.session_context.clone(),
+            affinity_target: request.affinity_target,
+            pinned_worker: None,
+            allowed_worker_ids: request.allowed_worker_ids.clone(),
+            routing_constraints,
+        };
+        match self.decode.select_and_reserve(decode_request).await {
+            Ok(booked) => {
+                plan.decode = Some(booking(Pool::Decode, booked));
+                if plan.prefill.is_some() {
+                    plan.transition(LinkedBookingState::Linked);
+                }
+                Ok(())
+            }
+            Err(error) => {
+                self.compensate_second_booking_failure(plan, Pool::Prefill)
+                    .await;
+                Err(CoordinatorError::DecodeCommit(error))
+            }
+        }
+    }
+
+    async fn plan_decode_anchored(
+        &self,
+        request: DisaggRequest,
+    ) -> Result<DisaggPlan, CoordinatorError> {
         let mut transitions = vec![LinkedBookingState::Idle];
 
-        // 1. Decode-anchored preview. Query-only: the scheduler evaluates the
-        //    candidate against current load without booking, and reports the
-        //    decode busy line when a threshold is configured.
+        // 1. Decode preview. Query-only: the scheduler evaluates the candidate
+        //    against current load without booking, and reports the decode busy
+        //    line when a threshold is configured.
         let preview = self
             .decode
             .select(SelectRequest {
@@ -283,9 +469,9 @@ impl<P: SelectionPool> DisaggCoordinator<P> {
                 strict_priority: None,
                 session_id: None,
                 session_context: request.session_context.clone(),
-                affinity_target: None,
+                affinity_target: request.affinity_target,
                 pinned_worker: None,
-                allowed_worker_ids: None,
+                allowed_worker_ids: request.allowed_worker_ids.clone(),
                 routing_constraints: request.routing_constraints.clone(),
                 advisory: true,
             })
@@ -319,15 +505,14 @@ impl<P: SelectionPool> DisaggCoordinator<P> {
             None
         };
 
-        // 3. Decision.
+        // 3. Decision. The decode busy gate is evaluated after the policy, on
+        //    the previewed decode worker: a bypass only stands when that worker
+        //    is not busy (or no gate is configured).
         let input =
             ConditionalDisaggDecisionInput::new(prompt_tokens, decode_signals.cached_tokens)
                 .with_prefill_chosen_worker_busy(prefill_busy);
         let policy_says_bypass =
             self.policy.is_enabled() && self.policy.should_bypass_remote_prefill(input).await;
-        // The decode busy gate is evaluated after the policy, on the previewed
-        // decode worker: a bypass only stands when that worker is not busy (or
-        // no gate is configured).
         let decode_gate_configured = self.decode_busy_threshold.is_some();
         let decode_busy = policy_says_bypass
             .then_some(decode_signals.decode_busy)
@@ -359,33 +544,22 @@ impl<P: SelectionPool> DisaggCoordinator<P> {
                 session_context: request.session_context.clone(),
                 affinity_target: None,
                 pinned_worker: Some(previewed_worker),
-                allowed_worker_ids: None,
+                allowed_worker_ids: request.allowed_worker_ids.clone(),
                 routing_constraints: request.routing_constraints.clone(),
             })
             .await
         {
             Ok(response) => response,
-            Err(error) => {
-                transitions.push(LinkedBookingState::Idle);
-                return Err(CoordinatorError::DecodeCommit(error));
-            }
-        };
-        let decode = PoolBooking {
-            pool: Pool::Decode,
-            selection_id: decode
-                .selection_id
-                .clone()
-                .expect("booked selection has an id"),
-            worker: WorkerWithDpRank::new(decode.worker_id, decode.dp_rank),
-            endpoint: decode.endpoint,
+            Err(error) => return Err(CoordinatorError::DecodeCommit(error)),
         };
         transitions.push(LinkedBookingState::DecodeCommitted);
-
         let mut plan = DisaggPlan {
-            decode,
+            request,
             prefill: None,
-            decision,
-            decode_signals,
+            decode: Some(booking(Pool::Decode, decode)),
+            decision: Some(decision),
+            decode_signals: Some(decode_signals),
+            prefill_worker: None,
             state: LinkedBookingState::DecodeCommitted,
             transitions,
         };
@@ -395,7 +569,7 @@ impl<P: SelectionPool> DisaggCoordinator<P> {
         }
 
         // 5. Prefill commit constrained to the decode worker's KV-transfer domain.
-        let prefill_request = match self.prefill_request(&request, &plan.decode) {
+        let prefill_request = match self.prefill_request_for_decode(&plan) {
             Ok(prefill_request) => prefill_request,
             Err(error) => {
                 self.compensate_prefill_failure(&mut plan).await;
@@ -407,15 +581,7 @@ impl<P: SelectionPool> DisaggCoordinator<P> {
         };
         match self.prefill.select_and_reserve(prefill_request).await {
             Ok(response) => {
-                plan.prefill = Some(PoolBooking {
-                    pool: Pool::Prefill,
-                    selection_id: response
-                        .selection_id
-                        .clone()
-                        .expect("booked selection has an id"),
-                    worker: WorkerWithDpRank::new(response.worker_id, response.dp_rank),
-                    endpoint: response.endpoint,
-                });
+                plan.prefill = Some(booking(Pool::Prefill, response));
                 plan.transition(LinkedBookingState::Linked);
                 Ok(plan)
             }
@@ -430,11 +596,14 @@ impl<P: SelectionPool> DisaggCoordinator<P> {
     }
 
     /// Prefill finished (first decode token or handoff observed): release the
-    /// prefill booking early so the prefill pool sees its capacity back.
+    /// prefill booking early so the prefill pool sees its capacity back. The
+    /// prefill worker stays known so a later [`Self::plan_decode`] can still
+    /// constrain decode to its KV-transfer domain.
     pub async fn prefill_complete(&self, plan: &mut DisaggPlan) -> Result<(), SelectionError> {
         let Some(prefill) = plan.prefill.take() else {
             return Ok(());
         };
+        plan.prefill_worker = Some(prefill.worker.worker_id);
         let result = self.prefill.free_reservation(&prefill.selection_id).await;
         plan.transition(LinkedBookingState::PrefillReleased);
         result
@@ -447,36 +616,44 @@ impl<P: SelectionPool> DisaggCoordinator<P> {
         {
             tracing::debug!(%error, selection_id = %prefill.selection_id, "prefill booking already released");
         }
-        if let Err(error) = self
-            .decode
-            .free_reservation(&plan.decode.selection_id)
-            .await
+        if let Some(decode) = plan.decode.take()
+            && let Err(error) = self.decode.free_reservation(&decode.selection_id).await
         {
-            tracing::debug!(%error, selection_id = %plan.decode.selection_id, "decode booking already released");
+            tracing::debug!(%error, selection_id = %decode.selection_id, "decode booking already released");
         }
         plan.transition(LinkedBookingState::Released);
     }
 
+    /// Decode-anchored compensation for a prefill failure after decode is booked.
     async fn compensate_prefill_failure(&self, plan: &mut DisaggPlan) {
         match self.prefill_failure {
             PrefillFailurePolicy::BypassOnDecode => {
                 plan.transition(LinkedBookingState::BypassAfterPrefillFailure);
             }
             PrefillFailurePolicy::FreeDecode => {
-                if let Err(error) = self
-                    .decode
-                    .free_reservation(&plan.decode.selection_id)
+                self.compensate_second_booking_failure(plan, Pool::Decode)
                     .await
-                {
-                    tracing::warn!(
-                        %error,
-                        selection_id = %plan.decode.selection_id,
-                        "failed to free decode booking while compensating a prefill failure"
-                    );
-                }
-                plan.transition(LinkedBookingState::Compensated);
             }
         }
+    }
+
+    /// Free the first booking after the second failed.
+    async fn compensate_second_booking_failure(&self, plan: &mut DisaggPlan, held: Pool) {
+        let (booking, pool): (_, &Arc<P>) = match held {
+            Pool::Prefill => (plan.prefill.take(), &self.prefill),
+            Pool::Decode => (plan.decode.take(), &self.decode),
+        };
+        if let Some(booking) = booking
+            && let Err(error) = pool.free_reservation(&booking.selection_id).await
+        {
+            tracing::warn!(
+                %error,
+                selection_id = %booking.selection_id,
+                ?held,
+                "failed to free the first booking while compensating the second"
+            );
+        }
+        plan.transition(LinkedBookingState::Compensated);
     }
 
     async fn prefill_busy(&self, request: &DisaggRequest) -> Result<Option<bool>, SelectionError> {
@@ -498,7 +675,7 @@ impl<P: SelectionPool> DisaggCoordinator<P> {
                 session_context: request.session_context.clone(),
                 affinity_target: None,
                 pinned_worker: None,
-                allowed_worker_ids: None,
+                allowed_worker_ids: request.allowed_worker_ids.clone(),
                 routing_constraints: request.routing_constraints.clone(),
                 advisory: true,
             })
@@ -512,13 +689,17 @@ impl<P: SelectionPool> DisaggCoordinator<P> {
         }))
     }
 
-    fn prefill_request(
+    fn prefill_request_for_decode(
         &self,
-        request: &DisaggRequest,
-        decode: &PoolBooking,
+        plan: &DisaggPlan,
     ) -> Result<SelectAndReserveRequest, CoordinatorError> {
+        let request = &plan.request;
         let mut routing_constraints = request.routing_constraints.clone();
-        if let Some(record) = self.decode.worker_record(decode.worker.worker_id) {
+        if let Some(record) = plan
+            .decode
+            .as_ref()
+            .and_then(|decode| self.decode.worker_record(decode.worker.worker_id))
+        {
             merge_kv_transfer_constraints(&mut routing_constraints, &record)?;
         }
         Ok(SelectAndReserveRequest {
@@ -533,10 +714,21 @@ impl<P: SelectionPool> DisaggCoordinator<P> {
             session_id: None,
             session_context: request.session_context.clone(),
             affinity_target: None,
-            pinned_worker: None,
-            allowed_worker_ids: None,
+            pinned_worker: request.pinned_prefill_worker,
+            allowed_worker_ids: request.allowed_worker_ids.clone(),
             routing_constraints,
         })
+    }
+}
+
+fn booking(pool: Pool, response: SelectResponse) -> PoolBooking {
+    PoolBooking {
+        pool,
+        selection_id: response
+            .selection_id
+            .expect("select_and_reserve always returns the booked selection id"),
+        worker: WorkerWithDpRank::new(response.worker_id, response.dp_rank),
+        endpoint: response.endpoint,
     }
 }
 
@@ -549,8 +741,8 @@ pub fn prefill_selection_id(selection_id: &str) -> String {
 }
 
 /// Decode never accounts prompt-side load. Normal disaggregation also forces
-/// zero overlap credit so decode routing stays load-only; bypass keeps the base
-/// credit because prefill runs on the chosen decode worker.
+/// zero overlap credit so decode routing stays load-only; bypass (or a
+/// conditional-disaggregation policy) keeps the base credit.
 fn decode_override(
     existing: Option<RouterConfigOverride>,
     allow_decode_overlap_affinity: bool,
@@ -564,29 +756,29 @@ fn decode_override(
     override_config
 }
 
-/// Constrain prefill selection to workers in the decode worker's KV-transfer
-/// domain, with the enforcement the decode worker advertises.
+/// Constrain the other pool's selection to `anchor`'s KV-transfer domain, with
+/// the enforcement `anchor` advertises.
 fn merge_kv_transfer_constraints(
     constraints: &mut RoutingConstraints,
-    decode_record: &WorkerCatalogRecord,
+    anchor: &WorkerCatalogRecord,
 ) -> Result<(), CoordinatorError> {
-    let Some(domain) = decode_record.kv_transfer_domain.as_deref() else {
+    let Some(domain) = anchor.kv_transfer_domain.as_deref() else {
         return Ok(());
     };
-    let worker_id = decode_record.worker_id;
-    let Some(value) = decode_record.topology_domains.get(domain) else {
+    let worker_id = anchor.worker_id;
+    let Some(value) = anchor.topology_domains.get(domain) else {
         return Err(CoordinatorError::MissingTopologyDomain {
             worker_id,
             domain: domain.to_string(),
         });
     };
     let taint = topology_taint(domain, value);
-    match decode_record.kv_transfer_enforcement {
+    match anchor.kv_transfer_enforcement {
         Some(KvTransferEnforcement::Required) => {
             constraints.required_taints.insert(taint);
         }
         Some(KvTransferEnforcement::Preferred) => {
-            let Some(weight) = decode_record.kv_transfer_preferred_weight else {
+            let Some(weight) = anchor.kv_transfer_preferred_weight else {
                 return Err(CoordinatorError::MissingPreferredWeight { worker_id });
             };
             constraints.preferred_taints.insert(taint, weight);
@@ -668,6 +860,9 @@ mod tests {
             },
             expected_output_tokens: Some(16),
             session_context: None,
+            affinity_target: None,
+            pinned_prefill_worker: None,
+            allowed_worker_ids: None,
             routing_constraints: RoutingConstraints::default(),
             decode_router_config_override: None,
             prefill_router_config_override: None,
@@ -697,6 +892,7 @@ mod tests {
         let coordinator = DisaggCoordinator::new(
             Arc::clone(&prefill),
             Arc::clone(&decode),
+            CoordinationOrder::DecodeAnchored,
             disabled_policy(),
             &config(),
         );
@@ -704,14 +900,15 @@ mod tests {
         let mut plan = coordinator.plan(request("req")).await.expect("linked plan");
         assert_eq!(plan.state(), LinkedBookingState::Linked);
         assert!(!plan.is_bypass());
-        assert_eq!(plan.decode.worker.worker_id, 2);
-        assert_eq!(plan.decode.selection_id, "req/decode");
-        let prefill_booking = plan.prefill.as_ref().expect("prefill booking");
+        let decode_booking = plan.decode().expect("decode booking");
+        assert_eq!(decode_booking.worker.worker_id, 2);
+        assert_eq!(decode_booking.selection_id, "req/decode");
+        let prefill_booking = plan.prefill().expect("prefill booking");
         assert_eq!(prefill_booking.worker.worker_id, 1);
         assert_eq!(prefill_booking.selection_id, "req/prefill");
         assert_eq!(active_requests(&prefill, PREFILL), 1);
         assert_eq!(active_requests(&decode, DECODE), 1);
-        assert!(!plan.decision.bypass);
+        assert!(!plan.decision().expect("decision").bypass);
 
         coordinator
             .prefill_complete(&mut plan)
@@ -748,14 +945,16 @@ mod tests {
         let coordinator = DisaggCoordinator::new(
             Arc::clone(&prefill),
             Arc::clone(&decode),
+            CoordinationOrder::DecodeAnchored,
             always_bypass(),
             &config(),
         );
         let mut plan = coordinator.plan(request("req")).await.expect("bypass plan");
         assert_eq!(plan.state(), LinkedBookingState::Bypass);
         assert!(plan.is_bypass());
-        assert!(plan.decision.policy_says_bypass && plan.decision.bypass);
-        assert_eq!(plan.decision.decode_busy, None, "no decode gate configured");
+        let decision = plan.decision().expect("decision");
+        assert!(decision.policy_says_bypass && decision.bypass);
+        assert_eq!(decision.decode_busy, None, "no decode gate configured");
         assert_eq!(active_requests(&prefill, PREFILL), 0);
         assert_eq!(active_requests(&decode, DECODE), 1);
         coordinator.release(&mut plan).await;
@@ -775,13 +974,15 @@ mod tests {
         let coordinator = DisaggCoordinator::new(
             Arc::clone(&prefill),
             Arc::clone(&decode),
+            CoordinationOrder::DecodeAnchored,
             always_bypass(),
             &gated,
         );
         let mut plan = coordinator.plan(request("req")).await.expect("linked plan");
-        assert!(plan.decision.policy_says_bypass);
-        assert_eq!(plan.decision.decode_busy, Some(true));
-        assert!(!plan.decision.bypass);
+        let decision = plan.decision().expect("decision");
+        assert!(decision.policy_says_bypass);
+        assert_eq!(decision.decode_busy, Some(true));
+        assert!(!decision.bypass);
         assert_eq!(plan.state(), LinkedBookingState::Linked);
         assert_eq!(active_requests(&prefill, PREFILL), 1);
         coordinator.release(&mut plan).await;
@@ -797,6 +998,7 @@ mod tests {
         let coordinator = DisaggCoordinator::new(
             Arc::clone(&prefill),
             Arc::clone(&decode),
+            CoordinationOrder::DecodeAnchored,
             disabled_policy(),
             &config(),
         );
@@ -821,6 +1023,7 @@ mod tests {
         let coordinator = DisaggCoordinator::new(
             Arc::clone(&prefill),
             Arc::clone(&decode),
+            CoordinationOrder::DecodeAnchored,
             disabled_policy(),
             &config(),
         )
@@ -842,6 +1045,7 @@ mod tests {
         let coordinator = DisaggCoordinator::new(
             Arc::clone(&prefill),
             Arc::clone(&decode),
+            CoordinationOrder::DecodeAnchored,
             disabled_policy(),
             &config(),
         );
@@ -878,6 +1082,7 @@ mod tests {
         let coordinator = DisaggCoordinator::new(
             Arc::clone(&prefill),
             Arc::clone(&decode),
+            CoordinationOrder::DecodeAnchored,
             disabled_policy(),
             &config(),
         );
@@ -887,9 +1092,7 @@ mod tests {
                 .await
                 .expect("linked plan");
             assert_eq!(
-                plan.prefill
-                    .as_ref()
-                    .map(|booking| booking.worker.worker_id),
+                plan.prefill().map(|booking| booking.worker.worker_id),
                 Some(11),
                 "prefill must land in the decode worker's zone"
             );
@@ -907,6 +1110,7 @@ mod tests {
         let coordinator = DisaggCoordinator::new(
             Arc::clone(&prefill),
             Arc::clone(&decode),
+            CoordinationOrder::DecodeAnchored,
             disabled_policy(),
             &config(),
         );
@@ -923,5 +1127,120 @@ mod tests {
         );
         assert_eq!(active_requests(&decode, DECODE), 0);
         assert_eq!(active_requests(&prefill, PREFILL), 0);
+    }
+
+    fn prefill_anchored(
+        prefill: &Arc<SelectionService>,
+        decode: &Arc<SelectionService>,
+    ) -> DisaggCoordinator {
+        DisaggCoordinator::new(
+            Arc::clone(prefill),
+            Arc::clone(decode),
+            CoordinationOrder::PrefillAnchored,
+            disabled_policy(),
+            &config(),
+        )
+    }
+
+    #[tokio::test]
+    async fn prefill_anchored_books_decode_in_the_prefill_domain_after_handoff() {
+        let mut prefill_worker = zoned(worker(1, PREFILL), "a");
+        prefill_worker.kv_transfer_domain = Some("zone".to_string());
+        prefill_worker.kv_transfer_enforcement = Some(KvTransferEnforcement::Required);
+        let (prefill, decode) = pools_with(
+            vec![prefill_worker],
+            vec![
+                zoned(worker(20, DECODE), "b"),
+                zoned(worker(21, DECODE), "a"),
+            ],
+        )
+        .await;
+        let coordinator = prefill_anchored(&prefill, &decode);
+
+        // Frontend shape: prefill booked and dispatched, handoff observed,
+        // decode booked afterwards, still inside the prefill worker's zone.
+        let mut plan = coordinator
+            .plan_prefill(request("req"))
+            .await
+            .expect("prefill booked");
+        assert_eq!(plan.state(), LinkedBookingState::PrefillCommitted);
+        assert_eq!(plan.prefill().map(|b| b.worker.worker_id), Some(1));
+        assert!(plan.decode().is_none());
+        assert_eq!(active_requests(&prefill, PREFILL), 1);
+
+        coordinator
+            .prefill_complete(&mut plan)
+            .await
+            .expect("prefill freed");
+        assert_eq!(active_requests(&prefill, PREFILL), 0);
+
+        coordinator
+            .plan_decode(&mut plan)
+            .await
+            .expect("decode booked");
+        assert_eq!(plan.decode().map(|b| b.worker.worker_id), Some(21));
+        assert_eq!(plan.state(), LinkedBookingState::PrefillReleased);
+        assert!(matches!(
+            coordinator.plan_decode(&mut plan).await,
+            Err(CoordinatorError::InvalidState { .. })
+        ));
+
+        coordinator.release(&mut plan).await;
+        assert_eq!(active_requests(&decode, DECODE), 0);
+        assert_eq!(
+            plan.transitions(),
+            &[
+                LinkedBookingState::Idle,
+                LinkedBookingState::PrefillCommitted,
+                LinkedBookingState::PrefillReleased,
+                LinkedBookingState::Released,
+            ]
+        );
+
+        // EPP shape: both bookings at plan time.
+        let mut plan = coordinator.plan(request("req-2")).await.expect("linked");
+        assert_eq!(plan.state(), LinkedBookingState::Linked);
+        assert_eq!(plan.decode().map(|b| b.worker.worker_id), Some(21));
+        assert_eq!(active_requests(&prefill, PREFILL), 1);
+        assert_eq!(active_requests(&decode, DECODE), 1);
+        coordinator.release(&mut plan).await;
+        assert_eq!(active_requests(&prefill, PREFILL), 0);
+        assert_eq!(active_requests(&decode, DECODE), 0);
+    }
+
+    #[tokio::test]
+    async fn prefill_anchored_decode_failure_frees_prefill() {
+        let (prefill, decode) = pools_with(vec![worker(1, PREFILL)], Vec::new()).await;
+        let coordinator = prefill_anchored(&prefill, &decode);
+        let mut plan = coordinator
+            .plan_prefill(request("req"))
+            .await
+            .expect("prefill booked");
+        let error = coordinator
+            .plan_decode(&mut plan)
+            .await
+            .expect_err("no decode worker");
+        assert!(
+            matches!(error, CoordinatorError::DecodeCommit(_)),
+            "{error}"
+        );
+        assert_eq!(plan.state(), LinkedBookingState::Compensated);
+        assert!(plan.prefill().is_none());
+        assert_eq!(active_requests(&prefill, PREFILL), 0);
+    }
+
+    #[tokio::test]
+    async fn prefill_anchored_prefill_failure_books_nothing() {
+        let (prefill, decode) = pools_with(Vec::new(), vec![worker(2, DECODE)]).await;
+        let coordinator = prefill_anchored(&prefill, &decode);
+        let error = coordinator
+            .plan(request("req"))
+            .await
+            .expect_err("no prefill worker");
+        assert!(
+            matches!(error, CoordinatorError::PrefillCommit(_)),
+            "{error}"
+        );
+        assert_eq!(active_requests(&decode, DECODE), 0);
     }
 }
