@@ -7,6 +7,7 @@
 //! model requests and never owns model responses.
 
 mod catalog;
+pub mod coordinator;
 mod core;
 mod error;
 mod input;
@@ -21,6 +22,10 @@ mod tests;
 
 pub use crate::WorkerSelectionPolicyFactory;
 pub use crate::services::common::replica_sync::{ReplicaPeerError, ScopedSequencePublisher};
+pub use coordinator::{
+    BypassDecision, CoordinatorError, DecodeSignals, DisaggCoordinator, DisaggPlan, DisaggRequest,
+    LinkedBookingState, Pool, PoolBooking, PrefillFailurePolicy, SelectionPool,
+};
 pub use core::{
     OverlapRefreshSource, RefreshProvider, SelectionCore, SelectionHostHooks, SelectionPartition,
     SelectionScheduler, SelectionServiceConfig,
