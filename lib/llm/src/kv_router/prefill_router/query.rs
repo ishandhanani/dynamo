@@ -5,15 +5,10 @@ use std::collections::HashSet;
 
 use anyhow::Result;
 use dynamo_kv_router::protocols::{BlockExtraInfo, RoutingConstraints, WorkerId};
-use dynamo_kv_router::selector::WorkerSelector;
 
 use super::{PrefillError, PrefillLifecycleState, PrefillQueryOutcome, PrefillRouter};
-use crate::local_model::runtime_config::ModelRuntimeConfig;
 
-impl<Sel> PrefillRouter<Sel>
-where
-    Sel: WorkerSelector<ModelRuntimeConfig> + Send + 'static,
-{
+impl PrefillRouter {
     /// Query the best prefill worker without executing a request.
     ///
     /// This query is advisory and does not book scheduler or occupancy state;
