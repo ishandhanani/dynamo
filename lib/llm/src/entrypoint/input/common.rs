@@ -337,7 +337,9 @@ where
     if router_mode.is_kv_routing() && prefill_router.needs_decode_routing_host() {
         prefill_router
             .set_decode_routing_host(routing_host.clone())
-            .context("install decode RoutingHost for conditional-disagg or decode-first coordination")?;
+            .context(
+                "install decode RoutingHost for conditional-disagg or decode-first coordination",
+            )?;
     }
     let backend_engine: ServiceEngine<_, _> = routing_host;
     Ok(PreprocessedRouting {

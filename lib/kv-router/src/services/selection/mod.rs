@@ -21,7 +21,9 @@ mod types;
 mod tests;
 
 pub use crate::WorkerSelectionPolicyFactory;
-pub use crate::services::common::replica_sync::{ReplicaPeerError, ScopedSequencePublisher};
+pub use crate::services::common::replica_sync::{
+    ReplicaPeerError, SchedulerLoadSink, ScopedSequencePublisher,
+};
 pub use coordinator::{
     BypassDecision, CoordinatorError, DecodeSignals, DisaggCoordinator, DisaggPlan, DisaggRequest,
     LinkedBookingState, Pool, PoolBooking, PrefillFailurePolicy, SelectionPool,
