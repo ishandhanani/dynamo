@@ -395,6 +395,9 @@ navigation:
               - page: Sidecar Backends (Experimental)
                 slug: system-architecture/sidecar-backends
                 path: pages/developer-guide/knowledge-base/concepts/system-architecture/sidecar-backends.md
+              - page: Runtime-Optional Frontend (Design)
+                slug: system-architecture/runtime-optional-frontend
+                path: pages/developer-guide/knowledge-base/concepts/system-architecture/runtime-optional-frontend.md
           - section: Modular Components
             collapsed: open-by-default
             contents:
