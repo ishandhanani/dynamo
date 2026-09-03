@@ -721,6 +721,12 @@ where
         self.conditional_disagg_policy.is_enabled()
     }
 
+    /// Whether this router needs the decode `RoutingHost` installed: either
+    /// the conditional-disagg policy or decode-first coordination reads it.
+    pub(crate) fn needs_decode_routing_host(&self) -> bool {
+        self.conditional_disagg_enabled() || self.decode_first
+    }
+
     pub(crate) fn set_decode_routing_host(
         &self,
         routing_host: Arc<RoutingHost<Sel>>,
