@@ -22,7 +22,9 @@ use serde::{Deserialize, Serialize};
 
 mod mem;
 pub use mem::MemoryStore;
+#[cfg(feature = "nats")]
 mod nats;
+#[cfg(feature = "nats")]
 pub use nats::NATSStore;
 #[cfg(feature = "etcd")]
 mod etcd;
@@ -191,6 +193,7 @@ impl TryFrom<String> for Selector {
 #[allow(clippy::large_enum_variant)]
 enum KeyValueStoreEnum {
     Memory(MemoryStore),
+    #[cfg(feature = "nats")]
     Nats(NATSStore),
     #[cfg(feature = "etcd")]
     Etcd(EtcdStore),
@@ -207,6 +210,7 @@ impl KeyValueStoreEnum {
         use KeyValueStoreEnum::*;
         Ok(match self {
             Memory(x) => Box::new(x.get_or_create_bucket(bucket_name, ttl).await?),
+            #[cfg(feature = "nats")]
             Nats(x) => Box::new(x.get_or_create_bucket(bucket_name, ttl).await?),
             #[cfg(feature = "etcd")]
             Etcd(x) => Box::new(x.get_or_create_bucket(bucket_name, ttl).await?),
@@ -221,6 +225,7 @@ impl KeyValueStoreEnum {
                 .get_bucket(bucket_name)
                 .await?
                 .map(|b| Box::new(b) as Box<dyn Bucket>),
+            #[cfg(feature = "nats")]
             Nats(x) => x
                 .get_bucket(bucket_name)
                 .await?
@@ -244,6 +249,7 @@ impl KeyValueStoreEnum {
             Memory(x) => x.connection_id(),
             #[cfg(feature = "etcd")]
             Etcd(x) => x.connection_id(),
+            #[cfg(feature = "nats")]
             Nats(x) => x.connection_id(),
             File(x) => x.connection_id(),
         }
@@ -255,6 +261,7 @@ impl KeyValueStoreEnum {
             Memory(x) => x.shutdown(),
             #[cfg(feature = "etcd")]
             Etcd(x) => x.shutdown(),
+            #[cfg(feature = "nats")]
             Nats(x) => x.shutdown(),
             File(x) => x.shutdown(),
         }

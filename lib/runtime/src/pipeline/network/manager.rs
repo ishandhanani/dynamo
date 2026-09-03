@@ -81,14 +81,14 @@ struct NetworkConfig {
     tcp_client_config: super::egress::tcp_client::TcpRequestConfig,
 
     // NATS configuration (provided externally, not from env)
-    nats_client: Option<async_nats::Client>,
+    nats_client: Option<crate::transports::NatsClientHandle>,
 }
 
 impl NetworkConfig {
     /// Load configuration from environment variables
     ///
     /// This is the ONLY place where network-related environment variables are read.
-    fn from_env(nats_client: Option<async_nats::Client>) -> Self {
+    fn from_env(nats_client: Option<crate::transports::NatsClientHandle>) -> Self {
         Self {
             // TCP server configuration
             // If DYN_TCP_RPC_PORT is set, use that port; otherwise None means OS will assign a free port
@@ -161,7 +161,7 @@ impl NetworkManager {
     /// Returns an Arc-wrapped NetworkManager ready to create servers and clients.
     pub fn new(
         cancellation_token: CancellationToken,
-        nats_client: Option<async_nats::Client>,
+        nats_client: Option<crate::transports::NatsClientHandle>,
         component_registry: crate::component::Registry,
         mode: RequestPlaneMode,
     ) -> Self {
@@ -298,6 +298,14 @@ impl NetworkManager {
         Ok(server.clone() as Arc<dyn RequestPlaneServer>)
     }
 
+    #[cfg(not(feature = "nats"))]
+    async fn create_nats_server(&self) -> Result<Arc<dyn RequestPlaneServer>> {
+        anyhow::bail!(
+            "NATS request plane is not compiled into this build (dynamo-runtime feature `nats`); use DYN_REQUEST_PLANE=tcp"
+        )
+    }
+
+    #[cfg(feature = "nats")]
     async fn create_nats_server(&self) -> Result<Arc<dyn RequestPlaneServer>> {
         use super::ingress::nats_server::NatsMultiplexedServer;
 
@@ -329,6 +337,14 @@ impl NetworkManager {
         )?))
     }
 
+    #[cfg(not(feature = "nats"))]
+    fn create_nats_client(&self) -> Result<Arc<dyn RequestPlaneClient>> {
+        anyhow::bail!(
+            "NATS request plane is not compiled into this build (dynamo-runtime feature `nats`); use DYN_REQUEST_PLANE=tcp"
+        )
+    }
+
+    #[cfg(feature = "nats")]
     fn create_nats_client(&self) -> Result<Arc<dyn RequestPlaneClient>> {
         use super::egress::nats_client::NatsRequestClient;
 
@@ -369,7 +385,13 @@ mod tests {
                 "expected NATS mode without NATS client to fail, got {} client",
                 client.transport_name()
             ),
-            Err(err) => assert!(err.to_string().contains("NATS client required")),
+            // With the `nats` feature the manager needs a client; without it the
+            // request plane itself is not compiled in.
+            Err(err) => assert!(
+                err.to_string().contains("NATS client required")
+                    || err.to_string().contains("not compiled into this build"),
+                "{err}"
+            ),
         }
     }
 }

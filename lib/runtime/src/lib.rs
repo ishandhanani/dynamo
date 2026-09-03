@@ -42,6 +42,7 @@ pub mod protocols;
 mod routing_policy;
 pub mod runnable;
 pub mod runtime;
+#[cfg(feature = "nats")]
 pub mod service;
 pub mod slug;
 pub mod storage;

@@ -54,6 +54,7 @@ use crate::config::{
     ConsoleLogFormat, console_log_format, disable_ansi_logging, env_is_truthy,
     legacy_jsonl_logging_enabled, span_events_enabled,
 };
+#[cfg(feature = "nats")]
 use async_nats::{HeaderMap, HeaderValue};
 use axum::extract::FromRequestParts;
 use axum::http;
@@ -487,6 +488,7 @@ impl GenericHeaders for TraceparentHeader<'_> {
     }
 }
 
+#[cfg(feature = "nats")]
 impl GenericHeaders for async_nats::HeaderMap {
     fn get(&self, key: &str) -> Option<&str> {
         async_nats::HeaderMap::get(self, key).map(|value| value.as_str())
@@ -678,6 +680,7 @@ pub fn make_system_request_span<B>(req: &Request<B>) -> Span {
 }
 
 /// Create a handle_payload span from NATS headers with component context
+#[cfg(feature = "nats")]
 pub fn make_handle_payload_span(
     headers: &async_nats::HeaderMap,
     component: &str,
@@ -779,6 +782,7 @@ pub fn make_handle_payload_span_from_tcp_headers(
 }
 
 /// Extract OpenTelemetry trace context from NATS headers for distributed tracing
+#[cfg(feature = "nats")]
 pub fn extract_otel_context_from_nats_headers(
     headers: &async_nats::HeaderMap,
 ) -> (
@@ -791,6 +795,7 @@ pub fn extract_otel_context_from_nats_headers(
 }
 
 /// Inject OpenTelemetry trace context into NATS headers using W3C Trace Context propagation
+#[cfg(feature = "nats")]
 pub fn inject_otel_context_into_nats_headers(
     headers: &mut async_nats::HeaderMap,
     context: Option<opentelemetry::Context>,
@@ -810,6 +815,7 @@ pub fn inject_otel_context_into_nats_headers(
 }
 
 /// Inject trace context from current span into NATS headers
+#[cfg(feature = "nats")]
 pub fn inject_current_trace_into_nats_headers(headers: &mut async_nats::HeaderMap) {
     inject_otel_context_into_nats_headers(headers, None);
 }
@@ -841,16 +847,13 @@ pub fn inject_trace_headers_into_map(headers: &mut std::collections::HashMap<Str
 pub fn otel_parent_context_from_distributed(
     ctx: &DistributedTraceContext,
 ) -> Option<opentelemetry::Context> {
-    let mut headers = async_nats::HeaderMap::new();
-    headers.insert("traceparent", ctx.create_traceparent());
-
+    // Plain string headers: the extraction is transport-agnostic.
+    let mut headers = std::collections::HashMap::new();
+    headers.insert("traceparent".to_string(), ctx.create_traceparent());
     if let Some(ref tracestate) = ctx.tracestate {
-        headers.insert("tracestate", tracestate.as_str());
+        headers.insert("tracestate".to_string(), tracestate.clone());
     }
-
-    let (otel_context, _trace_id, _parent_span_id) =
-        extract_otel_context_from_nats_headers(&headers);
-    otel_context
+    extract_trace_parent(&headers).1
 }
 
 /// Create a client_request span linked to the parent trace context
@@ -2384,10 +2387,10 @@ pub mod tests {
 
     #[test]
     fn trace_parent_from_headers_preserves_unsampled_flag() {
-        let mut headers = async_nats::HeaderMap::new();
+        let mut headers = std::collections::HashMap::new();
         headers.insert(
-            "traceparent",
-            "00-11111111111111111111111111111111-2222222222222222-00",
+            "traceparent".to_string(),
+            "00-11111111111111111111111111111111-2222222222222222-00".to_string(),
         );
 
         let trace_parent = TraceParent::from_headers(&headers);

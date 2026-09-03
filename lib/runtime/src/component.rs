@@ -35,20 +35,16 @@ use crate::{
     config::HealthStatus,
     distributed::RequestPlaneMode,
     metrics::{MetricsHierarchy, MetricsRegistry, prometheus_names},
-    service::ServiceClient,
-    service::ServiceSet,
 };
 
-use super::{DistributedRuntime, Runtime, traits::*, transports::nats::Slug, utils::Duration};
+use super::{DistributedRuntime, Runtime, slug::Slug, traits::*, utils::Duration};
 
 use crate::pipeline::network::{
     PushWorkHandler, RequestPlanePayloadCodec, ingress::push_endpoint::PushEndpoint,
 };
 use crate::protocols::EndpointId;
-use async_nats::{
-    rustls::quic,
-    service::{Service, ServiceExt},
-};
+#[cfg(feature = "nats")]
+use async_nats::service::Service;
 use dashmap::DashMap;
 use derive_builder::Builder;
 use derive_getters::Getters;
@@ -63,6 +59,7 @@ mod component;
 mod endpoint;
 mod namespace;
 mod registry;
+#[cfg(feature = "nats")]
 pub mod service;
 
 pub(crate) use client::EndpointDiscoverySource;
@@ -95,6 +92,7 @@ pub enum DeviceType {
 
 #[derive(Default)]
 pub struct RegistryInner {
+    #[cfg(feature = "nats")]
     pub(crate) services: HashMap<String, Service>,
 }
 
@@ -322,6 +320,13 @@ impl ComponentBuilder {
         // This prevents a race condition where serve_endpoint() tries to look up the service
         // before it's registered in the component registry.
         let drt = component.drt();
+        #[cfg(not(feature = "nats"))]
+        if drt.request_plane().is_nats() {
+            return Err(anyhow::anyhow!(
+                "NATS request plane is not compiled into this build (dynamo-runtime feature `nats`)"
+            ));
+        }
+        #[cfg(feature = "nats")]
         if drt.request_plane().is_nats() {
             let mut rx = drt.register_nats_service(component.clone());
             // Wait synchronously for the NATS service registration to complete.

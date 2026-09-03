@@ -3,6 +3,8 @@
 
 //! Pipeline Error
 //
+#[cfg(feature = "nats")]
+#[cfg(feature = "nats")]
 use async_nats::error::Error as NatsError;
 
 pub use anyhow::{Context, Error, Result, anyhow, anyhow as error, bail, ensure};
@@ -78,27 +80,35 @@ pub enum PipelineError {
     #[error("An endpoint URL must have the format: namespace/component/endpoint")]
     InvalidEndpointFormat,
 
+    #[cfg(feature = "nats")]
     #[error("NATS Request Error: {0}")]
     NatsRequestError(#[from] NatsError<async_nats::jetstream::context::RequestErrorKind>),
 
+    #[cfg(feature = "nats")]
     #[error("NATS Get Stream Error: {0}")]
     NatsGetStreamError(#[from] NatsError<async_nats::jetstream::context::GetStreamErrorKind>),
 
+    #[cfg(feature = "nats")]
     #[error("NATS Create Stream Error: {0}")]
     NatsCreateStreamError(#[from] NatsError<async_nats::jetstream::context::CreateStreamErrorKind>),
 
+    #[cfg(feature = "nats")]
     #[error("NATS Consumer Error: {0}")]
     NatsConsumerError(#[from] NatsError<async_nats::jetstream::stream::ConsumerErrorKind>),
 
+    #[cfg(feature = "nats")]
     #[error("NATS Batch Error: {0}")]
     NatsBatchError(#[from] NatsError<async_nats::jetstream::consumer::pull::BatchErrorKind>),
 
+    #[cfg(feature = "nats")]
     #[error("NATS Publish Error: {0}")]
     NatsPublishError(#[from] NatsError<async_nats::client::PublishErrorKind>),
 
+    #[cfg(feature = "nats")]
     #[error("NATS Connect Error: {0}")]
     NatsConnectError(#[from] NatsError<async_nats::ConnectErrorKind>),
 
+    #[cfg(feature = "nats")]
     #[error("NATS Subscriber Error: {0}")]
     NatsSubscriberError(#[from] async_nats::SubscribeError),
 

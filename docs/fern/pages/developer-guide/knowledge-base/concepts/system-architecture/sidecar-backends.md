@@ -138,11 +138,13 @@ succeeded. Across Kubernetes pods, use `DYN_DISCOVERY_BACKEND=kubernetes`, or
 the selection-catalog registration above, in place of the file backend.
 
 At build time, `dynamo-runtime` gates the etcd transport and discovery backend
-behind the `etcd` Cargo feature (on by default). A binary built with
-`--no-default-features` does not link `etcd-client`; `DYN_DISCOVERY_BACKEND`
-then defaults to `mem`, and `etcd` is rejected with an explicit error. The
-file, memory, and Kubernetes backends, the TCP request plane, and the ZMQ event
-plane are always compiled in.
+behind the `etcd` Cargo feature and the NATS request plane, NATS event plane,
+and NATS service registration behind the `nats` feature (both on by default).
+A binary built with `--no-default-features` links neither `etcd-client` nor
+`async-nats`; `DYN_DISCOVERY_BACKEND` then defaults to `mem`, and selecting
+`etcd` or a NATS plane is rejected with an explicit error naming the feature.
+The file, memory, and Kubernetes discovery backends, the TCP request plane, and
+the ZMQ event plane are always compiled in.
 
 ## Running Without A Distributed Runtime (Experimental)
 

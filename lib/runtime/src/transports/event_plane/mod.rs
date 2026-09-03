@@ -6,6 +6,7 @@
 mod codec;
 mod dynamic_subscriber;
 mod frame;
+#[cfg(feature = "nats")]
 mod nats_transport;
 mod traits;
 mod transport;
@@ -405,12 +406,14 @@ impl EventPublisher {
 
         // Use Msgpack codec for all transports
         enum TransportSetup {
+            #[cfg(feature = "nats")]
             Nats(Arc<dyn EventTransportTx>, Arc<Codec>),
             ZmqDirect(Arc<dyn EventTransportTx>, Arc<Codec>, String), // includes public endpoint
             ZmqBroker(Arc<dyn EventTransportTx>, Arc<Codec>),
         }
 
         let transport_setup = match transport_kind {
+            #[cfg(feature = "nats")]
             EventTransportKind::Nats => {
                 let transport = Arc::new(nats_transport::NatsTransport::new_publisher(
                     drt.clone(),
@@ -419,6 +422,10 @@ impl EventPublisher {
                 let codec = Arc::new(Codec::Msgpack(MsgpackCodec));
                 TransportSetup::Nats(transport as Arc<dyn EventTransportTx>, codec)
             }
+            #[cfg(not(feature = "nats"))]
+            EventTransportKind::Nats => anyhow::bail!(
+                "NATS event plane is not compiled into this build (dynamo-runtime feature `nats`); use DYN_EVENT_PLANE=zmq"
+            ),
             EventTransportKind::Zmq => {
                 // Check for broker mode
                 if let Some(broker) = resolve_zmq_broker(drt, &scope).await? {
@@ -480,6 +487,7 @@ impl EventPublisher {
 
         // Extract transport and codec, and register if needed
         let (tx, codec, discovery_instance) = match transport_setup {
+            #[cfg(feature = "nats")]
             TransportSetup::Nats(tx, codec) => {
                 let transport_config = EventTransport::nats(scope.subject_prefix());
                 let spec = DiscoverySpec::EventChannel {
@@ -744,12 +752,17 @@ impl EventSubscriber {
 
         // Use Msgpack codec for all transports
         let (wire_stream, codec): (WireStream, Arc<Codec>) = match transport_kind {
+            #[cfg(feature = "nats")]
             EventTransportKind::Nats => {
                 let transport = nats_transport::NatsTransport::new(drt.clone());
                 let stream = transport.subscribe(&routing_key).await?;
                 let codec = Arc::new(Codec::Msgpack(MsgpackCodec));
                 (stream, codec)
             }
+            #[cfg(not(feature = "nats"))]
+            EventTransportKind::Nats => anyhow::bail!(
+                "NATS event plane is not compiled into this build (dynamo-runtime feature `nats`); use DYN_EVENT_PLANE=zmq"
+            ),
             EventTransportKind::Zmq => {
                 // Check for broker mode
                 if let Some(broker) = resolve_zmq_broker(drt, &scope).await? {

@@ -7,6 +7,7 @@ use crate::component::{
 use crate::config::environment_names::tcp_response_stream;
 use crate::pipeline::PipelineError;
 use crate::pipeline::network::manager::NetworkManager;
+#[cfg(feature = "nats")]
 use crate::service::{ServiceClient, ServiceSet};
 use crate::storage::kv;
 use crate::{discovery, system_status_server, transports};
@@ -14,7 +15,7 @@ use crate::{
     discovery::{Discovery, DiscoverySpec, EndpointRegistrationLease, EndpointRegistrationManager},
     metrics::PrometheusUpdateCallback,
     metrics::{MetricsHierarchy, MetricsRegistry},
-    transports::{nats, tcp},
+    transports::tcp,
 };
 
 use super::utils::GracefulShutdownTracker;
@@ -54,6 +55,7 @@ pub struct DistributedRuntime {
     // local runtime
     runtime: Runtime,
 
+    #[cfg(feature = "nats")]
     nats_client: Option<transports::nats::Client>,
     network_manager: Arc<NetworkManager>,
     tcp_server: Arc<OnceCell<Arc<transports::tcp::server::TcpStreamServer>>>,
@@ -127,9 +129,17 @@ impl DistributedRuntime {
         let (discovery_backend, nats_config, request_plane, event_transport_kind) =
             config.dissolve();
 
+        #[cfg(feature = "nats")]
         let nats_client = match nats_config {
             Some(nc) => Some(nc.connect().await?),
             None => None,
+        };
+        #[cfg(feature = "nats")]
+        let network_nats_client = nats_client.clone().map(|c| c.client().clone());
+        #[cfg(not(feature = "nats"))]
+        let network_nats_client: Option<transports::NatsClientHandle> = {
+            let _: Option<transports::NatsClientOptions> = nats_config;
+            None
         };
 
         // Start system status server for health and metrics if enabled in configuration
@@ -196,7 +206,7 @@ impl DistributedRuntime {
         // NetworkManager for request plane
         let network_manager = NetworkManager::new(
             runtime.child_token(),
-            nats_client.clone().map(|c| c.client().clone()),
+            network_nats_client,
             component_registry.clone(),
             request_plane,
         );
@@ -209,6 +219,7 @@ impl DistributedRuntime {
         let distributed_runtime = Self {
             runtime,
             network_manager: Arc::new(network_manager),
+            #[cfg(feature = "nats")]
             nats_client,
             tcp_server: Arc::new(OnceCell::new()),
             system_status_server: Arc::new(OnceLock::new()),
@@ -492,6 +503,7 @@ impl DistributedRuntime {
         self.routing_occupancy_states.clone()
     }
 
+    #[cfg(feature = "nats")]
     /// TODO: This is a temporary KV router measure for component/component.rs EventPublisher impl for
     /// Component, to allow it to publish to NATS. KV Router is the only user.
     ///
@@ -506,6 +518,7 @@ impl DistributedRuntime {
             .await
     }
 
+    #[cfg(feature = "nats")]
     pub(crate) async fn kv_router_nats_publish_subject(
         &self,
         subject: async_nats::Subject,
@@ -519,6 +532,7 @@ impl DistributedRuntime {
         Ok(nats_client.client().publish(subject, payload).await?)
     }
 
+    #[cfg(feature = "nats")]
     /// TODO: This is a temporary KV router measure for component/component.rs EventSubscriber impl for
     /// Component, to allow it to subscribe to NATS. KV Router is the only user.
     pub(crate) async fn kv_router_nats_subscribe(
@@ -531,6 +545,7 @@ impl DistributedRuntime {
         Ok(nats_client.client().subscribe(subject).await?)
     }
 
+    #[cfg(feature = "nats")]
     /// TODO (karenc): This is a temporary KV router measure for worker query requests.
     /// Allows KV Router to perform request/reply with workers. (versus the pub/sub pattern above)
     /// KV Router is the only user, made public for use in dynamo-llm crate
@@ -550,6 +565,7 @@ impl DistributedRuntime {
         Ok(response)
     }
 
+    #[cfg(feature = "nats")]
     /// DEPRECATED: This method exists only for NATS request plane support.
     /// Once everything uses the TCP request plane, this can be removed along with
     /// the NATS service registration infrastructure.
@@ -683,7 +699,7 @@ impl DiscoveryBackend {
 #[derive(Dissolve)]
 pub struct DistributedConfig {
     pub discovery_backend: DiscoveryBackend,
-    pub nats_config: Option<nats::ClientOptions>,
+    pub nats_config: Option<transports::NatsClientOptions>,
     pub request_plane: RequestPlaneMode,
     /// Resolved event transport kind — computed once at config time from
     /// `DYN_EVENT_PLANE` and the discovery backend, then stored on the runtime
@@ -696,6 +712,25 @@ pub struct DistributedConfig {
 const DEFAULT_DISCOVERY_BACKEND: &str = "etcd";
 #[cfg(not(feature = "etcd"))]
 const DEFAULT_DISCOVERY_BACKEND: &str = "mem";
+
+/// NATS connection options when NATS is required by the configuration.
+/// Without the `nats` feature a configuration that needs NATS is a startup
+/// error, matching the unknown-backend handling above.
+pub(crate) fn nats_config_if(nats_enabled: bool) -> Option<transports::NatsClientOptions> {
+    if !nats_enabled {
+        return None;
+    }
+    #[cfg(feature = "nats")]
+    {
+        Some(transports::nats::ClientOptions::default())
+    }
+    #[cfg(not(feature = "nats"))]
+    {
+        panic!(
+            "NATS is required by DYN_REQUEST_PLANE/DYN_EVENT_PLANE/NATS_SERVER but not compiled into this build (dynamo-runtime feature `nats`)"
+        )
+    }
+}
 
 impl DistributedConfig {
     pub fn from_settings() -> DistributedConfig {
@@ -745,11 +780,7 @@ impl DistributedConfig {
 
         DistributedConfig {
             discovery_backend,
-            nats_config: if nats_enabled {
-                Some(nats::ClientOptions::default())
-            } else {
-                None
-            },
+            nats_config: crate::distributed::nats_config_if(nats_enabled),
             request_plane,
             event_transport_kind,
         }
@@ -776,11 +807,7 @@ impl DistributedConfig {
             );
         DistributedConfig {
             discovery_backend,
-            nats_config: if nats_enabled {
-                Some(nats::ClientOptions::default())
-            } else {
-                None
-            },
+            nats_config: crate::distributed::nats_config_if(nats_enabled),
             request_plane,
             event_transport_kind,
         }
@@ -861,14 +888,12 @@ pub mod distributed_test_utils {
     /// Note: Settings are read from environment variables inside DistributedRuntime::from_settings
     #[cfg(feature = "integration")]
     pub async fn create_test_drt_async() -> super::DistributedRuntime {
-        use crate::transports::nats;
-
         let rt = crate::Runtime::from_current().unwrap();
         let config = super::DistributedConfig {
             discovery_backend: super::DiscoveryBackend::KvStore(
                 crate::storage::kv::Selector::Memory,
             ),
-            nats_config: Some(nats::ClientOptions::default()),
+            nats_config: crate::distributed::nats_config_if(true),
             request_plane: crate::distributed::RequestPlaneMode::default(),
             event_transport_kind: crate::discovery::EventTransportKind::Nats,
         };
@@ -884,14 +909,12 @@ pub mod distributed_test_utils {
     pub async fn create_test_shared_drt_async(
         store_path: &std::path::Path,
     ) -> super::DistributedRuntime {
-        use crate::transports::nats;
-
         let rt = crate::Runtime::from_current().unwrap();
         let config = super::DistributedConfig {
             discovery_backend: super::DiscoveryBackend::KvStore(
                 crate::storage::kv::Selector::File(store_path.to_path_buf()),
             ),
-            nats_config: Some(nats::ClientOptions::default()),
+            nats_config: crate::distributed::nats_config_if(true),
             request_plane: crate::distributed::RequestPlaneMode::default(),
             event_transport_kind: crate::discovery::EventTransportKind::Nats,
         };

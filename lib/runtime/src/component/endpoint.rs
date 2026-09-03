@@ -9,6 +9,8 @@ use derive_getters::Dissolve;
 use educe::Educe;
 use tokio_util::sync::CancellationToken;
 
+#[cfg(feature = "nats")]
+use crate::transports::nats;
 use crate::{
     component::{DeviceType, Endpoint, Instance, TransportType},
     distributed::RequestPlaneMode,
@@ -17,7 +19,6 @@ use crate::{
     },
     protocols::EndpointId,
     traits::DistributedRuntimeProvider,
-    transports::nats,
 };
 
 fn endpoint_device_type() -> Option<DeviceType> {
@@ -345,6 +346,11 @@ fn build_transport_type_inner(
 
             Ok(TransportType::Tcp(tcp_endpoint))
         }
+        #[cfg(not(feature = "nats"))]
+        RequestPlaneMode::Nats => Err(anyhow::anyhow!(
+            "NATS request plane is not compiled into this build (dynamo-runtime feature `nats`)"
+        )),
+        #[cfg(feature = "nats")]
         RequestPlaneMode::Nats => Ok(TransportType::Nats(nats::instance_subject(
             endpoint_id,
             connection_id,

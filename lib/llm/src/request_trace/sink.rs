@@ -9,9 +9,11 @@ use std::sync::{
 use std::time::Duration;
 
 use anyhow::{Context as _, anyhow};
+#[cfg(feature = "nats")]
 use async_nats::jetstream;
 use async_trait::async_trait;
 use dynamo_runtime::config::environment_names::llm::request_trace as env_request_trace;
+#[cfg(feature = "nats")]
 use dynamo_runtime::transports::nats;
 use tokio::sync::broadcast;
 use tokio_util::sync::CancellationToken;
@@ -53,11 +55,13 @@ impl RequestTraceSink for StderrRequestTraceSink {
     }
 }
 
+#[cfg(feature = "nats")]
 pub struct NatsRequestTraceSink {
     js: jetstream::Context,
     subject: String,
 }
 
+#[cfg(feature = "nats")]
 impl NatsRequestTraceSink {
     async fn from_policy(policy: &RequestTracePolicy) -> anyhow::Result<Self> {
         let nats_client = nats::ClientOptions::default()
@@ -76,6 +80,7 @@ impl NatsRequestTraceSink {
     }
 }
 
+#[cfg(feature = "nats")]
 #[async_trait]
 impl RequestTraceSink for NatsRequestTraceSink {
     fn name(&self) -> &'static str {
@@ -191,6 +196,13 @@ async fn parse_sinks_from_env() -> anyhow::Result<Vec<Arc<dyn RequestTraceSink>>
     for sink_kind in &policy.sinks {
         match sink_kind {
             RequestTraceSinkKind::Stderr => sinks.push(Arc::new(StderrRequestTraceSink)),
+            #[cfg(not(feature = "nats"))]
+            RequestTraceSinkKind::Nats => {
+                return Err(anyhow!(
+                    "the NATS request-trace sink is not compiled into this build (dynamo-llm feature `nats`)"
+                ));
+            }
+            #[cfg(feature = "nats")]
             RequestTraceSinkKind::Nats => {
                 sinks.push(Arc::new(NatsRequestTraceSink::from_policy(policy).await?))
             }

@@ -4,7 +4,6 @@
 use crate::runtime::Runtime;
 use anyhow::{Context, Result};
 
-use async_nats::jetstream::kv;
 use derive_builder::Builder;
 use derive_getters::Dissolve;
 use futures::StreamExt;

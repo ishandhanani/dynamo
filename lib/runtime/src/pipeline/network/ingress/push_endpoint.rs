@@ -6,9 +6,11 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use super::*;
 use crate::SystemHealth;
 use crate::config::HealthStatus;
+#[cfg(feature = "nats")]
 use crate::logging::make_handle_payload_span;
 use crate::protocols::LeaseId;
 use anyhow::Result;
+#[cfg(feature = "nats")]
 use async_nats::service::endpoint::Endpoint;
 use derive_builder::Builder;
 use parking_lot::Mutex;
@@ -33,6 +35,7 @@ impl PushEndpoint {
         PushEndpointBuilder::default()
     }
 
+    #[cfg(feature = "nats")]
     pub async fn start(
         self,
         endpoint: Endpoint,
