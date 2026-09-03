@@ -14,6 +14,6 @@ pub use catalog::{CatalogAgent, CatalogAgentConfig, CatalogClient, CatalogRegist
 pub use endpoint::{GrpcEndpoint, HttpEndpoint};
 pub use error::{
     SidecarStartupError, cannot_connect, connection_timeout, engine_shutdown, invalid_argument,
-    protocol_error, status_to_dynamo,
+    protocol_error, status_to_dynamo, stream_incomplete,
 };
 pub use transport::{DEFAULT_MAX_GRPC_MESSAGE_SIZE, GrpcChannelPool};

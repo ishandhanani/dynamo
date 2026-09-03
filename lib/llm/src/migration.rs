@@ -76,6 +76,10 @@ fn is_migratable(err: &(dyn StdError + 'static)) -> bool {
         ErrorType::Backend(BackendError::EngineShutdown),
         // A truncated stream from a departed worker is recoverable by failover.
         ErrorType::Backend(BackendError::StreamIncomplete),
+        // Direct-dispatch engines report transport loss under the backend
+        // taxonomy; the connection is gone, another worker can serve.
+        ErrorType::Backend(BackendError::Disconnected),
+        ErrorType::Backend(BackendError::CannotConnect),
         // One overloaded worker: another may have room. Pool-wide exhaustion is
         // ResourceExhausted below and stays non-migratable.
         ErrorType::WorkerOverloaded,
@@ -728,6 +732,18 @@ mod tests {
             is_migratable(&stream_incomplete),
             "StreamIncomplete (truncated stream from departed worker) must be migratable"
         );
+
+        // Direct-dispatch engines report a vanished peer under the backend taxonomy.
+        for kind in [BackendError::Disconnected, BackendError::CannotConnect] {
+            let lost = DynamoError::builder()
+                .error_type(ErrorType::Backend(kind))
+                .message("GenerateStream: h2 protocol error (Unknown)")
+                .build();
+            assert!(
+                is_migratable(&lost),
+                "Backend({kind:?}) from a direct engine must be migratable"
+            );
+        }
     }
 
     // Guard: genuinely non-migratable errors stay non-migratable.

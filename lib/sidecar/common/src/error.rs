@@ -80,6 +80,32 @@ pub fn connection_timeout(message: impl Into<String>) -> DynamoError {
     backend(BackendError::ConnectionTimeout, message)
 }
 
+/// The engine stream ended without a terminal response (engine dropped
+/// mid-stream). Migratable: another worker can replay the request.
+pub fn stream_incomplete(message: impl Into<String>) -> DynamoError {
+    backend(BackendError::StreamIncomplete, message)
+}
+
+/// Whether a gRPC status text describes the transport failing underneath an
+/// established stream (peer died, connection reset) rather than an
+/// application error the engine returned.
+fn is_transport_failure(message: &str) -> bool {
+    let lower = message.to_ascii_lowercase();
+    [
+        "h2 protocol error",
+        "transport error",
+        "error reading a body",
+        "connection reset",
+        "connection refused",
+        "broken pipe",
+        "connection closed",
+        "stream closed",
+        "goaway",
+    ]
+    .iter()
+    .any(|needle| lower.contains(needle))
+}
+
 pub fn status_to_dynamo(rpc: &str, status: tonic::Status) -> DynamoError {
     let kind = match status.code() {
         tonic::Code::InvalidArgument
@@ -90,6 +116,14 @@ pub fn status_to_dynamo(rpc: &str, status: tonic::Status) -> DynamoError {
         tonic::Code::Unavailable => BackendError::CannotConnect,
         tonic::Code::Cancelled => BackendError::Cancelled,
         tonic::Code::DeadlineExceeded => BackendError::ConnectionTimeout,
+        // tonic reports a peer that vanished mid-stream as Unknown/Internal
+        // with the h2 transport text; that is a lost connection, not an
+        // engine-side failure, and the request can move to another worker.
+        tonic::Code::Unknown | tonic::Code::Internal | tonic::Code::Aborted
+            if is_transport_failure(status.message()) =>
+        {
+            BackendError::Disconnected
+        }
         _ => BackendError::Unknown,
     };
     backend(
@@ -103,6 +137,21 @@ mod tests {
     use dynamo_backend_common::{BackendError, ErrorType};
 
     use super::status_to_dynamo;
+
+    #[test]
+    fn mid_stream_transport_failures_are_disconnects() {
+        let status =
+            tonic::Status::unknown("h2 protocol error: error reading a body from connection");
+        assert_eq!(
+            status_to_dynamo("GenerateStream", status).error_type(),
+            ErrorType::Backend(BackendError::Disconnected)
+        );
+        let status = tonic::Status::unknown("model rejected the prompt");
+        assert_eq!(
+            status_to_dynamo("GenerateStream", status).error_type(),
+            ErrorType::Backend(BackendError::Unknown)
+        );
+    }
 
     #[test]
     fn maps_transport_statuses_to_backend_errors() {
