@@ -3011,6 +3011,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "dynamo-selection-catalog-feeder"
+version = "1.5.0"
+dependencies = [
+ "anyhow",
+ "axum 0.8.4",
+ "clap",
+ "dynamo-kv-router",
+ "dynamo-runtime",
+ "dynamo-sidecar-common",
+ "futures",
+ "k8s-openapi",
+ "kube",
+ "tokio",
+ "tokio-util",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "dynamo-sglang-mocker"
 version = "1.5.0"
 dependencies = [

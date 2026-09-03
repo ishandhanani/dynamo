@@ -34,6 +34,7 @@ members = [
     "lib/mocker/servers/vllm",
     "lib/sidecar/sglang",
     "lib/mocker/servers/sglang",
+    "lib/selection-catalog-feeder",
     "lib/sidecar/trtllm",
     "lib/bindings/c",
     "lib/bindings/python/codegen",

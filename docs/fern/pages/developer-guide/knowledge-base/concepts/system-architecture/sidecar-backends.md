@@ -179,6 +179,29 @@ process; a worker that is unreachable at startup is registered for selection
 but never chosen. Disaggregated serving, multimodal encoders, and worker
 churn need the runtime-backed frontend.
 
+### Feeding A Catalog From Kubernetes
+
+For a standalone selection service (or any consumer of its `/workers` API) on
+Kubernetes, `dynamo-selection-catalog-feeder` mirrors Ready pods into the
+catalog without gateway objects or a Dynamo runtime. It watches one namespace
+with an equality label selector and registers each Ready pod with a lease:
+`POST /workers` when the pod becomes Ready, `POST /workers/{id}/heartbeat`
+every third of the TTL, `DELETE /workers/{id}` when it leaves. A feeder that
+dies stops heartbeating, so its registrations expire.
+
+```bash
+dynamo-selection-catalog-feeder \
+  --catalog-url http://selection:8080 --namespace inference \
+  --selector app=vllm,role=decode --model-name Qwen/Qwen3-0.6B \
+  --port 50051 --block-size 16 --kv-event-port 5557 --data-parallel-size 1 \
+  --total-kv-blocks 65536 --max-num-batched-tokens 8192 --ttl-secs 30
+```
+
+Worker ids are the hash of the pod name (the same id the Kubernetes discovery
+backend and the EPP derive), so a pod is addressed consistently across
+feeders. Run one feeder per pool; a prefill pool and a decode pool are two
+feeders with different selectors and routing groups.
+
 See the
 [sidecar Dockerfile, source, and engine-specific READMEs](https://github.com/ai-dynamo/dynamo/tree/main/lib/sidecar)
 for implementation details.

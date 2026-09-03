@@ -160,6 +160,10 @@ after the last progress touch.
 
 ## Worker Registration
 
+Workers register themselves (the vLLM sidecar's `--selection-catalog-url`),
+or a `dynamo-selection-catalog-feeder` registers Ready Kubernetes pods on
+their behalf from a label selector; both use the API below with leases.
+
 Every selector replica must receive the same worker catalog before it serves
 selection traffic. Replica traffic never creates workers.
 
