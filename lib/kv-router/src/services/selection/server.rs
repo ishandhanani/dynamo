@@ -329,7 +329,7 @@ fn policy_class_from_headers(headers: &HeaderMap) -> Option<String> {
         .map(str::to_string)
 }
 
-pub(crate) fn create_router(state: Arc<AppState>) -> Router {
+pub fn create_router(state: Arc<AppState>) -> Router {
     Router::new()
         .route("/select", post(select))
         .route("/select_and_reserve", post(select_and_reserve))

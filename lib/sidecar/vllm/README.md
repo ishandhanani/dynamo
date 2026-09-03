@@ -87,6 +87,27 @@ The frontend must opt in with `DYN_ROUTER_DIRECT_DISPATCH=vllm`; without it the
 advertised endpoint is ignored and requests keep flowing through the request
 plane. The sidecar continues to handle registration, KV events, and health.
 
+### Register with a selection catalog (experimental)
+
+Instead of (or in addition to) Dynamo discovery, the sidecar can register the
+worker with a [standalone selection service](../../../docs/fern/pages/developer-guide/knowledge-base/modular-components/router/standalone-selection.md)
+over HTTP, heartbeat its lease, and deregister on shutdown. No etcd or NATS is
+involved in that path:
+
+```bash
+dynamo-vllm-sidecar \
+  --grpc-endpoint 127.0.0.1:50051 \
+  --advertise-grpc-endpoint http://worker-0.workers.svc.cluster.local:50051 \
+  --selection-catalog-url http://selector.workers.svc.cluster.local:8092 \
+  --selection-catalog-ttl-secs 30
+```
+
+The catalog record's dispatch endpoint is the advertised gRPC address, its
+KV-event ZMQ endpoints are vLLM's own publishers rehosted onto the advertised
+host (so the selector subscribes to the engine directly), and its routing group
+defaults to the disaggregation role (`prefill`, `decode`) or `default`
+(`--selection-catalog-routing-group` overrides).
+
 ### RL workflows
 
 Start vLLM with the capabilities required by the workflow, then opt the sidecar into RL discovery:

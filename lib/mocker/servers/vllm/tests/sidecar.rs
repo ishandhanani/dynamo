@@ -142,6 +142,130 @@ async fn collect(
         .await
 }
 
+/// With `--selection-catalog-url`, the sidecar registers the worker with a
+/// selection service over HTTP (dispatch endpoint = advertised gRPC address,
+/// KV-event ZMQ endpoints rehosted onto it, leased), keeps the lease alive,
+/// and deregisters on cleanup.
+#[tokio::test]
+async fn sidecar_registers_with_a_selection_catalog_and_deregisters_on_cleanup() {
+    use dynamo_kv_router::WorkerType;
+    use dynamo_kv_router::config::KvRouterConfig;
+    use dynamo_kv_router::services::selection::{
+        AppState, SelectionServiceBuilder, WorkerLifecycle, WorkerSelectionPolicyRegistry,
+        create_router,
+    };
+
+    let selection = SelectionServiceBuilder::new(
+        KvRouterConfig {
+            use_kv_events: false,
+            router_queue_threshold: None,
+            ..Default::default()
+        },
+        WorkerType::Aggregated,
+        WorkerSelectionPolicyRegistry::default(),
+    )
+    .indexer_threads(1)
+    .build()
+    .await
+    .expect("selection service");
+    let selection = Arc::new(selection);
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let catalog_url = format!("http://{}", listener.local_addr().unwrap());
+    let app = create_router(Arc::new(AppState {
+        service: Arc::clone(&selection),
+    }));
+    let http = tokio::spawn(async move {
+        let _ = axum::serve(listener, app).await;
+    });
+
+    let server = RunningServer::start(ServerMode::Aggregated, fast_engine_args()).await;
+    let engine_argv = vec![
+        "dynamo-vllm-sidecar".to_string(),
+        "--grpc-endpoint".to_string(),
+        server.endpoint.clone(),
+        "--grpc-connections".to_string(),
+        "1".to_string(),
+        "--grpc-startup-deadline-secs".to_string(),
+        "5".to_string(),
+        "--grpc-connect-attempt-timeout-secs".to_string(),
+        "1".to_string(),
+        "--advertise-grpc-endpoint".to_string(),
+        "http://worker-7.example:50051".to_string(),
+        "--selection-catalog-url".to_string(),
+        catalog_url.clone(),
+        "--selection-catalog-ttl-secs".to_string(),
+        "0.4".to_string(),
+    ];
+    let engine =
+        tokio::task::spawn_blocking(move || VllmSidecarEngine::from_args(Some(engine_argv)))
+            .await
+            .unwrap()
+            .unwrap()
+            .0;
+    engine
+        .start(7)
+        .await
+        .expect("start with catalog registration");
+
+    let records = selection.list_workers(None, None);
+    assert_eq!(records.len(), 1, "{records:?}");
+    let record = &records[0];
+    assert_eq!(record.worker_id, 7);
+    assert_eq!(record.routing_group, "default");
+    assert_eq!(
+        record.endpoint.as_deref(),
+        Some("http://worker-7.example:50051")
+    );
+    assert_eq!(record.block_size, Some(4));
+    assert_eq!(record.ttl_secs, Some(0.4));
+    assert_eq!(
+        record.lifecycle,
+        WorkerLifecycle::Schedulable,
+        "{:?}",
+        record.not_schedulable_reasons
+    );
+    for endpoint in record.kv_events_endpoints.values() {
+        assert!(
+            endpoint.starts_with("tcp://worker-7.example:"),
+            "KV event endpoint must be rehosted onto the advertised host: {endpoint}"
+        );
+    }
+
+    // Heartbeats keep the lease alive well past the TTL.
+    tokio::time::sleep(std::time::Duration::from_millis(900)).await;
+    assert!(selection.expire_leases().await.is_empty());
+    assert_eq!(
+        selection.list_workers(None, None)[0].lifecycle,
+        WorkerLifecycle::Schedulable
+    );
+
+    // Cleanup deregisters promptly instead of waiting for lease expiry.
+    engine.cleanup().await.expect("cleanup");
+    let record = &selection.list_workers(None, None)[0];
+    assert_eq!(record.lifecycle, WorkerLifecycle::Unschedulable);
+
+    // A registration that cannot reach a frontend is rejected up front.
+    let bad_argv = vec![
+        "dynamo-vllm-sidecar".to_string(),
+        "--grpc-endpoint".to_string(),
+        server.endpoint.clone(),
+        "--selection-catalog-url".to_string(),
+        catalog_url,
+    ];
+    let error = tokio::task::spawn_blocking(move || VllmSidecarEngine::from_args(Some(bad_argv)))
+        .await
+        .unwrap()
+        .err()
+        .expect("catalog registration requires an advertised endpoint");
+    assert!(
+        error.to_string().contains("advertise-grpc-endpoint"),
+        "{error}"
+    );
+
+    http.abort();
+    selection.shutdown().await;
+}
+
 /// A frontend with direct dispatch reaches the same vLLM gRPC service the
 /// sidecar does, through the same request/response conversion and error
 /// mapping, and an unreachable endpoint surfaces as a connect failure.

@@ -1,14 +1,17 @@
 // SPDX-FileCopyrightText: Copyright (c) 2025-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use async_trait::async_trait;
 use dynamo_backend_common::{
     DisaggregationMode, DynamoError, GenerateContext, KvEventSource, LLMEngine, LLMEngineOutput,
     LLMEngineOutputExt, RlAdminBaseUrl, WorkerConfig, usage,
 };
-use dynamo_sidecar_common::{GrpcEndpoint, GrpcTransportConfig, SidecarStartupError};
+use dynamo_sidecar_common::{
+    CatalogAgent, CatalogAgentConfig, CatalogRegistration, GrpcEndpoint, GrpcTransportConfig,
+    SidecarStartupError,
+};
 use futures::stream::BoxStream;
 use serde_json::{Map, Value, json};
 use tokio::sync::OnceCell;
@@ -30,6 +33,9 @@ pub struct VllmSidecarEngine {
     /// Frontend-routable gRPC endpoint published in the worker's runtime data
     /// for direct dispatch.
     advertise_endpoint: Option<GrpcEndpoint>,
+    /// Selection-catalog registration, when the worker registers over HTTP.
+    catalog: Option<(CatalogAgentConfig, String)>,
+    catalog_task: tokio::sync::Mutex<Option<tokio::task::JoinHandle<()>>>,
 }
 
 fn cancelled(state: &ResponseState) -> LLMEngineOutput {
@@ -55,7 +61,64 @@ impl VllmSidecarEngine {
             client: OnceCell::new(),
             cancel: CancellationToken::new(),
             advertise_endpoint,
+            catalog: None,
+            catalog_task: tokio::sync::Mutex::new(None),
         }
+    }
+
+    /// Register with a selection catalog on start and keep the lease alive.
+    pub(crate) fn with_catalog(
+        mut self,
+        config: CatalogAgentConfig,
+        routing_group: String,
+    ) -> Self {
+        self.catalog = Some((config, routing_group));
+        self
+    }
+
+    /// Build the catalog registration from discovered engine metadata. The
+    /// dispatch endpoint is the advertised gRPC address; KV-event ZMQ endpoints
+    /// are rewritten onto the advertised host so the selector can subscribe.
+    async fn catalog_registration(
+        &self,
+        worker_id: u64,
+        routing_group: &str,
+        ttl: std::time::Duration,
+    ) -> Result<CatalogRegistration, DynamoError> {
+        let advertised = self.advertise_endpoint.as_ref().ok_or_else(|| {
+            client::invalid_argument(
+                "--selection-catalog-url requires --advertise-grpc-endpoint so frontends can reach this worker",
+            )
+        })?;
+        let mut kv_events_endpoints = HashMap::new();
+        for source in self.kv_event_sources().await? {
+            if let KvEventSource::Zmq {
+                endpoint, dp_rank, ..
+            } = source
+            {
+                kv_events_endpoints.insert(dp_rank, rehost_zmq_endpoint(&endpoint, advertised));
+            }
+        }
+        let engine_config = self.model.engine_config();
+        let llm = engine_config.llm.as_ref();
+        Ok(CatalogRegistration {
+            worker_id,
+            model_name: self.model.served_name.clone(),
+            routing_group: routing_group.to_string(),
+            endpoint: advertised.to_string(),
+            block_size: llm.and_then(|llm| llm.kv_cache_block_size).unwrap_or(0),
+            data_parallel_start_rank: llm
+                .and_then(|llm| llm.data_parallel_start_rank)
+                .unwrap_or(0),
+            data_parallel_size: llm.and_then(|llm| llm.data_parallel_size).unwrap_or(1),
+            max_num_batched_tokens: llm.and_then(|llm| llm.max_num_batched_tokens),
+            total_kv_blocks: llm.and_then(|llm| llm.total_kv_blocks),
+            kv_events_endpoints,
+            replay_endpoint: None,
+            router_hint_worker_type: None,
+            router_hint_source_control_endpoints: HashMap::new(),
+            ttl_secs: ttl.as_secs_f64(),
+        })
     }
 
     /// Connect to a vLLM gRPC service for direct dispatch from a frontend:
@@ -156,7 +219,34 @@ impl VllmSidecarEngine {
             .as_deref()
             .map(|raw| GrpcEndpoint::parse(raw, "--advertise-grpc-endpoint"))
             .transpose()?;
-        let engine = Self::new(endpoint, model.clone(), mode, transport, advertise_endpoint);
+        let mut engine = Self::new(endpoint, model.clone(), mode, transport, advertise_endpoint);
+        if let Some(catalog_url) = args.selection_catalog_url {
+            if args.advertise_grpc_endpoint.is_none() {
+                return Err(client::invalid_argument(
+                    "--selection-catalog-url requires --advertise-grpc-endpoint",
+                ));
+            }
+            if !(args.selection_catalog_ttl_secs.is_finite()
+                && args.selection_catalog_ttl_secs > 0.0)
+            {
+                return Err(client::invalid_argument(
+                    "--selection-catalog-ttl-secs must be a positive number",
+                ));
+            }
+            let routing_group =
+                args.selection_catalog_routing_group
+                    .unwrap_or_else(|| match mode {
+                        DisaggregationMode::Aggregated => "default".to_string(),
+                        other => other.as_str().to_string(),
+                    });
+            engine = engine.with_catalog(
+                CatalogAgentConfig::new(
+                    catalog_url,
+                    std::time::Duration::from_secs_f64(args.selection_catalog_ttl_secs),
+                ),
+                routing_group,
+            );
+        }
         let config = WorkerConfig {
             namespace: args.sidecar.common.namespace,
             // Prefill/decode must register under fixed role components so the
@@ -199,7 +289,7 @@ impl VllmSidecarEngine {
 impl LLMEngine for VllmSidecarEngine {
     async fn start(
         &self,
-        _worker_id: u64,
+        worker_id: u64,
     ) -> Result<dynamo_backend_common::EngineConfig, DynamoError> {
         if self.client.initialized() {
             return Err(client::engine_shutdown("vLLM sidecar has already started"));
@@ -248,6 +338,14 @@ impl LLMEngine for VllmSidecarEngine {
                 dynamo_backend_common::NATIVE_GRPC_MODE_RUNTIME_KEY.to_string(),
                 json!(self.mode.as_str()),
             );
+        }
+        if let Some((catalog, routing_group)) = &self.catalog {
+            let registration = self
+                .catalog_registration(worker_id, routing_group, catalog.ttl)
+                .await?;
+            let agent = CatalogAgent::register(catalog, registration).await?;
+            let task = tokio::spawn(agent.run(self.cancel.child_token()));
+            *self.catalog_task.lock().await = Some(task);
         }
         Ok(engine_config)
     }
@@ -596,6 +694,15 @@ impl LLMEngine for VllmSidecarEngine {
 
     async fn cleanup(&self) -> Result<(), DynamoError> {
         self.cancel.cancel();
+        // Give the catalog agent a bounded window to deregister so the
+        // selector drains this worker immediately instead of at lease expiry.
+        if let Some(task) = self.catalog_task.lock().await.take()
+            && tokio::time::timeout(std::time::Duration::from_secs(3), task)
+                .await
+                .is_err()
+        {
+            tracing::warn!("catalog deregistration did not finish within 3s");
+        }
         Ok(())
     }
 
@@ -653,6 +760,18 @@ impl LLMEngine for VllmSidecarEngine {
             )));
         }
         Ok(sources)
+    }
+}
+
+/// Rewrite a ZMQ endpoint's host onto the advertised gRPC host so a selector
+/// outside the pod can subscribe. Non-TCP endpoints pass through unchanged.
+fn rehost_zmq_endpoint(endpoint: &str, advertised: &GrpcEndpoint) -> String {
+    let Some(rest) = endpoint.strip_prefix("tcp://") else {
+        return endpoint.to_string();
+    };
+    match rest.rsplit_once(':') {
+        Some((_, port)) => format!("tcp://{}:{port}", advertised.authority_host()),
+        None => endpoint.to_string(),
     }
 }
 

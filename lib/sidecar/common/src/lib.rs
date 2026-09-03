@@ -4,11 +4,13 @@
 //! Shared infrastructure for Rust sidecars.
 
 mod args;
+pub mod catalog;
 mod endpoint;
 mod error;
 mod transport;
 
 pub use args::{GrpcTransportArgs, GrpcTransportConfig, SidecarArgs};
+pub use catalog::{CatalogAgent, CatalogAgentConfig, CatalogClient, CatalogRegistration};
 pub use endpoint::{GrpcEndpoint, HttpEndpoint};
 pub use error::{
     SidecarStartupError, cannot_connect, connection_timeout, engine_shutdown, invalid_argument,

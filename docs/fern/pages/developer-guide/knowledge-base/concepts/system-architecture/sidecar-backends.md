@@ -103,6 +103,14 @@ opt-ins, one on each side:
   vLLM directly. Workers that do not advertise an endpoint keep using the
   request plane, so a fleet can migrate one worker at a time.
 
+The vLLM sidecar can also register the worker with a
+[standalone selection service](../../modular-components/router/standalone-selection.md)
+over HTTP (`--selection-catalog-url`, with a heartbeat-renewed lease and
+deregistration on shutdown), publishing the advertised gRPC address as the
+dispatch endpoint and vLLM's own KV-event ZMQ publishers as the event sources.
+Together with direct dispatch this is the runtime-free registration path: no
+etcd or NATS is needed between that worker and a selector.
+
 Selection, booking, cancellation, and error semantics are unchanged: the direct
 path uses the same request conversion, stream adapter, and gRPC-status error
 mapping as the sidecar, so a dispatch failure releases the router's booking and
