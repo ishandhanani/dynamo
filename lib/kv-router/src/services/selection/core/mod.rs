@@ -20,8 +20,9 @@ use crate::protocols::{
 use crate::scheduling::config::RouterConfigOverride;
 use crate::scheduling::selector::WorkerSelectionPolicy;
 use crate::scheduling::{
-    KvSchedulerError, LocalScheduler, OverlapAnalysis, OverlapSignals, PotentialLoad, ScheduleMode,
-    ScheduleRequest, SessionContext, TieredOverlapRefresher, effective_prefill_tokens,
+    KvSchedulerError, LocalScheduler, OverlapAnalysis, OverlapSignals, OverloadedWorkerProvider,
+    PotentialLoad, PrefillLoadEstimator, ScheduleMode, ScheduleRequest, SessionContext,
+    TieredOverlapRefresher, WorkerAvailabilityProvider, effective_prefill_tokens,
     prefill_load_hint_from_effective_tokens,
 };
 use crate::sequences::{
@@ -102,6 +103,39 @@ struct ReservationBooking {
     lora_name: Option<String>,
 }
 
+/// Host-supplied hooks applied to every partition scheduler the core creates.
+///
+/// A host that owns request transport (for example the frontend `KvRouter`)
+/// uses these to feed overload shedding and hard availability from its own
+/// client state, and to attach a prefill-duration estimator. The standalone
+/// HTTP service leaves them unset.
+#[derive(Clone, Default)]
+pub struct SelectionHostHooks {
+    pub prefill_load_estimator: Option<Arc<dyn PrefillLoadEstimator>>,
+    pub overloaded_worker_provider: Option<OverloadedWorkerProvider>,
+    pub available_worker_provider: Option<WorkerAvailabilityProvider>,
+}
+
+impl std::fmt::Debug for SelectionHostHooks {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("SelectionHostHooks")
+            .field(
+                "prefill_load_estimator",
+                &self.prefill_load_estimator.is_some(),
+            )
+            .field(
+                "overloaded_worker_provider",
+                &self.overloaded_worker_provider.is_some(),
+            )
+            .field(
+                "available_worker_provider",
+                &self.available_worker_provider.is_some(),
+            )
+            .finish()
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct SelectionServiceConfig {
     pub port: u16,
@@ -119,6 +153,7 @@ pub struct SelectionCore {
     indexer_registry: Arc<WorkerRegistry>,
     kv_router_config: crate::config::KvRouterConfig,
     worker_selection_policy_factory: Option<WorkerSelectionPolicyFactory>,
+    host_hooks: SelectionHostHooks,
     worker_type: WorkerType,
     cancel_token: CancellationToken,
     replica_config: Option<ReplicaSyncConfig>,
@@ -183,6 +218,7 @@ impl SelectionCore {
             cancel_token,
             None,
             None,
+            SelectionHostHooks::default(),
             WorkerType::Aggregated,
             true,
             cache_config,
@@ -197,6 +233,7 @@ impl SelectionCore {
         cancel_token: CancellationToken,
         replica_config: Option<ReplicaSyncConfig>,
         worker_selection_policy_factory: Option<WorkerSelectionPolicyFactory>,
+        host_hooks: SelectionHostHooks,
         worker_type: WorkerType,
         signal_indexer_ready: bool,
         cache_config: SelectionCacheConfig,
@@ -216,6 +253,7 @@ impl SelectionCore {
             indexer_registry,
             kv_router_config,
             worker_selection_policy_factory,
+            host_hooks,
             worker_type,
             cancel_token,
             replica_config,
@@ -495,11 +533,12 @@ impl SelectionCore {
                     profile,
                     block_size,
                     selector,
-                    None,
+                    self.host_hooks.prefill_load_estimator.clone(),
                     Some(overlap_refresh),
-                    None,
-                    // Standalone selection has no router Client snapshot.
-                    None,
+                    // Standalone selection has no router Client snapshot, so
+                    // these stay `None` unless an embedding host injects them.
+                    self.host_hooks.overloaded_worker_provider.clone(),
+                    self.host_hooks.available_worker_provider.clone(),
                     self.kv_router_config.router_queue_recheck_interval(),
                     self.kv_router_config.router_track_prefill_tokens,
                     self.cancel_token.child_token(),
@@ -1395,6 +1434,7 @@ mod tests {
                 CancellationToken::new(),
                 None,
                 None,
+                SelectionHostHooks::default(),
                 worker_type,
                 true,
                 SelectionCacheConfig::default(),
@@ -1410,6 +1450,63 @@ mod tests {
                 expected_label,
                 "{worker_type}"
             );
+        }
+    }
+
+    fn core_with_hooks(hooks: SelectionHostHooks) -> SelectionCore {
+        let config = test_config(false);
+        let tracking_hash = Arc::new(
+            TrackingHashContext::from_config(&config).expect("valid tracking hash configuration"),
+        );
+        SelectionCore::new_inner(
+            config,
+            1,
+            CancellationToken::new(),
+            None,
+            None,
+            hooks,
+            WorkerType::Aggregated,
+            true,
+            SelectionCacheConfig::default(),
+            tracking_hash,
+        )
+    }
+
+    #[tokio::test]
+    async fn injected_availability_provider_restricts_selection() {
+        let available: Arc<parking_lot::Mutex<Option<Arc<HashSet<WorkerId>>>>> =
+            Arc::new(parking_lot::Mutex::new(None));
+        let provider_state = Arc::clone(&available);
+        let core = core_with_hooks(SelectionHostHooks {
+            prefill_load_estimator: None,
+            overloaded_worker_provider: None,
+            available_worker_provider: Some(Arc::new(move || provider_state.lock().clone())),
+        });
+        core.upsert_worker(worker(1)).await.expect("worker upsert");
+        core.upsert_worker(worker(2)).await.expect("worker upsert");
+
+        for only in [1, 2] {
+            *available.lock() = Some(Arc::new(HashSet::from([only])));
+            for _ in 0..4 {
+                let response = core.select(select_request()).await.expect("select");
+                assert_eq!(response.worker_id, only);
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn injected_overload_provider_excludes_worker() {
+        let core = core_with_hooks(SelectionHostHooks {
+            prefill_load_estimator: None,
+            overloaded_worker_provider: Some(Arc::new(|| Some(HashSet::from([1])))),
+            available_worker_provider: None,
+        });
+        core.upsert_worker(worker(1)).await.expect("worker upsert");
+        core.upsert_worker(worker(2)).await.expect("worker upsert");
+
+        for _ in 0..4 {
+            let response = core.select(select_request()).await.expect("select");
+            assert_eq!(response.worker_id, 2);
         }
     }
 

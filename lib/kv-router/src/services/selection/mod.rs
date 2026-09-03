@@ -21,7 +21,7 @@ mod tests;
 
 pub use crate::WorkerSelectionPolicyFactory;
 pub use crate::services::common::replica_sync::ReplicaPeerError;
-pub use core::{SelectionCore, SelectionServiceConfig};
+pub use core::{SelectionCore, SelectionHostHooks, SelectionServiceConfig};
 pub use error::SelectionError;
 pub use input::PromptRequest;
 pub use pending::SelectionCacheConfig;
