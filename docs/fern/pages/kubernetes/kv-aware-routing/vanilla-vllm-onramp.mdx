@@ -488,7 +488,7 @@ For a single EPP replica, set `spec.replicas: 1` and remove `DYN_EPP_PEER_SERVIC
 
 | Variable | Required | Meaning |
 |---|---|---|
-| `DYN_EPP_MODE=standalone` | Yes | Runs the embedded selection service without the Dynamo runtime. |
+| `DYN_EPP_MODE=standalone` | Yes | Runs the embedded selection service without the Dynamo runtime. `DYN_EPP_MODE=dynamo` (runtime-backed EPP) is deprecated and logs a warning at startup; it remains available for this release. |
 | `DYN_EPP_INFERENCE_POOL_NAME` | Yes | Name of the `InferencePool` that drives worker discovery. |
 | `POD_NAMESPACE` | Yes | Namespace containing the EPP, pool, and workers; inject with the downward API. |
 | `DYN_MODEL_NAME` | Yes | Served model ID. Requests must use the same `model` value. |

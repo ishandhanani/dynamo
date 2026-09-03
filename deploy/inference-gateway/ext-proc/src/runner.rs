@@ -194,6 +194,14 @@ impl BackgroundTasks {
 
 async fn run_inner(mode: EppMode, policy_registry: WorkerSelectionPolicyRegistry) -> Result<()> {
     let standalone = matches!(mode, EppMode::Standalone);
+    if !standalone {
+        tracing::warn!(
+            "DYN_EPP_MODE=dynamo (runtime-backed EPP) is deprecated: the standalone EPP now \
+             covers aggregated and disaggregated routing without a Dynamo runtime \
+             (DYN_EPP_MODE=standalone, DYN_EPP_PREFILL_INFERENCE_POOL_NAME for disaggregation). \
+             Runtime mode remains available for this release."
+        );
+    }
 
     let config = Config::from_env();
 
