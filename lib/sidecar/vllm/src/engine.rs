@@ -90,13 +90,23 @@ impl VllmSidecarEngine {
                 "--selection-catalog-url requires --advertise-grpc-endpoint so frontends can reach this worker",
             )
         })?;
+        // Read the raw sources: the catalog wants each rank's PUB endpoint and
+        // the replay (REQ) endpoint vLLM offers for gap recovery, both
+        // rehosted onto the advertised address so a selector outside the pod
+        // can reach them.
+        let client = self.started_client()?;
         let mut kv_events_endpoints = HashMap::new();
-        for source in self.kv_event_sources().await? {
-            if let KvEventSource::Zmq {
-                endpoint, dp_rank, ..
-            } = source
-            {
-                kv_events_endpoints.insert(dp_rank, rehost_zmq_endpoint(&endpoint, advertised));
+        let mut replay_endpoint = None;
+        for source in client.kv_event_sources().await? {
+            if source.transport != "zmq" {
+                continue;
+            }
+            let Some(dp_rank) = source.data_parallel_rank else {
+                continue;
+            };
+            kv_events_endpoints.insert(dp_rank, rehost_zmq_endpoint(&source.endpoint, advertised));
+            if dp_rank == 0 && !source.replay_endpoint.is_empty() {
+                replay_endpoint = Some(rehost_zmq_endpoint(&source.replay_endpoint, advertised));
             }
         }
         let engine_config = self.model.engine_config();
@@ -114,7 +124,7 @@ impl VllmSidecarEngine {
             max_num_batched_tokens: llm.and_then(|llm| llm.max_num_batched_tokens),
             total_kv_blocks: llm.and_then(|llm| llm.total_kv_blocks),
             kv_events_endpoints,
-            replay_endpoint: None,
+            replay_endpoint,
             router_hint_worker_type: None,
             router_hint_source_control_endpoints: HashMap::new(),
             ttl_secs: ttl.as_secs_f64(),
