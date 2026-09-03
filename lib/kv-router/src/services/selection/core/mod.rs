@@ -12,10 +12,10 @@ use tokio::sync::{mpsc, watch};
 use tokio_util::sync::CancellationToken;
 
 use crate::identity::RoutingPartitionId;
-use crate::indexer::TieredMatchDetails;
+use crate::indexer::{SharedKvCache, TieredMatchDetails};
 use crate::protocols::{
-    ActiveSequenceEvent, LocalBlockHash, PrefillLoadHint, RoutingConstraints, WorkerAffinityTarget,
-    WorkerId, WorkerWithDpRank,
+    ActiveSequenceEvent, LocalBlockHash, PrefillLoadHint, RoutingConstraints, SharedCacheHits,
+    WorkerAffinityTarget, WorkerId, WorkerWithDpRank,
 };
 use crate::scheduling::config::RouterConfigOverride;
 use crate::scheduling::selector::WorkerSelectionPolicy;
@@ -72,6 +72,7 @@ struct PreparedSelectionInputs {
     sequence_hashes: Vec<SequenceHash>,
     isl_tokens: usize,
     overlap: OverlapSignals,
+    shared_cache_hits: Option<SharedCacheHits>,
 }
 
 struct SelectionOperation {
@@ -83,7 +84,7 @@ struct SelectionOperation {
     priority_jump: f64,
     strict_priority: u32,
     policy_class: Option<String>,
-    session_id: Option<String>,
+    session_context: Option<SessionContext>,
     affinity_target: Option<WorkerAffinityTarget>,
     pinned_worker: Option<WorkerWithDpRank>,
     allowed_worker_ids: Option<HashSet<WorkerId>>,
@@ -107,13 +108,17 @@ struct ReservationBooking {
 ///
 /// A host that owns request transport (for example the frontend `KvRouter`)
 /// uses these to feed overload shedding and hard availability from its own
-/// client state, and to attach a prefill-duration estimator. The standalone
-/// HTTP service leaves them unset.
+/// client state, to attach a prefill-duration estimator, and to consult a
+/// shared (cross-worker) KV cache during selection. The standalone HTTP
+/// service leaves them unset.
 #[derive(Clone, Default)]
 pub struct SelectionHostHooks {
     pub prefill_load_estimator: Option<Arc<dyn PrefillLoadEstimator>>,
     pub overloaded_worker_provider: Option<OverloadedWorkerProvider>,
     pub available_worker_provider: Option<WorkerAvailabilityProvider>,
+    /// Queried alongside the indexer for prompts that carry `token_ids`; a
+    /// failed lookup is logged and selection proceeds without shared hits.
+    pub shared_cache: Option<Arc<dyn SharedKvCache>>,
 }
 
 impl std::fmt::Debug for SelectionHostHooks {
@@ -124,6 +129,7 @@ impl std::fmt::Debug for SelectionHostHooks {
                 "prefill_load_estimator",
                 &self.prefill_load_estimator.is_some(),
             )
+            .field("shared_cache", &self.shared_cache.is_some())
             .field(
                 "overloaded_worker_provider",
                 &self.overloaded_worker_provider.is_some(),
@@ -675,9 +681,10 @@ impl SelectionCore {
 
     pub async fn select_with_policy_class(
         &self,
-        req: SelectRequest,
+        mut req: SelectRequest,
         policy_class: Option<String>,
     ) -> Result<SelectResponse, SelectionError> {
+        let session_context = req.take_session_context();
         self.schedule_selection(
             SelectionOperation {
                 key: RoutingPartitionId::new(req.model_name, req.routing_group),
@@ -688,7 +695,7 @@ impl SelectionCore {
                 priority_jump: req.priority_jump.unwrap_or_default(),
                 strict_priority: req.strict_priority.unwrap_or(0),
                 policy_class,
-                session_id: req.session_id,
+                session_context,
                 affinity_target: req.affinity_target,
                 pinned_worker: req.pinned_worker,
                 allowed_worker_ids: req.allowed_worker_ids,
@@ -708,9 +715,10 @@ impl SelectionCore {
 
     pub async fn select_and_reserve_with_policy_class(
         &self,
-        req: SelectAndReserveRequest,
+        mut req: SelectAndReserveRequest,
         policy_class: Option<String>,
     ) -> Result<SelectResponse, SelectionError> {
+        let session_context = req.take_session_context();
         let selection_id = req
             .selection_id
             .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
@@ -724,7 +732,7 @@ impl SelectionCore {
                 priority_jump: req.priority_jump.unwrap_or_default(),
                 strict_priority: req.strict_priority.unwrap_or(0),
                 policy_class,
-                session_id: req.session_id,
+                session_context,
                 affinity_target: req.affinity_target,
                 pinned_worker: req.pinned_worker,
                 allowed_worker_ids: req.allowed_worker_ids,
@@ -749,7 +757,7 @@ impl SelectionCore {
             priority_jump,
             strict_priority,
             policy_class,
-            session_id,
+            session_context,
             affinity_target,
             pinned_worker,
             allowed_worker_ids,
@@ -763,12 +771,14 @@ impl SelectionCore {
             sequence_hashes,
             isl_tokens,
             overlap,
+            shared_cache_hits,
         } = self
             .prepare_selection_inputs(
                 &entry,
                 &prompt,
                 self.kv_router_config
                     .assume_kv_reuse(router_config_override.as_ref()),
+                true,
             )
             .await?;
         let mode = if book {
@@ -815,14 +825,13 @@ impl SelectionCore {
             priority_jump,
             strict_priority,
             policy_class,
-            session_context: session_id
-                .map(|session_id| SessionContext::new(session_id, None, None, None, None)),
+            session_context,
             expected_output_tokens,
             affinity_target,
             pinned_worker,
             allowed_worker_ids,
             routing_constraints,
-            shared_cache_hits: None,
+            shared_cache_hits,
         };
         let response = tokio::select! {
             biased;
@@ -1178,6 +1187,7 @@ impl SelectionCore {
                 &req.prompt,
                 self.kv_router_config
                     .assume_kv_reuse(req.router_config_override.as_ref()),
+                false,
             )
             .await?;
         let track_prefill_tokens = req
@@ -1222,11 +1232,16 @@ impl SelectionCore {
         )
     }
 
+    /// Normalize the prompt and gather cache signals. The indexer lookup and
+    /// the optional shared-cache lookup run concurrently; the shared cache is
+    /// consulted only when `query_shared_cache` is set, a shared cache is
+    /// attached, and the prompt carries raw `token_ids`.
     async fn prepare_selection_inputs(
         &self,
         entry: &SelectionEntry,
         prompt: &PromptRequest,
         assume_kv_reuse: bool,
+        query_shared_cache: bool,
     ) -> Result<PreparedSelectionInputs, SelectionError> {
         let normalized = prompt.normalize_for_selection(
             entry.is_eagle,
@@ -1236,15 +1251,36 @@ impl SelectionCore {
                 assume_kv_reuse,
             },
         )?;
-        let tiered = if normalized.block_hashes.is_empty() {
-            TieredMatchDetails::default()
-        } else {
-            entry
-                .indexer
-                .find_tiered_matches(normalized.block_hashes.clone())
-                .await
-                .map_err(|error| SelectionError::Internal(error.to_string()))?
+        let indexer_lookup = async {
+            if normalized.block_hashes.is_empty() {
+                Ok(TieredMatchDetails::default())
+            } else {
+                entry
+                    .indexer
+                    .find_tiered_matches(normalized.block_hashes.clone())
+                    .await
+                    .map_err(|error| SelectionError::Internal(error.to_string()))
+            }
         };
+        let shared_cache = query_shared_cache
+            .then_some(self.host_hooks.shared_cache.as_deref())
+            .flatten()
+            .zip(prompt.token_ids.as_deref());
+        let shared_cache_lookup = async {
+            let (shared_cache, tokens) = shared_cache?;
+            match shared_cache
+                .check_blocks(tokens, entry.block_size, prompt.cache_namespace.as_deref())
+                .await
+            {
+                Ok(hits) => Some(hits),
+                Err(error) => {
+                    tracing::warn!(%error, "Shared cache query failed, ignoring");
+                    None
+                }
+            }
+        };
+        let (tiered, shared_cache_hits) = tokio::join!(indexer_lookup, shared_cache_lookup);
+        let tiered = tiered?;
         let overlap =
             OverlapAnalysis::new(&self.kv_router_config, entry.block_size, &tiered).signals();
         drop(tiered);
@@ -1253,6 +1289,7 @@ impl SelectionCore {
             sequence_hashes: normalized.sequence_hashes,
             isl_tokens: normalized.isl_tokens,
             overlap,
+            shared_cache_hits,
         })
     }
 
@@ -1354,6 +1391,7 @@ mod tests {
             priority_jump: None,
             strict_priority: None,
             session_id: None,
+            session_context: None,
             affinity_target: None,
             pinned_worker: None,
             allowed_worker_ids: None,
@@ -1372,6 +1410,7 @@ mod tests {
             priority_jump: None,
             strict_priority: None,
             session_id: None,
+            session_context: None,
             affinity_target: None,
             pinned_worker: None,
             allowed_worker_ids: None,
@@ -1454,6 +1493,13 @@ mod tests {
     }
 
     fn core_with_hooks(hooks: SelectionHostHooks) -> SelectionCore {
+        core_with_hooks_and_policy(hooks, None)
+    }
+
+    fn core_with_hooks_and_policy(
+        hooks: SelectionHostHooks,
+        policy_factory: Option<WorkerSelectionPolicyFactory>,
+    ) -> SelectionCore {
         let config = test_config(false);
         let tracking_hash = Arc::new(
             TrackingHashContext::from_config(&config).expect("valid tracking hash configuration"),
@@ -1463,13 +1509,201 @@ mod tests {
             1,
             CancellationToken::new(),
             None,
-            None,
+            policy_factory,
             hooks,
             WorkerType::Aggregated,
             true,
             SelectionCacheConfig::default(),
             tracking_hash,
         )
+    }
+
+    /// Picker that records what worker selection saw and always takes row 0.
+    struct CapturingPicker {
+        observed: Arc<parking_lot::Mutex<Vec<SelectionObservation>>>,
+    }
+
+    #[derive(Debug, Clone)]
+    struct SelectionObservation {
+        session_context: Option<SessionContext>,
+        shared_beyond_device_blocks: Vec<u32>,
+    }
+
+    impl crate::scheduling::selector::WorkerPicker for CapturingPicker {
+        fn required_worker_inputs(&self) -> crate::scheduling::selector::WorkerInputs {
+            crate::scheduling::selector::WorkerInputs::CACHE
+        }
+
+        fn pick(
+            &mut self,
+            context: &crate::scheduling::selector::WorkerSelectionContext<'_>,
+            input: crate::scheduling::selector::WorkerInputView<'_>,
+        ) -> Result<usize, crate::scheduling::WorkerSelectionPolicyError> {
+            self.observed.lock().push(SelectionObservation {
+                session_context: context.session_context().cloned(),
+                shared_beyond_device_blocks: input
+                    .cache()
+                    .expect("CACHE inputs requested")
+                    .iter()
+                    .map(|cache| cache.shared_beyond_device_blocks())
+                    .collect(),
+            });
+            Ok(0)
+        }
+    }
+
+    fn capturing_policy_factory() -> (
+        WorkerSelectionPolicyFactory,
+        Arc<parking_lot::Mutex<Vec<SelectionObservation>>>,
+    ) {
+        let observed = Arc::new(parking_lot::Mutex::new(Vec::new()));
+        let factory_observed = Arc::clone(&observed);
+        let factory: WorkerSelectionPolicyFactory =
+            Arc::new(move |config, worker_type, _partition| {
+                WorkerSelectionPolicy::new(
+                    config.clone(),
+                    worker_type.as_str(),
+                    Vec::new(),
+                    Box::new(CapturingPicker {
+                        observed: Arc::clone(&factory_observed),
+                    }),
+                )
+            });
+        (factory, observed)
+    }
+
+    type SharedCacheCalls = Arc<parking_lot::Mutex<Vec<(Vec<u32>, u32, Option<String>)>>>;
+
+    /// Shared cache that reports every block as a hit and records each query.
+    struct RecordingSharedCache {
+        calls: SharedCacheCalls,
+    }
+
+    #[async_trait::async_trait]
+    impl SharedKvCache for RecordingSharedCache {
+        async fn check_blocks(
+            &self,
+            tokens: &[u32],
+            block_size: u32,
+            cache_namespace: Option<&str>,
+        ) -> Result<SharedCacheHits, crate::indexer::KvRouterError> {
+            self.calls.lock().push((
+                tokens.to_vec(),
+                block_size,
+                cache_namespace.map(str::to_string),
+            ));
+            let blocks = (tokens.len() / block_size as usize) as u32;
+            Ok(SharedCacheHits::from_hits(&vec![true; blocks as usize]))
+        }
+    }
+
+    #[tokio::test]
+    async fn shared_cache_hits_reach_worker_selection() {
+        let calls: SharedCacheCalls = Arc::new(parking_lot::Mutex::new(Vec::new()));
+        let (factory, observed) = capturing_policy_factory();
+        let core = core_with_hooks_and_policy(
+            SelectionHostHooks {
+                prefill_load_estimator: None,
+                overloaded_worker_provider: None,
+                available_worker_provider: None,
+                shared_cache: Some(Arc::new(RecordingSharedCache {
+                    calls: Arc::clone(&calls),
+                })),
+            },
+            Some(factory),
+        );
+        core.upsert_worker(worker(1)).await.expect("worker upsert");
+
+        let mut request = select_request();
+        request.prompt.cache_namespace = Some("tenant-a".to_string());
+        core.select(request).await.expect("select");
+
+        assert_eq!(
+            calls.lock().as_slice(),
+            &[(vec![1, 2, 3, 4], 4, Some("tenant-a".to_string()))]
+        );
+        let observations = observed.lock().clone();
+        assert_eq!(observations.len(), 1);
+        // One block in the prompt, no device overlap, so the whole prompt is a
+        // shared-cache hit beyond the device prefix.
+        assert_eq!(observations[0].shared_beyond_device_blocks, vec![1]);
+
+        // Load projection does not consult the shared cache.
+        core.potential_loads(PotentialLoadsRequest {
+            model_name: "model".to_string(),
+            routing_group: "default".to_string(),
+            prompt: prompt(),
+            router_config_override: None,
+        })
+        .await
+        .expect("potential loads");
+        assert_eq!(calls.lock().len(), 1);
+
+        // Prompts without raw tokens cannot be checked against the shared cache.
+        let mut request = select_request();
+        request.prompt = PromptRequest {
+            token_ids: None,
+            block_hashes: Some(vec![11]),
+            sequence_hashes: Some(vec![101]),
+            isl_tokens: Some(4),
+            ..PromptRequest::default()
+        };
+        core.select(request).await.expect("select");
+        assert_eq!(calls.lock().len(), 1);
+        assert_eq!(observed.lock()[1].shared_beyond_device_blocks, vec![0]);
+    }
+
+    #[tokio::test]
+    async fn session_context_reaches_worker_selection() {
+        use super::super::types::{
+            SelectionInputTrigger, SelectionKvHints, SelectionSessionContext,
+        };
+        use crate::scheduling::WorkerSelectionInputTrigger;
+
+        let (factory, observed) = capturing_policy_factory();
+        let core = core_with_hooks_and_policy(SelectionHostHooks::default(), Some(factory));
+        core.upsert_worker(worker(1)).await.expect("worker upsert");
+
+        let mut request = select_request();
+        request.session_id = Some("ignored-legacy".to_string());
+        request.session_context = Some(SelectionSessionContext {
+            session_id: "child-session".to_string(),
+            parent_session_id: Some("root-session".to_string()),
+            session_final: Some(true),
+            kv_hints: Some(SelectionKvHints {
+                evict_session: true,
+            }),
+            input_trigger: Some(SelectionInputTrigger::ToolResult),
+        });
+        core.select(request).await.expect("select");
+
+        let mut request = reserve_request("legacy-session-reservation");
+        request.session_id = Some("legacy-only".to_string());
+        core.select_and_reserve(request)
+            .await
+            .expect("select and reserve");
+
+        let observations = observed.lock();
+        let context = observations[0]
+            .session_context
+            .as_ref()
+            .expect("structured session context");
+        assert_eq!(context.session_id(), "child-session");
+        assert_eq!(context.parent_session_id(), Some("root-session"));
+        assert_eq!(context.session_final(), Some(true));
+        assert!(context.kv_hints().expect("kv hints").evict_session());
+        assert_eq!(
+            context.input_trigger(),
+            Some(WorkerSelectionInputTrigger::ToolResult)
+        );
+
+        let legacy = observations[1]
+            .session_context
+            .as_ref()
+            .expect("legacy session context");
+        assert_eq!(legacy.session_id(), "legacy-only");
+        assert_eq!(legacy.parent_session_id(), None);
+        assert_eq!(legacy.input_trigger(), None);
     }
 
     #[tokio::test]
@@ -1481,6 +1715,7 @@ mod tests {
             prefill_load_estimator: None,
             overloaded_worker_provider: None,
             available_worker_provider: Some(Arc::new(move || provider_state.lock().clone())),
+            shared_cache: None,
         });
         core.upsert_worker(worker(1)).await.expect("worker upsert");
         core.upsert_worker(worker(2)).await.expect("worker upsert");
@@ -1500,6 +1735,7 @@ mod tests {
             prefill_load_estimator: None,
             overloaded_worker_provider: Some(Arc::new(|| Some(HashSet::from([1])))),
             available_worker_provider: None,
+            shared_cache: None,
         });
         core.upsert_worker(worker(1)).await.expect("worker upsert");
         core.upsert_worker(worker(2)).await.expect("worker upsert");
@@ -1833,6 +2069,7 @@ mod tests {
                     priority_jump: None,
                     strict_priority: None,
                     session_id: None,
+                    session_context: None,
                     affinity_target: None,
                     pinned_worker: None,
                     allowed_worker_ids: None,

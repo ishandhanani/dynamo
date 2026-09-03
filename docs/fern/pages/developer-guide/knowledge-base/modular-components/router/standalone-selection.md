@@ -234,6 +234,30 @@ The selection service does not persist, replicate, or expire `session_id`
 bindings. It is not part of the selection response and is not retained by the
 pending-selection cache, so a `POST /reservations` replay does not carry it.
 
+### `session_context`
+
+Both endpoints also accept an optional `session_context` object that carries
+the full session metadata the frontend hands to worker selection. When it is
+present, the flat `session_id` field is ignored.
+
+```json
+{
+  "token_ids": [1, 2, 3, 4],
+  "session_context": {
+    "session_id": "child-session",
+    "parent_session_id": "root-session",
+    "session_final": false,
+    "kv_hints": { "evict_session": false },
+    "input_trigger": "tool_result"
+  }
+}
+```
+
+Only `session_id` is required inside the object. `input_trigger` is one of
+`user_message`, `tool_result`, or `other`. A custom policy reads the values
+through `WorkerSelectionContext::session_context()`; the built-in selector
+ignores them, exactly as it ignores `session_id`.
+
 ## Ray Select-Then-Reserve Flow
 
 Ray can keep model invocation separate from selector admission:

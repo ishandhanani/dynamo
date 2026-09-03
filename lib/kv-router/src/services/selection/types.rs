@@ -10,9 +10,11 @@ use crate::protocols::{
     DpRank, KvTransferEnforcement, RoutingConstraints, WorkerAffinityTarget, WorkerConfigLike,
     WorkerId, WorkerWithDpRank,
 };
-use crate::scheduling::PotentialLoad;
 use crate::scheduling::config::RouterConfigOverride;
 pub use crate::scheduling::{OverlapScoresResponse, SharedCacheOverlapScore, WorkerOverlapScore};
+use crate::scheduling::{
+    PotentialLoad, SessionContext, WorkerSelectionInputTrigger, WorkerSelectionKvHints,
+};
 use crate::services::overlap::MooncakeOverlapSummary;
 
 use super::input::PromptRequest;
@@ -407,8 +409,11 @@ pub struct SelectRequest {
     pub priority_jump: Option<f64>,
     #[serde(default)]
     pub strict_priority: Option<u32>,
+    /// Legacy session identity. Ignored when `session_context` is present.
     #[serde(default)]
     pub session_id: Option<String>,
+    #[serde(default)]
+    pub session_context: Option<SelectionSessionContext>,
     #[serde(default)]
     pub affinity_target: Option<WorkerAffinityTarget>,
     #[serde(default)]
@@ -417,6 +422,12 @@ pub struct SelectRequest {
     pub allowed_worker_ids: Option<HashSet<WorkerId>>,
     #[serde(default)]
     pub routing_constraints: RoutingConstraints,
+}
+
+impl SelectRequest {
+    pub(super) fn take_session_context(&mut self) -> Option<SessionContext> {
+        resolve_session_context(self.session_context.take(), self.session_id.take())
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -437,8 +448,11 @@ pub struct SelectAndReserveRequest {
     pub priority_jump: Option<f64>,
     #[serde(default)]
     pub strict_priority: Option<u32>,
+    /// Legacy session identity. Ignored when `session_context` is present.
     #[serde(default)]
     pub session_id: Option<String>,
+    #[serde(default)]
+    pub session_context: Option<SelectionSessionContext>,
     #[serde(default)]
     pub affinity_target: Option<WorkerAffinityTarget>,
     #[serde(default)]
@@ -447,6 +461,79 @@ pub struct SelectAndReserveRequest {
     pub allowed_worker_ids: Option<HashSet<WorkerId>>,
     #[serde(default)]
     pub routing_constraints: RoutingConstraints,
+}
+
+impl SelectAndReserveRequest {
+    pub(super) fn take_session_context(&mut self) -> Option<SessionContext> {
+        resolve_session_context(self.session_context.take(), self.session_id.take())
+    }
+}
+
+/// Session metadata handed to worker selection, mirroring the frontend's
+/// agent-context extension field for field.
+///
+/// `session_context` supersedes the flat `session_id`: when both are present
+/// the structured form wins.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct SelectionSessionContext {
+    pub session_id: String,
+    #[serde(default)]
+    pub parent_session_id: Option<String>,
+    #[serde(default)]
+    pub session_final: Option<bool>,
+    #[serde(default)]
+    pub kv_hints: Option<SelectionKvHints>,
+    #[serde(default)]
+    pub input_trigger: Option<SelectionInputTrigger>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+pub struct SelectionKvHints {
+    #[serde(default)]
+    pub evict_session: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SelectionInputTrigger {
+    UserMessage,
+    ToolResult,
+    Other,
+}
+
+impl From<SelectionSessionContext> for SessionContext {
+    fn from(context: SelectionSessionContext) -> Self {
+        // Exhaustive so a new wire field must be mapped here.
+        let SelectionSessionContext {
+            session_id,
+            parent_session_id,
+            session_final,
+            kv_hints,
+            input_trigger,
+        } = context;
+        SessionContext::new(
+            session_id,
+            parent_session_id,
+            session_final,
+            kv_hints.map(|SelectionKvHints { evict_session }| {
+                WorkerSelectionKvHints::new(evict_session)
+            }),
+            input_trigger.map(|trigger| match trigger {
+                SelectionInputTrigger::UserMessage => WorkerSelectionInputTrigger::UserMessage,
+                SelectionInputTrigger::ToolResult => WorkerSelectionInputTrigger::ToolResult,
+                SelectionInputTrigger::Other => WorkerSelectionInputTrigger::Other,
+            }),
+        )
+    }
+}
+
+fn resolve_session_context(
+    session_context: Option<SelectionSessionContext>,
+    session_id: Option<String>,
+) -> Option<SessionContext> {
+    session_context.map(SessionContext::from).or_else(|| {
+        session_id.map(|session_id| SessionContext::new(session_id, None, None, None, None))
+    })
 }
 
 /// Booking request: replay the selection cached under `selection_id`, or book
@@ -553,4 +640,55 @@ pub struct ModelLoadResponse {
     pub loads: Vec<PotentialLoad>,
     pub pending_count: usize,
     pub pending_isl_tokens: usize,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn select_request_deserializes_structured_session_context() {
+        let mut request: SelectRequest = serde_json::from_value(serde_json::json!({
+            "token_ids": [1, 2, 3, 4],
+            "session_id": "legacy",
+            "session_context": {
+                "session_id": "child",
+                "parent_session_id": "root",
+                "session_final": false,
+                "kv_hints": { "evict_session": true },
+                "input_trigger": "user_message"
+            }
+        }))
+        .expect("valid select request");
+
+        let context = request
+            .take_session_context()
+            .expect("structured context wins over legacy session_id");
+        assert_eq!(context.session_id(), "child");
+        assert_eq!(context.parent_session_id(), Some("root"));
+        assert_eq!(context.session_final(), Some(false));
+        assert!(context.kv_hints().expect("kv hints").evict_session());
+        assert_eq!(
+            context.input_trigger(),
+            Some(WorkerSelectionInputTrigger::UserMessage)
+        );
+    }
+
+    #[test]
+    fn select_request_falls_back_to_legacy_session_id() {
+        let mut request: SelectRequest = serde_json::from_value(serde_json::json!({
+            "token_ids": [1, 2, 3, 4],
+            "session_id": "legacy"
+        }))
+        .expect("valid select request");
+        let context = request.take_session_context().expect("legacy context");
+        assert_eq!(context.session_id(), "legacy");
+        assert_eq!(context.parent_session_id(), None);
+        assert_eq!(context.kv_hints(), None);
+
+        let mut request: SelectAndReserveRequest =
+            serde_json::from_value(serde_json::json!({ "token_ids": [1, 2, 3, 4] }))
+                .expect("valid reserve request");
+        assert!(request.take_session_context().is_none());
+    }
 }
