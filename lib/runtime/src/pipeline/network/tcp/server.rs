@@ -187,8 +187,10 @@ impl TcpStreamServer {
     ) -> Result<Arc<Self>, PipelineError> {
         let local_ip = match options.interface {
             Some(interface) => {
-                let interfaces: HashMap<String, std::net::IpAddr> =
-                    list_afinet_netifas()?.into_iter().collect();
+                let interfaces: HashMap<String, std::net::IpAddr> = list_afinet_netifas()
+                    .map_err(|error| PipelineError::Generic(error.to_string()))?
+                    .into_iter()
+                    .collect();
 
                 interfaces
                     .get(&interface)

@@ -10,7 +10,7 @@ use std::sync::Arc;
 /// # Examples
 ///
 /// ```
-/// use dynamo_runtime::pipeline::registry::Registry;
+/// use dynamo_pipeline::pipeline::registry::Registry;
 ///
 /// let mut registry = Registry::new();
 ///

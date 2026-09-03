@@ -35,6 +35,7 @@ nvtx = ["dep:cudarc"]
 
 [dependencies]
 # repo
+dynamo-pipeline = { workspace = true }
 dynamo-truthy = { workspace = true }
 
 # Use workspace dependencies where available

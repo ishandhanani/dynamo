@@ -36,7 +36,7 @@ use std::{
     sync::{Arc, Mutex, OnceLock, Weak},
 };
 
-use super::{AsyncEngine, AsyncEngineContextProvider};
+use super::AsyncEngine;
 use async_trait::async_trait;
 use tokio::sync::oneshot;
 

@@ -254,6 +254,7 @@ areas:
   - lib/llm/src/perf/
   - lib/llm/src/utils/
   - lib/llm/tests/
+  - lib/pipeline/
   - lib/runtime/
   - lib/runtime/benches/
   - lib/runtime/docs/
