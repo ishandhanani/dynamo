@@ -36,7 +36,7 @@ pub use inference_pool::PoolState;
 pub use picker::{Endpoint, EndpointPicker, PickResult, RequestInfo, ResponseUsage};
 pub use pod_discovery::{PodDiscovery, RawWorker};
 pub use runner::run;
-pub use selector::{OverlapSummary, SelectRequest, SelectResponse, Selector, WorkerRegistration};
+pub use selector::{OverlapSummary, SelectRequest, SelectResponse, Selector};
 pub use server::ExtProcServer;
 pub use topology_adapter::{RegistrationDefaults, TopologyAdapter};
 pub use vllm_render_client::{VllmRenderClient, VllmRenderError};
