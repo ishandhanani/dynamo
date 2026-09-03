@@ -1783,8 +1783,6 @@ class KvRouterConfig:
         *,
         router_replica_sync: bool = False,
         router_embedded_selection: bool = True,
-        router_disagg_decode_first: bool = False,
-        router_disagg_bypass_on_prefill_failure: bool = False,
         router_track_active_blocks: bool = True,
         router_track_output_blocks: bool = False,
         router_assume_kv_reuse: bool = True,
@@ -1832,10 +1830,6 @@ class KvRouterConfig:
             router_replica_sync: Enable replica synchronization (default: False)
             router_embedded_selection: Deprecated and ignored; scheduling always runs on
                 an embedded selection-service partition. False only logs a warning.
-            router_disagg_decode_first: Book the decode worker before prefill and constrain
-                prefill to its KV-transfer domain (default: False). Experimental.
-            router_disagg_bypass_on_prefill_failure: With decode-first, run prefill on the
-                booked decode worker if the prefill booking fails (default: False).
             router_track_active_blocks: Track active blocks for load balancing (default: True)
             router_track_output_blocks: Track output blocks during generation (default: False).
                 When enabled, the router adds placeholder blocks as tokens are generated

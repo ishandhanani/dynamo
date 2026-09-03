@@ -287,12 +287,6 @@ fn kv_router_config_from_lookup(
     if let Some(value) = parse_bool(&get_env, "DYN_ROUTER_EMBEDDED_SELECTION") {
         config.router_embedded_selection = value;
     }
-    if let Some(value) = parse_bool(&get_env, "DYN_ROUTER_DISAGG_DECODE_FIRST") {
-        config.router_disagg_decode_first = value;
-    }
-    if let Some(value) = parse_bool(&get_env, "DYN_ROUTER_DISAGG_BYPASS_ON_PREFILL_FAILURE") {
-        config.router_disagg_bypass_on_prefill_failure = value;
-    }
     if let Some(value) = get_env("DYN_ROUTER_TRACKING_HASH") {
         config.router_tracking_hash = value.parse()?;
     }
@@ -685,10 +679,6 @@ struct KvRouterConfigSerde {
     router_track_prefill_tokens: bool,
     #[serde(default = "default_true")]
     router_embedded_selection: bool,
-    #[serde(default)]
-    router_disagg_decode_first: bool,
-    #[serde(default)]
-    router_disagg_bypass_on_prefill_failure: bool,
     router_tracking_hash: TrackingHashAlgorithm,
     router_tracking_key_file: Option<PathBuf>,
     router_tracking_key_id: Option<String>,
@@ -739,8 +729,6 @@ impl Default for KvRouterConfigSerde {
             router_assume_kv_reuse: config.router_assume_kv_reuse,
             router_track_prefill_tokens: config.router_track_prefill_tokens,
             router_embedded_selection: config.router_embedded_selection,
-            router_disagg_decode_first: config.router_disagg_decode_first,
-            router_disagg_bypass_on_prefill_failure: config.router_disagg_bypass_on_prefill_failure,
             router_tracking_hash: config.router_tracking_hash,
             router_tracking_key_file: config.router_tracking_key_file,
             router_tracking_key_id: config.router_tracking_key_id,
@@ -831,18 +819,6 @@ pub struct KvRouterConfig {
     /// and wire records still parse; `false` logs a warning.
     #[serde(default = "default_true", skip_serializing_if = "is_true")]
     pub router_embedded_selection: bool,
-
-    /// Disaggregated coordination books the decode worker first, constrains
-    /// prefill to that worker's KV-transfer domain, and compensates a prefill
-    /// failure explicitly (contract 5). Default: prefill first. Frontend-local.
-    #[serde(default, skip_serializing_if = "is_default")]
-    pub router_disagg_decode_first: bool,
-
-    /// With `router_disagg_decode_first`, run prefill on the already-booked
-    /// decode worker when the prefill booking fails instead of releasing the
-    /// decode booking and failing the request.
-    #[serde(default, skip_serializing_if = "is_default")]
-    pub router_disagg_bypass_on_prefill_failure: bool,
 
     /// Hash algorithm used for router-derived active-sequence identities.
     #[serde(default, skip_serializing_if = "is_default")]
@@ -1009,8 +985,6 @@ impl Default for KvRouterConfig {
             router_assume_kv_reuse: true,
             router_track_prefill_tokens: default_track_prefill_tokens(),
             router_embedded_selection: true,
-            router_disagg_decode_first: false,
-            router_disagg_bypass_on_prefill_failure: false,
             router_tracking_hash: TrackingHashAlgorithm::default(),
             router_tracking_key_file: None,
             router_tracking_key_id: None,
@@ -1076,8 +1050,6 @@ impl TryFrom<KvRouterConfigSerde> for KvRouterConfig {
             router_assume_kv_reuse: compat.router_assume_kv_reuse,
             router_track_prefill_tokens: compat.router_track_prefill_tokens,
             router_embedded_selection: compat.router_embedded_selection,
-            router_disagg_decode_first: compat.router_disagg_decode_first,
-            router_disagg_bypass_on_prefill_failure: compat.router_disagg_bypass_on_prefill_failure,
             router_tracking_hash: compat.router_tracking_hash,
             router_tracking_key_file: compat.router_tracking_key_file,
             router_tracking_key_id: compat.router_tracking_key_id,
@@ -1723,20 +1695,6 @@ mod tests {
         let predicted = config_from_values(&[("DYN_ROUTER_PREDICTED_TTL_SECS", "60")]);
         assert_eq!(predicted.router_predicted_ttl_secs, Some(60.0));
         assert!(predicted.validate_config().is_ok());
-    }
-
-    #[test]
-    fn dynamo_env_config_parses_disagg_coordination_flags() {
-        let config = config_from_values(&[
-            ("DYN_ROUTER_DISAGG_DECODE_FIRST", "true"),
-            ("DYN_ROUTER_DISAGG_BYPASS_ON_PREFILL_FAILURE", "1"),
-        ]);
-        assert!(config.router_disagg_decode_first);
-        assert!(config.router_disagg_bypass_on_prefill_failure);
-
-        let defaults = config_from_values(&[]);
-        assert!(!defaults.router_disagg_decode_first);
-        assert!(!defaults.router_disagg_bypass_on_prefill_failure);
     }
 
     #[test]

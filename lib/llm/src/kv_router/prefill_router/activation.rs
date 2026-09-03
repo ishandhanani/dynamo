@@ -183,8 +183,6 @@ where
             conditional_disagg_policy: make_conditional_disagg_policy(None),
             conditional_disagg_prefill_busy_threshold: None,
             conditional_disagg_decode_busy_threshold: None,
-            decode_first: false,
-            bypass_on_prefill_failure: false,
             prefill_load_estimator: None,
             model_name: String::new(), // Not used for disabled router
             namespace: String::new(),  // Not used for disabled router
@@ -222,12 +220,6 @@ where
         let conditional_disagg_decode_busy_threshold = kv_router_config
             .as_ref()
             .and_then(|c| c.conditional_disagg_decode_busy_threshold);
-        let decode_first = kv_router_config
-            .as_ref()
-            .is_some_and(|c| c.router_disagg_decode_first);
-        let bypass_on_prefill_failure = kv_router_config
-            .as_ref()
-            .is_some_and(|c| c.router_disagg_bypass_on_prefill_failure);
 
         let router = Arc::new(Self {
             binding: arc_swap::ArcSwapOption::empty(),
@@ -243,8 +235,6 @@ where
             conditional_disagg_policy,
             conditional_disagg_prefill_busy_threshold,
             conditional_disagg_decode_busy_threshold,
-            decode_first,
-            bypass_on_prefill_failure,
             prefill_load_estimator,
             model_name,
             namespace,

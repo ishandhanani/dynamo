@@ -80,17 +80,10 @@ the plan's `LinkedBookingState` transitions:
 Decode-first greedy pairing is by design; joint prefill/decode optimization is
 out of scope. Selection ids are derived as `<id>/decode` and `<id>/prefill`.
 
-The Dynamo frontend runs the same contract inside `PrefillRouter` when
-`--router-disagg-decode-first` (`DYN_ROUTER_DISAGG_DECODE_FIRST`) is set and the
-decode pool is KV routed: the decode `RoutingHost` previews and books the decode
-worker first, the prefill request is constrained to that worker's KV-transfer
-domain through the model manager's topology constraints, and decode is
-dispatched on the held booking after prefill completes. A failed prefill
-booking releases the decode booking (`Compensated`) or, with
-`--router-disagg-bypass-on-prefill-failure`, runs prefill on the decode worker
-(`BypassAfterPrefillFailure`). Each transition is logged with its
-`LinkedBookingState`. Requests that pin a prefill worker, or a decode pool that
-is not KV routed, use the default prefill-first flow.
+The Dynamo frontend keeps its prefill-first disaggregated flow; the
+coordinator is hosted by the standalone EPP (see below). A frontend
+decode-first mode was prototyped and removed pending validation on a real
+KV-transfer topology.
 
 The encoder pool needs no separate coordinator: each `KvRouter` the model
 manager creates per worker role (encoder, prefill, decode) runs its own

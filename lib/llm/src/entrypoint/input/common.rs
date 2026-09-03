@@ -334,12 +334,10 @@ where
         session_affinity_mode,
         load_context,
     )?;
-    if router_mode.is_kv_routing() && prefill_router.needs_decode_routing_host() {
+    if router_mode.is_kv_routing() && prefill_router.conditional_disagg_enabled() {
         prefill_router
             .set_decode_routing_host(routing_host.clone())
-            .context(
-                "install decode RoutingHost for conditional-disagg or decode-first coordination",
-            )?;
+            .context("install conditional-disagg decode RoutingHost")?;
     }
     let backend_engine: ServiceEngine<_, _> = routing_host;
     Ok(PreprocessedRouting {
