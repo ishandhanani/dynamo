@@ -56,6 +56,30 @@ lifecycle remain consistent with the standalone service.
 
 To inject native Rust scorers and a picker while retaining those service-owned capabilities, see [Write Custom Routing Strategies](custom-worker-selection.mdx).
 
+### Disaggregated coordination
+
+`DisaggCoordinator` books one request across a prefill and a decode
+`SelectionService` (or any `SelectionPool` implementation) with a fixed,
+decode-anchored order: advisory decode preview, optional advisory prefill busy
+read, conditional-disaggregation policy, decode commit pinned to the previewed
+worker, then prefill commit constrained to the decode worker's KV-transfer
+domain (`kv_transfer_domain` -> `dynamo.topology/<domain>=<value>` as a required
+or preferred taint per the worker's `kv_transfer_enforcement`).
+
+The two pools keep independent ledgers and the coordinator never holds a
+cross-pool lock; every partial state is compensated explicitly and recorded in
+the plan's `LinkedBookingState` transitions:
+
+| Failure | Compensation |
+|---|---|
+| Decode preview or commit fails | Nothing is booked; the error is returned. |
+| Prefill commit fails after decode is booked | `PrefillFailurePolicy::FreeDecode` (default) frees decode and returns the error; `BypassOnDecode` keeps decode and runs prefill there. |
+| Prefill completes | `prefill_complete` frees the prefill booking early; decode stays booked. |
+| Request ends or fails | `release` frees whatever is still booked. |
+
+Decode-first greedy pairing is by design; joint prefill/decode optimization is
+out of scope. Selection ids are derived as `<id>/decode` and `<id>/prefill`.
+
 The C and Go bindings do not currently expose `SelectionService`. An EPP
 integration requires separate FFI lifecycle, error-mapping, worker, and peer
 APIs. Those bindings should wrap `SelectionService` rather than construct

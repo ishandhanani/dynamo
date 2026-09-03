@@ -8,6 +8,7 @@
 
 pub mod affinity;
 mod catalog;
+pub mod coordinator;
 mod core;
 mod error;
 mod ingress;
@@ -26,6 +27,10 @@ pub use crate::WorkerSelectionPolicyFactory;
 pub use crate::services::common::replica_sync::{
     HostReplicaChannels, HostReplicaSyncFactory, ReplicaPeerError, SchedulerLoadSink,
     ScopedSequencePublisher,
+};
+pub use coordinator::{
+    BypassDecision, CoordinatorError, DecodeSignals, DisaggCoordinator, DisaggPlan, DisaggRequest,
+    LinkedBookingState, Pool, PoolBooking, PrefillFailurePolicy, SelectionPool,
 };
 pub use core::{
     HostCache, HostEligibility, HostLoad, HostReplication, HostTelemetry, KvIndexSource,
