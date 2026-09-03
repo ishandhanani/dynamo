@@ -14,7 +14,7 @@ use crate::{
     discovery::{Discovery, DiscoverySpec, EndpointRegistrationLease, EndpointRegistrationManager},
     metrics::PrometheusUpdateCallback,
     metrics::{MetricsHierarchy, MetricsRegistry},
-    transports::{etcd, nats, tcp},
+    transports::{nats, tcp},
 };
 
 use super::utils::GracefulShutdownTracker;
@@ -172,10 +172,10 @@ impl DistributedRuntime {
             }
             DiscoveryBackend::KvStore(kv_selector) => {
                 tracing::info!("Initializing KV store discovery backend: {kv_selector}");
-                let runtime_clone = runtime.clone();
                 let store = match kv_selector {
+                    #[cfg(feature = "etcd")]
                     kv::Selector::Etcd(etcd_config) => {
-                        let etcd_client = etcd::Client::new(*etcd_config, runtime_clone).await.inspect_err(|err|
+                        let etcd_client = crate::transports::etcd::Client::new(*etcd_config, runtime.clone()).await.inspect_err(|err|
                             tracing::error!(%err, "Could not connect to etcd. Pass `--discovery-backend ..` to use a different backend or start etcd."))?;
                         kv::Manager::etcd(etcd_client)
                     }
@@ -692,14 +692,20 @@ pub struct DistributedConfig {
     pub event_transport_kind: crate::discovery::EventTransportKind,
 }
 
+#[cfg(feature = "etcd")]
+const DEFAULT_DISCOVERY_BACKEND: &str = "etcd";
+#[cfg(not(feature = "etcd"))]
+const DEFAULT_DISCOVERY_BACKEND: &str = "mem";
+
 impl DistributedConfig {
     pub fn from_settings() -> DistributedConfig {
         let request_plane = RequestPlaneMode::from_env();
 
         // Determine the discovery backend first — we need it to compute the NATS default below.
-        // Valid values for DYN_DISCOVERY_BACKEND: "kubernetes", "etcd" (default), "file", "mem"
-        let backend_str =
-            std::env::var("DYN_DISCOVERY_BACKEND").unwrap_or_else(|_| "etcd".to_string());
+        // Valid values for DYN_DISCOVERY_BACKEND: "kubernetes", "etcd" (default when
+        // compiled in), "file", "mem". Without the `etcd` feature the default is "mem".
+        let backend_str = std::env::var("DYN_DISCOVERY_BACKEND")
+            .unwrap_or_else(|_| DEFAULT_DISCOVERY_BACKEND.to_string());
 
         let discovery_backend = match backend_str.as_str() {
             "kubernetes" => {
@@ -750,13 +756,17 @@ impl DistributedConfig {
     }
 
     pub fn for_cli() -> DistributedConfig {
-        let etcd_config = etcd::ClientOptions {
-            attach_lease: false,
-            ..Default::default()
-        };
         let request_plane = RequestPlaneMode::from_env();
-        let discovery_backend =
-            DiscoveryBackend::KvStore(kv::Selector::Etcd(Box::new(etcd_config)));
+        #[cfg(feature = "etcd")]
+        let discovery_backend = {
+            let etcd_config = crate::transports::etcd::ClientOptions {
+                attach_lease: false,
+                ..Default::default()
+            };
+            DiscoveryBackend::KvStore(kv::Selector::Etcd(Box::new(etcd_config)))
+        };
+        #[cfg(not(feature = "etcd"))]
+        let discovery_backend = DiscoveryBackend::KvStore(kv::Selector::Memory);
         let event_transport_kind = discovery_backend.resolve_event_transport_kind();
         let nats_enabled = request_plane.is_nats()
             || std::env::var(crate::config::environment_names::nats::NATS_SERVER).is_ok()

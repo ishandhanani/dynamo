@@ -6,6 +6,7 @@
 //!
 //! These are the low-level building blocks for the distributed system.
 
+#[cfg(feature = "etcd")]
 pub mod etcd;
 pub mod event_plane;
 pub mod nats;

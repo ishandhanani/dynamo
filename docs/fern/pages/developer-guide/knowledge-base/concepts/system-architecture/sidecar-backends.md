@@ -137,6 +137,13 @@ process running: the model was served within ten seconds and chat completions
 succeeded. Across Kubernetes pods, use `DYN_DISCOVERY_BACKEND=kubernetes`, or
 the selection-catalog registration above, in place of the file backend.
 
+At build time, `dynamo-runtime` gates the etcd transport and discovery backend
+behind the `etcd` Cargo feature (on by default). A binary built with
+`--no-default-features` does not link `etcd-client`; `DYN_DISCOVERY_BACKEND`
+then defaults to `mem`, and `etcd` is rejected with an explicit error. The
+file, memory, and Kubernetes backends, the TCP request plane, and the ZMQ event
+plane are always compiled in.
+
 ## Running Without A Distributed Runtime (Experimental)
 
 `dynamo.frontend --static-workers-file <path>` assembles the frontend with no

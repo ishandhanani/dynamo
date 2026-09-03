@@ -9,6 +9,7 @@ pub mod pool;
 pub mod stream;
 pub mod task;
 pub mod tasks;
+#[cfg(feature = "etcd")]
 pub mod typed_prefix_watcher;
 
 pub use graceful_shutdown::{GracefulShutdownTracker, GracefulTaskGuard};

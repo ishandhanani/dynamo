@@ -13,6 +13,7 @@ use std::{collections::HashMap, path::PathBuf};
 use std::{env, fmt};
 
 use crate::CancellationToken;
+#[cfg(feature = "etcd")]
 use crate::transports::etcd as etcd_transport;
 use async_trait::async_trait;
 use futures::StreamExt;
@@ -23,7 +24,9 @@ mod mem;
 pub use mem::MemoryStore;
 mod nats;
 pub use nats::NATSStore;
+#[cfg(feature = "etcd")]
 mod etcd;
+#[cfg(feature = "etcd")]
 pub use etcd::EtcdStore;
 mod file;
 pub use file::FileStore;
@@ -131,6 +134,7 @@ pub trait Store: Send + Sync {
 #[derive(Clone, Debug, Default)]
 pub enum Selector {
     // Box it because it is significantly bigger than the other variants
+    #[cfg(feature = "etcd")]
     Etcd(Box<etcd_transport::ClientOptions>),
     File(PathBuf),
     #[default]
@@ -141,6 +145,7 @@ pub enum Selector {
 impl fmt::Display for Selector {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            #[cfg(feature = "etcd")]
             Selector::Etcd(opts) => {
                 let urls = opts.etcd_url.join(",");
                 write!(f, "Etcd({urls})")
@@ -156,7 +161,13 @@ impl FromStr for Selector {
 
     fn from_str(s: &str) -> anyhow::Result<Selector> {
         match s {
+            #[cfg(feature = "etcd")]
             "etcd" => Ok(Self::Etcd(Box::default())),
+            #[cfg(not(feature = "etcd"))]
+            "etcd" => anyhow::bail!(
+                "etcd support is not compiled into this build (dynamo-runtime feature `etcd`); \
+                 use DYN_DISCOVERY_BACKEND=file, mem, or kubernetes"
+            ),
             "file" => {
                 let root = env::var("DYN_FILE_KV")
                     .map(PathBuf::from)
@@ -181,6 +192,7 @@ impl TryFrom<String> for Selector {
 enum KeyValueStoreEnum {
     Memory(MemoryStore),
     Nats(NATSStore),
+    #[cfg(feature = "etcd")]
     Etcd(EtcdStore),
     File(FileStore),
 }
@@ -196,6 +208,7 @@ impl KeyValueStoreEnum {
         Ok(match self {
             Memory(x) => Box::new(x.get_or_create_bucket(bucket_name, ttl).await?),
             Nats(x) => Box::new(x.get_or_create_bucket(bucket_name, ttl).await?),
+            #[cfg(feature = "etcd")]
             Etcd(x) => Box::new(x.get_or_create_bucket(bucket_name, ttl).await?),
             File(x) => Box::new(x.get_or_create_bucket(bucket_name, ttl).await?),
         })
@@ -212,6 +225,7 @@ impl KeyValueStoreEnum {
                 .get_bucket(bucket_name)
                 .await?
                 .map(|b| Box::new(b) as Box<dyn Bucket>),
+            #[cfg(feature = "etcd")]
             Etcd(x) => x
                 .get_bucket(bucket_name)
                 .await?
@@ -228,6 +242,7 @@ impl KeyValueStoreEnum {
         use KeyValueStoreEnum::*;
         match self {
             Memory(x) => x.connection_id(),
+            #[cfg(feature = "etcd")]
             Etcd(x) => x.connection_id(),
             Nats(x) => x.connection_id(),
             File(x) => x.connection_id(),
@@ -238,6 +253,7 @@ impl KeyValueStoreEnum {
         use KeyValueStoreEnum::*;
         match self {
             Memory(x) => x.shutdown(),
+            #[cfg(feature = "etcd")]
             Etcd(x) => x.shutdown(),
             Nats(x) => x.shutdown(),
             File(x) => x.shutdown(),
@@ -260,6 +276,7 @@ impl Manager {
         Self::new(KeyValueStoreEnum::Memory(MemoryStore::new()))
     }
 
+    #[cfg(feature = "etcd")]
     pub fn etcd(etcd_client: crate::transports::etcd::Client) -> Self {
         Self::new(KeyValueStoreEnum::Etcd(EtcdStore::new(etcd_client)))
     }

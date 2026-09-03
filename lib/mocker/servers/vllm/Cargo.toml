@@ -40,7 +40,7 @@ dynamo-kv-router = { workspace = true, features = ["standalone-selection"] }
 dynamo-llm = { workspace = true }
 tempfile = { workspace = true }
 tokio-util = { workspace = true }
-dynamo-runtime = { workspace = true }
+dynamo-runtime = { workspace = true, features = ["etcd"] }
 dynamo-sidecar-common = { workspace = true }
 serde_json = { workspace = true }
 tokio-stream = { workspace = true, features = ["net"] }

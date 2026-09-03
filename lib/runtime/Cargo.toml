@@ -15,9 +15,12 @@ description = "Dynamo Runtime Library"
 ignored = ["mio"]
 
 [features]
-default = []
+default = ["etcd"]
+# etcd discovery backend (`DYN_DISCOVERY_BACKEND=etcd`) and the etcd transport.
+# Off: the file, memory, and Kubernetes backends remain; `etcd-client` is not linked.
+etcd = ["dep:etcd-client"]
 integration = []
-testing-etcd = [] # Tests that require an active ETCD server
+testing-etcd = ["etcd"] # Tests that require an active ETCD server
 # White-box helpers for cross-crate lifecycle tests. Never enabled by a normal build.
 testing = []
 tokio-console = ["dep:console-subscriber", "tokio/tracing"]
@@ -46,7 +49,7 @@ dashmap = { workspace = true }
 derive_builder = { workspace = true }
 derive-getters = { workspace = true }
 either = { workspace = true }
-etcd-client = { workspace = true }
+etcd-client = { workspace = true, optional = true }
 fastrand = "2"
 futures = { workspace = true }
 fs4 = { workspace = true }

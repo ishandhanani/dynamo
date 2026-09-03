@@ -22,7 +22,7 @@ testing = []
 integration = ["dynamo-runtime/integration"]
 
 [dependencies]
-dynamo-runtime = { workspace = true }
+dynamo-runtime = { workspace = true, features = ["etcd"] }
 dynamo-llm = { path = "../llm", default-features = false }
 dynamo-protocols = { workspace = true }
 dynamo-rl = { workspace = true }
