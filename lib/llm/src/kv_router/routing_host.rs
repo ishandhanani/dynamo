@@ -256,6 +256,9 @@ where
     /// Compatibility construction paths that predate routing load ownership leave this unset.
     #[allow(dead_code)]
     routing_context: Option<Arc<crate::kv_router::RoutingLoadContext>>,
+    /// Workers reachable over their native engine RPC. Admitted KV requests to
+    /// such a worker bypass the request plane; everything else is unchanged.
+    direct_dispatch: Option<Arc<crate::kv_router::DirectDispatchRegistry>>,
 }
 
 /// An admitted KV route awaiting dispatch.
@@ -412,7 +415,23 @@ where
             hosted_occupancy: None,
             lora: None,
             routing_context: load_context,
+            direct_dispatch: None,
         }
+    }
+
+    /// Dispatch admitted KV requests to workers in `registry` over their native
+    /// engine RPC instead of the request plane.
+    pub fn with_direct_dispatch(
+        mut self,
+        registry: Arc<crate::kv_router::DirectDispatchRegistry>,
+    ) -> Self {
+        self.direct_dispatch = Some(registry);
+        self
+    }
+
+    /// The direct-dispatch registry, when one is attached.
+    pub fn direct_dispatch(&self) -> Option<&Arc<crate::kv_router::DirectDispatchRegistry>> {
+        self.direct_dispatch.as_ref()
     }
 
     #[cfg(test)]
@@ -498,6 +517,7 @@ where
             affinity,
             session_affinity_mode,
             hosted_occupancy,
+            direct_dispatch: None,
             lora: lora
                 .zip(lora_selector)
                 .map(|((filter, load_estimator), selector)| LoraRouting {

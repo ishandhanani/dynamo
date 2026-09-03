@@ -27,6 +27,9 @@ pub struct VllmSidecarEngine {
     transport: GrpcTransportConfig,
     client: OnceCell<VllmClient>,
     cancel: CancellationToken,
+    /// Frontend-routable gRPC endpoint published in the worker's runtime data
+    /// for direct dispatch.
+    advertise_endpoint: Option<GrpcEndpoint>,
 }
 
 fn cancelled(state: &ResponseState) -> LLMEngineOutput {
@@ -42,6 +45,7 @@ impl VllmSidecarEngine {
         model: DiscoveredModel,
         mode: DisaggregationMode,
         transport: GrpcTransportConfig,
+        advertise_endpoint: Option<GrpcEndpoint>,
     ) -> Self {
         Self {
             endpoint,
@@ -50,7 +54,38 @@ impl VllmSidecarEngine {
             transport,
             client: OnceCell::new(),
             cancel: CancellationToken::new(),
+            advertise_endpoint,
         }
+    }
+
+    /// Connect to a vLLM gRPC service for direct dispatch from a frontend:
+    /// discover the model asynchronously and start the engine. The returned
+    /// engine is ready for `generate`.
+    pub async fn connect_direct(
+        endpoint: &str,
+        mode: DisaggregationMode,
+        transport: GrpcTransportConfig,
+    ) -> Result<Self, DynamoError> {
+        let endpoint = GrpcEndpoint::parse(endpoint, "native_grpc_endpoint")?;
+        let startup_deadline = client::startup_deadline(transport.startup_deadline)?;
+        let bootstrap_transport = GrpcTransportConfig {
+            connections: std::num::NonZeroUsize::MIN,
+            ..transport
+        };
+        let bootstrap =
+            VllmClient::connect(&endpoint, bootstrap_transport, startup_deadline).await?;
+        bootstrap
+            .wait_for_services(
+                &[CONTROL_SERVICE],
+                startup_deadline,
+                transport.retry_interval,
+            )
+            .await?;
+        let (model, server) = bootstrap.discover(startup_deadline).await?;
+        let model = DiscoveredModel::from_proto(model, server)?;
+        let engine = Self::new(endpoint, model, mode, transport, None);
+        engine.start(0).await?;
+        Ok(engine)
     }
 
     /// Parse arguments and synchronously discover the vLLM model.
@@ -116,7 +151,12 @@ impl VllmSidecarEngine {
         let rl_metadata = enable_rl
             .then(|| model.rl_worker_metadata(vllm_http_url))
             .transpose()?;
-        let engine = Self::new(endpoint, model.clone(), mode, transport);
+        let advertise_endpoint = args
+            .advertise_grpc_endpoint
+            .as_deref()
+            .map(|raw| GrpcEndpoint::parse(raw, "--advertise-grpc-endpoint"))
+            .transpose()?;
+        let engine = Self::new(endpoint, model.clone(), mode, transport, advertise_endpoint);
         let config = WorkerConfig {
             namespace: args.sidecar.common.namespace,
             // Prefill/decode must register under fixed role components so the
@@ -194,7 +234,22 @@ impl LLMEngine for VllmSidecarEngine {
             mode = %self.mode,
             "vLLM gRPC services are ready"
         );
-        Ok(observed.engine_config())
+        let mut engine_config = observed.engine_config();
+        if let Some(advertised) = &self.advertise_endpoint {
+            tracing::info!(
+                advertised_endpoint = %advertised,
+                "advertising vLLM gRPC endpoint for direct frontend dispatch"
+            );
+            engine_config.runtime_data.insert(
+                dynamo_backend_common::NATIVE_GRPC_ENDPOINT_RUNTIME_KEY.to_string(),
+                json!(advertised.to_string()),
+            );
+            engine_config.runtime_data.insert(
+                dynamo_backend_common::NATIVE_GRPC_MODE_RUNTIME_KEY.to_string(),
+                json!(self.mode.as_str()),
+            );
+        }
+        Ok(engine_config)
     }
 
     async fn generate(

@@ -23,4 +23,10 @@ pub(crate) struct Args {
         value_parser = parse_http_endpoint
     )]
     pub vllm_http_endpoint: Option<HttpEndpoint>,
+
+    /// Frontend-routable address of the vLLM gRPC service. When set, the worker
+    /// advertises it so frontends with direct dispatch enabled send requests to
+    /// vLLM directly instead of through this sidecar.
+    #[arg(long, env = "DYN_ADVERTISE_GRPC_ENDPOINT")]
+    pub advertise_grpc_endpoint: Option<String>,
 }

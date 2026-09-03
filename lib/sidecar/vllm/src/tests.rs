@@ -798,6 +798,7 @@ fn engine_with_server_info(
         DiscoveredModel::from_proto(model, server).expect("valid discovery"),
         mode,
         transport,
+        None,
     )
 }
 

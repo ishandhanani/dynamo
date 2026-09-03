@@ -52,6 +52,7 @@ pub use dynamo_kv_router::protocols;
 pub use dynamo_kv_router::scheduling;
 pub use dynamo_kv_router::selector;
 
+pub mod direct_dispatch;
 pub(crate) mod embedded;
 pub mod encoder_router;
 pub mod indexer;
@@ -66,6 +67,11 @@ pub mod scheduler;
 pub mod sequence;
 pub mod shared_cache;
 
+pub use direct_dispatch::{
+    DirectDispatchRegistry, DirectEngine, DirectEngineFactory, NATIVE_GRPC_ENDPOINT_RUNTIME_KEY,
+    NATIVE_GRPC_MODE_RUNTIME_KEY, install_direct_engine_factory, installed_direct_engine_factory,
+    native_grpc_endpoint,
+};
 pub use dynamo_kv_router::scheduling::{
     OverlapScoresResponse, SharedCacheOverlapScore, WorkerOverlapScore,
 };
@@ -965,6 +971,16 @@ where
     /// Get a reference to the client used by this KvRouter
     pub fn client(&self) -> &Client {
         &self.client
+    }
+
+    /// Discovery-fed runtime configs of the workers this router selects among.
+    pub fn runtime_config_watch(&self) -> RuntimeConfigWatch {
+        self.workers_with_configs.clone()
+    }
+
+    /// A cancellation token scoped to this router's lifetime.
+    pub fn child_cancellation_token(&self) -> CancellationToken {
+        self.cancellation_token.child_token()
     }
 
     pub fn indexer(&self) -> &Indexer {

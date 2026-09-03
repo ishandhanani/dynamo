@@ -142,6 +142,73 @@ async fn collect(
         .await
 }
 
+/// A frontend with direct dispatch reaches the same vLLM gRPC service the
+/// sidecar does, through the same request/response conversion and error
+/// mapping, and an unreachable endpoint surfaces as a connect failure.
+#[tokio::test]
+async fn direct_engine_factory_streams_from_the_mock_server() {
+    use dynamo_backend_common::{
+        DirectEngineFactory, ModelRuntimeConfig, NATIVE_GRPC_MODE_RUNTIME_KEY,
+    };
+    use dynamo_runtime::pipeline::Context;
+    use dynamo_sidecar_common::GrpcTransportConfig;
+    use dynamo_vllm_sidecar::VllmDirectEngineFactory;
+    use std::num::NonZeroUsize;
+    use std::time::Duration;
+
+    let server = RunningServer::start(ServerMode::Aggregated, fast_engine_args()).await;
+    let transport = GrpcTransportConfig {
+        connections: NonZeroUsize::MIN,
+        startup_deadline: Duration::from_secs(5),
+        connect_attempt_timeout: Duration::from_secs(1),
+        ..Default::default()
+    };
+    let factory = VllmDirectEngineFactory::new(transport);
+    let mut config = ModelRuntimeConfig::default();
+    config.runtime_data.insert(
+        NATIVE_GRPC_MODE_RUNTIME_KEY.to_string(),
+        serde_json::Value::String("agg".to_string()),
+    );
+
+    let engine = factory
+        .connect(7, &server.endpoint, &config)
+        .await
+        .expect("direct engine connects to the mock server");
+    let outputs: Vec<_> = engine
+        .generate(Context::new(request(3)))
+        .await
+        .expect("direct generate")
+        .collect()
+        .await;
+    let tokens: usize = outputs
+        .iter()
+        .filter_map(|item| item.data.as_ref())
+        .map(|output| output.token_ids.len())
+        .sum();
+    assert_eq!(tokens, 3, "{outputs:?}");
+    assert!(outputs.iter().all(|item| item.error.is_none()));
+    let terminal = outputs
+        .iter()
+        .rev()
+        .find_map(|item| item.data.as_ref())
+        .expect("terminal chunk");
+    assert_eq!(terminal.finish_reason, Some(FinishReason::Length));
+    assert_eq!(server.service.active_request_count(), 0);
+
+    let unreachable = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let unreachable_endpoint = format!("http://{}", unreachable.local_addr().unwrap());
+    drop(unreachable);
+    let error = match factory.connect(8, &unreachable_endpoint, &config).await {
+        Ok(_) => panic!("unreachable endpoint must fail to connect"),
+        Err(error) => error,
+    };
+    let text = format!("{error:#}").to_ascii_lowercase();
+    assert!(
+        text.contains("connect") || text.contains("deadline") || text.contains("unavailable"),
+        "{text}"
+    );
+}
+
 #[tokio::test]
 async fn sidecar_streams_mocker_tokens_logprobs_and_usage() {
     let server = RunningServer::start(ServerMode::Aggregated, fast_engine_args()).await;

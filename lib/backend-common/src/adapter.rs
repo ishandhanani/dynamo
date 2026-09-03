@@ -139,6 +139,19 @@ pub(crate) struct EngineAdapter {
     first_token_source: Option<FirstTokenSource>,
 }
 
+/// Wrap an [`LLMEngine`] as a directly dispatchable engine for a frontend.
+///
+/// This is the same adapter the worker's network ingress uses, so a request
+/// sent directly from a frontend gets identical streaming, cancellation
+/// (including deferred decode aborts), and error semantics to one that
+/// arrived over the request plane.
+pub fn direct_engine(
+    engine: Arc<dyn LLMEngine>,
+    mode: DisaggregationMode,
+) -> dynamo_llm::kv_router::DirectEngine {
+    Arc::new(EngineAdapter::new(engine, mode))
+}
+
 impl EngineAdapter {
     pub(crate) fn new(engine: Arc<dyn LLMEngine>, mode: DisaggregationMode) -> Self {
         Self {

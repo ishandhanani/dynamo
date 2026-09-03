@@ -89,6 +89,28 @@ Disaggregated launch paths require multiple GPUs and use NIXL for KV transfer.
 This table describes validated launch topologies, not feature parity with the
 in-process backends.
 
+## Direct Dispatch (Experimental)
+
+The target design's direct request path is available for vLLM behind two
+opt-ins, one on each side:
+
+- The sidecar advertises a frontend-routable address for the engine's gRPC
+  service with `--advertise-grpc-endpoint` (or `DYN_ADVERTISE_GRPC_ENDPOINT`).
+  It is published in the worker's runtime config as `native_grpc_endpoint`,
+  together with the role the engine serves (`native_grpc_mode`).
+- The frontend process sets `DYN_ROUTER_DIRECT_DISPATCH=vllm`. Every KV routing
+  host then connects to each advertising worker and sends admitted requests to
+  vLLM directly. Workers that do not advertise an endpoint keep using the
+  request plane, so a fleet can migrate one worker at a time.
+
+Selection, booking, cancellation, and error semantics are unchanged: the direct
+path uses the same request conversion, stream adapter, and gRPC-status error
+mapping as the sidecar, so a dispatch failure releases the router's booking and
+reaches the migration layer with the same error type it would have had over the
+request plane. The sidecar stays in the pod for registration, KV events, and
+health. Request-plane fault detection does not observe direct-dispatch
+failures; worker liveness comes from discovery.
+
 See the
 [sidecar Dockerfile, source, and engine-specific READMEs](https://github.com/ai-dynamo/dynamo/tree/main/lib/sidecar)
 for implementation details.

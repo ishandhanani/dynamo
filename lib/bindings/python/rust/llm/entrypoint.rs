@@ -1000,6 +1000,32 @@ async fn select_engine(
     Ok(inner)
 }
 
+/// `DYN_ROUTER_DIRECT_DISPATCH=vllm` makes every KV routing host in this
+/// process send admitted requests straight to workers that advertise a
+/// `native_grpc_endpoint`, bypassing the request plane. Unset or empty keeps
+/// the request plane for every worker.
+fn install_direct_dispatch_from_env() -> anyhow::Result<()> {
+    let Ok(value) = std::env::var("DYN_ROUTER_DIRECT_DISPATCH") else {
+        return Ok(());
+    };
+    match value.trim().to_ascii_lowercase().as_str() {
+        "" | "0" | "false" | "off" | "none" => Ok(()),
+        "vllm" => {
+            let factory =
+                std::sync::Arc::new(dynamo_vllm_sidecar::VllmDirectEngineFactory::default());
+            if dynamo_llm::kv_router::install_direct_engine_factory(factory) {
+                tracing::info!(
+                    "direct dispatch enabled for workers advertising a vLLM gRPC endpoint"
+                );
+            }
+            Ok(())
+        }
+        other => anyhow::bail!(
+            "unsupported DYN_ROUTER_DIRECT_DISPATCH value `{other}`; expected `vllm` or unset"
+        ),
+    }
+}
+
 #[pyfunction]
 #[pyo3(signature = (distributed_runtime, input, engine_config, frontend_route_extensions=None))]
 pub fn run_input<'p>(
@@ -1037,6 +1063,7 @@ pub fn run_input<'p>(
             "linked worker-selection policies require HTTP frontend input",
         ));
     }
+    install_direct_dispatch_from_env().map_err(to_pyerr)?;
     pyo3_async_runtimes::tokio::future_into_py(py, async move {
         if let Some(factory) = worker_selection_policy_factory {
             HttpFrontend::default()

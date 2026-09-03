@@ -29,8 +29,14 @@ pub mod testing;
 mod validate;
 pub mod worker;
 
+pub use adapter::direct_engine;
 pub use args::CommonArgs;
 pub use disagg::DisaggregationMode;
+pub use dynamo_llm::kv_router::{
+    DirectEngine, DirectEngineFactory, NATIVE_GRPC_ENDPOINT_RUNTIME_KEY,
+    NATIVE_GRPC_MODE_RUNTIME_KEY,
+};
+pub use dynamo_llm::local_model::runtime_config::ModelRuntimeConfig;
 pub use dynamo_llm::model_type::ModelInput;
 pub use engine::{
     AsyncEngineContext, BootstrapInfo, CompletionUsage, ComponentSnapshot, EngineConfig,

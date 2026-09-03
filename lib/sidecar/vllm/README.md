@@ -72,6 +72,21 @@ python -m dynamo.vllm.sidecar \
 Use `DYN_SIDECAR_GRPC_ENDPOINT` instead of `--grpc-endpoint` when the endpoint is
 provided through the environment.
 
+### Direct frontend dispatch (experimental)
+
+Advertise a frontend-routable address for vLLM's gRPC service so frontends can
+send requests to vLLM directly, leaving the sidecar off the request path:
+
+```bash
+dynamo-vllm-sidecar \
+  --grpc-endpoint 127.0.0.1:50051 \
+  --advertise-grpc-endpoint http://worker-0.workers.svc.cluster.local:50051
+```
+
+The frontend must opt in with `DYN_ROUTER_DIRECT_DISPATCH=vllm`; without it the
+advertised endpoint is ignored and requests keep flowing through the request
+plane. The sidecar continues to handle registration, KV events, and health.
+
 ### RL workflows
 
 Start vLLM with the capabilities required by the workflow, then opt the sidecar into RL discovery:

@@ -1194,6 +1194,129 @@ async fn track_request(
     (request, selection, guard)
 }
 
+/// A worker with a registered direct engine is served by that engine; a
+/// direct-engine failure releases the booking and surfaces the error exactly
+/// like a request-plane failure.
+struct FakeDirectEngine {
+    calls: Arc<std::sync::atomic::AtomicUsize>,
+    fail: bool,
+}
+
+#[async_trait]
+impl AsyncEngine<SingleIn<PreprocessedRequest>, ManyOut<Annotated<LLMEngineOutput>>, Error>
+    for FakeDirectEngine
+{
+    async fn generate(
+        &self,
+        request: SingleIn<PreprocessedRequest>,
+    ) -> Result<ManyOut<Annotated<LLMEngineOutput>>, Error> {
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        if self.fail {
+            return Err(DynamoError::builder()
+                .error_type(ErrorType::CannotConnect)
+                .message("direct engine unreachable")
+                .build()
+                .into());
+        }
+        let (_, context) = request.into_parts();
+        let ctx = context.context();
+        let output = LLMEngineOutput {
+            token_ids: vec![42],
+            finish_reason: Some(FinishReason::Stop),
+            ..Default::default()
+        };
+        Ok(ResponseStream::new(
+            Box::pin(stream::iter(vec![Annotated::from_data(output)])),
+            ctx,
+        ))
+    }
+}
+
+#[tokio::test]
+#[serial_test::serial]
+async fn direct_dispatch_serves_registered_workers_and_releases_on_failure() {
+    let (router, runtime) = router_with_workers(None, &[7]).await;
+    let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let registry = Arc::new(crate::kv_router::DirectDispatchRegistry::new());
+    registry.insert(
+        7,
+        "http://worker-7:50051",
+        Arc::new(FakeDirectEngine {
+            calls: Arc::clone(&calls),
+            fail: false,
+        }),
+    );
+    let router = router.with_direct_dispatch(Arc::clone(&registry));
+    assert_eq!(router.direct_dispatch().unwrap().len(), 1);
+
+    let first_request = Context::new(request());
+    let mut stream = router
+        .generate(first_request)
+        .await
+        .expect("direct dispatch");
+    let first = stream.next().await.expect("one item");
+    assert_eq!(first.data.unwrap().token_ids, vec![42]);
+    assert!(stream.next().await.is_none());
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    drop(stream);
+    let released = tokio::time::timeout(Duration::from_secs(2), async {
+        loop {
+            let loads = router
+                .kv_router()
+                .get_potential_loads(&[], None, None, None, None)
+                .await
+                .unwrap();
+            if loads.iter().all(|load| load.active_requests == 0) {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await;
+    assert!(
+        released.is_ok(),
+        "completed direct stream must release its booking"
+    );
+
+    // Failure path: the booking is released before the error propagates, and
+    // the error keeps its migratable type.
+    registry.insert(
+        7,
+        "http://worker-7:50051",
+        Arc::new(FakeDirectEngine {
+            calls: Arc::clone(&calls),
+            fail: true,
+        }),
+    );
+    let error = router
+        .generate(Context::new(request()))
+        .await
+        .expect_err("direct failure must surface");
+    assert!(
+        match_error_chain(error.as_ref(), &[ErrorType::CannotConnect], &[]),
+        "{error:?}"
+    );
+    let loads = router
+        .kv_router()
+        .get_potential_loads(&[], None, None, None, None)
+        .await
+        .unwrap();
+    assert!(
+        loads.iter().all(|load| load.active_requests == 0),
+        "failed direct dispatch must release the booking: {loads:?}"
+    );
+    assert_eq!(calls.load(Ordering::SeqCst), 2);
+
+    // A worker without a direct engine still goes through the request plane
+    // (which has no live worker here, so it fails, but not via the fake).
+    registry.remove(7);
+    let _ = router.generate(Context::new(request())).await;
+    assert_eq!(calls.load(Ordering::SeqCst), 2);
+
+    drop(router);
+    runtime.shutdown();
+}
+
 /// The embedded selection partition books and releases exactly like the
 /// runtime scheduler: preview does not book, plan books, abort releases, and
 /// a tracked request frees on guard completion.

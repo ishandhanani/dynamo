@@ -35,4 +35,7 @@ uuid = { workspace = true }
 
 [dev-dependencies]
 dynamo-backend-common = { workspace = true, features = ["testing"] }
+dynamo-runtime = { workspace = true }
+dynamo-sidecar-common = { workspace = true }
+serde_json = { workspace = true }
 tokio-stream = { workspace = true, features = ["net"] }

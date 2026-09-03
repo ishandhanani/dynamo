@@ -222,6 +222,13 @@ router. See [Router Guide](../../developer-guide/knowledge-base/modular-componen
   Environment variable: `DYN_ROUTER_EMBEDDED_SELECTION`
 </ParamField>
 
+<ParamField path="DYN_ROUTER_DIRECT_DISPATCH" type="string" default="unset">
+  **Experimental.** Environment variable only. Set to `vllm` to send admitted KV-routed requests
+  directly to workers that advertise a `native_grpc_endpoint` (vLLM sidecars started with
+  `--advertise-grpc-endpoint`), bypassing the request plane for those workers. Workers without an
+  advertised endpoint keep using the request plane.
+</ParamField>
+
 <ParamField path="--router-tracking-hash" type="string" default="public-xxh3-v1">
   Hash function for router-derived active-sequence identities. `keyed-xxh3-v1` is experimental and
   requires both a tracking key file and key ID.

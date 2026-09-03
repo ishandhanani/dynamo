@@ -187,13 +187,27 @@ where
             let Some(chooser) = chooser else {
                 anyhow::bail!("RouterMode::KV requires KVRouter to not be null");
             };
-            Arc::new(RoutingHost::new_with_load_context_and_coordinator(
+            let direct_registry =
+                crate::kv_router::installed_direct_engine_factory().map(|factory| {
+                    let registry = Arc::new(crate::kv_router::DirectDispatchRegistry::new());
+                    registry.spawn_feeder(
+                        factory,
+                        chooser.runtime_config_watch(),
+                        chooser.child_cancellation_token(),
+                    );
+                    registry
+                });
+            let host = RoutingHost::new_with_load_context_and_coordinator(
                 router,
                 chooser,
                 load_context,
                 affinity,
                 session_affinity_mode,
-            ))
+            );
+            Arc::new(match direct_registry {
+                Some(registry) => host.with_direct_dispatch(registry),
+                None => host,
+            })
         }
         _ => {
             let lora = model_manager

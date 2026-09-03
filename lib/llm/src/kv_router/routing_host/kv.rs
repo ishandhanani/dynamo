@@ -428,9 +428,30 @@ where
         let updated_request = context.map(|_| backend_input);
         guard.record_prefill_start();
 
-        let dispatch = self
-            .inner
-            .dispatch_kv_admitted(updated_request, selection.worker.worker_id);
+        // Transport choice: a directly reachable engine when the worker
+        // advertises one, else the request plane. Both yield the same stream
+        // and error shapes, so booking release and migration are unaffected.
+        let direct_engine = self
+            .direct_dispatch
+            .as_ref()
+            .and_then(|registry| registry.get(selection.worker.worker_id));
+        let dispatch = async {
+            match direct_engine {
+                Some(engine) => {
+                    tracing::debug!(
+                        request_id = %context_id,
+                        worker_id = selection.worker.worker_id,
+                        "dispatching directly to the worker's native engine RPC"
+                    );
+                    engine.generate(updated_request).await
+                }
+                None => {
+                    self.inner
+                        .dispatch_kv_admitted(updated_request, selection.worker.worker_id)
+                        .await
+                }
+            }
+        };
         let route_span = tracing::info_span!(
             target: "request_span",
             "kv_router.route_request",
