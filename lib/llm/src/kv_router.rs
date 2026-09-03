@@ -66,6 +66,7 @@ pub(crate) mod routing_load;
 pub mod scheduler;
 pub mod sequence;
 pub mod shared_cache;
+pub mod static_direct;
 
 pub use direct_dispatch::{
     DirectDispatchRegistry, DirectEngine, DirectEngineFactory, NATIVE_GRPC_ENDPOINT_RUNTIME_KEY,

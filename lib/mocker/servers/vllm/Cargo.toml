@@ -37,6 +37,9 @@ uuid = { workspace = true }
 axum = { workspace = true }
 dynamo-backend-common = { workspace = true, features = ["testing"] }
 dynamo-kv-router = { workspace = true, features = ["standalone-selection"] }
+dynamo-llm = { workspace = true }
+tempfile = { workspace = true }
+tokio-util = { workspace = true }
 dynamo-runtime = { workspace = true }
 dynamo-sidecar-common = { workspace = true }
 serde_json = { workspace = true }

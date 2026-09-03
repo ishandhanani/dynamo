@@ -242,7 +242,7 @@ impl AicPerfConfig {
 #[pymethods]
 impl KvRouterConfig {
     #[new]
-    #[pyo3(signature = (overlap_score_weight=None, host_cache_hit_weight=0.75, disk_cache_hit_weight=0.25, router_temperature=0.0, use_kv_events=true, *, router_replica_sync=false, router_embedded_selection=false, router_track_active_blocks=true, router_track_output_blocks=false, router_assume_kv_reuse=true, router_track_prefill_tokens=true, router_prefill_load_model="none", router_ttl_secs=120.0, router_approximate_cache_policy="ttl", router_queue_threshold=None, router_event_threads=4, router_queue_policy="fcfs", use_remote_indexer=false, serve_indexer=false, shared_cache_multiplier=0.0, shared_cache_type="none", router_predicted_ttl_secs=None, conditional_disagg_enabled=false, conditional_disagg_policy="isl_bounding", conditional_disagg_eff_isl_threshold=2048, conditional_disagg_eff_isl_ratio_threshold=0.7, conditional_disagg_prefill_busy_threshold=None, conditional_disagg_decode_busy_threshold=None, overlap_score_credit=1.0, overlap_score_credit_decay=0.0, prefill_load_scale=1.0, decode_active_request_weight=0.0, router_policy_config=None, router_prefill_policy=None, router_decode_policy=None, router_tracking_hash="public-xxh3-v1", router_tracking_key_file=None, router_tracking_key_id=None))]
+    #[pyo3(signature = (overlap_score_weight=None, host_cache_hit_weight=0.75, disk_cache_hit_weight=0.25, router_temperature=0.0, use_kv_events=true, *, router_replica_sync=false, router_embedded_selection=false, router_disagg_decode_first=false, router_disagg_bypass_on_prefill_failure=false, router_track_active_blocks=true, router_track_output_blocks=false, router_assume_kv_reuse=true, router_track_prefill_tokens=true, router_prefill_load_model="none", router_ttl_secs=120.0, router_approximate_cache_policy="ttl", router_queue_threshold=None, router_event_threads=4, router_queue_policy="fcfs", use_remote_indexer=false, serve_indexer=false, shared_cache_multiplier=0.0, shared_cache_type="none", router_predicted_ttl_secs=None, conditional_disagg_enabled=false, conditional_disagg_policy="isl_bounding", conditional_disagg_eff_isl_threshold=2048, conditional_disagg_eff_isl_ratio_threshold=0.7, conditional_disagg_prefill_busy_threshold=None, conditional_disagg_decode_busy_threshold=None, overlap_score_credit=1.0, overlap_score_credit_decay=0.0, prefill_load_scale=1.0, decode_active_request_weight=0.0, router_policy_config=None, router_prefill_policy=None, router_decode_policy=None, router_tracking_hash="public-xxh3-v1", router_tracking_key_file=None, router_tracking_key_id=None))]
     #[allow(clippy::too_many_arguments)]
     fn new(
         overlap_score_weight: Option<f64>,
@@ -252,6 +252,8 @@ impl KvRouterConfig {
         use_kv_events: bool,
         router_replica_sync: bool,
         router_embedded_selection: bool,
+        router_disagg_decode_first: bool,
+        router_disagg_bypass_on_prefill_failure: bool,
         router_track_active_blocks: bool,
         router_track_output_blocks: bool,
         router_assume_kv_reuse: bool,
@@ -303,6 +305,8 @@ impl KvRouterConfig {
             use_kv_events,
             router_replica_sync,
             router_embedded_selection,
+            router_disagg_decode_first,
+            router_disagg_bypass_on_prefill_failure,
             router_track_active_blocks,
             router_track_output_blocks,
             router_assume_kv_reuse,
@@ -733,13 +737,10 @@ pub(crate) struct EngineConfig {
 
 /// Create the backend engine wrapper to run the model.
 /// Download the model if necessary.
-#[pyfunction]
-#[pyo3(signature = (distributed_runtime, args))]
-pub fn make_engine<'p>(
-    py: Python<'p>,
-    distributed_runtime: super::DistributedRuntime,
-    args: EntrypointArgs,
-) -> PyResult<Bound<'p, PyAny>> {
+
+/// Resolve the model (download if needed) and build the `LocalModel` the
+/// engine assemblies share. Independent of any runtime.
+async fn build_local_model(args: &EntrypointArgs) -> anyhow::Result<LocalModel> {
     let mut builder = LocalModelBuilder::default();
     builder
         .model_name(
@@ -770,30 +771,126 @@ pub fn make_engine<'p>(
         .runtime_config(args.runtime_config.clone().inner)
         .namespace(args.namespace.clone())
         .namespace_prefix(args.namespace_prefix.clone());
-    pyo3_async_runtimes::tokio::future_into_py(py, async move {
-        if let Some(model_path) = args.model_path.clone() {
-            let local_path = if model_path.exists() {
-                model_path
-            } else {
-                // Mocker only needs tokenizer, not weights
-                let ignore_weights = matches!(args.engine_type, EngineType::Mocker);
-                // Preserve the original HF model ID as source_path so the
-                // frontend can resolve model metadata even when the served
-                // model name differs (e.g., --model-name model-1 --model-path
-                // Qwen/Qwen3-0.6B).
-                builder.source_path(model_path.clone());
-                LocalModel::fetch(&model_path.display().to_string(), ignore_weights)
-                    .await
-                    .map_err(to_pyerr)?
-            };
-            builder.model_path(local_path);
-        }
+    if let Some(model_path) = args.model_path.clone() {
+        let local_path = if model_path.exists() {
+            model_path
+        } else {
+            // Mocker only needs tokenizer, not weights
+            let ignore_weights = matches!(args.engine_type, EngineType::Mocker);
+            // Preserve the original HF model ID as source_path so the
+            // frontend can resolve model metadata even when the served
+            // model name differs (e.g., --model-name model-1 --model-path
+            // Qwen/Qwen3-0.6B).
+            builder.source_path(model_path.clone());
+            LocalModel::fetch(&model_path.display().to_string(), ignore_weights)
+                .await
+                .map_err(to_pyerr)?
+        };
+        builder.model_path(local_path);
+    }
 
-        let local_model = builder.build().await.map_err(to_pyerr)?;
+    builder.build().await
+}
+
+#[pyfunction]
+#[pyo3(signature = (distributed_runtime, args))]
+pub fn make_engine<'p>(
+    py: Python<'p>,
+    distributed_runtime: super::DistributedRuntime,
+    args: EntrypointArgs,
+) -> PyResult<Bound<'p, PyAny>> {
+    pyo3_async_runtimes::tokio::future_into_py(py, async move {
+        let local_model = build_local_model(&args).await.map_err(to_pyerr)?;
         let inner = select_engine(distributed_runtime, args, local_model)
             .await
             .map_err(to_pyerr)?;
         Ok(EngineConfig { inner })
+    })
+}
+
+/// Cancellation shared by `make_static_engine` and `run_static_input`; the
+/// runtime-free assembly has no `DistributedRuntime` primary token.
+static STATIC_FRONTEND_CANCEL: std::sync::LazyLock<tokio_util::sync::CancellationToken> =
+    std::sync::LazyLock::new(tokio_util::sync::CancellationToken::new);
+
+/// Runtime-free assembly: model card from `model_path`, workers from a static
+/// file, KV-aware selection on an embedded selection service, dispatch over the
+/// direct engine transport named by `DYN_ROUTER_DIRECT_DISPATCH`.
+#[pyfunction]
+#[pyo3(signature = (args, workers_file))]
+pub fn make_static_engine<'p>(
+    py: Python<'p>,
+    args: EntrypointArgs,
+    workers_file: PathBuf,
+) -> PyResult<Bound<'p, PyAny>> {
+    pyo3_async_runtimes::tokio::future_into_py(py, async move {
+        if args.model_path.is_none() {
+            return Err(PyValueError::new_err(
+                "a static frontend needs model_path: the model card is read locally",
+            ));
+        }
+        let local_model = build_local_model(&args).await.map_err(to_pyerr)?;
+        install_direct_dispatch_from_env().map_err(to_pyerr)?;
+        let factory = dynamo_llm::kv_router::installed_direct_engine_factory().ok_or_else(|| {
+            PyValueError::new_err(
+                "a static frontend needs a direct-dispatch transport; set DYN_ROUTER_DIRECT_DISPATCH=vllm",
+            )
+        })?;
+        let block_size = local_model.card().kv_cache_block_size;
+        if block_size == 0 {
+            return Err(PyValueError::new_err(
+                "kv_cache_block_size must be set for a static frontend",
+            ));
+        }
+        let engine = dynamo_llm::kv_router::static_direct::StaticDirectEngine::start(
+            dynamo_llm::kv_router::static_direct::StaticDirectArgs {
+                kv_router_config: local_model.router_config().kv_router_config.clone(),
+                model_name: local_model.display_name().to_string(),
+                block_size,
+                workers_file,
+                factory,
+                cancel: STATIC_FRONTEND_CANCEL.clone(),
+            },
+        )
+        .await
+        .map_err(to_pyerr)?;
+        let inner = RsEngineConfig::InProcessTokens {
+            engine,
+            model: Box::new(local_model),
+            is_prefill: false,
+            is_decode: false,
+        };
+        Ok(EngineConfig { inner })
+    })
+}
+
+/// Stop a running `run_static_input`; it then returns normally. Safe to call
+/// from a signal handler.
+#[pyfunction]
+pub fn cancel_static_frontend() {
+    STATIC_FRONTEND_CANCEL.cancel();
+}
+
+/// Serve a `make_static_engine` engine over HTTP without a `DistributedRuntime`.
+#[pyfunction]
+#[pyo3(signature = (engine_config, frontend_route_extensions=None))]
+pub fn run_static_input<'p>(
+    py: Python<'p>,
+    engine_config: EngineConfig,
+    frontend_route_extensions: Option<PyObject>,
+) -> PyResult<Bound<'p, PyAny>> {
+    let frontend_route_extensions =
+        super::frontend_routes::frontend_route_extensions_from_py(py, frontend_route_extensions)?;
+    pyo3_async_runtimes::tokio::future_into_py(py, async move {
+        let cancel = STATIC_FRONTEND_CANCEL.clone();
+        let result = dynamo_llm::entrypoint::input::http::run_static(
+            engine_config.inner,
+            frontend_route_extensions,
+            cancel.clone(),
+        )
+        .await;
+        cancel.cancel();
+        result.map_err(to_pyerr)
     })
 }
 

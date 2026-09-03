@@ -222,6 +222,34 @@ router. See [Router Guide](../../developer-guide/knowledge-base/modular-componen
   Environment variable: `DYN_ROUTER_EMBEDDED_SELECTION`
 </ParamField>
 
+<ParamField path="--router-disagg-decode-first / --no-router-disagg-decode-first" type="boolean" default="false">
+  **Experimental.** In disaggregated serving with KV routing on the decode pool, book the decode
+  worker before selecting prefill, constrain prefill to that worker's KV-transfer domain, and
+  dispatch decode on the held booking. A failed prefill booking releases the decode booking and
+  fails the request unless `--router-disagg-bypass-on-prefill-failure` is set. Falls back to the
+  default prefill-first flow when the decode pool is not KV routed or the request pins a prefill
+  worker.
+
+  Environment variable: `DYN_ROUTER_DISAGG_DECODE_FIRST`
+</ParamField>
+
+<ParamField path="--router-disagg-bypass-on-prefill-failure / --no-router-disagg-bypass-on-prefill-failure" type="boolean" default="false">
+  With `--router-disagg-decode-first`, run prefill on the already-booked decode worker when the
+  prefill booking fails, instead of releasing the decode booking and failing the request.
+
+  Environment variable: `DYN_ROUTER_DISAGG_BYPASS_ON_PREFILL_FAILURE`
+</ParamField>
+
+<ParamField path="--static-workers-file" type="path" default="unset">
+  **Experimental.** Serve a fixed worker set without a `DistributedRuntime`: no discovery, etcd,
+  NATS, request plane, or event plane. The file is a JSON list of selection-service worker records
+  whose `endpoint` is each worker's direct gRPC endpoint and whose `kv_events_endpoint` (optional)
+  is its ZMQ KV-event publisher. Requires `--model-path` (the model card is read locally) and
+  `DYN_ROUTER_DIRECT_DISPATCH`. Membership does not change after startup.
+
+  Environment variable: `DYN_FRONTEND_STATIC_WORKERS_FILE`
+</ParamField>
+
 <ParamField path="DYN_ROUTER_DIRECT_DISPATCH" type="string" default="unset">
   **Experimental.** Environment variable only. Set to `vllm` to send admitted KV-routed requests
   directly to workers that advertise a `native_grpc_endpoint` (vLLM sidecars started with

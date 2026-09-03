@@ -137,6 +137,41 @@ process running: the model was served within ten seconds and chat completions
 succeeded. Across Kubernetes pods, use `DYN_DISCOVERY_BACKEND=kubernetes`, or
 the selection-catalog registration above, in place of the file backend.
 
+## Running Without A Distributed Runtime (Experimental)
+
+`dynamo.frontend --static-workers-file <path>` assembles the frontend with no
+`DistributedRuntime` at all: no discovery backend, request plane, or event
+plane is constructed. The pieces are:
+
+| Concern | Source |
+|---|---|
+| Model card and tokenizer | `--model-path` (a local model directory), read locally. |
+| Worker membership | The workers file: a JSON list of selection-service worker records (the same shape `dynamo-selection-service --workers-file` loads). `endpoint` is the worker's direct gRPC endpoint, `kv_events_endpoint(s)` its ZMQ KV-event publisher. |
+| Selection | An embedded selection service. With KV-event endpoints it subscribes to the workers' ZMQ publishers and routes KV-aware; without any, routing is load-based. |
+| Dispatch | The direct engine transport named by `DYN_ROUTER_DIRECT_DISPATCH` (currently `vllm`), connected once per worker at startup. |
+
+```bash
+cat > workers.json <<'EOF2'
+[
+  {"worker_id": 1, "endpoint": "http://10.0.0.11:50051",
+   "kv_events_endpoint": "tcp://10.0.0.11:5557", "block_size": 16,
+   "total_kv_blocks": 65536, "max_num_batched_tokens": 8192},
+  {"worker_id": 2, "endpoint": "http://10.0.0.12:50051",
+   "kv_events_endpoint": "tcp://10.0.0.12:5557", "block_size": 16,
+   "total_kv_blocks": 65536, "max_num_batched_tokens": 8192}
+]
+EOF2
+DYN_ROUTER_DIRECT_DISPATCH=vllm python3 -m dynamo.frontend \
+  --model-path /models/Qwen3-0.6B --model-name Qwen/Qwen3-0.6B \
+  --kv-cache-block-size 16 --router-mode kv --static-workers-file workers.json
+```
+
+Workers are vLLM sidecars started with `--advertise-grpc-endpoint` (or any
+process serving vLLM's gRPC service). Membership is fixed for the life of the
+process; a worker that is unreachable at startup is registered for selection
+but never chosen. Disaggregated serving, multimodal encoders, and worker
+churn need the runtime-backed frontend.
+
 See the
 [sidecar Dockerfile, source, and engine-specific READMEs](https://github.com/ai-dynamo/dynamo/tree/main/lib/sidecar)
 for implementation details.

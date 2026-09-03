@@ -437,3 +437,99 @@ async fn dropping_sidecar_stream_cancels_mocker_work() {
     .await
     .expect("dropping the gRPC stream should cancel scheduler work promptly");
 }
+
+/// The runtime-free assembly: a workers file names the mock server as a direct
+/// endpoint, the embedded selection service books it, the direct engine
+/// streams from it, and the booking is freed when the stream ends. No
+/// `DistributedRuntime` exists in this test.
+#[tokio::test]
+async fn static_direct_engine_serves_from_a_workers_file_without_a_runtime() {
+    use dynamo_kv_router::config::KvRouterConfig;
+    use dynamo_kv_router::services::selection::SelectionError;
+    use dynamo_llm::kv_router::static_direct::{StaticDirectArgs, StaticDirectEngine};
+    use dynamo_runtime::pipeline::{AsyncEngine, Context};
+    use dynamo_sidecar_common::GrpcTransportConfig;
+    use dynamo_vllm_sidecar::VllmDirectEngineFactory;
+    use std::num::NonZeroUsize;
+    use std::time::Duration;
+    use tokio_util::sync::CancellationToken;
+
+    let server = RunningServer::start(ServerMode::Aggregated, fast_engine_args()).await;
+    let dir = tempfile::tempdir().unwrap();
+    let workers_file = dir.path().join("workers.json");
+    std::fs::write(
+        &workers_file,
+        serde_json::json!([
+            {
+                "worker_id": 11,
+                "endpoint": server.endpoint,
+                "block_size": 16,
+                "total_kv_blocks": 4096,
+                "max_num_batched_tokens": 8192
+            },
+            {
+                "worker_id": 12,
+                "block_size": 16,
+                "total_kv_blocks": 4096
+            }
+        ])
+        .to_string(),
+    )
+    .unwrap();
+
+    let transport = GrpcTransportConfig {
+        connections: NonZeroUsize::MIN,
+        startup_deadline: Duration::from_secs(5),
+        connect_attempt_timeout: Duration::from_secs(1),
+        ..Default::default()
+    };
+    let cancel = CancellationToken::new();
+    let engine = StaticDirectEngine::start(StaticDirectArgs {
+        kv_router_config: KvRouterConfig::default(),
+        model_name: "static-model".to_string(),
+        block_size: 16,
+        workers_file,
+        factory: Arc::new(VllmDirectEngineFactory::new(transport)),
+        cancel: cancel.clone(),
+    })
+    .await
+    .expect("static assembly starts");
+    // Worker 12 has no endpoint: registered for selection, unreachable.
+    assert_eq!(engine.reachable_worker_ids(), &[11]);
+
+    let context = Context::new(request(3));
+    let selection_id = context.id().to_string();
+    let outputs: Vec<_> = engine
+        .generate(context)
+        .await
+        .expect("static generate")
+        .collect()
+        .await;
+    let tokens: usize = outputs
+        .iter()
+        .filter_map(|item| item.data.as_ref())
+        .map(|output| output.token_ids.len())
+        .sum();
+    assert_eq!(tokens, 3, "{outputs:?}");
+    assert!(outputs.iter().all(|item| item.error.is_none()));
+    assert_eq!(server.service.active_request_count(), 0);
+
+    // The booking is released when the stream is dropped.
+    let service = Arc::clone(engine.selection_service());
+    let mut freed = false;
+    for _ in 0..50 {
+        match service.free_reservation(&selection_id).await {
+            Err(SelectionError::NotFound(_)) => {
+                freed = true;
+                break;
+            }
+            _ => tokio::time::sleep(Duration::from_millis(20)).await,
+        }
+    }
+    assert!(
+        freed,
+        "booking {selection_id} was not freed after the stream ended"
+    );
+
+    cancel.cancel();
+}

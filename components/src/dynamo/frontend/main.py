@@ -35,8 +35,11 @@ from dynamo.llm import (
     EngineType,
     EntrypointArgs,
     FrontendRoute,
+    cancel_static_frontend,
     make_engine,
+    make_static_engine,
     run_input,
+    run_static_input,
 )
 from dynamo.runtime import DistributedRuntime
 from dynamo.runtime.logging import configure_dynamo_logging
@@ -387,23 +390,6 @@ async def async_main():
         )
 
     loop = asyncio.get_running_loop()
-    # Export transport TLS/mTLS settings BEFORE constructing DistributedRuntime:
-    # it connects to NATS eagerly, so NATS (m)TLS env vars must already be set or
-    # the CLI flags are silently ignored (unlike the lazily-dialed TCP planes).
-    _export_transport_tls_env(config)
-    runtime = DistributedRuntime(
-        loop,
-        config.discovery_backend,
-        config.request_plane,
-        event_plane=config.event_plane,
-    )
-
-    def signal_handler():
-        asyncio.create_task(graceful_shutdown(runtime))
-
-    for sig in (signal.SIGTERM, signal.SIGINT):
-        loop.add_signal_handler(sig, signal_handler)
-
     os.environ[MIN_INITIAL_WORKERS_ENV] = str(config.min_initial_workers)
     # Shared with the backends so a worker's advertised config is built from the
     # same flags and semantics. --router-mode always has a default here, so this
@@ -464,6 +450,37 @@ async def async_main():
 
     if config.router_prefill_load_model == "aic":
         kwargs["aic_perf_config"] = AicPerfConfig(**config.aic_perf_kwargs())
+
+    if config.static_workers_file is not None:
+        # Runtime-free assembly: no DistributedRuntime, discovery, etcd, or NATS.
+        if not config.model_path:
+            raise ValueError("--static-workers-file requires --model-path")
+        e = EntrypointArgs(EngineType.Dynamic, **kwargs)
+        engine = await make_static_engine(e, str(config.static_workers_file))
+        frontend_route_extensions = load_frontend_route_extensions(
+            config.frontend_route_extensions
+        )
+        for sig in (signal.SIGTERM, signal.SIGINT):
+            loop.add_signal_handler(sig, cancel_static_frontend)
+        await run_static_input(engine, frontend_route_extensions)
+        return
+
+    # Export transport TLS/mTLS settings BEFORE constructing DistributedRuntime:
+    # it connects to NATS eagerly, so NATS (m)TLS env vars must already be set or
+    # the CLI flags are silently ignored (unlike the lazily-dialed TCP planes).
+    _export_transport_tls_env(config)
+    runtime = DistributedRuntime(
+        loop,
+        config.discovery_backend,
+        config.request_plane,
+        event_plane=config.event_plane,
+    )
+
+    def signal_handler():
+        asyncio.create_task(graceful_shutdown(runtime))
+
+    for sig in (signal.SIGTERM, signal.SIGINT):
+        loop.add_signal_handler(sig, signal_handler)
 
     e = EntrypointArgs(EngineType.Dynamic, **kwargs)
     engine = await make_engine(runtime, e)

@@ -1783,6 +1783,8 @@ class KvRouterConfig:
         *,
         router_replica_sync: bool = False,
         router_embedded_selection: bool = False,
+        router_disagg_decode_first: bool = False,
+        router_disagg_bypass_on_prefill_failure: bool = False,
         router_track_active_blocks: bool = True,
         router_track_output_blocks: bool = False,
         router_assume_kv_reuse: bool = True,
@@ -1830,6 +1832,10 @@ class KvRouterConfig:
             router_replica_sync: Enable replica synchronization (default: False)
             router_embedded_selection: Run scheduling on an embedded selection-service
                 partition instead of the runtime-bound scheduler (default: False). Experimental.
+            router_disagg_decode_first: Book the decode worker before prefill and constrain
+                prefill to its KV-transfer domain (default: False). Experimental.
+            router_disagg_bypass_on_prefill_failure: With decode-first, run prefill on the
+                booked decode worker if the prefill booking fails (default: False).
             router_track_active_blocks: Track active blocks for load balancing (default: True)
             router_track_output_blocks: Track output blocks during generation (default: False).
                 When enabled, the router adds placeholder blocks as tokens are generated
@@ -2372,6 +2378,16 @@ async def make_engine(distributed_runtime: DistributedRuntime, args: EntrypointA
     """Make an engine matching the args"""
     ...
 
+async def make_static_engine(args: EntrypointArgs, workers_file: str) -> EngineConfig:
+    """Make a runtime-free engine over a static worker set.
+
+    `workers_file` is a JSON list of selection-service worker records whose
+    `endpoint` is each worker's direct gRPC endpoint. The model card comes from
+    `args.model_path`; no DistributedRuntime, discovery, etcd, or NATS is used.
+    Requires a direct-dispatch factory (DYN_ROUTER_DIRECT_DISPATCH).
+    """
+    ...
+
 class FrontendExtensionContext:
     """Read-only, live view of frontend state passed to extension route handlers.
 
@@ -2433,6 +2449,17 @@ class FrontendResponse:
     """
 
     def __init__(self, status_code: int, body: object) -> None: ...
+
+async def run_static_input(
+    engine_config: EngineConfig,
+    frontend_route_extensions: Optional[Sequence[FrontendRoute]] = None,
+) -> None:
+    """Serve an engine from `make_static_engine` over HTTP without a DistributedRuntime."""
+    ...
+
+def cancel_static_frontend() -> None:
+    """Stop a running `run_static_input`; it then returns normally."""
+    ...
 
 async def run_input(
     distributed_runtime: DistributedRuntime,

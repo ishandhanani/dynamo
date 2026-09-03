@@ -47,9 +47,9 @@ from dynamo._core import WorkerType as WorkerType
 from dynamo._core import compute_block_hash_for_seq as compute_block_hash_for_seq
 from dynamo._core import fetch_model as fetch_model
 from dynamo._core import lora_name_to_id as lora_name_to_id
-from dynamo._core import make_engine
+from dynamo._core import make_engine, make_static_engine
 from dynamo._core import register_model as register_model
-from dynamo._core import run_input
+from dynamo._core import cancel_static_frontend, run_input, run_static_input
 from dynamo._core import run_kv_indexer as run_kv_indexer
 from dynamo._core import run_select_service as run_select_service
 from dynamo._core import run_slot_tracker as run_slot_tracker

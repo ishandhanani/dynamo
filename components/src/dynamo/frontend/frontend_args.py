@@ -61,6 +61,7 @@ class FrontendConfig(RouterConfigBase, KvRouterConfigBase, AicPerfConfigBase):
     http_port: int
     tls_cert_path: Optional[pathlib.Path]
     tls_key_path: Optional[pathlib.Path]
+    static_workers_file: Optional[pathlib.Path] = None
     tcp_tls_cert_path: Optional[str] = None
     tcp_tls_key_path: Optional[str] = None
     tcp_tls_ca_cert_path: Optional[str] = None
@@ -234,6 +235,20 @@ class FrontendArgGroup(ArgGroup):
             action=argparse.BooleanOptionalAction,
             default=env_or_default("DYN_INTERACTIVE", False),
             help="Interactive text chat.\nenv var: DYN_INTERACTIVE",
+        )
+
+        add_argument(
+            g,
+            flag_name="--static-workers-file",
+            env_var="DYN_FRONTEND_STATIC_WORKERS_FILE",
+            default=None,
+            type=pathlib.Path,
+            help=(
+                "Experimental. Serve a static worker set without a distributed runtime: "
+                "a JSON list of selection-service worker records whose `endpoint` is each "
+                "worker's direct gRPC endpoint. No discovery, etcd, or NATS is used; requires "
+                "--model-path and DYN_ROUTER_DIRECT_DISPATCH (for example `vllm`)."
+            ),
         )
 
         add_argument(

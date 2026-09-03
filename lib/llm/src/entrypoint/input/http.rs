@@ -145,53 +145,12 @@ async fn run_with_worker_selector_factory<Sel>(
 where
     Sel: WorkerSelector<ModelRuntimeConfig> + Send + 'static,
 {
-    let local_model = engine_config.local_model();
-    let mut http_service_builder = match (local_model.tls_cert_path(), local_model.tls_key_path()) {
-        (Some(tls_cert_path), Some(tls_key_path)) => {
-            if !tls_cert_path.exists() {
-                anyhow::bail!("TLS certificate not found: {}", tls_cert_path.display());
-            }
-            if !tls_key_path.exists() {
-                anyhow::bail!("TLS key not found: {}", tls_key_path.display());
-            }
-            service_v2::HttpService::builder()
-                .enable_tls(true)
-                .tls_cert_path(Some(tls_cert_path.to_path_buf()))
-                .tls_key_path(Some(tls_key_path.to_path_buf()))
-                .port(local_model.http_port())
-        }
-        (None, None) => service_v2::HttpService::builder().port(local_model.http_port()),
-        (_, _) => {
-            // CLI should prevent us ever getting here
-            anyhow::bail!(
-                "Both --tls-cert-path and --tls-key-path must be provided together to enable TLS"
-            );
-        }
-    };
-    if let Some(http_host) = local_model.http_host() {
-        http_service_builder = http_service_builder.host(http_host);
-    }
-    http_service_builder =
-        http_service_builder.cancel_token(Some(distributed_runtime.primary_token()));
-    http_service_builder =
-        http_service_builder.with_request_template(engine_config.local_model().request_template());
-    http_service_builder = http_service_builder
-        .metrics_config(local_model.metrics_config().clone())
-        .frontend_api_config(local_model.frontend_api_config().clone());
-    // Inject the DRT's metrics registry so that component-scoped metrics
-    // (e.g. KvIndexerMetrics) are exposed (default port 8000 if not overridden).
-    http_service_builder =
-        http_service_builder.drt_metrics(Some(distributed_runtime.get_metrics_registry().clone()));
-
-    // Wire DRT discovery so that router metrics (dynamo_router_*) are registered
-    // with the instance_id as the router_id label.
-    http_service_builder =
-        http_service_builder.drt_discovery(Some(distributed_runtime.discovery()));
-    http_service_builder =
-        http_service_builder.runtime(Some(Arc::new(distributed_runtime.clone())));
-    for extension in frontend_route_extensions {
-        http_service_builder = http_service_builder.add_frontend_route_extension_arc(extension);
-    }
+    let mut http_service_builder = http_service_builder_for(
+        engine_config.local_model(),
+        Some(&distributed_runtime),
+        distributed_runtime.primary_token(),
+        frontend_route_extensions,
+    )?;
 
     let http_service = match engine_config {
         EngineConfig::Dynamic {
@@ -237,6 +196,93 @@ where
             .await?;
             http_service
         }
+        in_process => register_in_process_engine(http_service_builder, in_process).await?,
+    };
+    tracing::debug!(
+        "Supported routes: {:?}",
+        http_service
+            .route_docs()
+            .iter()
+            .map(|rd| rd.to_string())
+            .collect::<Vec<String>>()
+    );
+
+    http_service
+        .run(distributed_runtime.primary_token())
+        .await?;
+
+    distributed_runtime.shutdown(); // Cancel primary token
+    Ok(())
+}
+
+/// Build the HTTP service configuration shared by the runtime-backed and the
+/// runtime-free assemblies. `runtime` is `None` when the frontend runs without
+/// a `DistributedRuntime`; router and discovery metrics are then not wired.
+fn http_service_builder_for(
+    local_model: &crate::local_model::LocalModel,
+    runtime: Option<&DistributedRuntime>,
+    cancel_token: tokio_util::sync::CancellationToken,
+    frontend_route_extensions: Vec<FrontendRouteExtension>,
+) -> anyhow::Result<service_v2::HttpServiceConfigBuilder> {
+    let mut http_service_builder = match (local_model.tls_cert_path(), local_model.tls_key_path()) {
+        (Some(tls_cert_path), Some(tls_key_path)) => {
+            if !tls_cert_path.exists() {
+                anyhow::bail!("TLS certificate not found: {}", tls_cert_path.display());
+            }
+            if !tls_key_path.exists() {
+                anyhow::bail!("TLS key not found: {}", tls_key_path.display());
+            }
+            service_v2::HttpService::builder()
+                .enable_tls(true)
+                .tls_cert_path(Some(tls_cert_path.to_path_buf()))
+                .tls_key_path(Some(tls_key_path.to_path_buf()))
+                .port(local_model.http_port())
+        }
+        (None, None) => service_v2::HttpService::builder().port(local_model.http_port()),
+        (_, _) => {
+            // CLI should prevent us ever getting here
+            anyhow::bail!(
+                "Both --tls-cert-path and --tls-key-path must be provided together to enable TLS"
+            );
+        }
+    };
+    if let Some(http_host) = local_model.http_host() {
+        http_service_builder = http_service_builder.host(http_host);
+    }
+    http_service_builder = http_service_builder.cancel_token(Some(cancel_token));
+    http_service_builder =
+        http_service_builder.with_request_template(local_model.request_template());
+    http_service_builder = http_service_builder
+        .metrics_config(local_model.metrics_config().clone())
+        .frontend_api_config(local_model.frontend_api_config().clone());
+    if let Some(distributed_runtime) = runtime {
+        // Inject the DRT's metrics registry so that component-scoped metrics
+        // (e.g. KvIndexerMetrics) are exposed (default port 8000 if not overridden).
+        http_service_builder = http_service_builder
+            .drt_metrics(Some(distributed_runtime.get_metrics_registry().clone()));
+        // Wire DRT discovery so that router metrics (dynamo_router_*) are registered
+        // with the instance_id as the router_id label.
+        http_service_builder =
+            http_service_builder.drt_discovery(Some(distributed_runtime.discovery()));
+        http_service_builder =
+            http_service_builder.runtime(Some(Arc::new(distributed_runtime.clone())));
+    }
+    for extension in frontend_route_extensions {
+        http_service_builder = http_service_builder.add_frontend_route_extension_arc(extension);
+    }
+    Ok(http_service_builder)
+}
+
+/// Register an in-process engine (`InProcessText` or `InProcessTokens`) with a
+/// fresh HTTP service. `Dynamic` is not an in-process engine and is rejected.
+async fn register_in_process_engine(
+    http_service_builder: service_v2::HttpServiceConfigBuilder,
+    engine_config: EngineConfig,
+) -> anyhow::Result<HttpService> {
+    match engine_config {
+        EngineConfig::Dynamic { .. } => {
+            anyhow::bail!("Dynamic engines need a DistributedRuntime; use `run`")
+        }
         EngineConfig::InProcessText { engine, model, .. } => {
             let http_service = http_service_builder.build()?;
             let engine = Arc::new(StreamingEngineAdapter::new(engine));
@@ -246,7 +292,7 @@ where
             manager.add_chat_completions_model(model.display_name(), checksum, engine)?;
 
             enable_in_process_model_endpoints(&http_service)?;
-            http_service
+            Ok(http_service)
         }
         EngineConfig::InProcessTokens {
             engine: inner_engine,
@@ -272,9 +318,29 @@ where
             .await?;
             manager.add_completions_model(model.display_name(), checksum, cmpl_pipeline)?;
             enable_in_process_model_endpoints(&http_service)?;
-            http_service
+            Ok(http_service)
         }
-    };
+    }
+}
+
+/// Serve an in-process engine over HTTP without a `DistributedRuntime`.
+///
+/// This is the runtime-free frontend assembly: no discovery, request plane, or
+/// event plane is constructed. The engine (for example
+/// `kv_router::static_direct::StaticDirectEngine`) owns worker membership and
+/// dispatch. Runs until `cancel_token` fires.
+pub async fn run_static(
+    engine_config: EngineConfig,
+    frontend_route_extensions: Vec<FrontendRouteExtension>,
+    cancel_token: tokio_util::sync::CancellationToken,
+) -> anyhow::Result<()> {
+    let http_service_builder = http_service_builder_for(
+        engine_config.local_model(),
+        None,
+        cancel_token.clone(),
+        frontend_route_extensions,
+    )?;
+    let http_service = register_in_process_engine(http_service_builder, engine_config).await?;
     tracing::debug!(
         "Supported routes: {:?}",
         http_service
@@ -283,13 +349,7 @@ where
             .map(|rd| rd.to_string())
             .collect::<Vec<String>>()
     );
-
-    http_service
-        .run(distributed_runtime.primary_token())
-        .await?;
-
-    distributed_runtime.shutdown(); // Cancel primary token
-    Ok(())
+    http_service.run(cancel_token).await
 }
 
 fn enable_in_process_model_endpoints(http_service: &HttpService) -> anyhow::Result<()> {

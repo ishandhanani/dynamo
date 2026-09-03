@@ -302,7 +302,7 @@ impl Default for WorkerRequest {
     }
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct WorkerRequest {
     pub worker_id: WorkerId,
     #[serde(default = "default_model_name")]

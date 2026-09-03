@@ -18,6 +18,7 @@ use dynamo_kv_router::{
     protocols::RoutingConstraints,
     scheduling::QueueRejection,
     selector::{DefaultWorkerSelector, WorkerSelector},
+    services::selection::LinkedBookingState,
 };
 use dynamo_runtime::{
     pipeline::{
@@ -44,6 +45,8 @@ use crate::{
 mod activation;
 mod admission;
 mod conditional_bypass;
+
+use crate::kv_router::routing_host::RoutePlan;
 mod query;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -205,6 +208,12 @@ where
     conditional_disagg_prefill_busy_threshold: Option<f64>,
     /// Dedicated decode-busy guard threshold. `None` means disabled.
     conditional_disagg_decode_busy_threshold: Option<f64>,
+    /// Contract-5 coordination: book decode first, constrain prefill to the
+    /// decode worker's KV-transfer domain, compensate prefill failure.
+    decode_first: bool,
+    /// With `decode_first`, a failed prefill booking runs prefill on the booked
+    /// decode worker instead of releasing it and failing the request.
+    bypass_on_prefill_failure: bool,
     prefill_load_estimator: Option<Arc<dyn PrefillLoadEstimator>>,
     /// Model name (used for logging / lifecycle messages).
     model_name: String,
@@ -378,6 +387,77 @@ where
             }
         }
 
+        // Decode-first coordination (contract 5): book decode now, run prefill
+        // constrained to that worker's KV-transfer domain, dispatch decode on
+        // the held plan. Falls back to the prefill-first path below when the
+        // decode host cannot plan (not KV routed, preselected prefill worker).
+        let mut decode_plan = None;
+        if self.decode_first {
+            let planning_request = context.map(|_| req);
+            match self.plan_decode_first(&planning_request, &request_id).await {
+                Ok(Some(planned)) if planned.bypass => {
+                    tracing::info!(
+                        request_id = %request_id,
+                        worker_id = planned.worker.worker_id,
+                        dp_rank = planned.worker.dp_rank,
+                        state = ?LinkedBookingState::Bypass,
+                        "Decode-first coordination: prefill on the decode worker"
+                    );
+                    return self
+                        .dispatch_bypass_on_decode(planning_request, planned.plan)
+                        .await;
+                }
+                Ok(Some(planned)) => {
+                    (req, context) = planning_request.into_parts();
+                    let decode_host = self
+                        .decode_routing_host
+                        .get()
+                        .expect("decode-first plan requires a decode RoutingHost");
+                    let decode_endpoint_id = decode_host.kv_router().client().endpoint.id();
+                    match self.model_manager.get_kv_transfer_routing_constraints(
+                        &decode_endpoint_id,
+                        planned.worker.worker_id,
+                    ) {
+                        Ok(Some(constraints)) => {
+                            merge_decode_topology_constraints(&mut req, constraints);
+                        }
+                        Ok(None) => {}
+                        Err(error) => {
+                            tracing::warn!(
+                                request_id = %request_id,
+                                %error,
+                                state = ?LinkedBookingState::Compensated,
+                                "Decode-first coordination: cannot constrain prefill to the decode worker; releasing decode"
+                            );
+                            planned.plan.release().await;
+                            return Err(error);
+                        }
+                    }
+                    tracing::debug!(
+                        request_id = %request_id,
+                        worker_id = planned.worker.worker_id,
+                        state = ?LinkedBookingState::DecodeCommitted,
+                        "Decode-first coordination: decode booked, selecting prefill"
+                    );
+                    decode_plan = Some(planned.plan);
+                }
+                Ok(None) => {
+                    (req, context) = planning_request.into_parts();
+                }
+                Err(error) if crate::kv_router::routing_host::is_cancelled(&error) => {
+                    return Err(error);
+                }
+                Err(error) => {
+                    tracing::warn!(
+                        request_id = %request_id,
+                        %error,
+                        "Decode-first coordination: decode planning failed; falling back to prefill-first"
+                    );
+                    (req, context) = planning_request.into_parts();
+                }
+            }
+        }
+
         // Ensure tracker exists for routing decisions in disaggregated mode.
         // Create one if not provided by the upstream DeltaGenerator.
         if req.tracker.is_none() {
@@ -408,6 +488,9 @@ where
             );
         }
         let Some(binding) = self.binding.load_full() else {
+            if let Some(plan) = decode_plan {
+                plan.release().await;
+            }
             return next.generate(context.map(|_| req)).await;
         };
 
@@ -483,6 +566,25 @@ where
                 } else {
                     tracing::error!(error = %error, "Remote prefill failed, failing request");
                 }
+                if let Some(plan) = decode_plan {
+                    // Contract-5 compensation for "decode booked, prefill failed".
+                    if self.bypass_on_prefill_failure {
+                        tracing::warn!(
+                            request_id = %request_id,
+                            state = ?LinkedBookingState::BypassAfterPrefillFailure,
+                            "Decode-first coordination: prefill failed; running prefill on the booked decode worker"
+                        );
+                        return self
+                            .dispatch_bypass_on_decode(context.map(|_| req), plan)
+                            .await;
+                    }
+                    tracing::warn!(
+                        request_id = %request_id,
+                        state = ?LinkedBookingState::Compensated,
+                        "Decode-first coordination: prefill failed; releasing the decode booking"
+                    );
+                    plan.release().await;
+                }
                 return Err(error);
             }
         };
@@ -493,6 +595,9 @@ where
         // of launching a generation-only request with missing handoff IDs.
         let outcome = match outcome {
             PrefillOutcome::Terminal { output } => {
+                if let Some(plan) = decode_plan {
+                    plan.release().await;
+                }
                 let output = strip_terminal_disaggregated_params(*output);
                 return Ok(dynamo_runtime::pipeline::ResponseStream::new(
                     Box::pin(stream::once(async move { output })),
@@ -561,6 +666,20 @@ where
             self.conditional_disagg_policy.is_enabled(),
         ));
 
+        if let Some(plan) = decode_plan {
+            tracing::debug!(
+                request_id = %request_id,
+                state = ?LinkedBookingState::Linked,
+                "Decode-first coordination: dispatching decode on the held booking"
+            );
+            let decode_host = self
+                .decode_routing_host
+                .get()
+                .expect("decode-first plan requires a decode RoutingHost");
+            return decode_host
+                .dispatch_kv_plan(context.map(|_| decode_req), plan)
+                .await;
+        }
         next.generate(context.map(|_| decode_req)).await
     }
 }
@@ -569,6 +688,35 @@ impl<Sel> PrefillRouter<Sel>
 where
     Sel: WorkerSelector<ModelRuntimeConfig> + Send + 'static,
 {
+    /// Run the whole request on the already-booked decode worker: prefill
+    /// locally there, tagged with the bypass annotation the backend expects.
+    async fn dispatch_bypass_on_decode(
+        &self,
+        request: SingleIn<PreprocessedRequest>,
+        plan: RoutePlan<Sel>,
+    ) -> Result<ManyOut<Annotated<LLMEngineOutput>>> {
+        let mut request = request;
+        if request.tracker.is_none() {
+            request.tracker = Some(Arc::new(RequestTracker::new()));
+        }
+        if let Some(ref tracker) = request.tracker {
+            let _decode_permit = tracker.set_phase(RequestPhase::Decode).await;
+        }
+        request
+            .annotations
+            .push(BYPASS_REMOTE_PREFILL_ANNOTATION.to_string());
+        let decode_host = self
+            .decode_routing_host
+            .get()
+            .expect("bypass on decode requires a decode RoutingHost");
+        let response_stream = decode_host.dispatch_kv_plan(request, plan).await?;
+        let ctx = response_stream.context();
+        let annotation =
+            Annotated::<LLMEngineOutput>::from_annotation(BYPASS_REMOTE_PREFILL_ANNOTATION, &true)?;
+        let merged = stream::once(async move { annotation }).chain(response_stream);
+        Ok(ResponseStream::new(Box::pin(merged), ctx))
+    }
+
     pub(crate) fn conditional_disagg_enabled(&self) -> bool {
         self.conditional_disagg_policy.is_enabled()
     }
@@ -813,6 +961,106 @@ mod tests {
             output.routing_data.and_then(|routing| routing.token_ids),
             Some(vec![1, 2, 3])
         );
+    }
+
+    fn decode_first_router(conditional: bool) -> Arc<PrefillRouter> {
+        let (_activation_tx, activation_rx) = oneshot::channel();
+        let router = PrefillRouter::new(
+            activation_rx,
+            Arc::new(ModelManager::new()),
+            RouterMode::KV,
+            16,
+            Some(KvRouterConfig {
+                conditional_disagg_enabled: conditional,
+                router_disagg_decode_first: true,
+                ..Default::default()
+            }),
+            None,
+            None,
+            SessionAffinityMode::Hard,
+            "model".to_string(),
+            "namespace".to_string(),
+            crate::discovery::LoadThresholdHandle::new(Default::default()),
+            CancellationToken::new(),
+        );
+        router.lifecycle.store(
+            PrefillLifecycleState::Active as u8,
+            std::sync::atomic::Ordering::Release,
+        );
+        router
+    }
+
+    /// A downstream engine that records whether the bypass annotation reached it.
+    #[derive(Default)]
+    struct RecordingNext {
+        requests: AtomicUsize,
+        bypass_annotations: AtomicUsize,
+    }
+
+    #[async_trait]
+    impl AsyncEngine<SingleIn<PreprocessedRequest>, ManyOut<Annotated<LLMEngineOutput>>, Error>
+        for RecordingNext
+    {
+        async fn generate(
+            &self,
+            request: SingleIn<PreprocessedRequest>,
+        ) -> Result<ManyOut<Annotated<LLMEngineOutput>>, Error> {
+            self.requests.fetch_add(1, Ordering::Relaxed);
+            if request.has_annotation(BYPASS_REMOTE_PREFILL_ANNOTATION) {
+                self.bypass_annotations.fetch_add(1, Ordering::Relaxed);
+            }
+            let output = Annotated::from_data(LLMEngineOutput::default());
+            Ok(ResponseStream::new(
+                Box::pin(stream::once(async move { output })),
+                request.context(),
+            ))
+        }
+    }
+
+    #[tokio::test]
+    async fn decode_first_falls_back_to_prefill_first_without_a_decode_host() {
+        // Contract 5 needs a decode RoutingHost to book against. Without one
+        // the router must take the unchanged prefill-first path (here: no
+        // prefill binding either, so straight to `next`) and must not tag the
+        // request as a bypass.
+        let router = decode_first_router(false);
+        assert!(router.decode_first);
+        assert!(router.decode_routing_host.get().is_none());
+        let next_engine = Arc::new(RecordingNext::default());
+        let next: ServerStreamingEngine<PreprocessedRequest, Annotated<LLMEngineOutput>> =
+            next_engine.clone();
+
+        let request = PreprocessedRequest::builder()
+            .model("test".to_string())
+            .token_ids(vec![1, 2, 3, 4])
+            .stop_conditions(Default::default())
+            .sampling_options(Default::default())
+            .output_options(Default::default())
+            .build()
+            .unwrap();
+        let mut response = router
+            .generate(SingleIn::new(request), next)
+            .await
+            .expect("request should fall back to the prefill-first path");
+        assert!(response.next().await.is_some());
+        assert_eq!(next_engine.requests.load(Ordering::Relaxed), 1);
+        assert_eq!(next_engine.bypass_annotations.load(Ordering::Relaxed), 0);
+    }
+
+    #[tokio::test]
+    async fn decode_first_plan_is_none_when_a_prefill_worker_is_pinned() {
+        let router = decode_first_router(true);
+        let mut request = query_only_request();
+        request.annotations.clear();
+        request.routing = Some(crate::protocols::common::preprocessor::RoutingHints {
+            prefill_worker_id: Some(7),
+            ..Default::default()
+        });
+        let planned = router
+            .plan_decode_first(&SingleIn::new(request), "req")
+            .await
+            .expect("planning must not fail");
+        assert!(planned.is_none());
     }
 
     #[test]
