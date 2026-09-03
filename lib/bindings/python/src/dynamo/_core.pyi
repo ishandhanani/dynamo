@@ -1830,9 +1830,8 @@ class KvRouterConfig:
             router_temperature: Temperature for normalized worker sampling via softmax (default: 0.0)
             use_kv_events: Whether to use KV events from workers (default: True)
             router_replica_sync: Enable replica synchronization (default: False)
-            router_embedded_selection: Run scheduling on an embedded selection-service
-                partition (default: True). False selects the deprecated runtime-bound
-                scheduler, kept for one release as a rollback.
+            router_embedded_selection: Deprecated and ignored; scheduling always runs on
+                an embedded selection-service partition. False only logs a warning.
             router_disagg_decode_first: Book the decode worker before prefill and constrain
                 prefill to its KV-transfer domain (default: False). Experimental.
             router_disagg_bypass_on_prefill_failure: With decode-first, run prefill on the
