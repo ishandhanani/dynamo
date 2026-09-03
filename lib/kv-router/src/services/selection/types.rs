@@ -422,6 +422,14 @@ pub struct SelectRequest {
     pub allowed_worker_ids: Option<HashSet<WorkerId>>,
     #[serde(default)]
     pub routing_constraints: RoutingConstraints,
+    /// Select from current scheduler state without queue admission.
+    ///
+    /// The response then carries the chosen worker's `worker_load` snapshot
+    /// and `prefill_busy` evaluation. The request never waits in the router
+    /// queue; when the queue would have rejected it the call fails the same
+    /// way an admitted selection does. Rejected on `select_and_reserve`.
+    #[serde(default)]
+    pub advisory: bool,
 }
 
 impl SelectRequest {
@@ -614,6 +622,33 @@ pub struct SelectResponse {
     pub block_size: u32,
     pub overlap: MooncakeOverlapSummary,
     pub effective_prefill_tokens: usize,
+    /// Projected KV blocks on the chosen worker once this request decodes,
+    /// including its own blocks: the scheduler's `potential_decode_blocks`.
+    pub potential_decode_blocks: u64,
+    /// `potential_decode_blocks` against the chosen worker's `total_kv_blocks`
+    /// at `conditional_disagg_decode_busy_threshold`. Absent when either the
+    /// threshold or the worker's capacity is unknown.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub decode_busy: Option<bool>,
+    /// Chosen worker's load at selection time. Present only for advisory
+    /// selections (`SelectRequest::advisory`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub worker_load: Option<SelectionWorkerLoad>,
+}
+
+/// Load snapshot of the chosen worker, as the scheduler projected it for this
+/// request. Mirrors the frontend's advisory selection load.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub struct SelectionWorkerLoad {
+    pub active_prefill_tokens: usize,
+    pub prefill_token_capacity: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub total_kv_blocks: Option<u64>,
+    /// `active_prefill_tokens` against `prefill_token_capacity` at
+    /// `conditional_disagg_prefill_busy_threshold`. Absent when the threshold
+    /// is unset.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub prefill_busy: Option<bool>,
 }
 
 #[derive(Debug, Serialize)]

@@ -44,8 +44,8 @@ use super::pending::{PendingSelection, SelectionCache, SelectionCacheConfig};
 use super::types::{
     ModelLoadResponse, OverlapScoresRequest, OverlapScoresResponse, PotentialLoadsRequest,
     ReadyResponse, ReservationRequest, ReservationResponse, SelectAndReserveRequest, SelectRequest,
-    SelectResponse, SelectionWorkerConfig, WorkerCatalogRecord, WorkerLifecycle,
-    WorkerPatchRequest, WorkerRequest,
+    SelectResponse, SelectionWorkerConfig, SelectionWorkerLoad, WorkerCatalogRecord,
+    WorkerLifecycle, WorkerPatchRequest, WorkerRequest,
 };
 use crate::WorkerSelectionPolicyFactory;
 use crate::WorkerType;
@@ -89,6 +89,8 @@ struct SelectionOperation {
     pinned_worker: Option<WorkerWithDpRank>,
     allowed_worker_ids: Option<HashSet<WorkerId>>,
     routing_constraints: RoutingConstraints,
+    /// Skip queue admission and return the chosen worker's load snapshot.
+    advisory: bool,
 }
 
 /// Resolved inputs for booking a reservation, shared by the cached and explicit
@@ -729,6 +731,7 @@ impl SelectionCore {
                 pinned_worker: req.pinned_worker,
                 allowed_worker_ids: req.allowed_worker_ids,
                 routing_constraints: req.routing_constraints,
+                advisory: req.advisory,
             },
             false,
         )
@@ -766,6 +769,7 @@ impl SelectionCore {
                 pinned_worker: req.pinned_worker,
                 allowed_worker_ids: req.allowed_worker_ids,
                 routing_constraints: req.routing_constraints,
+                advisory: false,
             },
             true,
         )
@@ -791,8 +795,14 @@ impl SelectionCore {
             pinned_worker,
             allowed_worker_ids,
             routing_constraints,
+            advisory,
         } = operation;
         self.ensure_running()?;
+        if advisory && book {
+            return Err(SelectionError::BadRequest(
+                "advisory selection cannot book a reservation".to_string(),
+            ));
+        }
 
         let entry = self.ready_entry(&key)?;
         let PreparedSelectionInputs {
@@ -872,12 +882,26 @@ impl SelectionCore {
             routing_constraints,
             shared_cache_hits,
         };
-        let response = tokio::select! {
+        let (response, advisory_load) = tokio::select! {
             biased;
             _ = self.cancel_token.cancelled() => {
                 return Err(SelectionError::Scheduler(KvSchedulerError::SubscriberShutdown));
             }
-            result = entry.scheduler.schedule_request(schedule_request) => result?,
+            result = async {
+                if advisory {
+                    entry
+                        .scheduler
+                        .select_without_admission(schedule_request)
+                        .await
+                        .map(|advisory| (advisory.response, Some(advisory.selected_worker_load)))
+                } else {
+                    entry
+                        .scheduler
+                        .schedule_request(schedule_request)
+                        .await
+                        .map(|response| (response, None))
+                }
+            } => result?,
         };
         let endpoint = self
             .catalog
@@ -894,6 +918,29 @@ impl SelectionCore {
         );
 
         let effective_prefill = effective_prefill_tokens(isl_tokens, response.cached_tokens);
+        let potential_decode_blocks = response.potential_decode_blocks as u64;
+        let total_kv_blocks = advisory_load
+            .and_then(|load| load.total_kv_blocks.map(|blocks| blocks as u64))
+            .or_else(|| {
+                self.catalog
+                    .total_kv_blocks(response.best_worker.worker_id, &key)
+            });
+        let decode_busy = self
+            .kv_router_config
+            .conditional_disagg_decode_busy_threshold
+            .zip(total_kv_blocks)
+            .map(|(threshold, total_kv_blocks)| {
+                potential_decode_blocks as f64 > threshold * total_kv_blocks as f64
+            });
+        let worker_load = advisory_load.map(|load| SelectionWorkerLoad {
+            active_prefill_tokens: load.active_prefill_tokens,
+            prefill_token_capacity: load.prefill_token_capacity,
+            total_kv_blocks,
+            prefill_busy: self
+                .kv_router_config
+                .conditional_disagg_prefill_busy_threshold
+                .map(|threshold| load.prefill_load_exceeds(threshold)),
+        });
 
         if book && let Some(selection_id) = selection_id.as_deref() {
             self.record_reservation(selection_id, &key);
@@ -929,6 +976,9 @@ impl SelectionCore {
             block_size: entry.block_size,
             overlap,
             effective_prefill_tokens: effective_prefill,
+            potential_decode_blocks,
+            decode_busy,
+            worker_load,
         })
     }
 
@@ -1532,6 +1582,7 @@ mod tests {
             pinned_worker: None,
             allowed_worker_ids: None,
             routing_constraints: RoutingConstraints::default(),
+            advisory: false,
         }
     }
 
@@ -2182,6 +2233,70 @@ mod tests {
             core.add_output_block("later-entry-reservation", None),
             Err(SelectionError::NotFound(_))
         ));
+    }
+
+    #[tokio::test]
+    async fn advisory_select_reports_worker_load_and_busy_evaluation() {
+        let mut config = test_config(false);
+        config.conditional_disagg_prefill_busy_threshold = Some(0.5);
+        config.conditional_disagg_decode_busy_threshold = Some(0.0);
+        let core = SelectionCore::new_local(
+            config,
+            1,
+            CancellationToken::new(),
+            SelectionCacheConfig::default(),
+        );
+        let mut request = worker(1);
+        request.total_kv_blocks = Some(1000);
+        core.upsert_worker(request).await.expect("worker upsert");
+
+        // Admitted (queued) select: decode evaluation comes from the catalog's
+        // total_kv_blocks; no load snapshot is taken.
+        let response = core.select(select_request()).await.expect("select");
+        assert!(response.potential_decode_blocks > 0);
+        assert_eq!(
+            response.decode_busy,
+            Some(true),
+            "threshold 0.0 is always exceeded"
+        );
+        assert!(response.worker_load.is_none());
+
+        // Advisory select: same decode evaluation plus the projected load.
+        let mut request = select_request();
+        request.advisory = true;
+        let response = core.select(request).await.expect("advisory select");
+        assert!(response.potential_decode_blocks > 0);
+        assert_eq!(response.decode_busy, Some(true));
+        let load = response.worker_load.expect("advisory load");
+        assert_eq!(load.total_kv_blocks, Some(1000));
+        assert_eq!(load.prefill_token_capacity, 1024);
+        assert_eq!(load.active_prefill_tokens, 0);
+        assert_eq!(load.prefill_busy, Some(false));
+
+        // Advisory selection does not book.
+        assert!(core.reservation_index.read().is_empty());
+        assert_eq!(
+            core.loads(Some("model"), Some("default"))[0].loads[0].potential_prefill_tokens,
+            0
+        );
+    }
+
+    #[tokio::test]
+    async fn busy_evaluation_is_absent_without_thresholds_or_capacity() {
+        let core = SelectionCore::new_local(
+            test_config(false),
+            1,
+            CancellationToken::new(),
+            SelectionCacheConfig::default(),
+        );
+        core.upsert_worker(worker(1)).await.expect("worker upsert");
+        let mut request = select_request();
+        request.advisory = true;
+        let response = core.select(request).await.expect("advisory select");
+        assert_eq!(response.decode_busy, None);
+        let load = response.worker_load.expect("advisory load");
+        assert_eq!(load.total_kv_blocks, None);
+        assert_eq!(load.prefill_busy, None);
     }
 
     #[tokio::test]

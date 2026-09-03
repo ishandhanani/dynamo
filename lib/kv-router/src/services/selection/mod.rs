@@ -39,6 +39,7 @@ pub use types::{
     ModelLoadResponse, OutputBlockRequest, OverlapScoresRequest, OverlapScoresResponse,
     PotentialLoadsRequest, ReadyResponse, ReservationRequest, ReservationResponse,
     SelectAndReserveRequest, SelectRequest, SelectResponse, SelectionInputTrigger,
-    SelectionKvHints, SelectionSessionContext, SelectionWorkerConfig, SharedCacheOverlapScore,
-    WorkerCatalogRecord, WorkerLifecycle, WorkerOverlapScore, WorkerPatchRequest, WorkerRequest,
+    SelectionKvHints, SelectionSessionContext, SelectionWorkerConfig, SelectionWorkerLoad,
+    SharedCacheOverlapScore, WorkerCatalogRecord, WorkerLifecycle, WorkerOverlapScore,
+    WorkerPatchRequest, WorkerRequest,
 };

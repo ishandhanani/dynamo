@@ -183,12 +183,49 @@ globally unique `selection_id`, or allow the service to generate one:
     "cpu": 96,
     "disk": 128
   },
-  "effective_prefill_tokens": 384
+  "effective_prefill_tokens": 384,
+  "potential_decode_blocks": 212,
+  "decode_busy": false
 }
 ```
 
 `select` returns the same selection fields but omits `sequence_hashes`, `isl_tokens`, and
-`track_prefill_tokens`. `selection_id` is omitted when absent. All `overlap`
+`track_prefill_tokens`. `selection_id` is omitted when absent.
+
+`potential_decode_blocks` is the scheduler's projection of KV blocks on the
+chosen worker once this request is decoding, including the request's own
+blocks. `decode_busy` compares it against the worker's `total_kv_blocks` at
+`conditional_disagg_decode_busy_threshold` and is omitted when either the
+threshold or the capacity is unknown.
+
+### Advisory selection
+
+`POST /select` accepts `"advisory": true` to select from current scheduler
+state without queue admission. The request never waits in the router queue,
+and the response adds the chosen worker's projected load:
+
+```json
+{
+  "worker_id": 1,
+  "dp_rank": 0,
+  "potential_decode_blocks": 212,
+  "decode_busy": false,
+  "worker_load": {
+    "active_prefill_tokens": 2048,
+    "prefill_token_capacity": 8192,
+    "total_kv_blocks": 4096,
+    "prefill_busy": false
+  }
+}
+```
+
+`prefill_busy` compares `active_prefill_tokens` against
+`prefill_token_capacity` at `conditional_disagg_prefill_busy_threshold` and is
+omitted when that threshold is unset. This is the probe a disaggregation
+coordinator uses to decide whether to bypass remote prefill: one advisory
+`select` against the prefill pool answers "would the prefill worker I'd get be
+busy?" without a separate load read. `advisory` is not accepted on
+`select_and_reserve`. All `overlap`
 values are matched token counts. `gpu`, `cpu`, and `disk` use the cumulative
 Mooncake tier semantics documented in the standalone indexer's
 [per-instance tier breakdown](standalone-indexer.md#per-instance-tier-breakdown).
