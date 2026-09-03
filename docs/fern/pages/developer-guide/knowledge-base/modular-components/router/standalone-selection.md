@@ -81,6 +81,23 @@ APIs. Those bindings should wrap `SelectionService` rather than construct
 Router scheduling behavior continues to use the standard Dynamo router
 environment configuration.
 
+### KV Indexing Modes
+
+The service resolves its indexer shape from the same router configuration the
+frontend uses, so the two index the same way:
+
+| Configuration | Primary indexer | Routing decisions |
+|---|---|---|
+| `use_kv_events=true` (default) | Event-driven from worker ZMQ events | Not recorded |
+| `use_kv_events=true`, `DYN_ROUTER_PREDICTED_TTL_SECS` set | Event-driven | Recorded into a short-TTL side indexer merged into device scores by per-worker max |
+| `use_kv_events=false` | Approximate: no events, entries expire after `router_ttl_secs` | Recorded into the primary |
+
+A routing decision is recorded when a reservation is booked (`select_and_reserve`,
+or `select` followed by `POST /reservations`), never for a query-only `select`.
+Hash-only reservations that supply `sequence_hashes` without `block_hashes` or
+`token_ids` are not recorded. `router_approximate_cache_policy=lru` is not yet
+supported here and falls back to TTL retention with a warning.
+
 The standalone expiry guard measures absolute age from admission; output progress does not refresh
 it. Periodic cleanup therefore reclaims stale state approximately five to six minutes after
 admission by default. The embedded `KvRouter` uses the same `300`-second value as its shared

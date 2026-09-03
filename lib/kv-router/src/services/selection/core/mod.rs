@@ -12,6 +12,7 @@ use tokio::sync::{mpsc, watch};
 use tokio_util::sync::CancellationToken;
 
 use crate::identity::RoutingPartitionId;
+use crate::indexer::RoutingDecisionHashes;
 use crate::indexer::{SharedKvCache, TieredMatchDetails};
 use crate::protocols::{
     ActiveSequenceEvent, LocalBlockHash, PrefillLoadHint, RoutingConstraints, SharedCacheHits,
@@ -31,7 +32,7 @@ use crate::sequences::{
 use crate::services::common::replica_sync::{
     ReplicaSyncConfig, ScopedReplicaEvent, ScopedSequencePublisher, setup_scoped_replica_sync,
 };
-use crate::services::indexer::backend::Indexer;
+use crate::services::indexer::backend::{Indexer, IndexerPolicy};
 use crate::services::indexer::recovery;
 use crate::services::indexer::registry::WorkerRegistry;
 use crate::services::overlap::MooncakeOverlapSummary;
@@ -104,6 +105,8 @@ struct ReservationBooking {
     expected_output_tokens: Option<u32>,
     track_prefill_tokens: bool,
     lora_name: Option<String>,
+    /// Public block hashes to record into an approximate indexer once booked.
+    routing_hashes: Option<Vec<LocalBlockHash>>,
 }
 
 /// Host-supplied hooks applied to every partition scheduler the core creates.
@@ -240,6 +243,7 @@ impl SelectionCore {
             .validate_config()
             .map_err(anyhow::Error::msg)?;
         let tracking_hash = Arc::new(TrackingHashContext::from_config(&kv_router_config)?);
+        let indexer_policy = IndexerPolicy::from_router_config(&kv_router_config)?;
         Ok(Self::new_inner(
             kv_router_config,
             indexer_threads,
@@ -251,6 +255,7 @@ impl SelectionCore {
             true,
             cache_config,
             tracking_hash,
+            indexer_policy,
         ))
     }
 
@@ -266,12 +271,14 @@ impl SelectionCore {
         signal_indexer_ready: bool,
         cache_config: SelectionCacheConfig,
         tracking_hash: Arc<TrackingHashContext>,
+        indexer_policy: IndexerPolicy,
     ) -> Self {
         let cancel_token = cancel_token.child_token();
         let indexer_registry = Arc::new(WorkerRegistry::new_with_cancel_token(
             indexer_threads,
             cancel_token.clone(),
         ));
+        indexer_registry.set_indexer_policy(indexer_policy);
         if signal_indexer_ready {
             indexer_registry.signal_ready();
         }
@@ -861,6 +868,11 @@ impl SelectionCore {
             book.then(|| sequence_hashes.iter().map(|hash| *hash as i64).collect());
         let response_isl_tokens = book.then_some(isl_tokens);
         let response_track_prefill_tokens = book.then_some(track_prefill_tokens);
+        // Bookings (now, or later via the pending-selection cache) are recorded
+        // into an approximate indexer; keep the public hashes for that.
+        let routing_hashes = (entry.indexer.records_routing_decisions()
+            && (book || cached_inputs.is_some()))
+        .then(|| block_hashes.clone());
         let schedule_request = ScheduleRequest {
             mode,
             token_seq: Some(sequence_hashes),
@@ -944,6 +956,10 @@ impl SelectionCore {
 
         if book && let Some(selection_id) = selection_id.as_deref() {
             self.record_reservation(selection_id, &key);
+            if let Some(hashes) = routing_hashes.clone() {
+                self.record_routing_decision(&entry, response.best_worker, hashes)
+                    .await;
+            }
         }
 
         if let Some((cache_id, sequence_hashes, lora_name, track_prefill_tokens)) = cached_inputs {
@@ -958,6 +974,7 @@ impl SelectionCore {
                     expected_output_tokens,
                     track_prefill_tokens,
                     lora_name,
+                    routing_hashes,
                 },
                 Instant::now(),
             );
@@ -1037,6 +1054,7 @@ impl SelectionCore {
                 expected_output_tokens: pending.expected_output_tokens,
                 track_prefill_tokens,
                 lora_name: pending.lora_name.clone(),
+                routing_hashes: pending.routing_hashes.clone(),
             },
         )
         .await
@@ -1118,6 +1136,16 @@ impl SelectionCore {
                     .and_then(|cfg| cfg.track_prefill_tokens)
                     .unwrap_or(self.kv_router_config.router_track_prefill_tokens)
         });
+        // Hash-only reservations (sequence hashes without block hashes) carry
+        // nothing an indexer can key on; recording is skipped for them.
+        let can_record = entry.indexer.records_routing_decisions()
+            && (req.prompt.token_ids.is_some() || req.prompt.block_hashes.is_some());
+        let routing_hashes = can_record
+            .then(|| {
+                req.prompt
+                    .block_hashes_for_indexer(entry.block_size, entry.is_eagle)
+            })
+            .transpose()?;
 
         self.finalize_reservation(
             entry,
@@ -1131,6 +1159,7 @@ impl SelectionCore {
                 expected_output_tokens: req.expected_output_tokens,
                 track_prefill_tokens,
                 lora_name: req.prompt.lora_name,
+                routing_hashes,
             },
         )
         .await
@@ -1154,6 +1183,7 @@ impl SelectionCore {
             expected_output_tokens,
             track_prefill_tokens,
             lora_name,
+            routing_hashes,
         } = booking;
 
         // Strict booking: never lazily recreate a worker/rank removed since the
@@ -1171,6 +1201,9 @@ impl SelectionCore {
             })
             .await?;
         self.record_reservation(&selection_id, &key);
+        if let Some(hashes) = routing_hashes {
+            self.record_routing_decision(&entry, worker, hashes).await;
+        }
 
         Ok(ReservationResponse {
             selection_id,
@@ -1190,6 +1223,36 @@ impl SelectionCore {
 
     fn forget_reservation(&self, selection_id: &str) {
         self.reservation_index.write().remove(selection_id);
+    }
+
+    /// Record a booked routing decision into the partition's approximate
+    /// indexer (side or primary). The booking already landed, so a failure
+    /// here only costs predicted cache credit; it is logged, not returned.
+    async fn record_routing_decision(
+        &self,
+        entry: &SelectionEntry,
+        worker: WorkerWithDpRank,
+        block_hashes: Vec<LocalBlockHash>,
+    ) {
+        if block_hashes.is_empty() {
+            return;
+        }
+        if let Err(error) = entry
+            .indexer
+            .record_routing_decision(
+                worker,
+                RoutingDecisionHashes::from_local_hashes(block_hashes),
+            )
+            .await
+        {
+            tracing::warn!(
+                %error,
+                key = %entry.key,
+                worker_id = worker.worker_id,
+                dp_rank = worker.dp_rank,
+                "Failed to record routing decision into approximate indexer"
+            );
+        }
     }
 
     /// Entries to try for a lifecycle call on `selection_id`: the indexed
@@ -1665,6 +1728,7 @@ mod tests {
                 true,
                 SelectionCacheConfig::default(),
                 tracking_hash,
+                IndexerPolicy::from_router_config(&test_config(false)).expect("indexer policy"),
             );
 
             core.upsert_worker(worker(1)).await.expect("worker upsert");
@@ -1691,6 +1755,7 @@ mod tests {
         let tracking_hash = Arc::new(
             TrackingHashContext::from_config(&config).expect("valid tracking hash configuration"),
         );
+        let indexer_policy = IndexerPolicy::from_router_config(&config).expect("indexer policy");
         SelectionCore::new_inner(
             config,
             1,
@@ -1702,7 +1767,139 @@ mod tests {
             true,
             SelectionCacheConfig::default(),
             tracking_hash,
+            indexer_policy,
         )
+    }
+
+    async fn wait_for_overlap(
+        core: &SelectionCore,
+        request: impl Fn() -> SelectRequest,
+    ) -> SelectResponse {
+        tokio::time::timeout(Duration::from_secs(2), async {
+            loop {
+                let response = core.select(request()).await.expect("select");
+                if response.overlap.longest_matched > 0 {
+                    return response;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("approximate indexer never credited the booked prompt")
+    }
+
+    #[tokio::test]
+    async fn bookings_populate_the_approximate_primary_without_kv_events() {
+        // use_kv_events=false: the primary is approximate and bookings feed it.
+        let core = SelectionCore::new_local(
+            test_config(false),
+            1,
+            CancellationToken::new(),
+            SelectionCacheConfig::default(),
+        );
+        core.upsert_worker(worker(1)).await.expect("worker upsert");
+        core.upsert_worker(worker(2)).await.expect("worker upsert");
+
+        // Query-only selection records nothing.
+        let first = core.select(select_request()).await.expect("select");
+        assert_eq!(first.overlap.longest_matched, 0);
+
+        // select_and_reserve records the routed prefix for the chosen worker.
+        let booked = core
+            .select_and_reserve(reserve_request("booked"))
+            .await
+            .expect("reserve");
+        let credited = wait_for_overlap(&core, || {
+            let mut request = select_request();
+            request.allowed_worker_ids = Some(HashSet::from([booked.worker_id]));
+            request
+        })
+        .await;
+        assert_eq!(credited.worker_id, booked.worker_id);
+        assert_eq!(credited.overlap.longest_matched, 4);
+
+        // The cached replay path records too, on a different prompt.
+        let prompt_b = || PromptRequest {
+            token_ids: Some(vec![5, 6, 7, 8]),
+            ..PromptRequest::default()
+        };
+        let mut request = select_request();
+        request.prompt = prompt_b();
+        request.selection_id = Some("cached".to_string());
+        request.allowed_worker_ids = Some(HashSet::from([2]));
+        core.select(request).await.expect("select");
+        core.create_reservation(ReservationRequest {
+            model_name: "model".to_string(),
+            routing_group: "default".to_string(),
+            selection_id: "cached".to_string(),
+            worker_id: None,
+            dp_rank: None,
+            prompt: PromptRequest::default(),
+            router_config_override: None,
+            expected_output_tokens: None,
+            effective_prefill_tokens: None,
+            track_prefill_tokens: None,
+        })
+        .await
+        .expect("cached reservation");
+        let credited = wait_for_overlap(&core, || {
+            let mut request = select_request();
+            request.prompt = prompt_b();
+            request.allowed_worker_ids = Some(HashSet::from([2]));
+            request
+        })
+        .await;
+        assert_eq!(credited.worker_id, 2);
+
+        // And the explicit reservation form.
+        let prompt_c = || PromptRequest {
+            token_ids: Some(vec![9, 10, 11, 12]),
+            ..PromptRequest::default()
+        };
+        core.create_reservation(ReservationRequest {
+            model_name: "model".to_string(),
+            routing_group: "default".to_string(),
+            selection_id: "explicit".to_string(),
+            worker_id: Some(1),
+            dp_rank: None,
+            prompt: prompt_c(),
+            router_config_override: None,
+            expected_output_tokens: None,
+            effective_prefill_tokens: None,
+            track_prefill_tokens: None,
+        })
+        .await
+        .expect("explicit reservation");
+        let credited = wait_for_overlap(&core, || {
+            let mut request = select_request();
+            request.prompt = prompt_c();
+            request.allowed_worker_ids = Some(HashSet::from([1]));
+            request
+        })
+        .await;
+        assert_eq!(credited.worker_id, 1);
+    }
+
+    #[tokio::test]
+    async fn event_driven_indexer_does_not_record_bookings() {
+        let core = SelectionCore::new_local(
+            test_config(true),
+            1,
+            CancellationToken::new(),
+            SelectionCacheConfig::default(),
+        );
+        core.upsert_worker(worker_with_kv_events(1))
+            .await
+            .expect("worker upsert");
+        core.select_and_reserve(reserve_request("booked"))
+            .await
+            .expect("reserve");
+        core.free_reservation("booked").await.expect("free");
+        for _ in 0..3 {
+            let response = core.select(select_request()).await.expect("select");
+            assert_eq!(response.overlap.longest_matched, 0);
+            tokio::task::yield_now().await;
+        }
     }
 
     /// Picker that records what worker selection saw and always takes row 0.
