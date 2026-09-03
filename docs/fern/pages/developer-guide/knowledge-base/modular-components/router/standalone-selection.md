@@ -97,10 +97,15 @@ manager creates per worker role (encoder, prefill, decode) runs its own
 embedded selection partition under `--router-embedded-selection`, so the
 encoder pool is a third independent instance with its own ledger.
 
-The C and Go bindings do not currently expose `SelectionService`. An EPP
-integration requires separate FFI lifecycle, error-mapping, worker, and peer
-APIs. Those bindings should wrap `SelectionService` rather than construct
-`SelectionCore` directly.
+The Rust standalone EPP (`DYN_EPP_MODE=standalone`) hosts the same coordinator
+directly: with `DYN_EPP_PREFILL_INFERENCE_POOL_NAME` set it runs one
+`SelectionService` per `InferencePool` (decode and prefill), plans every request
+through `DisaggCoordinator`, forwards the decode endpoint with the
+`x-dynamo-*` disaggregation headers, and releases both bookings from the
+response-lifecycle callbacks. The C and Go bindings do not expose
+`SelectionService`; a non-Rust EPP would need separate FFI lifecycle,
+error-mapping, worker, and peer APIs wrapping `SelectionService` rather than
+`SelectionCore`.
 
 ### CLI
 

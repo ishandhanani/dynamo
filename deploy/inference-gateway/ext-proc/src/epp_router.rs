@@ -17,7 +17,7 @@
 //! worker constrained to the currently-Ready pods, and tells Envoy where to send
 //! the request via routing headers.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -26,13 +26,19 @@ use std::time::Duration;
 use anyhow::Result;
 use tokio::sync::Semaphore;
 
-use dynamo_kv_router::services::selection::WorkerSelectionPolicyRegistry;
+use dynamo_kv_router::conditional_disagg::make_conditional_disagg_policy;
+use dynamo_kv_router::config::try_kv_router_config_from_dynamo_env;
+use dynamo_kv_router::services::selection::{
+    DisaggCoordinator, DisaggPlan, DisaggRequest, PrefillFailurePolicy, PromptRequest,
+    SelectionService, WorkerSelectionPolicyRegistry,
+};
+use dynamo_kv_router::{DEFAULT_ROUTING_GROUP, WorkerType};
 use dynamo_llm::protocols::common::extensions::{
     AgentHints, HEADER_REQUEST_PRIORITY, HEADER_REQUEST_STRICT_PRIORITY, resolve_request_priority,
 };
 use serde::Deserialize;
 
-use crate::epp_standalone_config::EppStandaloneConfig;
+use crate::epp_standalone_config::{DisaggPrefillFailure, EppStandaloneConfig};
 use crate::picker::{Endpoint, EndpointPicker, PickError, PickResult, RequestInfo};
 use crate::pod_discovery::PodDiscovery;
 use crate::selector::{SelectRequest, Selector};
@@ -55,6 +61,66 @@ pub struct EppRouter {
     /// and released (RAII) when it returns or is dropped/cancelled; when none are
     /// available the request is shed with `PickError::Overloaded` (not queued).
     inflight: Arc<Semaphore>,
+    /// Decode-first disaggregated coordination over a second (prefill) pool.
+    /// `None` in aggregated deployments.
+    disagg: Option<DisaggState>,
+}
+
+/// Everything the disaggregated path owns beyond the decode pool: the prefill
+/// pool's discovery, registration, and selector, the coordinator that links a
+/// booking on each pool, and the live plans keyed by the EPP-minted booking id
+/// so the response-lifecycle callbacks can release both bookings.
+struct DisaggState {
+    coordinator: DisaggCoordinator<SelectionService>,
+    prefill_reflector: Arc<PodDiscovery>,
+    prefill_ready: Arc<AtomicBool>,
+    _prefill_adapter: TopologyAdapter,
+    _prefill_selector: Arc<Selector>,
+    plans: tokio::sync::Mutex<HashMap<String, DisaggPlan>>,
+}
+
+impl DisaggState {
+    async fn take_plan(&self, booking_id: &str) -> Option<DisaggPlan> {
+        self.plans.lock().await.remove(booking_id)
+    }
+}
+
+/// Routing headers the sidecar-backed workers read for a coordinator plan:
+/// the decode worker always, plus the prefill worker when one was booked
+/// (`x-dynamo-routing-mode: disaggregated`); a bypass decision routes the whole
+/// request to the decode worker (`aggregated`).
+pub(crate) fn disagg_headers(plan: &DisaggPlan) -> Vec<(String, String)> {
+    let mut headers = vec![
+        (
+            "x-dynamo-worker-instance-id".to_string(),
+            plan.decode.worker.worker_id.to_string(),
+        ),
+        (
+            "x-dynamo-dp-rank".to_string(),
+            plan.decode.worker.dp_rank.to_string(),
+        ),
+    ];
+    match &plan.prefill {
+        Some(prefill) => {
+            headers.push((
+                "x-dynamo-routing-mode".to_string(),
+                "disaggregated".to_string(),
+            ));
+            headers.push((
+                "x-dynamo-prefill-instance-id".to_string(),
+                prefill.worker.worker_id.to_string(),
+            ));
+            headers.push((
+                "x-dynamo-prefill-dp-rank".to_string(),
+                prefill.worker.dp_rank.to_string(),
+            ));
+        }
+        None => headers.push((
+            "x-dynamo-routing-mode".to_string(),
+            "aggregated".to_string(),
+        )),
+    }
+    headers
 }
 
 impl EppRouter {
@@ -63,7 +129,56 @@ impl EppRouter {
         cfg: EppStandaloneConfig,
         policy_registry: WorkerSelectionPolicyRegistry,
     ) -> Result<Self> {
-        let selector = Arc::new(Selector::new(&cfg, policy_registry).await?);
+        let disagg_pool = cfg.prefill_inference_pool_name.clone();
+        let (selector, disagg_parts) = match &disagg_pool {
+            None => (Arc::new(Selector::new(&cfg, policy_registry).await?), None),
+            Some(prefill_pool) => {
+                let kv_router_config =
+                    try_kv_router_config_from_dynamo_env().map_err(anyhow::Error::msg)?;
+                let served = [WorkerType::Prefill, WorkerType::Decode];
+                // Linked policies are resolved against the decode pool; the
+                // prefill pool uses the built-in policy for its worker type.
+                let decode = Arc::new(
+                    Selector::new_for_pool(
+                        &cfg,
+                        kv_router_config.clone(),
+                        policy_registry,
+                        WorkerType::Decode,
+                        &served,
+                    )
+                    .await?,
+                );
+                let prefill = Arc::new(
+                    Selector::new_for_pool(
+                        &cfg,
+                        kv_router_config.clone(),
+                        WorkerSelectionPolicyRegistry::default(),
+                        WorkerType::Prefill,
+                        &served,
+                    )
+                    .await?,
+                );
+                let policy: Arc<dyn dynamo_kv_router::conditional_disagg::ConditionalDisaggPolicy> =
+                    Arc::from(make_conditional_disagg_policy(Some(&kv_router_config)));
+                let coordinator = DisaggCoordinator::new(
+                    prefill.service(),
+                    decode.service(),
+                    policy,
+                    &kv_router_config,
+                )
+                .with_prefill_failure_policy(match cfg.disagg_prefill_failure {
+                    DisaggPrefillFailure::FreeDecode => PrefillFailurePolicy::FreeDecode,
+                    DisaggPrefillFailure::BypassOnDecode => PrefillFailurePolicy::BypassOnDecode,
+                });
+                tracing::info!(
+                    decode_pool = %cfg.inference_pool_name,
+                    prefill_pool = %prefill_pool,
+                    prefill_failure = ?cfg.disagg_prefill_failure,
+                    "Standalone EPP running decode-first disaggregated coordination"
+                );
+                (decode, Some((prefill, coordinator, prefill_pool.clone())))
+            }
+        };
         let renderer = VllmRenderClient::new(
             &cfg.tokenizer_service_url,
             Duration::from_millis(cfg.tokenization_timeout_ms),
@@ -72,8 +187,32 @@ impl EppRouter {
         let (reflector, reflector_ready) = PodDiscovery::spawn(&cfg).await?;
         let reflector = Arc::new(reflector);
         let defaults = RegistrationDefaults::from_config(&cfg);
-        let adapter =
-            TopologyAdapter::spawn(reflector.as_ref().clone(), selector.clone(), defaults);
+        let adapter = TopologyAdapter::spawn(
+            reflector.as_ref().clone(),
+            selector.clone(),
+            defaults.clone(),
+        );
+        let disagg = match disagg_parts {
+            None => None,
+            Some((prefill_selector, coordinator, prefill_pool)) => {
+                let (prefill_reflector, prefill_ready) =
+                    PodDiscovery::spawn_for_pool(&cfg, prefill_pool).await?;
+                let prefill_reflector = Arc::new(prefill_reflector);
+                let prefill_adapter = TopologyAdapter::spawn(
+                    prefill_reflector.as_ref().clone(),
+                    prefill_selector.clone(),
+                    defaults,
+                );
+                Some(DisaggState {
+                    coordinator,
+                    prefill_reflector,
+                    prefill_ready,
+                    _prefill_adapter: prefill_adapter,
+                    _prefill_selector: prefill_selector,
+                    plans: tokio::sync::Mutex::new(HashMap::new()),
+                })
+            }
+        };
 
         // Readiness is driven solely by the live pod+pool signal (see `is_ready`);
         // we do not block startup on a schedulable worker. A valid, empty pool is
@@ -86,6 +225,7 @@ impl EppRouter {
             reflector_ready,
             model_name: cfg.model_name,
             inflight: Arc::new(Semaphore::new(cfg.max_inflight_requests)),
+            disagg,
         })
     }
 
@@ -93,6 +233,93 @@ impl EppRouter {
     /// synced workers and resolved its InferencePool. Polled by the health mirror in `main`.
     pub fn is_ready(&self) -> bool {
         self.reflector_ready.load(Ordering::Acquire)
+            && self
+                .disagg
+                .as_ref()
+                .is_none_or(|disagg| disagg.prefill_ready.load(Ordering::Acquire))
+    }
+
+    /// Decode-first coordinated pick: book decode, then prefill constrained to
+    /// the decode worker's KV-transfer domain, and hold the plan under
+    /// `reservation_id` until the lifecycle callbacks release it. The Envoy
+    /// subset hint is not applied across two pools and is ignored here.
+    async fn pick_disaggregated(
+        &self,
+        disagg: &DisaggState,
+        tokens: Vec<u32>,
+        reservation_id: String,
+        subset_ignored: bool,
+        request_id: &str,
+    ) -> Result<PickResult, PickError> {
+        if subset_ignored {
+            tracing::debug!(
+                request_id,
+                "subset hint ignored: disaggregated coordination books across two pools"
+            );
+        }
+        let mut plan = disagg
+            .coordinator
+            .plan(DisaggRequest {
+                model_name: self.model_name.clone(),
+                prefill_routing_group: DEFAULT_ROUTING_GROUP.to_string(),
+                decode_routing_group: DEFAULT_ROUTING_GROUP.to_string(),
+                selection_id: reservation_id.clone(),
+                prompt: PromptRequest {
+                    token_ids: Some(tokens),
+                    ..Default::default()
+                },
+                expected_output_tokens: None,
+                session_context: None,
+                routing_constraints: Default::default(),
+                decode_router_config_override: None,
+                prefill_router_config_override: None,
+            })
+            .await
+            .map_err(|e| PickError::RoutingFailed(e.to_string()))?;
+
+        // Both pools must still resolve; a worker that left Ready in the race
+        // makes the plan stale, so release everything rather than route to it.
+        let decode_endpoint = self
+            .reflector
+            .resolve_endpoint(plan.decode.worker.worker_id);
+        let prefill_resolves = plan.prefill.as_ref().is_none_or(|prefill| {
+            disagg
+                .prefill_reflector
+                .resolve_endpoint(prefill.worker.worker_id)
+                .is_some()
+        });
+        let Some(endpoint) = decode_endpoint.filter(|_| prefill_resolves) else {
+            tracing::warn!(
+                request_id,
+                decode_worker = plan.decode.worker.worker_id,
+                prefill_worker = plan.prefill.as_ref().map(|p| p.worker.worker_id),
+                "Coordinated selection no longer resolvable in reflectors; releasing the plan"
+            );
+            disagg.coordinator.release(&mut plan).await;
+            return Err(PickError::NoEndpoints);
+        };
+
+        tracing::debug!(
+            request_id,
+            state = ?plan.state(),
+            bypass = plan.is_bypass(),
+            decode_worker = plan.decode.worker.worker_id,
+            prefill_worker = plan.prefill.as_ref().map(|p| p.worker.worker_id),
+            "Decode-first coordination planned"
+        );
+        let headers = disagg_headers(&plan);
+        disagg
+            .plans
+            .lock()
+            .await
+            .insert(reservation_id.clone(), plan);
+        Ok(PickResult {
+            endpoint,
+            headers,
+            token_ids: None,
+            reservation_id: Some(reservation_id),
+            ..Default::default()
+        })
     }
 
     /// Tokenize a chat body for routing → `(token_ids, priority_jump,
@@ -278,6 +505,18 @@ impl EndpointPicker for EppRouter {
         // so the server frees it via the callbacks without a shared map.
         let reservation_id = uuid::Uuid::new_v4().to_string();
 
+        if let Some(disagg) = &self.disagg {
+            return self
+                .pick_disaggregated(
+                    disagg,
+                    tokens,
+                    reservation_id,
+                    allowed.is_some(),
+                    &req.request_id,
+                )
+                .await;
+        }
+
         // Free the booking if this pick is dropped before it is adopted — the
         // ext-proc stream can close after the scheduler booked but before the
         // server stores `booking_id`, and a booked (past-queue) reservation is not
@@ -335,6 +574,17 @@ impl EndpointPicker for EppRouter {
     /// Response complete: release the booking from `pick`. `booking_id` is that
     /// reservation id; `free_reservation` is idempotent (body-less pick → no-op).
     async fn on_request_complete(&self, booking_id: &str) {
+        if let Some(disagg) = &self.disagg {
+            if let Some(mut plan) = disagg.take_plan(booking_id).await {
+                disagg.coordinator.release(&mut plan).await;
+                tracing::debug!(
+                    reservation_id = booking_id,
+                    transitions = ?plan.transitions(),
+                    "Released coordinated plan"
+                );
+            }
+            return;
+        }
         if let Err(e) = self.selector.free_reservation(booking_id).await {
             tracing::warn!(reservation_id = booking_id, error = %e, "Failed to free reservation");
         }
@@ -343,6 +593,15 @@ impl EndpointPicker for EppRouter {
     /// First token: release prefill load, keep decode booked until completion.
     /// `booking_id` is `pick`'s reservation id; `prefill_complete` is idempotent.
     async fn on_prefill_complete(&self, booking_id: &str) {
+        if let Some(disagg) = &self.disagg {
+            let mut plans = disagg.plans.lock().await;
+            if let Some(plan) = plans.get_mut(booking_id)
+                && let Err(e) = disagg.coordinator.prefill_complete(plan).await
+            {
+                tracing::warn!(reservation_id = booking_id, error = %e, "Failed to mark coordinated prefill complete");
+            }
+            return;
+        }
         if let Err(e) = self.selector.prefill_complete(booking_id).await {
             tracing::warn!(reservation_id = booking_id, error = %e, "Failed to mark prefill complete");
         }
@@ -451,6 +710,151 @@ impl TokenizeError {
 
 #[cfg(test)]
 mod tests {
+
+    /// Two in-process selectors (no Kubernetes) linked by the coordinator: the
+    /// plan books decode then prefill, the headers name both workers, and
+    /// release frees both bookings. This is the path `pick_disaggregated`
+    /// takes once pods resolve.
+    #[tokio::test]
+    async fn coordinator_links_prefill_and_decode_pools_and_headers_name_both() {
+        use crate::epp_standalone_config::TokenizerProtocol;
+        use crate::selector::WorkerRegistration;
+        use dynamo_kv_router::config::KvRouterConfig;
+        use dynamo_kv_router::services::selection::LinkedBookingState;
+
+        let cfg = EppStandaloneConfig {
+            selector_threads: 1,
+            peer_replication: None,
+            inference_pool_name: "decode-pool".to_string(),
+            namespace: "test-ns".to_string(),
+            model_name: "test-model".to_string(),
+            tokenizer_service_url: "http://vllm-render:8000".to_string(),
+            tokenizer_protocol: TokenizerProtocol::VllmRender,
+            tokenizer_max_response_bytes: 16 * 1024 * 1024,
+            tokenization_timeout_ms: 5_000,
+            block_size: 16,
+            data_parallel_size: 1,
+            kv_event_port_stride: 1,
+            kv_event_port: 5557,
+            replay_port: None,
+            total_kv_blocks: None,
+            max_num_batched_tokens: Some(8192),
+            max_inflight_requests: 1024,
+            prefill_inference_pool_name: Some("prefill-pool".to_string()),
+            disagg_prefill_failure: DisaggPrefillFailure::FreeDecode,
+        };
+        cfg.validate_config().expect("disagg config validates");
+        let kv_router_config = KvRouterConfig::default();
+        let served = [WorkerType::Prefill, WorkerType::Decode];
+        let decode = Arc::new(
+            Selector::new_for_pool(
+                &cfg,
+                kv_router_config.clone(),
+                WorkerSelectionPolicyRegistry::default(),
+                WorkerType::Decode,
+                &served,
+            )
+            .await
+            .expect("decode selector"),
+        );
+        let prefill = Arc::new(
+            Selector::new_for_pool(
+                &cfg,
+                kv_router_config.clone(),
+                WorkerSelectionPolicyRegistry::default(),
+                WorkerType::Prefill,
+                &served,
+            )
+            .await
+            .expect("prefill selector"),
+        );
+        let registration = |worker_id: u64, port: u16| WorkerRegistration {
+            worker_id,
+            model_name: "test-model".to_string(),
+            endpoint: format!("http://10.0.0.{worker_id}:8000"),
+            block_size: 16,
+            data_parallel_size: 1,
+            kv_events_endpoints: HashMap::from([(0u32, format!("tcp://127.0.0.1:{port}"))]),
+            replay_endpoint: None,
+            total_kv_blocks: None,
+            max_num_batched_tokens: Some(8192),
+        };
+        decode
+            .reconcile(&[registration(1, 46_001)])
+            .await
+            .expect("decode worker registers");
+        prefill
+            .reconcile(&[registration(2, 46_002)])
+            .await
+            .expect("prefill worker registers");
+
+        let policy: Arc<dyn dynamo_kv_router::conditional_disagg::ConditionalDisaggPolicy> =
+            Arc::from(make_conditional_disagg_policy(Some(&kv_router_config)));
+        let coordinator = DisaggCoordinator::new(
+            prefill.service(),
+            decode.service(),
+            policy,
+            &kv_router_config,
+        );
+        let mut plan = coordinator
+            .plan(DisaggRequest {
+                model_name: "test-model".to_string(),
+                prefill_routing_group: DEFAULT_ROUTING_GROUP.to_string(),
+                decode_routing_group: DEFAULT_ROUTING_GROUP.to_string(),
+                selection_id: "res-disagg".to_string(),
+                prompt: PromptRequest {
+                    token_ids: Some((1..=64).collect()),
+                    ..Default::default()
+                },
+                expected_output_tokens: None,
+                session_context: None,
+                routing_constraints: Default::default(),
+                decode_router_config_override: None,
+                prefill_router_config_override: None,
+            })
+            .await
+            .expect("coordinated plan");
+        assert_eq!(plan.decode.worker.worker_id, 1);
+        assert_eq!(
+            plan.prefill.as_ref().map(|p| p.worker.worker_id),
+            Some(2),
+            "conditional disagg is off by default, so prefill is booked remotely"
+        );
+        assert_eq!(plan.state(), LinkedBookingState::Linked);
+
+        let headers = disagg_headers(&plan);
+        let get = |name: &str| {
+            headers
+                .iter()
+                .find(|(k, _)| k == name)
+                .map(|(_, v)| v.as_str())
+        };
+        assert_eq!(get("x-dynamo-worker-instance-id"), Some("1"));
+        assert_eq!(get("x-dynamo-dp-rank"), Some("0"));
+        assert_eq!(get("x-dynamo-routing-mode"), Some("disaggregated"));
+        assert_eq!(get("x-dynamo-prefill-instance-id"), Some("2"));
+        assert_eq!(get("x-dynamo-prefill-dp-rank"), Some("0"));
+
+        coordinator
+            .prefill_complete(&mut plan)
+            .await
+            .expect("prefill complete");
+        assert_eq!(plan.state(), LinkedBookingState::PrefillReleased);
+        coordinator.release(&mut plan).await;
+        assert_eq!(plan.state(), LinkedBookingState::Released);
+        // Both bookings are gone: a second free is NotFound on each pool.
+        assert!(matches!(
+            decode.service().free_reservation("res-disagg/decode").await,
+            Err(dynamo_kv_router::services::selection::SelectionError::NotFound(_))
+        ));
+        assert!(matches!(
+            prefill
+                .service()
+                .free_reservation("res-disagg/prefill")
+                .await,
+            Err(dynamo_kv_router::services::selection::SelectionError::NotFound(_))
+        ));
+    }
     use super::*;
 
     #[test]

@@ -166,6 +166,37 @@ pub struct EppStandaloneConfig {
     /// throughput throttle). Excess requests are shed with a 503, not queued.
     #[validate(range(min = 1, message = "DYN_EPP_MAX_INFLIGHT_REQUESTS must be >= 1"))]
     pub max_inflight_requests: usize,
+    /// Optional second `InferencePool` holding prefill workers. When set, the
+    /// EPP runs decode-first disaggregated coordination: `inference_pool_name`
+    /// is the decode pool and this pool supplies prefill workers.
+    pub prefill_inference_pool_name: Option<String>,
+    /// Compensation when the prefill booking fails after decode is booked.
+    pub disagg_prefill_failure: DisaggPrefillFailure,
+}
+
+/// What the coordinator does when prefill cannot be booked after decode was
+/// (`DYN_EPP_DISAGG_PREFILL_FAILURE`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum DisaggPrefillFailure {
+    /// Free the decode booking and fail the request.
+    #[default]
+    FreeDecode,
+    /// Keep decode and run prefill there (aggregated for this request).
+    BypassOnDecode,
+}
+
+impl std::str::FromStr for DisaggPrefillFailure {
+    type Err = anyhow::Error;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "free-decode" | "free_decode" => Ok(Self::FreeDecode),
+            "bypass-on-decode" | "bypass_on_decode" => Ok(Self::BypassOnDecode),
+            other => anyhow::bail!(
+                "DYN_EPP_DISAGG_PREFILL_FAILURE must be `free-decode` or `bypass-on-decode`, got `{other}`"
+            ),
+        }
+    }
 }
 
 impl EppStandaloneConfig {
@@ -229,6 +260,11 @@ impl EppStandaloneConfig {
             max_num_batched_tokens: opt_parse::<u64>(get, "DYN_EPP_MAX_NUM_BATCHED_TOKENS")?,
             max_inflight_requests: opt_parse::<usize>(get, "DYN_EPP_MAX_INFLIGHT_REQUESTS")?
                 .unwrap_or(DEFAULT_MAX_INFLIGHT_REQUESTS),
+            prefill_inference_pool_name: trimmed(get("DYN_EPP_PREFILL_INFERENCE_POOL_NAME")),
+            disagg_prefill_failure: trimmed(get("DYN_EPP_DISAGG_PREFILL_FAILURE"))
+                .map(|value| value.parse())
+                .transpose()?
+                .unwrap_or_default(),
         })
     }
 
@@ -236,7 +272,24 @@ impl EppStandaloneConfig {
     pub fn validate_config(&self) -> anyhow::Result<()> {
         self.validate()
             .map_err(|e| anyhow::anyhow!("invalid {STANDALONE_MODE} EPP config: {e}"))?;
+        if let Some(prefill_pool) = &self.prefill_inference_pool_name {
+            if prefill_pool.is_empty() {
+                anyhow::bail!(
+                    "invalid {STANDALONE_MODE} EPP config: DYN_EPP_PREFILL_INFERENCE_POOL_NAME must not be empty when set"
+                );
+            }
+            if *prefill_pool == self.inference_pool_name {
+                anyhow::bail!(
+                    "invalid {STANDALONE_MODE} EPP config: DYN_EPP_PREFILL_INFERENCE_POOL_NAME must name a different InferencePool than DYN_EPP_INFERENCE_POOL_NAME"
+                );
+            }
+        }
         Ok(())
+    }
+
+    /// Whether decode-first disaggregated coordination is configured.
+    pub fn disaggregated(&self) -> bool {
+        self.prefill_inference_pool_name.is_some()
     }
 }
 
