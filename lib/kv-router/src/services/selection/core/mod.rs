@@ -56,12 +56,10 @@ use crate::WorkerSelectionPolicyFactory;
 use crate::WorkerType;
 
 /// Source of dequeue-time overlap refreshes for a partition scheduler: the
-/// partition's own indexer, or one the embedding host supplies when it keeps
-/// its own index (the frontend `KvRouter` in embedded mode).
+/// partition's index.
 #[derive(Clone)]
 pub enum RefreshProvider {
     Local(Arc<Indexer>),
-    External(Arc<dyn TieredMatchProvider>),
 }
 
 #[async_trait::async_trait]
@@ -72,7 +70,6 @@ impl TieredMatchProvider for RefreshProvider {
     ) -> Result<TieredMatchDetails, KvRouterError> {
         match self {
             Self::Local(indexer) => indexer.find_tiered_matches(sequence.to_vec()).await,
-            Self::External(provider) => provider.find_tiered_matches(sequence).await,
         }
     }
 
@@ -85,11 +82,6 @@ impl TieredMatchProvider for RefreshProvider {
             Self::Local(indexer) => {
                 indexer
                     .find_tiered_matches_with_options(sequence.to_vec(), options)
-                    .await
-            }
-            Self::External(provider) => {
-                provider
-                    .find_tiered_matches_with_options(sequence, options)
                     .await
             }
         }
@@ -213,19 +205,18 @@ pub struct HostCache {
     pub index: KvIndexSource,
 }
 
-/// Where a partition's KV index lives and who feeds it.
+/// Where a partition's KV index comes from and who feeds it.
 #[derive(Clone, Default)]
 pub enum KvIndexSource {
-    /// The core owns the index and subscribes to each worker rank's KV events
-    /// over ZMQ; workers need KV-event endpoints to be schedulable.
+    /// The core builds the index and subscribes to each worker rank's KV
+    /// events over ZMQ; workers need KV-event endpoints to be schedulable.
     #[default]
     Owned,
-    /// The host owns and feeds the index. Workers need no KV-event metadata.
-    /// `refresh` lets the core re-score queued requests against that index at
-    /// dequeue; `None` keeps their admission-time scores.
-    External {
-        refresh: Option<Arc<dyn TieredMatchProvider>>,
-    },
+    /// The host built this index and feeds it (its own event ingress and
+    /// recovery). Every partition uses it; the core reads it for selection
+    /// and dequeue-time refresh but never writes to it, and workers need no
+    /// KV-event metadata.
+    Provided(Arc<Indexer>),
     /// A standalone indexer at this base URL serves the primary index; this
     /// core does not subscribe to worker KV events.
     Remote(String),
@@ -235,9 +226,10 @@ impl std::fmt::Debug for KvIndexSource {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Owned => formatter.write_str("Owned"),
-            Self::External { refresh } => formatter
-                .debug_struct("External")
-                .field("refresh", &refresh.is_some())
+            Self::Provided(indexer) => formatter
+                .debug_struct("Provided")
+                .field("remote", &indexer.is_remote())
+                .field("overlap_refresh", &indexer.supports_overlap_refresh())
                 .finish(),
             Self::Remote(url) => formatter.debug_tuple("Remote").field(url).finish(),
         }
@@ -432,7 +424,7 @@ impl SelectionCore {
         ));
         let listens_for_kv_events = kv_router_config.use_kv_events
             && !indexer_policy.is_remote()
-            && !matches!(host.cache.index, KvIndexSource::External { .. });
+            && !matches!(host.cache.index, KvIndexSource::Provided(_));
         indexer_registry.set_indexer_policy(indexer_policy);
         if signal_indexer_ready {
             indexer_registry.signal_ready();
@@ -750,20 +742,19 @@ impl SelectionCore {
                     self.cancel_token.child_token(),
                 );
 
-                let indexer = self
-                    .indexer_registry
-                    .get_or_create_indexer(key.clone(), block_size);
-                let refresh_provider = match &self.host.cache.index {
-                    KvIndexSource::Owned | KvIndexSource::Remote(_) => {
-                        Some(RefreshProvider::Local(Arc::new(indexer.clone())))
+                let (indexer, refreshes) = match &self.host.cache.index {
+                    KvIndexSource::Provided(indexer) => {
+                        (Indexer::clone(indexer), indexer.supports_overlap_refresh())
                     }
-                    KvIndexSource::External { refresh } => refresh
-                        .as_ref()
-                        .map(|p| RefreshProvider::External(Arc::clone(p))),
+                    KvIndexSource::Owned | KvIndexSource::Remote(_) => (
+                        self.indexer_registry
+                            .get_or_create_indexer(key.clone(), block_size),
+                        true,
+                    ),
                 };
-                let overlap_refresh = refresh_provider.map(|provider| {
+                let overlap_refresh = refreshes.then(|| {
                     Arc::new(TieredOverlapRefresher::new(
-                        provider,
+                        RefreshProvider::Local(Arc::new(indexer.clone())),
                         self.kv_router_config.clone(),
                         block_size,
                     ))
@@ -863,6 +854,9 @@ impl SelectionCore {
     }
 
     async fn cleanup_indexer_registration(&self, record: &WorkerCatalogRecord) {
+        if matches!(self.host.cache.index, KvIndexSource::Provided(_)) {
+            return;
+        }
         if self.listens_for_kv_events {
             if let Err(error) = self
                 .indexer_registry
