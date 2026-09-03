@@ -22,6 +22,17 @@ where
     pub net_new_tokens: usize,
 }
 
+/// A decode booking held before prefill selection.
+pub(super) struct DecodeFirstPlan<Sel>
+where
+    Sel: WorkerSelector<ModelRuntimeConfig> + Send + 'static,
+{
+    pub plan: RoutePlan<Sel>,
+    pub worker: dynamo_kv_router::protocols::WorkerWithDpRank,
+    /// Conditional-disagg decision: run prefill on the decode worker.
+    pub bypass: bool,
+}
+
 fn decode_gate_allows_bypass(
     policy_says_bypass: bool,
     decode_gate_configured: bool,
@@ -34,6 +45,77 @@ impl<Sel> PrefillRouter<Sel>
 where
     Sel: WorkerSelector<ModelRuntimeConfig> + Send + 'static,
 {
+    /// Decode-first coordination (contract 5): preview and book the decode
+    /// worker before prefill is selected, carrying the conditional-disagg
+    /// decision along. Returns `None` when the decode host cannot plan (not KV
+    /// routed, preselected prefill worker, no routing tokens); the caller then
+    /// falls back to the prefill-first path.
+    pub(super) async fn plan_decode_first(
+        &self,
+        request: &SingleIn<PreprocessedRequest>,
+        request_id: &str,
+    ) -> Result<Option<DecodeFirstPlan<Sel>>> {
+        if !self.decode_router_mode.is_kv_routing() {
+            return Ok(None);
+        }
+        if request
+            .routing
+            .as_ref()
+            .is_some_and(|routing| routing.prefill_worker_id.is_some())
+        {
+            return Ok(None);
+        }
+        let Some(decode_host) = self.decode_routing_host.get() else {
+            return Ok(None);
+        };
+        let (routing_token_ids, _) = request.block_mm_routing_info();
+        if routing_token_ids.is_empty() {
+            return Ok(None);
+        }
+
+        let preview = decode_host
+            .preview_kv_route(request, RequestPhase::Decode)
+            .await?;
+        let signals = preview.signals();
+        let mut bypass = false;
+        if self.conditional_disagg_policy.is_enabled() {
+            let mut input =
+                ConditionalDisaggDecisionInput::new(routing_token_ids.len(), signals.cached_tokens);
+            if self.conditional_disagg_policy.needs_prefill_worker_busy() {
+                let busy = match self.peek_prefill_chosen_worker_busy(request).await {
+                    Ok(busy) => busy,
+                    Err(error) if is_cancelled(&error) => return Err(error),
+                    Err(error) => {
+                        tracing::debug!(request_id, %error, "prefill-load probe failed; treating load as unavailable");
+                        None
+                    }
+                };
+                input = input.with_prefill_chosen_worker_busy(busy);
+            }
+            let policy_says_bypass = self
+                .conditional_disagg_policy
+                .should_bypass_remote_prefill(input)
+                .await;
+            let decode_gate_configured = self.conditional_disagg_decode_busy_threshold.is_some();
+            let decode_busy = if policy_says_bypass {
+                self.conditional_disagg_decode_busy_threshold
+                    .and_then(|threshold| signals.decode_load_exceeds(threshold))
+            } else {
+                None
+            };
+            bypass =
+                decode_gate_allows_bypass(policy_says_bypass, decode_gate_configured, decode_busy);
+        }
+        let plan = decode_host
+            .plan_kv_route_from_preview(request, preview)
+            .await?;
+        Ok(Some(DecodeFirstPlan {
+            worker: plan.signals().worker,
+            plan,
+            bypass,
+        }))
+    }
+
     /// Preview one decode route, then admit it only when the topology policy
     /// chooses local decode.
     pub(super) async fn plan_conditional_disagg_decode(

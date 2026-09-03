@@ -309,9 +309,15 @@ where
         self.signals
     }
 
+    /// Release the admitted booking without dispatching. Used when a linked
+    /// booking on another pool fails and the coordinator compensates.
+    pub(crate) async fn release(self) {
+        self.cleanup.finish().await;
+    }
+
     #[cfg(test)]
     pub(crate) async fn abort(self) {
-        self.cleanup.finish().await;
+        self.release().await;
     }
 }
 

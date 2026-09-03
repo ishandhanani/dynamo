@@ -40,6 +40,8 @@ _KV_ROUTER_FIELDS: tuple[str, ...] = (
     "use_kv_events",
     "router_replica_sync",
     "router_embedded_selection",
+    "router_disagg_decode_first",
+    "router_disagg_bypass_on_prefill_failure",
     "router_track_active_blocks",
     "router_track_output_blocks",
     "router_assume_kv_reuse",
@@ -202,6 +204,8 @@ class KvRouterConfigBase(ConfigBase):
     use_kv_events: bool
     router_replica_sync: bool
     router_embedded_selection: bool = False
+    router_disagg_decode_first: bool = False
+    router_disagg_bypass_on_prefill_failure: bool = False
     router_track_active_blocks: bool
     router_track_output_blocks: bool
     router_assume_kv_reuse: bool
@@ -435,6 +439,29 @@ class KvRouterArgGroup(ArgGroup):
                 "KV Router: Run scheduling and active-sequence accounting on an "
                 "embedded selection-service partition instead of the runtime-bound "
                 "scheduler. Experimental; the KV indexer and request transport are unchanged."
+            ),
+        )
+        add_negatable_bool_argument(
+            g,
+            flag_name="--router-disagg-decode-first",
+            env_var="DYN_ROUTER_DISAGG_DECODE_FIRST",
+            default=False,
+            dest="router_disagg_decode_first",
+            help=(
+                "KV Router: In disaggregated serving, book the decode worker first, "
+                "constrain prefill to its KV-transfer domain, and compensate a prefill "
+                "failure explicitly. Experimental."
+            ),
+        )
+        add_negatable_bool_argument(
+            g,
+            flag_name="--router-disagg-bypass-on-prefill-failure",
+            env_var="DYN_ROUTER_DISAGG_BYPASS_ON_PREFILL_FAILURE",
+            default=False,
+            dest="router_disagg_bypass_on_prefill_failure",
+            help=(
+                "KV Router: With --router-disagg-decode-first, run prefill on the booked "
+                "decode worker when the prefill booking fails instead of failing the request."
             ),
         )
         add_negatable_bool_argument(
