@@ -28,11 +28,7 @@ use futures::stream::{self, StreamExt};
 use tracing::Instrument;
 
 use crate::{
-    kv_router::{
-        KvRouter, metrics::RouterRequestMetrics, scheduler::DefaultWorkerSelector,
-        to_worker_selection_session_context,
-    },
-    local_model::runtime_config::ModelRuntimeConfig,
+    kv_router::{KvRouter, metrics::RouterRequestMetrics, to_worker_selection_session_context},
     lora::{LoadEstimator, LoraFilter},
     preprocessor::PreprocessedRequest,
     protocols::common::{
@@ -74,14 +70,11 @@ fn route_target(worker: WorkerWithDpRank) -> AffinityTarget {
     AffinityTarget::new(worker.worker_id, Some(worker.dp_rank))
 }
 
-fn monitor_response_stream<Sel>(
+fn monitor_response_stream(
     mut response_stream: ManyOut<Annotated<LLMEngineOutput>>,
     context: Arc<dyn AsyncEngineContext>,
-    mut guard: RequestGuard<Sel>,
-) -> impl futures::Stream<Item = Annotated<LLMEngineOutput>> + Send
-where
-    Sel: WorkerSelector<ModelRuntimeConfig> + Send + 'static,
-{
+    mut guard: RequestGuard,
+) -> impl futures::Stream<Item = Annotated<LLMEngineOutput>> + Send {
     async_stream::stream! {
         // Keep one cancellation future alive for the whole response stream. Calling
         // `stopped()` for every item repeatedly clones and polls a watch receiver.
@@ -182,13 +175,10 @@ where
     }
 }
 
-fn into_monitored_response<Sel>(
+fn into_monitored_response(
     response_stream: ManyOut<Annotated<LLMEngineOutput>>,
-    guard: RequestGuard<Sel>,
-) -> ManyOut<Annotated<LLMEngineOutput>>
-where
-    Sel: WorkerSelector<ModelRuntimeConfig> + Send + 'static,
-{
+    guard: RequestGuard,
+) -> ManyOut<Annotated<LLMEngineOutput>> {
     let stream_context = response_stream.context();
     let wrapped_stream = Box::pin(monitor_response_stream(
         response_stream,
@@ -198,11 +188,8 @@ where
     ResponseStream::new(wrapped_stream, stream_context)
 }
 
-enum RoutingPolicy<Sel>
-where
-    Sel: WorkerSelector<ModelRuntimeConfig> + Send + 'static,
-{
-    Kv(Arc<KvRouter<Sel>>),
+enum RoutingPolicy {
+    Kv(Arc<KvRouter>),
     Builtin(BuiltinWorkerSelector),
     Direct,
     DeviceAwareWeighted,
@@ -240,12 +227,9 @@ struct DeviceAwareTelemetry {
 /// [`PushRouter`] owns discovery, fault detection, and transport. [`KvRouter`]
 /// owns optional KV candidate state. `RoutingHost` owns the common request
 /// lifecycle regardless of which policy selected the worker.
-pub struct RoutingHost<Sel = DefaultWorkerSelector>
-where
-    Sel: WorkerSelector<ModelRuntimeConfig> + Send + 'static,
-{
+pub struct RoutingHost {
     inner: PushRouter<PreprocessedRequest, Annotated<LLMEngineOutput>>,
-    policy: RoutingPolicy<Sel>,
+    policy: RoutingPolicy,
     request_metrics: Arc<RouterRequestMetrics>,
     affinity: Option<AffinityCoordinator>,
     session_affinity_mode: SessionAffinityMode,
@@ -259,13 +243,10 @@ where
 }
 
 /// An admitted KV route awaiting dispatch.
-pub(crate) struct RoutePlan<Sel = DefaultWorkerSelector>
-where
-    Sel: WorkerSelector<ModelRuntimeConfig> + Send + 'static,
-{
+pub(crate) struct RoutePlan {
     signals: RoutePlanSignals,
     selection: WorkerSelection,
-    cleanup: KvRequestCleanup<Sel>,
+    cleanup: KvRequestCleanup,
     affinity: Option<AffinityAcquire>,
 }
 
@@ -298,10 +279,7 @@ impl RoutePlanSignals {
     }
 }
 
-impl<Sel> RoutePlan<Sel>
-where
-    Sel: WorkerSelector<ModelRuntimeConfig> + Send + 'static,
-{
+impl RoutePlan {
     pub(crate) fn signals(&self) -> RoutePlanSignals {
         self.signals
     }
@@ -316,15 +294,12 @@ where
 ///
 /// This alias remains supported through the Dynamo 1.x series. It may be
 /// removed only in a 2.0.0 (or later) breaking release.
-pub type KvPushRouter<Sel = DefaultWorkerSelector> = RoutingHost<Sel>;
+pub type KvPushRouter = RoutingHost;
 
-impl<Sel> RoutingHost<Sel>
-where
-    Sel: WorkerSelector<ModelRuntimeConfig> + Send + 'static,
-{
+impl RoutingHost {
     pub fn new(
         inner: PushRouter<PreprocessedRequest, Annotated<LLMEngineOutput>>,
-        kv_router: Arc<KvRouter<Sel>>,
+        kv_router: Arc<KvRouter>,
         session_affinity_ttl: Option<Duration>,
     ) -> Result<Self, Error> {
         let affinity = session_affinity_ttl
@@ -341,7 +316,7 @@ where
 
     pub fn new_with_load_context(
         inner: PushRouter<PreprocessedRequest, Annotated<LLMEngineOutput>>,
-        kv_router: Arc<KvRouter<Sel>>,
+        kv_router: Arc<KvRouter>,
         load_context: Arc<crate::kv_router::RoutingLoadContext>,
         session_affinity_ttl: Option<Duration>,
         session_affinity_mode: SessionAffinityMode,
@@ -361,7 +336,7 @@ where
 
     pub(crate) fn new_with_coordinator(
         inner: PushRouter<PreprocessedRequest, Annotated<LLMEngineOutput>>,
-        kv_router: Arc<KvRouter<Sel>>,
+        kv_router: Arc<KvRouter>,
         affinity: Option<AffinityCoordinator>,
         session_affinity_mode: SessionAffinityMode,
     ) -> Self {
@@ -376,7 +351,7 @@ where
 
     pub(crate) fn new_with_load_context_and_coordinator(
         inner: PushRouter<PreprocessedRequest, Annotated<LLMEngineOutput>>,
-        kv_router: Arc<KvRouter<Sel>>,
+        kv_router: Arc<KvRouter>,
         load_context: Arc<crate::kv_router::RoutingLoadContext>,
         affinity: Option<AffinityCoordinator>,
         session_affinity_mode: SessionAffinityMode,
@@ -392,7 +367,7 @@ where
 
     fn new_with_optional_load_context_and_coordinator(
         inner: PushRouter<PreprocessedRequest, Annotated<LLMEngineOutput>>,
-        kv_router: Arc<KvRouter<Sel>>,
+        kv_router: Arc<KvRouter>,
         load_context: Option<Arc<crate::kv_router::RoutingLoadContext>>,
         affinity: Option<AffinityCoordinator>,
         session_affinity_mode: SessionAffinityMode,
@@ -524,12 +499,12 @@ where
     }
 
     /// The active KV-aware data plane.
-    pub fn kv_router(&self) -> &Arc<KvRouter<Sel>> {
+    pub fn kv_router(&self) -> &Arc<KvRouter> {
         self.kv_router_if_enabled()
             .expect("routing host has no KV capability")
     }
 
-    pub(crate) fn kv_router_if_enabled(&self) -> Option<&Arc<KvRouter<Sel>>> {
+    pub(crate) fn kv_router_if_enabled(&self) -> Option<&Arc<KvRouter>> {
         match &self.policy {
             RoutingPolicy::Kv(chooser) => Some(chooser),
             RoutingPolicy::Builtin(_)
@@ -645,10 +620,8 @@ where
 }
 
 #[async_trait]
-impl<Sel> AsyncEngine<SingleIn<PreprocessedRequest>, ManyOut<Annotated<LLMEngineOutput>>, Error>
-    for RoutingHost<Sel>
-where
-    Sel: WorkerSelector<ModelRuntimeConfig> + Send + 'static,
+impl AsyncEngine<SingleIn<PreprocessedRequest>, ManyOut<Annotated<LLMEngineOutput>>, Error>
+    for RoutingHost
 {
     /// Generate a request through the selected routing plane.
     ///
