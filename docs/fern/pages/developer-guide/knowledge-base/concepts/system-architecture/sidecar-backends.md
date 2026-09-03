@@ -119,6 +119,24 @@ request plane. The sidecar stays in the pod for registration, KV events, and
 health. Request-plane fault detection does not observe direct-dispatch
 failures; worker liveness comes from discovery.
 
+## Running Without etcd Or NATS
+
+None of the three planes requires an infrastructure daemon on a single host or a
+shared-filesystem VM group:
+
+| Plane | Setting | Effect |
+|---|---|---|
+| Discovery | `DYN_DISCOVERY_BACKEND=file` (+ `DYN_FILE_KV=<shared dir>`) or `mem` | Registrations live in files (or in-process); no etcd. |
+| Request | `DYN_REQUEST_PLANE=tcp` (default) | Frontend to worker over TCP; no NATS. With direct dispatch, straight to the engine's gRPC. |
+| Event | `DYN_EVENT_PLANE=zmq` (default) | Workers publish KV events over ZMQ; the router subscribes directly. |
+| Selection | `DYN_ROUTER_EMBEDDED_SELECTION=1` | Scheduling on the embedded selection partition, whose replica sync is ZMQ. |
+
+Validated locally with `dynamo.frontend --router-mode kv` and two
+`dynamo.mocker` workers under exactly these settings, with no etcd or NATS
+process running: the model was served within ten seconds and chat completions
+succeeded. Across Kubernetes pods, use `DYN_DISCOVERY_BACKEND=kubernetes`, or
+the selection-catalog registration above, in place of the file backend.
+
 See the
 [sidecar Dockerfile, source, and engine-specific READMEs](https://github.com/ai-dynamo/dynamo/tree/main/lib/sidecar)
 for implementation details.
