@@ -16,8 +16,9 @@ use crate::config::{ApproximateCachePolicyKind, KvRouterConfig};
 use crate::identity::RoutingPartitionId;
 use crate::indexer::{
     ApproximateRetentionConfig, KvIndexer, KvIndexerInterface, KvIndexerMetrics, KvRouterError,
-    LowerTierIndexers, MatchDetails, RoutingDecisionHashes, SyncIndexer, TieredMatchDetails,
-    TieredMatchProvider, WireTieredMatchDetails, query_lower_tiers,
+    LowerTierIndexers, LowerTierQueryOptions, MatchDetails, RoutingDecisionHashes, SyncIndexer,
+    TieredMatchDetails, TieredMatchProvider, WireTieredMatchDetails,
+    query_lower_tiers_with_options,
 };
 use crate::protocols::{
     KvCacheEventData, LocalBlockHash, OverlapScores, RouterEvent, WorkerId, WorkerWithDpRank,
@@ -663,14 +664,35 @@ impl Indexer {
         &self,
         sequence: Vec<LocalBlockHash>,
     ) -> std::result::Result<TieredMatchDetails, KvRouterError> {
+        self.find_tiered_matches_with_options(sequence, LowerTierQueryOptions::default())
+            .await
+    }
+
+    /// [`Self::find_tiered_matches`] with lower-tier query options. Router-hint
+    /// chain retention is honored only by a local event-driven primary (see
+    /// [`Self::supports_router_hint_chain_retention`]); other shapes ignore it.
+    pub async fn find_tiered_matches_with_options(
+        &self,
+        sequence: Vec<LocalBlockHash>,
+        options: LowerTierQueryOptions,
+    ) -> std::result::Result<TieredMatchDetails, KvRouterError> {
+        let options = LowerTierQueryOptions {
+            retain_router_hint_chain: options.retain_router_hint_chain
+                && self.supports_router_hint_chain_retention(),
+        };
         let (device, lower_tier) = match self {
             Indexer::Single {
                 primary,
                 lower_tier,
                 ..
             } => {
-                let device = primary.find_match_details(sequence.clone()).await?;
-                let lt = query_lower_tiers(lower_tier, &sequence, &device);
+                let device = primary
+                    .find_match_details_with_options(
+                        sequence.clone(),
+                        options.retain_router_hint_chain,
+                    )
+                    .await?;
+                let lt = query_lower_tiers_with_options(lower_tier, &sequence, &device, options);
                 (device, lt)
             }
             Indexer::Concurrent {
@@ -678,9 +700,12 @@ impl Indexer {
                 lower_tier,
                 ..
             } => {
-                let device: MatchDetails =
-                    primary.backend().find_match_details_impl(&sequence, false);
-                let lt = query_lower_tiers(lower_tier, &sequence, &device);
+                let device: MatchDetails = primary.backend().find_match_details_impl_with_options(
+                    &sequence,
+                    false,
+                    options.retain_router_hint_chain,
+                );
+                let lt = query_lower_tiers_with_options(lower_tier, &sequence, &device, options);
                 (device, lt)
             }
             Indexer::Remote { primary, .. } => {

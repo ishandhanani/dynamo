@@ -143,6 +143,19 @@ previous partition and moved to the new one, which can leave the previous
 partition not ready. Assign a unique ID to every live worker across the entire
 service.
 
+A worker that can consume router hints registers `router_hint_worker_type`
+(its backend role, used to match hint sources to targets) and, when it can also
+serve as a source, `router_hint_source_control_endpoints` keyed by global DP
+rank:
+
+```json
+{
+  "worker_id": 1,
+  "router_hint_worker_type": "decode",
+  "router_hint_source_control_endpoints": { "0": "tcp://worker:5600", "1": "tcp://worker:5601" }
+}
+```
+
 `PATCH /workers/{worker_id}` updates supplied fields, `DELETE
 /workers/{worker_id}` removes the worker, and `GET /workers` lists catalog
 state. `model_name` and `routing_group` scope selection, indexer, and load state;
@@ -221,6 +234,24 @@ chosen worker once this request is decoding, including the request's own
 blocks. `decode_busy` compares it against the worker's `total_kv_blocks` at
 `conditional_disagg_decode_busy_threshold` and is omitted when either the
 threshold or the capacity is unknown.
+
+A booking response may also carry a `router_hint` when another worker of the
+same `router_hint_worker_type` holds a longer cached prefix than the chosen
+worker and advertises a source control endpoint for the matching DP rank:
+
+```json
+{
+  "router_hint": {
+    "source_control_endpoint": "tcp://worker-1:5600",
+    "block_hashes": [8713492873, 1928374650]
+  }
+}
+```
+
+`block_hashes` are root-aligned external sequence hashes; entry `i` is request
+block `i`, and the target decides which suffix to fetch from the source. Hints
+require a local event-driven primary indexer (no approximate or remote primary)
+and are never attached to query-only `select` responses.
 
 ### Advisory selection
 
