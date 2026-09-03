@@ -44,10 +44,10 @@ pub use service::{
     SelectionService, SelectionServiceBuilder, warn_for_unserved_worker_selection_policies,
 };
 pub use types::{
-    ModelLoadResponse, OutputBlockRequest, OverlapScoresRequest, OverlapScoresResponse,
-    PotentialLoadsRequest, ReadyResponse, ReservationRequest, ReservationResponse,
-    SelectAndReserveRequest, SelectRequest, SelectResponse, SelectionInputTrigger,
-    SelectionKvHints, SelectionSessionContext, SelectionWorkerConfig, SelectionWorkerLoad,
-    SharedCacheOverlapScore, WorkerCatalogRecord, WorkerLifecycle, WorkerOverlapScore,
-    WorkerPatchRequest, WorkerRequest,
+    HeartbeatRequest, ModelLoadResponse, OutputBlockRequest, OverlapScoresRequest,
+    OverlapScoresResponse, PotentialLoadsRequest, ReadyResponse, ReservationRequest,
+    ReservationResponse, SelectAndReserveRequest, SelectRequest, SelectResponse,
+    SelectionInputTrigger, SelectionKvHints, SelectionSessionContext, SelectionWorkerConfig,
+    SelectionWorkerLoad, SharedCacheOverlapScore, WorkerCatalogRecord, WorkerLifecycle,
+    WorkerOverlapScore, WorkerPatchRequest, WorkerRequest,
 };

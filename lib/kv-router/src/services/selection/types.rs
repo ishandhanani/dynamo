@@ -150,6 +150,9 @@ pub struct WorkerCatalogRecord {
     pub router_hint_worker_type: Option<String>,
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub router_hint_source_control_endpoints: HashMap<u32, String>,
+    /// Lease duration, when the worker registered with `ttl_secs`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ttl_secs: Option<f64>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub not_schedulable_reasons: Vec<String>,
 }
@@ -179,6 +182,7 @@ impl WorkerCatalogRecord {
             kv_transfer_preferred_weight: req.kv_transfer_preferred_weight,
             router_hint_worker_type: req.router_hint_worker_type,
             router_hint_source_control_endpoints: req.router_hint_source_control_endpoints,
+            ttl_secs: req.ttl_secs,
             not_schedulable_reasons: Vec::new(),
         }
     }
@@ -293,6 +297,7 @@ impl Default for WorkerRequest {
             kv_transfer_preferred_weight: None,
             router_hint_worker_type: None,
             router_hint_source_control_endpoints: HashMap::new(),
+            ttl_secs: None,
         }
     }
 }
@@ -343,6 +348,19 @@ pub struct WorkerRequest {
     /// Per-global-DP-rank KV control endpoints this worker can serve hints from.
     #[serde(default)]
     pub router_hint_source_control_endpoints: HashMap<u32, String>,
+    /// Lease duration in seconds. When set, the worker must call
+    /// `POST /workers/{id}/heartbeat` before it elapses or it is drained and
+    /// deregistered. Absent means the record lives until deleted.
+    #[serde(default)]
+    pub ttl_secs: Option<f64>,
+}
+
+/// Renew (or start) a worker's lease.
+#[derive(Debug, Default, Deserialize)]
+pub struct HeartbeatRequest {
+    /// New lease duration; defaults to the worker's current TTL.
+    #[serde(default)]
+    pub ttl_secs: Option<f64>,
 }
 
 #[derive(Debug, Deserialize)]

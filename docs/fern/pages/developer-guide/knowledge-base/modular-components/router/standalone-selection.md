@@ -93,6 +93,7 @@ APIs. Those bindings should wrap `SelectionService` rather than construct
 | `--threads` | `4` | KV indexer worker threads. |
 | `--indexer-peers` | none | Comma-separated HTTP URLs used for startup KV recovery through `/dump`. Ignored with `--remote-indexer-url`. |
 | `--remote-indexer-url` | none | Base URL of a [standalone indexer](standalone-indexer.md) that serves the primary KV index. The selector then does not subscribe to worker KV events; workers publish to the indexer instead. Requires `use_kv_events=true`. |
+| `--workers-file` | none | JSON file holding an array of worker registrations applied at startup (static catalog for VMs without a discovery plane). |
 | `--replica-sync-port` | none | Local ZMQ PUB port for active-load lifecycle events. The selector binds `tcp://*:<port>` internally. |
 | `--replica-sync-peers` | none | Comma-separated ZMQ PUB endpoints for selector peers. Requires `--replica-sync-port`. |
 | `--selection-cache-ttl-secs` | `120` | Seconds an unclaimed pending selection lives before eviction. |
@@ -179,6 +180,20 @@ rank:
   "router_hint_source_control_endpoints": { "0": "tcp://worker:5600", "1": "tcp://worker:5601" }
 }
 ```
+
+A worker may register with a lease by adding `"ttl_secs": 30`. It must then
+call `POST /workers/{worker_id}/heartbeat` (body optional; `{"ttl_secs": 60}`
+changes the lease) before the lease elapses, or the service drains the worker,
+deregisters it, and marks its record `unschedulable` with reason
+`lease expired`. A later `POST /workers` re-registers it. Workers registered
+without `ttl_secs` live until deleted; a heartbeat for one of them must supply
+`ttl_secs` to start a lease. This is the runtime-free replacement for a
+discovery lease: an agent next to the engine registers, heartbeats, and on
+shutdown deletes.
+
+Deployments without a discovery plane can pre-register workers from a JSON
+file (an array of `POST /workers` bodies) with `--workers-file`; the entries
+are applied before the service serves selections.
 
 `PATCH /workers/{worker_id}` updates supplied fields, `DELETE
 /workers/{worker_id}` removes the worker, and `GET /workers` lists catalog

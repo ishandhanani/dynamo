@@ -18,8 +18,9 @@ use crate::services::common::replica_sync::ReplicaPeerError;
 
 use super::service::SelectionService;
 use super::types::{
-    OutputBlockRequest, OverlapScoresRequest, PotentialLoadsRequest, REQUEST_BODY_LIMIT_BYTES,
-    ReservationRequest, SelectAndReserveRequest, SelectRequest, WorkerPatchRequest, WorkerRequest,
+    HeartbeatRequest, OutputBlockRequest, OverlapScoresRequest, PotentialLoadsRequest,
+    REQUEST_BODY_LIMIT_BYTES, ReservationRequest, SelectAndReserveRequest, SelectRequest,
+    WorkerCatalogRecord, WorkerPatchRequest, WorkerRequest,
 };
 
 #[derive(Debug, Deserialize)]
@@ -62,6 +63,28 @@ async fn patch_worker(
     };
     match state.service.patch_worker(worker_id, req).await {
         Ok(worker) => Json(worker).into_response(),
+        Err(error) => error.into_response(),
+    }
+}
+
+#[derive(serde::Serialize)]
+struct HeartbeatResponse {
+    worker: WorkerCatalogRecord,
+    lease_secs: f64,
+}
+
+async fn heartbeat_worker(
+    State(state): State<Arc<AppState>>,
+    Path(worker_id): Path<WorkerId>,
+    payload: Option<Json<HeartbeatRequest>>,
+) -> Response {
+    let ttl_secs = payload.and_then(|Json(req)| req.ttl_secs);
+    match state.service.heartbeat_worker(worker_id, ttl_secs) {
+        Ok((worker, lease)) => Json(HeartbeatResponse {
+            worker,
+            lease_secs: lease.as_secs_f64(),
+        })
+        .into_response(),
         Err(error) => error.into_response(),
     }
 }
@@ -321,6 +344,7 @@ pub(crate) fn create_router(state: Arc<AppState>) -> Router {
         )
         .route("/reservations/{selection_id}", delete(delete_reservation))
         .route("/workers", post(create_worker).get(list_workers))
+        .route("/workers/{worker_id}/heartbeat", post(heartbeat_worker))
         .route(
             "/workers/{worker_id}",
             patch(patch_worker).delete(delete_worker),

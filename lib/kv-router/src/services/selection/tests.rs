@@ -149,6 +149,47 @@ async fn response_json(response: Response) -> serde_json::Value {
 }
 
 #[tokio::test]
+async fn heartbeat_renews_a_leased_worker() {
+    let app = app();
+    let response = post(
+        app.clone(),
+        "/workers",
+        r#"{"worker_id":1,"model_name":"model","endpoint":"http://w:8000","block_size":4,"max_num_batched_tokens":1024,"ttl_secs":60}"#,
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::CREATED);
+    assert_eq!(response_json(response).await["ttl_secs"], 60.0);
+
+    let response = post(app.clone(), "/workers/1/heartbeat", r#"{"ttl_secs": 90}"#).await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response_json(response).await;
+    assert_eq!(body["lease_secs"], 90.0);
+    assert_eq!(body["worker"]["ttl_secs"], 90.0);
+
+    // Body is optional: an empty heartbeat keeps the current TTL.
+    let response = post(app.clone(), "/workers/1/heartbeat", "{}").await;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(response_json(response).await["lease_secs"], 90.0);
+
+    let response = post(app.clone(), "/workers/7/heartbeat", "{}").await;
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+
+    let response = post(
+        app.clone(),
+        "/workers",
+        r#"{"worker_id":2,"model_name":"model","endpoint":"http://w2:8000","block_size":4,"max_num_batched_tokens":1024}"#,
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let response = post(app, "/workers/2/heartbeat", "{}").await;
+    assert_eq!(
+        response.status(),
+        StatusCode::BAD_REQUEST,
+        "a worker without a lease needs ttl_secs"
+    );
+}
+
+#[tokio::test]
 async fn replica_sync_routes_are_mounted() {
     let response = app()
         .oneshot(
@@ -1798,6 +1839,7 @@ async fn selector_replica_sync_propagates_request_lifecycle() {
         threads: 1,
         indexer_peers: Vec::new(),
         remote_indexer_url: None,
+        workers_file: None,
         replica_sync_port: Some(port_a),
         replica_sync_peers: Vec::new(),
         kv_router_config: test_config(),

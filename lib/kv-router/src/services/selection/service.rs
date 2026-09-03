@@ -40,6 +40,8 @@ pub struct SelectionServiceBuilder {
     remote_indexer_url: Option<String>,
     worker_selection_policy_factory: Option<WorkerSelectionPolicyFactory>,
     external_kv_events: bool,
+    initial_workers: Vec<WorkerRequest>,
+    initial_workers_file: Option<std::path::PathBuf>,
 }
 
 /// Warn when a host does not construct workers for explicitly configured policy roles.
@@ -81,7 +83,25 @@ impl SelectionServiceBuilder {
             remote_indexer_url: None,
             worker_selection_policy_factory: None,
             external_kv_events: false,
+            initial_workers: Vec::new(),
+            initial_workers_file: None,
         }
+    }
+
+    /// Like [`Self::initial_workers`], read from a JSON file holding an array
+    /// of `POST /workers` bodies. Read when the service is built.
+    pub fn initial_workers_file(mut self, path: impl Into<std::path::PathBuf>) -> Self {
+        self.initial_workers_file = Some(path.into());
+        self
+    }
+
+    /// Register these workers as soon as the service is built, before it
+    /// serves selections. This is the static-file feeder for VM deployments
+    /// where no discovery plane exists; each entry is an ordinary
+    /// `POST /workers` body.
+    pub fn initial_workers(mut self, workers: Vec<WorkerRequest>) -> Self {
+        self.initial_workers = workers;
+        self
     }
 
     /// Use `factory` for every partition's worker-selection policy instead of
@@ -205,6 +225,33 @@ impl SelectionServiceBuilder {
             }
         }
         core.signal_indexer_ready();
+        let mut initial_workers = self.initial_workers;
+        if let Some(path) = &self.initial_workers_file {
+            let contents = std::fs::read(path).map_err(|error| {
+                anyhow::anyhow!("read workers file {}: {error}", path.display())
+            })?;
+            let workers: Vec<WorkerRequest> =
+                serde_json::from_slice(&contents).map_err(|error| {
+                    anyhow::anyhow!("parse workers file {}: {error}", path.display())
+                })?;
+            tracing::info!(path = %path.display(), workers = workers.len(), "loaded workers file");
+            initial_workers.extend(workers);
+        }
+        for request in initial_workers {
+            let worker_id = request.worker_id;
+            match core.upsert_worker(request).await {
+                Ok(record) if record.not_schedulable_reasons.is_empty() => {
+                    tracing::info!(worker_id, "registered initial worker");
+                }
+                Ok(record) => tracing::warn!(
+                    worker_id,
+                    reasons = ?record.not_schedulable_reasons,
+                    "initial worker registered but not schedulable"
+                ),
+                Err(error) => anyhow::bail!("initial worker {worker_id} rejected: {error}"),
+            }
+        }
+        spawn_lease_sweeper(Arc::downgrade(&core), cancel_token.child_token());
 
         let peer_manager = if replica_runtime.is_some() {
             let weak_core = Arc::downgrade(&core);
@@ -252,8 +299,38 @@ impl SelectionServiceConfig {
         if let Some(url) = &self.remote_indexer_url {
             builder = builder.remote_indexer(url.clone());
         }
+        if let Some(path) = &self.workers_file {
+            builder = builder.initial_workers_file(path.clone());
+        }
         builder
     }
+}
+
+/// Drain and deregister workers whose registration lease lapsed. Wakes at the
+/// next deadline (bounded below by `MIN_LEASE_SWEEP`) so short TTLs expire
+/// promptly and idle catalogs cost nothing.
+fn spawn_lease_sweeper(core: std::sync::Weak<SelectionCore>, cancel_token: CancellationToken) {
+    const MIN_LEASE_SWEEP: std::time::Duration = std::time::Duration::from_millis(100);
+    const IDLE_LEASE_SWEEP: std::time::Duration = std::time::Duration::from_secs(1);
+    tokio::spawn(async move {
+        loop {
+            let Some(strong) = core.upgrade() else {
+                break;
+            };
+            let wait = strong
+                .next_lease_expiry()
+                .map_or(IDLE_LEASE_SWEEP, |expiry| expiry.max(MIN_LEASE_SWEEP));
+            drop(strong);
+            tokio::select! {
+                _ = cancel_token.cancelled() => break,
+                _ = tokio::time::sleep(wait) => {}
+            }
+            let Some(strong) = core.upgrade() else {
+                break;
+            };
+            strong.expire_leases().await;
+        }
+    });
 }
 
 struct StartupGuard {
@@ -346,6 +423,21 @@ impl SelectionService {
         patch: WorkerPatchRequest,
     ) -> Result<WorkerCatalogRecord, SelectionError> {
         self.core.patch_worker(worker_id, patch).await
+    }
+
+    /// Renew a worker's registration lease. Returns the record and the lease
+    /// duration that now applies.
+    pub fn heartbeat_worker(
+        &self,
+        worker_id: WorkerId,
+        ttl_secs: Option<f64>,
+    ) -> Result<(WorkerCatalogRecord, std::time::Duration), SelectionError> {
+        self.core.heartbeat_worker(worker_id, ttl_secs)
+    }
+
+    /// Drain and deregister workers whose lease has expired; returns their ids.
+    pub async fn expire_leases(&self) -> Vec<WorkerId> {
+        self.core.expire_leases().await
     }
 
     pub async fn delete_worker(
@@ -589,6 +681,59 @@ worker_selection:
         })
         .await
         .expect("replica port was not released")
+    }
+
+    #[tokio::test]
+    async fn initial_workers_and_workers_file_register_before_serving() {
+        let workers_file = tempfile::NamedTempFile::new().unwrap();
+        std::fs::write(
+            workers_file.path(),
+            r#"[{"worker_id": 2, "model_name": "model", "endpoint": "http://w2:8000", "block_size": 4, "max_num_batched_tokens": 1024, "ttl_secs": 30}]"#,
+        )
+        .unwrap();
+        let service = SelectionServiceBuilder::new(
+            test_config(),
+            WorkerType::Aggregated,
+            WorkerSelectionPolicyRegistry::default(),
+        )
+        .indexer_threads(1)
+        .initial_workers(vec![super::super::types::WorkerRequest {
+            worker_id: 1,
+            model_name: "model".to_string(),
+            endpoint: Some("http://w1:8000".to_string()),
+            block_size: Some(4),
+            max_num_batched_tokens: Some(1024),
+            ..Default::default()
+        }])
+        .initial_workers_file(workers_file.path())
+        .build()
+        .await
+        .expect("service with initial workers");
+        let ready = service.ready();
+        assert!(ready.ready);
+        assert_eq!(ready.schedulable_workers, 2);
+        let leased = service
+            .list_workers(Some("model"), None)
+            .into_iter()
+            .find(|record| record.worker_id == 2)
+            .expect("file worker");
+        assert_eq!(leased.ttl_secs, Some(30.0));
+        service.shutdown().await;
+
+        let bad_file = tempfile::NamedTempFile::new().unwrap();
+        std::fs::write(bad_file.path(), "not json").unwrap();
+        let error = SelectionServiceBuilder::new(
+            test_config(),
+            WorkerType::Aggregated,
+            WorkerSelectionPolicyRegistry::default(),
+        )
+        .indexer_threads(1)
+        .initial_workers_file(bad_file.path())
+        .build()
+        .await
+        .err()
+        .expect("unparseable workers file fails startup");
+        assert!(error.to_string().contains("parse workers file"), "{error}");
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

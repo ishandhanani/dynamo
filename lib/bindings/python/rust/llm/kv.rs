@@ -369,6 +369,11 @@ struct SelectServiceCli {
     #[arg(long)]
     remote_indexer_url: Option<String>,
 
+    /// JSON file with an array of worker registrations (POST /workers bodies)
+    /// applied at startup, for deployments without a discovery plane
+    #[arg(long)]
+    workers_file: Option<std::path::PathBuf>,
+
     /// Local ZMQ PUB port for active-load replica events
     #[arg(long, value_parser = parse_nonzero_port)]
     replica_sync_port: Option<u16>,
@@ -558,6 +563,7 @@ where
         threads: cli.threads,
         indexer_peers: cli.indexer_peers,
         remote_indexer_url: cli.remote_indexer_url,
+        workers_file: cli.workers_file,
         replica_sync_port: cli.replica_sync_port,
         replica_sync_peers: cli.replica_sync_peers,
         kv_router_config,

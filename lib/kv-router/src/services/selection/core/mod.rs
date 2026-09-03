@@ -3,7 +3,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use dynamo_tokens::SequenceHash;
 use once_cell::sync::OnceCell;
@@ -257,6 +257,10 @@ pub struct SelectionServiceConfig {
     /// When set, this service does not listen for worker KV events and
     /// `indexer_peers` recovery is skipped.
     pub remote_indexer_url: Option<String>,
+    /// JSON file holding an array of worker registrations (`POST /workers`
+    /// bodies) applied at startup. The static catalog feeder for deployments
+    /// without a discovery plane.
+    pub workers_file: Option<std::path::PathBuf>,
     pub replica_sync_port: Option<u16>,
     pub replica_sync_peers: Vec<String>,
     pub kv_router_config: crate::config::KvRouterConfig,
@@ -508,6 +512,51 @@ impl SelectionCore {
         let (previous, record) = self.catalog.patch(worker_id, patch)?;
         self.reconcile_worker(record.worker_id, Some(previous))
             .await
+    }
+
+    /// Renew a worker's lease. Returns the record and the remaining lease.
+    pub fn heartbeat_worker(
+        &self,
+        worker_id: WorkerId,
+        ttl_secs: Option<f64>,
+    ) -> Result<(WorkerCatalogRecord, Duration), SelectionError> {
+        self.ensure_running()?;
+        let now = Instant::now();
+        let (record, lease) = self.catalog.heartbeat(worker_id, ttl_secs, now)?;
+        Ok((record, lease.ttl))
+    }
+
+    /// Drain and deregister every worker whose lease has expired. Returns the
+    /// expired worker ids. Called periodically by the lease sweeper; exposed so
+    /// hosts and tests can drive it deterministically.
+    pub async fn expire_leases(&self) -> Vec<WorkerId> {
+        let expired = self.catalog.take_expired_leases(Instant::now());
+        for worker_id in &expired {
+            tracing::warn!(
+                worker_id,
+                "worker lease expired; draining and deregistering"
+            );
+            match self.delete_worker(*worker_id).await {
+                Ok(_) => {
+                    self.catalog.set_lifecycle(
+                        *worker_id,
+                        WorkerLifecycle::Unschedulable,
+                        vec!["lease expired".to_string()],
+                    );
+                }
+                Err(error) => {
+                    tracing::debug!(worker_id, %error, "expired worker was already removed");
+                }
+            }
+        }
+        expired
+    }
+
+    /// Time until the next lease expires, if any lease is outstanding.
+    pub fn next_lease_expiry(&self) -> Option<Duration> {
+        self.catalog
+            .next_lease_deadline()
+            .map(|deadline| deadline.saturating_duration_since(Instant::now()))
     }
 
     pub async fn delete_worker(
@@ -1854,6 +1903,7 @@ mod tests {
             kv_transfer_preferred_weight: None,
             router_hint_worker_type: None,
             router_hint_source_control_endpoints: HashMap::new(),
+            ttl_secs: None,
         }
     }
 
@@ -2921,6 +2971,70 @@ mod tests {
         let load = response.worker_load.expect("advisory load");
         assert_eq!(load.total_kv_blocks, None);
         assert_eq!(load.prefill_busy, None);
+    }
+
+    #[tokio::test]
+    async fn leases_renew_on_heartbeat_and_expire_into_deregistration() {
+        let core = SelectionCore::new_local(
+            test_config(false),
+            1,
+            CancellationToken::new(),
+            SelectionCacheConfig::default(),
+        );
+        let mut leased = worker(1);
+        leased.ttl_secs = Some(0.05);
+        core.upsert_worker(leased).await.expect("leased worker");
+        core.upsert_worker(worker(2))
+            .await
+            .expect("unleased worker");
+        assert!(core.next_lease_expiry().is_some());
+
+        // Heartbeat renews and can change the TTL; an unleased worker needs one.
+        let (record, lease) = core.heartbeat_worker(1, Some(10.0)).expect("renew");
+        assert_eq!(record.ttl_secs, Some(10.0));
+        assert_eq!(lease, Duration::from_secs(10));
+        assert!(matches!(
+            core.heartbeat_worker(2, None),
+            Err(SelectionError::BadRequest(_))
+        ));
+        assert!(matches!(
+            core.heartbeat_worker(99, Some(1.0)),
+            Err(SelectionError::NotFound(_))
+        ));
+        assert!(matches!(
+            core.heartbeat_worker(1, Some(0.0)),
+            Err(SelectionError::BadRequest(_))
+        ));
+        assert!(
+            core.expire_leases().await.is_empty(),
+            "renewed lease is live"
+        );
+
+        // Let a short lease lapse: the worker is drained and deregistered, the
+        // unleased worker is untouched, and the expiry is reported once.
+        core.heartbeat_worker(1, Some(0.01)).expect("short lease");
+        tokio::time::sleep(Duration::from_millis(30)).await;
+        assert_eq!(core.expire_leases().await, vec![1]);
+        let expired = core.catalog.get(1).expect("record kept");
+        assert_eq!(expired.lifecycle, WorkerLifecycle::Unschedulable);
+        assert_eq!(
+            expired.not_schedulable_reasons,
+            vec!["lease expired".to_string()]
+        );
+        assert!(core.catalog.lease(1).is_none());
+        assert_eq!(
+            core.catalog.get(2).expect("unleased").lifecycle,
+            WorkerLifecycle::Schedulable
+        );
+        assert!(core.expire_leases().await.is_empty());
+        assert_eq!(core.ready().schedulable_workers, 1);
+
+        // Re-registering revives the worker and its lease.
+        let mut revived = worker(1);
+        revived.ttl_secs = Some(5.0);
+        let record = core.upsert_worker(revived).await.expect("re-register");
+        assert_eq!(record.lifecycle, WorkerLifecycle::Schedulable);
+        assert!(core.catalog.lease(1).is_some());
     }
 
     #[tokio::test]

@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use std::collections::HashMap;
+use std::time::{Duration, Instant};
 
 use parking_lot::RwLock;
 
@@ -13,9 +14,26 @@ use super::types::{
     SelectionWorkerConfig, WorkerCatalogRecord, WorkerLifecycle, WorkerPatchRequest, WorkerRequest,
 };
 
+/// A worker's registration lease: it must heartbeat before `deadline`.
+#[derive(Debug, Clone, Copy)]
+pub(super) struct Lease {
+    pub ttl: Duration,
+    pub deadline: Instant,
+}
+
 #[derive(Debug, Default)]
 pub(super) struct WorkerCatalog {
     workers: RwLock<HashMap<WorkerId, WorkerCatalogRecord>>,
+    leases: RwLock<HashMap<WorkerId, Lease>>,
+}
+
+pub(super) fn lease_ttl(ttl_secs: f64) -> Result<Duration, SelectionError> {
+    if !ttl_secs.is_finite() || ttl_secs <= 0.0 {
+        return Err(SelectionError::BadRequest(
+            "ttl_secs must be a positive number of seconds".to_string(),
+        ));
+    }
+    Ok(Duration::from_secs_f64(ttl_secs))
 }
 
 impl WorkerCatalog {
@@ -23,11 +41,93 @@ impl WorkerCatalog {
         &self,
         req: WorkerRequest,
     ) -> (Option<WorkerCatalogRecord>, WorkerCatalogRecord) {
+        let lease = req.ttl_secs.and_then(|ttl_secs| lease_ttl(ttl_secs).ok());
         let mut workers = self.workers.write();
         let previous = workers.get(&req.worker_id).cloned();
         let record = WorkerCatalogRecord::new(req);
         workers.insert(record.worker_id, record.clone());
+        let mut leases = self.leases.write();
+        match lease {
+            Some(ttl) => {
+                leases.insert(
+                    record.worker_id,
+                    Lease {
+                        ttl,
+                        deadline: Instant::now() + ttl,
+                    },
+                );
+            }
+            None => {
+                leases.remove(&record.worker_id);
+            }
+        }
         (previous, record)
+    }
+
+    /// Renew `worker_id`'s lease, optionally changing its TTL. A worker that
+    /// registered without a TTL needs one here to start a lease.
+    pub(super) fn heartbeat(
+        &self,
+        worker_id: WorkerId,
+        ttl_secs: Option<f64>,
+        now: Instant,
+    ) -> Result<(WorkerCatalogRecord, Lease), SelectionError> {
+        let mut workers = self.workers.write();
+        let Some(record) = workers.get_mut(&worker_id) else {
+            return Err(SelectionError::NotFound(format!(
+                "worker {worker_id} not found"
+            )));
+        };
+        let mut leases = self.leases.write();
+        let ttl = match (ttl_secs, leases.get(&worker_id)) {
+            (Some(ttl_secs), _) => lease_ttl(ttl_secs)?,
+            (None, Some(lease)) => lease.ttl,
+            (None, None) => {
+                return Err(SelectionError::BadRequest(format!(
+                    "worker {worker_id} has no lease; supply ttl_secs to start one"
+                )));
+            }
+        };
+        let lease = Lease {
+            ttl,
+            deadline: now + ttl,
+        };
+        leases.insert(worker_id, lease);
+        record.ttl_secs = Some(ttl.as_secs_f64());
+        Ok((record.clone(), lease))
+    }
+
+    #[cfg(test)]
+    pub(super) fn lease(&self, worker_id: WorkerId) -> Option<Lease> {
+        self.leases.read().get(&worker_id).copied()
+    }
+
+    /// Workers whose lease deadline has passed, oldest first. Their leases are
+    /// removed so an expiry is reported once; the record stays until deleted.
+    pub(super) fn take_expired_leases(&self, now: Instant) -> Vec<WorkerId> {
+        let mut leases = self.leases.write();
+        let mut expired: Vec<(Instant, WorkerId)> = leases
+            .iter()
+            .filter(|(_, lease)| lease.deadline <= now)
+            .map(|(worker_id, lease)| (lease.deadline, *worker_id))
+            .collect();
+        expired.sort();
+        for (_, worker_id) in &expired {
+            leases.remove(worker_id);
+        }
+        expired
+            .into_iter()
+            .map(|(_, worker_id)| worker_id)
+            .collect()
+    }
+
+    /// Earliest lease deadline, for sizing the sweep interval.
+    pub(super) fn next_lease_deadline(&self) -> Option<Instant> {
+        self.leases
+            .read()
+            .values()
+            .map(|lease| lease.deadline)
+            .min()
     }
 
     pub(super) fn patch(
