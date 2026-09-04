@@ -39,6 +39,7 @@ _KV_ROUTER_FIELDS: tuple[str, ...] = (
     "router_temperature",
     "use_kv_events",
     "router_replica_sync",
+    "router_embedded_selection",
     "router_track_active_blocks",
     "router_track_output_blocks",
     "router_assume_kv_reuse",
@@ -200,6 +201,7 @@ class KvRouterConfigBase(ConfigBase):
     router_temperature: float
     use_kv_events: bool
     router_replica_sync: bool
+    router_embedded_selection: bool = True
     router_track_active_blocks: bool
     router_track_output_blocks: bool
     router_assume_kv_reuse: bool
@@ -421,6 +423,19 @@ class KvRouterArgGroup(ArgGroup):
             help=(
                 "KV Router: Enable best-effort active-sequence synchronization through "
                 "the Runtime event plane."
+            ),
+        )
+        add_negatable_bool_argument(
+            g,
+            flag_name="--router-embedded-selection",
+            env_var="DYN_ROUTER_EMBEDDED_SELECTION",
+            default=True,
+            dest="router_embedded_selection",
+            help=(
+                "KV Router: Run scheduling and active-sequence accounting on an "
+                "embedded selection-service partition (default). "
+                "--no-router-embedded-selection selects the deprecated runtime-bound "
+                "scheduler, kept for one release as a rollback."
             ),
         )
         add_negatable_bool_argument(
