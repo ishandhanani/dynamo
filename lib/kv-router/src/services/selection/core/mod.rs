@@ -44,6 +44,7 @@ use crate::tracking_hash::{TrackingHashContext, TrackingHashScope};
 
 use super::catalog::WorkerCatalog;
 use super::error::SelectionError;
+use super::ingress::{KvEventIngress, ZmqDirectIngress};
 use super::input::{PromptRequest, TrackingHashInput};
 use super::pending::{PendingSelection, SelectionCache, SelectionCacheConfig};
 use super::types::{
@@ -56,12 +57,10 @@ use crate::WorkerSelectionPolicyFactory;
 use crate::WorkerType;
 
 /// Source of dequeue-time overlap refreshes for a partition scheduler: the
-/// partition's own indexer, or one the embedding host supplies when it keeps
-/// its own index (the frontend `KvRouter` in embedded mode).
+/// partition's index.
 #[derive(Clone)]
 pub enum RefreshProvider {
     Local(Arc<Indexer>),
-    External(Arc<dyn TieredMatchProvider>),
 }
 
 #[async_trait::async_trait]
@@ -72,7 +71,6 @@ impl TieredMatchProvider for RefreshProvider {
     ) -> Result<TieredMatchDetails, KvRouterError> {
         match self {
             Self::Local(indexer) => indexer.find_tiered_matches(sequence.to_vec()).await,
-            Self::External(provider) => provider.find_tiered_matches(sequence).await,
         }
     }
 
@@ -85,11 +83,6 @@ impl TieredMatchProvider for RefreshProvider {
             Self::Local(indexer) => {
                 indexer
                     .find_tiered_matches_with_options(sequence.to_vec(), options)
-                    .await
-            }
-            Self::External(provider) => {
-                provider
-                    .find_tiered_matches_with_options(sequence, options)
                     .await
             }
         }
@@ -204,16 +197,41 @@ pub struct HostLoad {
     pub available_workers: Option<WorkerAvailabilityProvider>,
 }
 
-/// KV-cache knowledge outside the partition's own index.
+/// Where a partition's KV knowledge comes from.
 #[derive(Clone, Default)]
 pub struct HostCache {
     /// Queried alongside the indexer for prompts that carry `token_ids`; a
     /// failed lookup is logged and selection proceeds without shared hits.
     pub shared: Option<Arc<dyn SharedKvCache>>,
-    /// Where dequeue-time overlap refresh reads from. A host that keeps its
-    /// own index points this at that index so queued requests are re-scored
-    /// against the index that scored them.
-    pub overlap_refresh: OverlapRefreshSource,
+    pub index: KvIndexSource,
+}
+
+/// Where a partition's KV index comes from and who feeds it.
+#[derive(Clone)]
+pub enum KvIndexSource {
+    /// The ingress builds each partition's index and feeds it with worker KV
+    /// events; it also decides what metadata a worker needs to be schedulable
+    /// and what happens to the index when a worker leaves. Defaults to
+    /// [`ZmqDirectIngress`]; the frontend supplies its runtime-backed ingress.
+    Owned(Arc<dyn KvEventIngress>),
+    /// A standalone indexer at this base URL serves the primary index; this
+    /// core does not subscribe to worker KV events.
+    Remote(String),
+}
+
+impl Default for KvIndexSource {
+    fn default() -> Self {
+        Self::Owned(Arc::new(ZmqDirectIngress))
+    }
+}
+
+impl std::fmt::Debug for KvIndexSource {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Owned(_) => formatter.write_str("Owned"),
+            Self::Remote(url) => formatter.debug_tuple("Remote").field(url).finish(),
+        }
+    }
 }
 
 /// Host-owned narrowing of the candidate set.
@@ -239,28 +257,6 @@ pub struct HostReplication {
     pub channels: Option<HostReplicaSyncFactory>,
 }
 
-/// Source of dequeue-time overlap refreshes for partition schedulers.
-#[derive(Clone, Default)]
-pub enum OverlapRefreshSource {
-    /// The partition's own indexer (standalone service default).
-    #[default]
-    PartitionIndexer,
-    /// A host-owned index.
-    External(Arc<dyn TieredMatchProvider>),
-    /// No refresh: queued requests keep their admission-time scores.
-    Disabled,
-}
-
-impl std::fmt::Debug for OverlapRefreshSource {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter.write_str(match self {
-            Self::PartitionIndexer => "PartitionIndexer",
-            Self::External(_) => "External",
-            Self::Disabled => "Disabled",
-        })
-    }
-}
-
 impl std::fmt::Debug for SelectionHost {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
@@ -272,7 +268,7 @@ impl std::fmt::Debug for SelectionHost {
             )
             .field("available_workers", &self.load.available_workers.is_some())
             .field("shared_cache", &self.cache.shared.is_some())
-            .field("overlap_refresh", &self.cache.overlap_refresh)
+            .field("index", &self.cache.index)
             .field(
                 "lora_worker_filter",
                 &self.eligibility.lora_worker_filter.is_some(),
@@ -396,7 +392,6 @@ impl SelectionCore {
             cache_config,
             tracking_hash,
             indexer_policy,
-            false,
         ))
     }
 
@@ -419,15 +414,13 @@ impl SelectionCore {
         cache_config: SelectionCacheConfig,
         tracking_hash: Arc<TrackingHashContext>,
         indexer_policy: IndexerPolicy,
-        external_kv_events: bool,
     ) -> Self {
         let cancel_token = cancel_token.child_token();
         let indexer_registry = Arc::new(WorkerRegistry::new_with_cancel_token(
             indexer_threads,
             cancel_token.clone(),
         ));
-        let listens_for_kv_events =
-            kv_router_config.use_kv_events && !indexer_policy.is_remote() && !external_kv_events;
+        let listens_for_kv_events = kv_router_config.use_kv_events && !indexer_policy.is_remote();
         indexer_registry.set_indexer_policy(indexer_policy);
         if signal_indexer_ready {
             indexer_registry.signal_ready();
@@ -611,8 +604,10 @@ impl SelectionCore {
             .kv_router_config
             .queueing_enabled(Some(&record.model_name))
             .map_err(|error| SelectionError::BadRequest(error.to_string()))?;
-        let reasons =
-            record.missing_schedulable_metadata(queueing_enabled, self.listens_for_kv_events);
+        let mut reasons = record.missing_schedulable_metadata(queueing_enabled);
+        if let Some(ingress) = self.ingress() {
+            reasons.extend(ingress.missing_metadata(&record));
+        }
         if !reasons.is_empty() {
             let updated = self
                 .catalog
@@ -625,8 +620,8 @@ impl SelectionCore {
         if let Err(error) = self.ensure_entry(&record) {
             return self.mark_incomplete_after_reconcile_error(worker_id, record.key(), error);
         }
-        if self.listens_for_kv_events
-            && let Err(error) = self.register_indexer_listeners(&record).await
+        if let Some(ingress) = self.ingress()
+            && let Err(error) = ingress.attach(&self.indexer_registry, &record).await
         {
             self.cleanup_indexer_registration(&record).await;
             return self.mark_incomplete_after_reconcile_error(worker_id, record.key(), error);
@@ -745,21 +740,17 @@ impl SelectionCore {
                     self.cancel_token.child_token(),
                 );
 
-                let indexer = self
-                    .indexer_registry
-                    .get_or_create_indexer(key.clone(), block_size);
-                let refresh_provider = match &self.host.cache.overlap_refresh {
-                    OverlapRefreshSource::PartitionIndexer => {
-                        Some(RefreshProvider::Local(Arc::new(indexer.clone())))
+                let indexer = match &self.host.cache.index {
+                    KvIndexSource::Owned(ingress) => {
+                        ingress.open(&self.indexer_registry, &key, block_size)
                     }
-                    OverlapRefreshSource::External(provider) => {
-                        Some(RefreshProvider::External(Arc::clone(provider)))
-                    }
-                    OverlapRefreshSource::Disabled => None,
+                    KvIndexSource::Remote(_) => self
+                        .indexer_registry
+                        .get_or_create_indexer(key.clone(), block_size),
                 };
-                let overlap_refresh = refresh_provider.map(|provider| {
+                let overlap_refresh = indexer.supports_overlap_refresh().then(|| {
                     Arc::new(TieredOverlapRefresher::new(
-                        provider,
+                        RefreshProvider::Local(Arc::new(indexer.clone())),
                         self.kv_router_config.clone(),
                         block_size,
                     ))
@@ -816,61 +807,17 @@ impl SelectionCore {
         Ok(entry)
     }
 
-    async fn register_indexer_listeners(
-        &self,
-        record: &WorkerCatalogRecord,
-    ) -> Result<(), SelectionError> {
-        let block_size = record
-            .block_size
-            .ok_or_else(|| SelectionError::BadRequest("block_size is required".to_string()))?;
-        let mut endpoints: Vec<_> = record.listener_endpoints().into_iter().collect();
-        endpoints.sort_by_key(|(dp_rank, _)| *dp_rank);
-        for (dp_rank, endpoint) in endpoints {
-            crate::services::common::zmq::validate_endpoint(&endpoint).map_err(|error| {
-                SelectionError::BadRequest(format!(
-                    "invalid kv_events endpoint for worker {} dp_rank {dp_rank}: {error}",
-                    record.worker_id
-                ))
-            })?;
-            if let Some(replay_endpoint) = record.replay_endpoint.as_deref() {
-                crate::services::common::zmq::validate_endpoint(replay_endpoint).map_err(
-                    |error| {
-                        SelectionError::BadRequest(format!(
-                            "invalid replay endpoint for worker {} dp_rank {dp_rank}: {error}",
-                            record.worker_id
-                        ))
-                    },
-                )?;
-            }
-            self.indexer_registry
-                .register(
-                    record.worker_id,
-                    endpoint,
-                    dp_rank,
-                    record.model_name.clone(),
-                    record.routing_group.clone(),
-                    block_size,
-                    record.replay_endpoint.clone(),
-                )
-                .await
-                .map_err(|error| SelectionError::BadRequest(error.to_string()))?;
+    /// The ingress feeding core-owned indexes, when this core listens for KV events.
+    fn ingress(&self) -> Option<&dyn KvEventIngress> {
+        match &self.host.cache.index {
+            KvIndexSource::Owned(ingress) if self.listens_for_kv_events => Some(ingress.as_ref()),
+            _ => None,
         }
-        Ok(())
     }
 
     async fn cleanup_indexer_registration(&self, record: &WorkerCatalogRecord) {
-        if self.listens_for_kv_events {
-            if let Err(error) = self
-                .indexer_registry
-                .deregister(record.worker_id, &record.model_name, &record.routing_group)
-                .await
-            {
-                tracing::debug!(
-                    worker_id = record.worker_id,
-                    error = %error,
-                    "indexer deregistration skipped or failed"
-                );
-            }
+        if let KvIndexSource::Owned(ingress) = &self.host.cache.index {
+            ingress.detach(&self.indexer_registry, record).await;
             return;
         }
 
@@ -2025,7 +1972,6 @@ mod tests {
                 SelectionCacheConfig::default(),
                 tracking_hash,
                 IndexerPolicy::from_router_config(&test_config(false)).expect("indexer policy"),
-                false,
             );
 
             core.upsert_worker(worker(1)).await.expect("worker upsert");
@@ -2065,7 +2011,6 @@ mod tests {
             SelectionCacheConfig::default(),
             tracking_hash,
             indexer_policy,
-            false,
         )
     }
 
@@ -2225,7 +2170,6 @@ mod tests {
             SelectionCacheConfig::default(),
             tracking_hash,
             indexer_policy,
-            false,
         );
         assert!(!core.listens_for_kv_events);
         for worker_id in [1, 2] {
