@@ -463,12 +463,9 @@ impl SessionAffinity {
     }
 
     fn reserve_entry(&self) -> Result<(), AffinityError> {
-        self.inner
-            .reserve_entry()
-            .then_some(())
-            .ok_or_else(|| {
-                AffinityError::ResourceExhausted("session affinity entry limit reached".to_string())
-            })
+        self.inner.reserve_entry().then_some(()).ok_or_else(|| {
+            AffinityError::ResourceExhausted("session affinity entry limit reached".to_string())
+        })
     }
 }
 
