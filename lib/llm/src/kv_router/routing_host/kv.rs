@@ -4,10 +4,7 @@
 use super::*;
 use crate::kv_router::{FindBestMatchAdmission, routing_host::kv_selection::SelectionOutcome};
 
-impl<Sel> RoutingHost<Sel>
-where
-    Sel: WorkerSelector<ModelRuntimeConfig> + Send + 'static,
-{
+impl RoutingHost {
     async fn select_request_outcome(
         &self,
         request: &SingleIn<PreprocessedRequest>,
@@ -143,7 +140,7 @@ where
         &self,
         request: &SingleIn<PreprocessedRequest>,
         preview: RoutePreview,
-    ) -> Result<RoutePlan<Sel>, Error> {
+    ) -> Result<RoutePlan, Error> {
         if self.kv_router_if_enabled().is_none() {
             return Err(anyhow::anyhow!("KV route plans require KV routing"));
         }
@@ -193,7 +190,7 @@ where
     pub(crate) async fn dispatch_kv_plan(
         &self,
         request: SingleIn<PreprocessedRequest>,
-        plan: RoutePlan<Sel>,
+        plan: RoutePlan,
     ) -> Result<ManyOut<Annotated<LLMEngineOutput>>, Error> {
         let RoutePlan {
             mut selection,
@@ -264,7 +261,7 @@ where
         request: &SingleIn<PreprocessedRequest>,
         selection: &mut WorkerSelection,
         is_query_only: bool,
-    ) -> Result<RequestGuard<Sel>, Error> {
+    ) -> Result<RequestGuard, Error> {
         self.track_selection_with_cleanup(request, selection, is_query_only, None)
             .await
     }
@@ -273,8 +270,8 @@ where
         &self,
         request: &SingleIn<PreprocessedRequest>,
         selection: &mut WorkerSelection,
-        cleanup: KvRequestCleanup<Sel>,
-    ) -> Result<RequestGuard<Sel>, Error> {
+        cleanup: KvRequestCleanup,
+    ) -> Result<RequestGuard, Error> {
         self.track_selection_with_cleanup(request, selection, false, Some(cleanup))
             .await
     }
@@ -284,8 +281,8 @@ where
         request: &SingleIn<PreprocessedRequest>,
         selection: &mut WorkerSelection,
         is_query_only: bool,
-        cleanup: Option<KvRequestCleanup<Sel>>,
-    ) -> Result<RequestGuard<Sel>, Error> {
+        cleanup: Option<KvRequestCleanup>,
+    ) -> Result<RequestGuard, Error> {
         let context_id = request.context().id().to_string();
         let request_context = request.context().clone();
         let routing_parts = RoutingRequestParts::new(request);
@@ -392,7 +389,7 @@ where
         &self,
         request: SingleIn<PreprocessedRequest>,
         selection: WorkerSelection,
-        mut guard: RequestGuard<Sel>,
+        mut guard: RequestGuard,
     ) -> Result<ManyOut<Annotated<LLMEngineOutput>>, Error> {
         let context_id = request.context().id().to_string();
         let request_context = request.context().clone();
