@@ -19,7 +19,6 @@ use anyhow::{Context, Result};
 use dynamo_kv_router::WorkerType;
 use dynamo_kv_router::config::KvRouterConfig;
 use dynamo_kv_router::identity::RoutingPartitionId;
-use dynamo_kv_router::indexer::TieredMatchProvider;
 use dynamo_kv_router::protocols::{WorkerConfigLike, WorkerId, WorkerWithDpRank};
 use dynamo_kv_router::scheduling::queue::{SchedulerBookingCleanup, SchedulerBookingDescriptor};
 use dynamo_kv_router::scheduling::{
@@ -29,9 +28,9 @@ use dynamo_kv_router::scheduling::{
 use dynamo_kv_router::sequences::{SequenceError, SequenceRequest};
 use dynamo_kv_router::services::selection::{
     CatalogObserver, CatalogReconciler, HostCache, HostEligibility, HostLoad, HostReplication,
-    HostTelemetry, OverlapRefreshSource, SelectionHost, SelectionPartition, SelectionService,
-    SelectionServiceBuilder, WorkerCatalogRecord, WorkerCatalogSource, WorkerRequest,
-    WorkerSelectionPolicyRegistry,
+    HostTelemetry, KvEventIngress, KvIndexSource, SelectionHost, SelectionPartition,
+    SelectionService, SelectionServiceBuilder, WorkerCatalogRecord, WorkerCatalogSource,
+    WorkerRequest, WorkerSelectionPolicyRegistry,
 };
 use dynamo_kv_router::{DEFAULT_ROUTING_GROUP, PrefillLoadEstimator, WorkerSelectionPolicyFactory};
 use dynamo_tokens::SequenceHash;
@@ -51,9 +50,9 @@ pub(crate) struct EmbeddedSelectionArgs {
     pub prefill_load_estimator: Option<Arc<dyn PrefillLoadEstimator>>,
     pub overloaded_worker_provider: OverloadedWorkerProvider,
     pub available_worker_provider: WorkerAvailabilityProvider,
-    /// The router's own indexer, used for dequeue-time overlap refresh so
-    /// queued requests are re-scored against the index that scored them.
-    pub overlap_refresh: Option<Arc<dyn TieredMatchProvider>>,
+    /// Builds and feeds the router's index from the runtime; the partition
+    /// takes its index from it.
+    pub ingress: Arc<dyn KvEventIngress>,
     /// Scheduler-owned load snapshots for the worker monitor's overload
     /// detection, the same feed the runtime scheduler publishes.
     pub scheduler_load: crate::kv_router::routing_load::SchedulerLoadSender,
@@ -148,7 +147,6 @@ impl EmbeddedSelection {
         )
         .worker_selection_policy_factory(args.policy_factory)
         .indexer_threads(1)
-        .external_kv_events()
         .host(SelectionHost {
             load: HostLoad {
                 prefill_estimator: args.prefill_load_estimator,
@@ -157,10 +155,7 @@ impl EmbeddedSelection {
             },
             cache: HostCache {
                 shared: None,
-                overlap_refresh: match args.overlap_refresh {
-                    Some(provider) => OverlapRefreshSource::External(provider),
-                    None => OverlapRefreshSource::Disabled,
-                },
+                index: KvIndexSource::Owned(args.ingress),
             },
             eligibility: HostEligibility::default(),
             telemetry: HostTelemetry {
