@@ -21,7 +21,7 @@ mod tests;
 
 pub use crate::WorkerSelectionPolicyFactory;
 pub use crate::services::common::replica_sync::ReplicaPeerError;
-pub use core::{SelectionCore, SelectionServiceConfig};
+pub use core::{SelectionCore, SelectionHostHooks, SelectionServiceConfig};
 pub use error::SelectionError;
 pub use input::PromptRequest;
 pub use pending::SelectionCacheConfig;
@@ -38,7 +38,7 @@ pub use service::{
 pub use types::{
     ModelLoadResponse, OutputBlockRequest, OverlapScoresRequest, OverlapScoresResponse,
     PotentialLoadsRequest, ReadyResponse, ReservationRequest, ReservationResponse,
-    SelectAndReserveRequest, SelectRequest, SelectResponse, SelectionWorkerConfig,
-    SharedCacheOverlapScore, WorkerCatalogRecord, WorkerLifecycle, WorkerOverlapScore,
-    WorkerPatchRequest, WorkerRequest,
+    SelectAndReserveRequest, SelectRequest, SelectResponse, SelectionInputTrigger,
+    SelectionSessionContext, SelectionWorkerConfig, SelectionWorkerLoad, SharedCacheOverlapScore,
+    WorkerCatalogRecord, WorkerLifecycle, WorkerOverlapScore, WorkerPatchRequest, WorkerRequest,
 };
