@@ -201,7 +201,7 @@ impl<'a> LookupPipeline<'a> {
                     .primary
                     .find_match_details_retained_with_options(
                         &sequence,
-                        lower_tier_options.retain_router_hint_chain,
+                        lower_tier_options.retain_kv_transfer_chain,
                     )
                     .await?;
                 let lt = query_lower_tiers_with_options(
@@ -218,7 +218,7 @@ impl<'a> LookupPipeline<'a> {
                 })
             }
             PrimaryLookup::Remote(primary) => {
-                if lower_tier_options.retain_router_hint_chain {
+                if lower_tier_options.retain_kv_transfer_chain {
                     tracing::warn!(
                         "router_hint chain retention is not supported with remote primary indexer; proceeding without router hints"
                     );
@@ -320,21 +320,21 @@ impl<'a> PrimaryLookup<'a> {
     async fn find_match_details_retained_with_options(
         &self,
         sequence: &HashInput<'_>,
-        retain_router_hint_chain: bool,
+        retain_kv_transfer_chain: bool,
     ) -> Result<MatchDetails, KvRouterError> {
         let primary_details = match self {
             Self::Single(primary) => {
                 primary
                     .find_match_details_with_options(
                         sequence.clone_for_boundary(),
-                        retain_router_hint_chain,
+                        retain_kv_transfer_chain,
                     )
                     .await?
             }
             Self::Concurrent(primary) => primary.backend().find_match_details_impl_with_options(
                 sequence.as_slice(),
                 false,
-                retain_router_hint_chain,
+                retain_kv_transfer_chain,
             ),
             Self::Remote(primary) => {
                 let tiered = primary
@@ -472,10 +472,10 @@ mod tests {
 
     #[test]
     fn router_hint_chain_retention_requires_event_driven_primary() {
-        assert!(make_test_indexer().supports_router_hint_chain_retention());
-        assert!(make_test_concurrent_indexer().supports_router_hint_chain_retention());
-        assert!(!make_test_concurrent_approx_indexer().supports_router_hint_chain_retention());
-        assert!(!Indexer::None.supports_router_hint_chain_retention());
+        assert!(make_test_indexer().supports_kv_transfer_chain_retention());
+        assert!(make_test_concurrent_indexer().supports_kv_transfer_chain_retention());
+        assert!(!make_test_concurrent_approx_indexer().supports_kv_transfer_chain_retention());
+        assert!(!Indexer::None.supports_kv_transfer_chain_retention());
     }
 
     async fn flush_indexer(indexer: &Indexer) {
