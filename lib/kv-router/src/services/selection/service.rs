@@ -40,6 +40,7 @@ pub struct SelectionServiceBuilder {
     worker_selection_policy_registry: WorkerSelectionPolicyRegistry,
     host: SelectionHost,
     worker_selection_policy_factory: Option<WorkerSelectionPolicyFactory>,
+    session_affinity_ttl: Option<std::time::Duration>,
 }
 
 /// Warn when a host does not construct workers for explicitly configured policy roles.
@@ -79,6 +80,7 @@ impl SelectionServiceBuilder {
             worker_selection_policy_registry,
             host: SelectionHost::default(),
             worker_selection_policy_factory: None,
+            session_affinity_ttl: None,
         }
     }
 
@@ -115,6 +117,13 @@ impl SelectionServiceBuilder {
         self
     }
 
+    /// Pin each session id to the worker that served it for `ttl` after its
+    /// last request. Bindings replicate over the replica mesh when enabled.
+    pub fn session_affinity(mut self, ttl: std::time::Duration) -> Self {
+        self.session_affinity_ttl = Some(ttl);
+        self
+    }
+
     pub fn replica_sync(mut self, port: u16, peers: Vec<String>) -> Self {
         self.replica_sync_port = Some(port);
         self.replica_sync_peers = peers;
@@ -127,6 +136,9 @@ impl SelectionServiceBuilder {
     }
 
     pub async fn build(self) -> anyhow::Result<SelectionService> {
+        if let Some(ttl) = self.session_affinity_ttl {
+            super::affinity::SessionAffinity::validate_ttl(ttl)?;
+        }
         self.kv_router_config
             .validate_config()
             .map_err(anyhow::Error::msg)?;
@@ -176,6 +188,7 @@ impl SelectionServiceBuilder {
             self.selection_cache,
             tracking_hash,
             indexer_policy,
+            self.session_affinity_ttl,
         ));
 
         if recover_from_peers {
@@ -195,7 +208,8 @@ impl SelectionServiceBuilder {
 
         let peer_manager = if replica_runtime.is_some() {
             let weak_core = Arc::downgrade(&core);
-            Some(PeerManager::start(
+            let affinity_core = Arc::downgrade(&core);
+            Some(PeerManager::start_with_affinity(
                 self.replica_sync_peers,
                 cancel_token.child_token(),
                 move |event| {
@@ -203,6 +217,13 @@ impl SelectionServiceBuilder {
                         core.dispatch_replica_event(event);
                     }
                 },
+                self.session_affinity_ttl.map(|_| {
+                    move |event| {
+                        if let Some(core) = affinity_core.upgrade() {
+                            core.dispatch_affinity_event(event);
+                        }
+                    }
+                }),
             )?)
         } else {
             None
@@ -235,6 +256,9 @@ impl SelectionServiceConfig {
         .selection_cache(self.selection_cache.clone());
         if let Some(port) = self.replica_sync_port {
             builder = builder.replica_sync(port, self.replica_sync_peers.clone());
+        }
+        if let Some(ttl) = self.session_affinity_ttl {
+            builder = builder.session_affinity(ttl);
         }
         if let Some(url) = &self.remote_indexer_url {
             builder = builder.kv_index(KvIndexSource::Remote(url.clone()));

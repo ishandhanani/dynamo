@@ -370,6 +370,11 @@ struct SelectServiceCli {
     #[arg(long, value_delimiter = ',', requires = "replica_sync_port")]
     replica_sync_peers: Vec<String>,
 
+    /// Pin each session id (`session_id` on the request) to the worker that
+    /// served it for this many seconds after its last request
+    #[arg(long)]
+    session_affinity_ttl_secs: Option<f64>,
+
     /// Seconds an unclaimed pending selection lives before eviction
     #[arg(long)]
     selection_cache_ttl_secs: Option<f64>,
@@ -553,6 +558,11 @@ where
         remote_indexer_url: cli.remote_indexer_url,
         replica_sync_port: cli.replica_sync_port,
         replica_sync_peers: cli.replica_sync_peers,
+        session_affinity_ttl: cli
+            .session_affinity_ttl_secs
+            .map(session_affinity_ttl_from_secs)
+            .transpose()
+            .map_err(anyhow::Error::msg)?,
         kv_router_config,
         selection_cache: selection_cache_config_from_overrides(
             cli.selection_cache_ttl_secs,
@@ -629,6 +639,18 @@ impl SelectionCacheConfig {
     }
 }
 
+#[cfg(feature = "select-service")]
+fn session_affinity_ttl_from_secs(ttl: f64) -> Result<Duration, String> {
+    use selection::affinity::MAX_SESSION_AFFINITY_TTL_SECS;
+
+    if !(1.0..=MAX_SESSION_AFFINITY_TTL_SECS as f64).contains(&ttl) {
+        return Err(format!(
+            "session_affinity_ttl_secs must be between 1 and {MAX_SESSION_AFFINITY_TTL_SECS}"
+        ));
+    }
+    Ok(Duration::from_secs_f64(ttl))
+}
+
 /// In-process handle to a managed Dynamo `SelectionService`.
 #[cfg(feature = "select-service")]
 #[pyclass]
@@ -641,7 +663,8 @@ pub(crate) struct SelectionService {
 impl SelectionService {
     /// Create a selection service. `indexer_threads` sizes the KV indexer pool.
     #[new]
-    #[pyo3(signature = (*, indexer_threads = 4, indexer_peers = None, replica_sync_port = None, replica_sync_peers = None, selection_cache = None, remote_indexer_url = None))]
+    #[pyo3(signature = (*, indexer_threads = 4, indexer_peers = None, replica_sync_port = None, replica_sync_peers = None, selection_cache = None, remote_indexer_url = None, session_affinity_ttl_secs = None))]
+    #[allow(clippy::too_many_arguments)]
     fn new(
         py: Python<'_>,
         indexer_threads: usize,
@@ -650,6 +673,7 @@ impl SelectionService {
         replica_sync_peers: Option<Vec<String>>,
         selection_cache: Option<SelectionCacheConfig>,
         remote_indexer_url: Option<String>,
+        session_affinity_ttl_secs: Option<f64>,
     ) -> PyResult<Self> {
         let replica_sync_peers = replica_sync_peers.unwrap_or_default();
         if replica_sync_port.is_none() && !replica_sync_peers.is_empty() {
@@ -674,6 +698,11 @@ impl SelectionService {
         }
         if let Some(url) = remote_indexer_url {
             builder = builder.kv_index(KvIndexSource::Remote(url));
+        }
+        if let Some(ttl) = session_affinity_ttl_secs {
+            builder = builder.session_affinity(
+                session_affinity_ttl_from_secs(ttl).map_err(PyValueError::new_err)?,
+            );
         }
         let inner = py
             .allow_threads(|| pyo3_async_runtimes::tokio::get_runtime().block_on(builder.build()))
@@ -962,8 +991,9 @@ mod selection_service_lifecycle_tests {
 
     #[test]
     fn idempotent_shutdown() {
+        pyo3::prepare_freethreaded_python();
         let service =
-            Python::with_gil(|py| SelectionService::new(py, 1, None, None, None, None, None))
+            Python::with_gil(|py| SelectionService::new(py, 1, None, None, None, None, None, None))
                 .unwrap();
         Python::with_gil(|py| {
             service.shutdown(py);

@@ -38,6 +38,9 @@ pub struct SelectRequest {
     pub strict_priority: Option<u32>,
     pub expected_output_tokens: Option<u32>,
     pub policy_class: Option<String>,
+    /// Session to pin (`x-dynamo-session-id`); the selector binds it to the
+    /// chosen worker when session affinity is enabled.
+    pub session_id: Option<String>,
 }
 
 /// Observability overlap summary (matched token counts).
@@ -112,6 +115,12 @@ impl Selector {
         if let Some(peer_replication) = peer_replication {
             builder = builder.replica_sync(peer_replication.sync_port, Vec::new());
         }
+        if let Some(ttl) = cfg.session_affinity_ttl_secs {
+            builder = builder.session_affinity(
+                std::time::Duration::try_from_secs_f64(ttl)
+                    .context("invalid session affinity TTL")?,
+            );
+        }
         let service = Arc::new(
             builder
                 .build()
@@ -180,7 +189,7 @@ impl Selector {
             },
             router_config_override: None,
             expected_output_tokens: req.expected_output_tokens,
-            session_id: None,
+            session_id: req.session_id,
             session_context: None,
             priority_jump: req.priority_jump,
             strict_priority: req.strict_priority,
@@ -350,6 +359,7 @@ models:
             total_kv_blocks: None,
             max_num_batched_tokens: Some(8192),
             max_inflight_requests: 1024,
+            session_affinity_ttl_secs: None,
         }
     }
 
@@ -405,6 +415,7 @@ models:
             strict_priority: None,
             expected_output_tokens: None,
             policy_class: None,
+            session_id: None,
         }
     }
 
@@ -870,5 +881,18 @@ worker_selection:
             .select_and_reserve(synthetic_req)
             .await
             .expect("synthetic profile must ignore any policy_class value");
+    }
+    #[tokio::test]
+    async fn invalid_affinity_ttl_returns_configuration_error() {
+        for ttl in [-1.0, 0.0, 0.5, f64::NAN, f64::INFINITY] {
+            let mut cfg = test_config();
+            cfg.session_affinity_ttl_secs = Some(ttl);
+            assert!(
+                Selector::new(&cfg, WorkerSelectionPolicyRegistry::default())
+                    .await
+                    .is_err(),
+                "TTL={ttl}"
+            );
+        }
     }
 }
