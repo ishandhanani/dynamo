@@ -26,8 +26,9 @@ use std::time::Duration;
 use anyhow::Result;
 use tokio::sync::Semaphore;
 
-use dynamo_kv_router::services::selection::WorkerSelectionPolicyRegistry;
+use dynamo_kv_router::services::selection::{SelectionError, WorkerSelectionPolicyRegistry};
 use dynamo_llm::http::service::metadata::extract_metadata_from_header_pairs;
+use dynamo_llm::protocols::agents::HEADER_DYNAMO_SESSION_ID;
 use dynamo_llm::protocols::common::extensions::{
     AgentHints, HEADER_REQUEST_PRIORITY, HEADER_REQUEST_STRICT_PRIORITY, resolve_request_priority,
 };
@@ -51,7 +52,7 @@ pub(crate) fn requested_policy_class(
 ) -> Result<Option<String>, PickError> {
     let metadata =
         extract_metadata_from_header_pairs(headers.iter().map(|(k, v)| (k.as_str(), v.as_str())))
-            .map_err(|e| PickError::MetadataHeadersInvalid(e.to_string()))?;
+            .map_err(PickError::MetadataHeadersTooLarge)?;
     Ok(metadata.get("policy-class").cloned())
 }
 
@@ -341,6 +342,7 @@ impl EndpointPicker for EppRouter {
             model_name: self.model_name.clone(),
             reservation_id: reservation_id.clone(),
             token_ids: tokens,
+            session_id: first_header(&req.headers, HEADER_DYNAMO_SESSION_ID).map(str::to_owned),
             // `None` on the ordinary path: the selector schedules over its
             // catalog; `Some` only carries an Envoy subset constraint.
             allowed_worker_ids: allowed,
@@ -355,6 +357,9 @@ impl EndpointPicker for EppRouter {
 
         let resp = match self.selector.select_and_reserve(select_req).await {
             Ok(resp) => resp,
+            Err(SelectionError::BadRequest(message)) => {
+                return Err(PickError::InvalidRequest(message));
+            }
             Err(e) => return Err(PickError::RoutingFailed(e.to_string())),
         };
 
@@ -540,6 +545,23 @@ mod tests {
         // No metadata header → no policy class.
         let headers: Vec<(String, String)> = vec![("x-request-id".to_string(), "r1".to_string())];
         assert_eq!(requested_policy_class(&headers).unwrap(), None);
+    }
+
+    #[test]
+    fn requested_policy_class_preserves_typed_limit_error() {
+        use dynamo_llm::http::service::metadata::MetadataHeaderError;
+
+        let headers: Vec<(String, String)> = (0..65)
+            .map(|i| (format!("x-dynamo-meta-key-{i:02}"), "v".to_string()))
+            .collect();
+        let err = requested_policy_class(&headers).expect_err("65 metadata entries must fail");
+        assert!(
+            matches!(
+                err,
+                PickError::MetadataHeadersTooLarge(MetadataHeaderError::TooManyEntries { .. })
+            ),
+            "unexpected error: {err}"
+        );
     }
 
     #[test]

@@ -3218,6 +3218,9 @@ pub fn validate_chat_completion_fields_generic(
     request: &NvCreateChatCompletionRequest,
 ) -> Result<(), ErrorResponse> {
     request.validate().map_err(|e| {
+        if find_invalid_argument_in_chain(e.as_ref()).is_some() {
+            return ErrorMessage::from_anyhow(e, "Invalid chat completion request");
+        }
         ErrorMessage::from_http_error(HttpError {
             code: 400,
             message: VALIDATION_PREFIX.to_string() + &e.to_string(),
@@ -3249,6 +3252,9 @@ pub fn validate_completion_fields_generic(
     request: &NvCreateCompletionRequest,
 ) -> Result<(), ErrorResponse> {
     request.validate().map_err(|e| {
+        if find_invalid_argument_in_chain(e.as_ref()).is_some() {
+            return ErrorMessage::from_anyhow(e, "Invalid completion request");
+        }
         ErrorMessage::from_http_error(HttpError {
             code: 400,
             message: VALIDATION_PREFIX.to_string() + &e.to_string(),
@@ -5418,6 +5424,28 @@ mod tests {
             request["messages"][0]["content"][0]["image_url"],
             serde_json::Value::Null
         );
+    }
+
+    #[test]
+    fn test_parse_chat_completion_request_accepts_media_url_with_uuid() {
+        for (part_type, media_url, uuid) in [
+            ("video_url", "https://example.com/video.mp4", "video-42"),
+            ("audio_url", "https://example.com/audio.wav", "audio-42"),
+        ] {
+            let body = format!(
+                r#"{{"model":"test-model","messages":[{{"role":"user","content":[{{"type":"{part_type}","{part_type}":{{"url":"{media_url}"}},"uuid":"{uuid}"}}]}}]}}"#
+            );
+
+            let request: NvCreateChatCompletionRequest =
+                parse_json_request("chat completions", body.as_bytes())
+                    .expect("request should parse");
+            let request = serde_json::to_value(request).expect("request should serialize");
+            assert_eq!(request["messages"][0]["content"][0]["uuid"], uuid);
+            assert_eq!(
+                request["messages"][0]["content"][0][part_type]["url"],
+                media_url
+            );
+        }
     }
 
     #[test]

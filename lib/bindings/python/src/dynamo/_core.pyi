@@ -748,8 +748,18 @@ class SelectionService:
         replica_sync_port: Optional[int] = None,
         replica_sync_peers: Optional[list[str]] = None,
         selection_cache: Optional[SelectionCacheConfig] = None,
+        remote_indexer_url: Optional[str] = None,
+        session_affinity_ttl_secs: Optional[float] = None,
     ) -> None:
-        """Create a selection service. `indexer_threads` sizes the KV indexer pool."""
+        """Create a selection service. `indexer_threads` sizes the KV indexer pool.
+
+        `remote_indexer_url` is the base URL of a standalone indexer that serves
+        the primary KV index; when set, this service does not subscribe to worker
+        KV events itself.
+
+        `session_affinity_ttl_secs` enables session affinity with an idle TTL
+        between 1 and 31536000 seconds.
+        """
         ...
 
     def shutdown(self) -> None:
@@ -2828,6 +2838,13 @@ class KvDcRelay:
         publication_threshold: int = 16,
         publication_delay_ms: int = 1,
         recovery_attempt_timeout_ms: int = 30_000,
+        *,
+        namespaces: Optional[List[str]] = None,
+        endpoint_prefixes: Optional[List[str]] = None,
+        watch_all: Optional[bool] = None,
+        expected_unique_blocks: int = 1_048_576,
+        bind: Optional[str] = None,
+        tuning: Optional[Dict[str, int]] = None,
     ) -> None:
         ...
 
@@ -2835,6 +2852,14 @@ class KvDcRelay:
         ...
 
     async def health(self) -> Dict[str, Any]:
+        ...
+
+    async def stats(self) -> Dict[str, Any]:
+        """Available only in builds with the ckf-diagnostics Cargo feature."""
+        ...
+
+    async def snapshot(self, serving_endpoint: str) -> Dict[str, Any]:
+        """Available only in builds with the ckf-diagnostics Cargo feature."""
         ...
 
     async def flush(self) -> None:

@@ -201,6 +201,10 @@ Returns:
 Register a ZMQ endpoint for an instance. Each call creates or reuses the indexer for the given `(model_name, routing_group)` pair.
 Registration is non-blocking: if the worker is not up yet, the listener is accepted in `pending` state and transitions to `active` once the initial ZMQ connection succeeds.
 
+Repeating `/register` for an existing `instance_id` and `dp_rank` returns an error;
+it does not replace the listener or reset its sequence watermark. For worker restarts,
+see [Worker Restarts](#worker-restarts).
+
 ```bash
 # Single model, default routing group
 curl -X POST http://localhost:8090/register \
@@ -399,6 +403,32 @@ after they have been computed. Callers must precompute these hashes with the int
 and omit `cache_salt` from `/query_by_hash`. Use `/query` when the indexer should compute salted
 hashes from tokens server-side.
 
+### `POST /query_tiered_by_hash` — Lossless tiered matches for a remote-primary selector
+
+```bash
+curl -X POST http://localhost:8090/query_tiered_by_hash \
+  -H 'Content-Type: application/json' \
+  -d '{"block_hashes": [123456, 789012], "model_name": "llama-3-8b", "routing_group": "default"}'
+```
+
+Returns the indexer's tiered match details in their wire form rather than the
+Mooncake score summary, so a caller can run its own overlap analysis:
+
+```json
+{
+  "block_size": 16,
+  "tiered": {
+    "device": { "scores": [[{"worker_id": 7, "dp_rank": 0}, 2]], "frequencies": [] },
+    "lower_tier": [["host_pinned", { "hits": [[{"worker_id": 7, "dp_rank": 0}, 1]] }]]
+  }
+}
+```
+
+Scores and hits are in blocks. This is the endpoint a
+[standalone selection service](standalone-selection.md) configured with
+`--remote-indexer-url` uses for its primary lookups. Both `model_name` and
+`routing_group` are required; an unknown partition returns `404`.
+
 ### Per-instance tier breakdown
 
 Each entry in `instances` is keyed by `instance_id` (as a string) and reports prefix reach across the device, host-pinned, and disk storage tiers:
@@ -489,6 +519,31 @@ the previous listener's `last_seq`. If the first live batch starts above sequenc
 recovers history still retained by the engine. Without a replay endpoint, or when the requested
 range is no longer retained, restart with a healthy indexer in `--peers` to recover its startup
 snapshot, or perform another full resynchronization before relying on the rebuilt worker state.
+
+## Worker Restarts
+
+A ZMQ reconnect does not identify a new worker or cache-event publisher lifetime.
+If the publisher restarts with its sequence reset, an existing listener retains its
+watermark and discards batches at or below it. Previously indexed ownership can also
+remain stale.
+
+On a worker or publisher restart, call `/unregister` and wait for the response before
+calling `/register` with the current worker metadata. For a whole-worker restart,
+omit `dp_rank` from `/unregister` to remove all ranks. Apply this lifecycle change to
+every indexer replica; peer registration does not propagate worker lifecycle changes.
+Serialize lifecycle operations for the same worker.
+
+This sequence requests removal of old cache ownership and starts a fresh sequence
+watermark. It does not certify a complete cache view or provide an atomic boundary
+against in-flight old events. Registration success and listener status `active` do
+not establish that startup events were received or replayed. Recover missing history
+before relying on cache overlap, subject to the limits in
+[Gap Detection and Replay](#gap-detection-and-replay).
+
+The [standalone selector](standalone-selection.md#worker-restarts) has a different
+registration API: updating a schedulable worker reconciles its indexer registration
+per rank, keeping listeners whose endpoints did not change, and a restart at the same
+address needs `DELETE /workers/{worker_id}` before the new `POST /workers`.
 
 ## Limitations
 
