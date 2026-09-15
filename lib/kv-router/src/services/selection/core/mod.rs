@@ -9,7 +9,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 #[cfg(test)]
 use std::sync::atomic::Ordering;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use dynamo_tokens::SequenceHash;
 use once_cell::sync::OnceCell;
@@ -246,8 +246,8 @@ pub struct SelectionServiceConfig {
     pub replica_sync_peers: Vec<String>,
     pub kv_router_config: crate::config::KvRouterConfig,
     pub selection_cache: SelectionCacheConfig,
-    /// Session stickiness TTL; `None` disables session affinity.
-    pub session_affinity_ttl: Option<Duration>,
+    /// Session-affinity settings; `None` disables session affinity.
+    pub session_affinity: Option<SessionAffinityConfig>,
 }
 
 type SelectionEntries = RwLock<HashMap<RoutingPartitionId, Arc<OnceCell<Arc<SelectionEntry>>>>>;

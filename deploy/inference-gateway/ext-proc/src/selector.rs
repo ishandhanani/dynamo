@@ -14,6 +14,7 @@ use anyhow::{Context, Result, anyhow};
 
 use dynamo_kv_router::config::{KvRouterConfig, try_kv_router_config_from_dynamo_env};
 use dynamo_kv_router::protocols::RoutingConstraints;
+use dynamo_kv_router::services::selection::affinity::SessionAffinityConfig;
 use dynamo_kv_router::services::selection::{
     CatalogReconciler, PromptRequest, SelectAndReserveRequest as CoreSelectAndReserveRequest,
     SelectionError, SelectionService, SelectionServiceBuilder, WorkerSelectionPolicyRegistry,
@@ -80,12 +81,14 @@ impl Selector {
     ) -> Result<Self> {
         let kv_router_config =
             try_kv_router_config_from_dynamo_env().map_err(anyhow::Error::msg)?;
-        Self::new_with_kv_router_config(cfg, kv_router_config, policy_registry).await
+        let affinity_config = SessionAffinityConfig::from_dynamo_env()?;
+        Self::new_with_configs(cfg, kv_router_config, affinity_config, policy_registry).await
     }
 
-    async fn new_with_kv_router_config(
+    async fn new_with_configs(
         cfg: &EppStandaloneConfig,
         kv_router_config: KvRouterConfig,
+        affinity_config: Option<SessionAffinityConfig>,
         policy_registry: WorkerSelectionPolicyRegistry,
     ) -> Result<Self> {
         Self::validate_queueing_worker_capacity(cfg, &kv_router_config)?;
@@ -113,6 +116,9 @@ impl Selector {
         let mut builder =
             SelectionServiceBuilder::new(kv_router_config, WorkerType::Aggregated, policy_registry)
                 .indexer_threads(cfg.selector_threads);
+        if let Some(config) = affinity_config {
+            builder = builder.session_affinity_config(config);
+        }
         if let Some(peer_replication) = peer_replication {
             builder = builder.replica_sync(peer_replication.sync_port, Vec::new());
         }
@@ -257,10 +263,9 @@ mod tests {
     use std::collections::HashMap;
     use std::sync::Mutex;
     use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::time::Duration;
 
-    use dynamo_kv_router::services::selection::{
-        CatalogReconciler, WorkerRequest, WorkerSelectionPolicyParameters,
-    };
+    use dynamo_kv_router::services::selection::{WorkerRequest, WorkerSelectionPolicyParameters};
     use dynamo_kv_router::{
         WorkerInputView, WorkerPicker, WorkerSelectionContext, WorkerSelectionPolicy,
         WorkerSelectionPolicyError, WorkerSelectionPolicyFactory,
@@ -431,13 +436,46 @@ models:
     }
 
     #[tokio::test]
-    async fn over_long_session_id_is_a_bad_request() {
-        let selector = Selector::new_with_kv_router_config(
+    async fn explicit_affinity_config_keeps_epp_sessions_sticky() {
+        let selector = Selector::new_with_configs(
             &test_config(),
-            KvRouterConfig {
-                session_affinity_ttl_secs: Some(60.0),
-                ..Default::default()
-            },
+            KvRouterConfig::default(),
+            Some(SessionAffinityConfig::new(Duration::from_secs(60))),
+            WorkerSelectionPolicyRegistry::default(),
+        )
+        .await
+        .expect("selector should build");
+        register(
+            &selector,
+            vec![schedulable_registration(1), schedulable_registration(2)],
+        )
+        .await;
+
+        // Force the first binding onto worker 1. The next request has no caller pin
+        // and worker 2 is idle, so only affinity keeps it on the busy worker 1.
+        let mut first = select_request("affinity-first");
+        first.session_id = Some("session".into());
+        first.allowed_worker_ids = Some(HashSet::from([1]));
+        assert_eq!(
+            selector.select_and_reserve(first).await.unwrap().worker_id,
+            1
+        );
+        let mut next = select_request("affinity-next");
+        next.session_id = Some("session".into());
+        assert_eq!(
+            selector.select_and_reserve(next).await.unwrap().worker_id,
+            1
+        );
+        selector.free_reservation("affinity-first").await.unwrap();
+        selector.free_reservation("affinity-next").await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn over_long_session_id_is_a_bad_request() {
+        let selector = Selector::new_with_configs(
+            &test_config(),
+            KvRouterConfig::default(),
+            Some(SessionAffinityConfig::new(Duration::from_secs(60))),
             WorkerSelectionPolicyRegistry::default(),
         )
         .await
@@ -507,9 +545,10 @@ worker_selection:
                 }),
             )
             .expect("register policy provider");
-        let selector = Selector::new_with_kv_router_config(
+        let selector = Selector::new_with_configs(
             &test_config(),
             router_config_with_policy(&policy_file),
+            None,
             registry,
         )
         .await
@@ -708,9 +747,10 @@ worker_selection:
             sync_port: 9092,
         });
 
-        let error = Selector::new_with_kv_router_config(
+        let error = Selector::new_with_configs(
             &cfg,
             router_config_with_policy(&policy_file),
+            None,
             WorkerSelectionPolicyRegistry::default(),
         )
         .await
@@ -731,9 +771,10 @@ worker_selection:
         cfg.model_name = "threshold-free-model".to_string();
         cfg.max_num_batched_tokens = None;
 
-        Selector::new_with_kv_router_config(
+        Selector::new_with_configs(
             &cfg,
             router_config_with_policy(&policy_file),
+            None,
             WorkerSelectionPolicyRegistry::default(),
         )
         .await
@@ -799,12 +840,13 @@ worker_selection:
             )
             .expect("register policy provider");
 
-        let selector = Selector::new_with_kv_router_config(
+        let selector = Selector::new_with_configs(
             &test_config(),
             KvRouterConfig {
                 router_policy_config: Some(policy_file.path().display().to_string()),
                 ..Default::default()
             },
+            None,
             registry,
         )
         .await
@@ -837,9 +879,10 @@ worker_selection:
         let mut cfg = test_config();
         cfg.model_name = "threshold-free-model".to_string();
 
-        let selector = Selector::new_with_kv_router_config(
+        let selector = Selector::new_with_configs(
             &cfg,
             router_config_with_policy(&policy_file),
+            None,
             WorkerSelectionPolicyRegistry::default(),
         )
         .await
@@ -903,21 +946,23 @@ worker_selection:
     }
     #[tokio::test]
     async fn invalid_affinity_ttl_returns_configuration_error() {
-        for ttl in [-1.0, 0.0, 0.5, f64::NAN, f64::INFINITY] {
-            let error = Selector::new_with_kv_router_config(
+        for ttl in [
+            Duration::ZERO,
+            Duration::from_millis(500),
+            Duration::from_secs(31_536_001),
+        ] {
+            let error = Selector::new_with_configs(
                 &test_config(),
-                KvRouterConfig {
-                    session_affinity_ttl_secs: Some(ttl),
-                    ..Default::default()
-                },
+                KvRouterConfig::default(),
+                Some(SessionAffinityConfig::new(ttl)),
                 WorkerSelectionPolicyRegistry::default(),
             )
             .await
             .err()
-            .unwrap_or_else(|| panic!("TTL={ttl} must be rejected"));
+            .unwrap_or_else(|| panic!("TTL={ttl:?} must be rejected"));
             assert!(
                 format!("{error:#}").contains("session affinity TTL"),
-                "TTL={ttl}: {error:#}"
+                "TTL={ttl:?}: {error:#}"
             );
         }
     }

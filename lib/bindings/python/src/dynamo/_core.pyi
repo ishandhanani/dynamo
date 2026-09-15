@@ -1719,6 +1719,12 @@ class RouterConfig:
     router_mode: RouterMode
     kv_router_config: KvRouterConfig
 
+    @property
+    def session_affinity_ttl_secs(self) -> Optional[int]: ...
+
+    @property
+    def session_affinity_mode(self) -> str: ...
+
     def __init__(
         self,
         mode: RouterMode,

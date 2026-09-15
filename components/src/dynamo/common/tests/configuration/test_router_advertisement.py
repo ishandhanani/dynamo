@@ -13,6 +13,7 @@ from dynamo.common.configuration.groups.router_args import (
     build_router_config,
     parse_worker_router_config,
 )
+from dynamo.frontend.frontend_args import FrontendArgGroup, FrontendConfig
 
 pytestmark = [pytest.mark.pre_merge, pytest.mark.unit, pytest.mark.gpu_0]
 
@@ -125,3 +126,56 @@ def test_router_flags_do_not_collide_with_backend_flags(backend):
         f"never see them. Rename the backend flag or route it through "
         f"WorkerRouterConfig."
     )
+
+
+@pytest.mark.parametrize(
+    "router_mode",
+    [
+        "round-robin",
+        "random",
+        "power-of-two",
+        "kv",
+        "direct",
+        "least-loaded",
+        "device-aware-weighted",
+    ],
+)
+@pytest.mark.parametrize("host", ["frontend", "worker"])
+@pytest.mark.parametrize("source", ["env", "cli"])
+def test_affinity_reaches_router_config_in_every_mode(
+    monkeypatch, router_mode, host, source
+):
+    monkeypatch.setenv("DYN_ROUTER_SESSION_AFFINITY_TTL_SECS", "600")
+    monkeypatch.setenv("DYN_ROUTER_SESSION_AFFINITY_MODE", "soft")
+    argv = ["--router-mode", router_mode]
+    expected = (600, "soft")
+    if source == "cli":
+        argv += [
+            "--router-session-affinity-ttl-secs",
+            "300",
+            "--router-session-affinity-mode",
+            "hard",
+        ]
+        expected = (300, "hard")
+    if host == "frontend":
+        parser = argparse.ArgumentParser()
+        FrontendArgGroup().add_arguments(parser)
+        config = FrontendConfig.from_cli_args(parser.parse_args(argv))
+        config.validate()
+    else:
+        config, remainder = parse_worker_router_config(argv)
+        assert not remainder
+    router_config = build_router_config(config)
+    assert (
+        router_config.session_affinity_ttl_secs,
+        router_config.session_affinity_mode,
+    ) == expected
+    assert "session_affinity_ttl_secs" not in config.kv_router_kwargs()
+    assert "session_affinity_mode" not in config.kv_router_kwargs()
+
+
+def test_affinity_stays_disabled_without_ttl(monkeypatch):
+    monkeypatch.delenv("DYN_ROUTER_SESSION_AFFINITY_TTL_SECS", raising=False)
+    monkeypatch.setenv("DYN_ROUTER_SESSION_AFFINITY_MODE", "soft")
+    config, _ = parse_worker_router_config(["--router-mode", "round-robin"])
+    assert build_router_config(config).session_affinity_ttl_secs is None

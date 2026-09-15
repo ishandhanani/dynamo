@@ -327,3 +327,17 @@ async def test_selection_service_not_ready_carries_status(monkeypatch):
         assert exc_info.value.status_code == 503
     finally:
         service.shutdown()
+
+
+@pytest.mark.skipif(
+    SelectionService is None,
+    reason="SelectionService requires the select-service Cargo feature",
+)
+@pytest.mark.timeout(5)
+def test_selection_service_explicit_affinity_ttl_overrides_environment(monkeypatch):
+    monkeypatch.setenv("DYN_ROUTER_SESSION_AFFINITY_TTL_SECS", "invalid")
+    monkeypatch.setenv("DYN_ROUTER_SESSION_AFFINITY_MODE", "soft")
+    with pytest.raises(ValueError, match="DYN_ROUTER_SESSION_AFFINITY_TTL_SECS"):
+        SelectionService(indexer_threads=1)
+    service = SelectionService(indexer_threads=1, session_affinity_ttl_secs=60)
+    service.shutdown()

@@ -42,12 +42,16 @@ class StandaloneRouterHandler:
         block_size: int,
         kv_router_config: KvRouterConfig,
         aic_perf_config: Optional[AicPerfConfig],
+        session_affinity_ttl_secs: Optional[int] = None,
+        session_affinity_mode: str = "hard",
     ):
         self.runtime = runtime
         self.worker_endpoint_path = worker_endpoint_path
         self.block_size = block_size
         self.kv_router_config = kv_router_config
         self.aic_perf_config = aic_perf_config
+        self.session_affinity_ttl_secs = session_affinity_ttl_secs
+        self.session_affinity_mode = session_affinity_mode
         self.kv_router: Optional[KvRouter] = None
         self.worker_client: Optional[Client] = None
 
@@ -74,6 +78,8 @@ class StandaloneRouterHandler:
                 block_size=self.block_size,
                 kv_router_config=self.kv_router_config,
                 aic_perf_config=self.aic_perf_config,
+                session_affinity_ttl_secs=self.session_affinity_ttl_secs,
+                session_affinity_mode=self.session_affinity_mode,
             )
 
         except Exception as e:
@@ -155,7 +161,7 @@ class StandaloneRouterHandler:
             logger.error("KvRouter not initialized - cannot get best worker")
             raise RuntimeError("Router not initialized")
 
-        (worker_id, _dp_rank, _overlap_blocks) = await self.kv_router.best_worker(
+        worker_id, _dp_rank, _overlap_blocks = await self.kv_router.best_worker(
             token_ids,
             router_config_override,
             cache_namespace=cache_namespace,
@@ -234,6 +240,7 @@ async def worker(runtime: DistributedRuntime):
         config.router_block_size,
         kv_router_config,
         aic_perf_config,
+        **config.session_affinity_kwargs(),
     )
     await handler.initialize()
 

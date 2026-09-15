@@ -16,12 +16,18 @@ from dynamo.common.configuration.groups.kv_router_args import (
     KvRouterArgGroup,
     KvRouterConfigBase,
 )
+from dynamo.common.configuration.groups.session_affinity_args import (
+    SessionAffinityArgGroup,
+    SessionAffinityConfigBase,
+)
 from dynamo.common.configuration.utils import add_argument, add_negatable_bool_argument
 from dynamo.common.utils.namespace import get_worker_namespace
 from dynamo.llm import AicPerfConfig, KvRouterConfig
 
 
-class DynamoRouterConfig(KvRouterConfigBase, AicPerfConfigBase):
+class DynamoRouterConfig(
+    KvRouterConfigBase, AicPerfConfigBase, SessionAffinityConfigBase
+):
     """Typed configuration for the standalone KV router (router-owned options only)."""
 
     namespace: str
@@ -32,6 +38,7 @@ class DynamoRouterConfig(KvRouterConfigBase, AicPerfConfigBase):
     def validate(self) -> None:
         """Validate config invariants (aligned with Rust KvRouterConfig where applicable)."""
         self.apply_load_aware_preset()
+        self.validate_session_affinity()
 
         if not self.endpoint:
             raise ValueError(
@@ -124,6 +131,7 @@ class DynamoRouterArgGroup(ArgGroup):
 
         # KV router options (shared with dynamo.frontend)
         KvRouterArgGroup().add_arguments(parser)
+        SessionAffinityArgGroup().add_arguments(parser)
         AicPerfArgGroup().add_arguments(parser)
 
 

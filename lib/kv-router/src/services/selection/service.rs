@@ -39,7 +39,7 @@ pub struct SelectionServiceBuilder {
     worker_selection_policy_registry: WorkerSelectionPolicyRegistry,
     host: SelectionHost,
     worker_selection_policy_factory: Option<WorkerSelectionPolicyFactory>,
-    session_affinity_ttl: Option<Duration>,
+    session_affinity: Option<SessionAffinityConfig>,
 }
 
 /// Warn when a host does not construct workers for explicitly configured policy roles.
@@ -79,7 +79,7 @@ impl SelectionServiceBuilder {
             worker_selection_policy_registry,
             host: SelectionHost::default(),
             worker_selection_policy_factory: None,
-            session_affinity_ttl: None,
+            session_affinity: None,
         }
     }
 
@@ -118,8 +118,13 @@ impl SelectionServiceBuilder {
 
     /// Pin each session id to the worker that served it for `ttl` after its
     /// last request. Bindings replicate over the replica mesh when enabled.
-    pub fn session_affinity(mut self, ttl: Duration) -> Self {
-        self.session_affinity_ttl = Some(ttl);
+    pub fn session_affinity(self, ttl: Duration) -> Self {
+        self.session_affinity_config(SessionAffinityConfig::new(ttl))
+    }
+
+    /// Configure session affinity independently of KV scoring and indexing.
+    pub fn session_affinity_config(mut self, config: SessionAffinityConfig) -> Self {
+        self.session_affinity = Some(config);
         self
     }
 
@@ -135,30 +140,14 @@ impl SelectionServiceBuilder {
     }
 
     pub async fn build(self) -> anyhow::Result<SelectionService> {
-        if let Some(ttl) = self.session_affinity_ttl {
-            super::affinity::SessionAffinity::validate_ttl(ttl)?;
+        if let Some(config) = self.session_affinity {
+            super::affinity::SessionAffinity::validate_ttl(config.ttl)?;
         }
         self.kv_router_config
             .validate_config()
             .map_err(anyhow::Error::msg)?;
 
-        // Explicit session_affinity() call takes precedence over KvRouterConfig.
-        let affinity_config: Option<SessionAffinityConfig> =
-            if let Some(ttl) = self.session_affinity_ttl {
-                Some(
-                    SessionAffinityConfig::new(ttl)
-                        .with_mode(self.kv_router_config.session_affinity_mode),
-                )
-            } else if let Some(secs) = self.kv_router_config.session_affinity_ttl_secs {
-                let ttl = Duration::try_from_secs_f64(secs)
-                    .map_err(|_| anyhow::anyhow!("session affinity TTL {secs} out of range"))?;
-                Some(
-                    SessionAffinityConfig::new(ttl)
-                        .with_mode(self.kv_router_config.session_affinity_mode),
-                )
-            } else {
-                None
-            };
+        let affinity_config = self.session_affinity;
         let worker_selection_policy_factory = match self.worker_selection_policy_factory {
             Some(factory) => Some(factory),
             None => self
@@ -274,8 +263,8 @@ impl SelectionServiceConfig {
         if let Some(port) = self.replica_sync_port {
             builder = builder.replica_sync(port, self.replica_sync_peers.clone());
         }
-        if let Some(ttl) = self.session_affinity_ttl {
-            builder = builder.session_affinity(ttl);
+        if let Some(config) = self.session_affinity {
+            builder = builder.session_affinity_config(config);
         }
         if let Some(url) = &self.remote_indexer_url {
             builder = builder.kv_index(KvIndexSource::Remote(url.clone()));

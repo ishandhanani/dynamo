@@ -29,6 +29,8 @@ use dynamo_kv_router::protocols::*;
 #[cfg(feature = "kv-indexer")]
 use dynamo_kv_router::services::indexer::{self, IndexerConfig};
 #[cfg(feature = "select-service")]
+use dynamo_kv_router::services::selection::affinity::SessionAffinityConfig;
+#[cfg(feature = "select-service")]
 use dynamo_kv_router::services::selection::{
     self, KvIndexSource, OverlapScoresRequest, PotentialLoadsRequest, ReservationRequest,
     SelectAndReserveRequest, SelectRequest, SelectionCacheConfig as RsSelectionCacheConfig,
@@ -559,10 +561,7 @@ where
         remote_indexer_url: cli.remote_indexer_url,
         replica_sync_port: cli.replica_sync_port,
         replica_sync_peers: cli.replica_sync_peers,
-        session_affinity_ttl: cli
-            .session_affinity_ttl_secs
-            .map(session_affinity_ttl_from_secs)
-            .transpose()
+        session_affinity: selection_affinity_config(cli.session_affinity_ttl_secs)
             .map_err(anyhow::Error::msg)?,
         kv_router_config,
         selection_cache: selection_cache_config_from_overrides(
@@ -656,6 +655,22 @@ pub(crate) fn check_session_affinity_ttl_secs(ttl: Option<u64>) -> PyResult<()> 
     Ok(())
 }
 
+#[cfg(feature = "select-service")]
+fn selection_affinity_config(ttl: Option<f64>) -> Result<Option<SessionAffinityConfig>, String> {
+    if let Some(ttl) = ttl {
+        session_affinity_ttl_from_secs(ttl)?;
+    }
+    SessionAffinityConfig::from_lookup(|name| {
+        if name == "DYN_ROUTER_SESSION_AFFINITY_TTL_SECS" {
+            if let Some(ttl) = ttl {
+                return Some(ttl.to_string());
+            }
+        }
+        std::env::var(name).ok()
+    })
+    .map_err(|error| error.to_string())
+}
+
 /// In-process handle to a managed Dynamo `SelectionService`.
 #[cfg(feature = "select-service")]
 #[pyclass]
@@ -704,10 +719,10 @@ impl SelectionService {
         if let Some(url) = remote_indexer_url {
             builder = builder.kv_index(KvIndexSource::Remote(url));
         }
-        if let Some(ttl) = session_affinity_ttl_secs {
-            builder = builder.session_affinity(
-                session_affinity_ttl_from_secs(ttl).map_err(PyValueError::new_err)?,
-            );
+        if let Some(config) =
+            selection_affinity_config(session_affinity_ttl_secs).map_err(PyValueError::new_err)?
+        {
+            builder = builder.session_affinity_config(config);
         }
         let inner = py
             .allow_threads(|| pyo3_async_runtimes::tokio::get_runtime().block_on(builder.build()))

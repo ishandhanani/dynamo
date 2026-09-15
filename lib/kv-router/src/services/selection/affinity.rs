@@ -100,6 +100,45 @@ pub struct SessionAffinityConfig {
 }
 
 impl SessionAffinityConfig {
+    /// Read the standard affinity environment settings at a host entrypoint.
+    /// An absent TTL disables affinity. Table construction never reads the environment.
+    pub fn from_dynamo_env() -> Result<Option<Self>, AffinityError> {
+        Self::from_lookup(|name| std::env::var(name).ok())
+    }
+
+    /// Resolve standard env names through a host-provided lookup. Entrypoints can
+    /// supply explicit CLI/API values ahead of environment defaults without
+    /// mutating process-wide environment state.
+    pub fn from_lookup(
+        get_env: impl Fn(&str) -> Option<String>,
+    ) -> Result<Option<Self>, AffinityError> {
+        let mode = get_env("DYN_ROUTER_SESSION_AFFINITY_MODE")
+            .map(|value| value.parse::<SessionAffinityMode>())
+            .transpose()
+            .map_err(AffinityError::InvalidArgument)?
+            .unwrap_or_default();
+        get_env("DYN_ROUTER_SESSION_AFFINITY_TTL_SECS")
+            .map(|value| {
+                let secs = value.parse::<f64>().map_err(|_| {
+                    AffinityError::InvalidArgument(format!(
+                        "DYN_ROUTER_SESSION_AFFINITY_TTL_SECS must be a number, got {value:?}"
+                    ))
+                })?;
+                Self::from_seconds(secs, mode)
+            })
+            .transpose()
+    }
+
+    /// Construct a validated config from seconds without panicking on invalid floats.
+    pub fn from_seconds(secs: f64, mode: SessionAffinityMode) -> Result<Self, AffinityError> {
+        if !(1.0..=MAX_SESSION_AFFINITY_TTL_SECS as f64).contains(&secs) {
+            return Err(AffinityError::InvalidArgument(format!(
+                "session affinity TTL must be between 1 and {MAX_SESSION_AFFINITY_TTL_SECS} seconds"
+            )));
+        }
+        Ok(Self::new(Duration::from_secs_f64(secs)).with_mode(mode))
+    }
+
     pub fn new(ttl: Duration) -> Self {
         Self {
             ttl,
@@ -997,6 +1036,56 @@ pub fn validate_dispatch_target(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn affinity_environment_is_independent_of_kv_tuning() {
+        let config = SessionAffinityConfig::from_lookup(|name| match name {
+            "DYN_ROUTER_SESSION_AFFINITY_TTL_SECS" => Some("600.5".into()),
+            "DYN_ROUTER_SESSION_AFFINITY_MODE" => Some("soft".into()),
+            _ => panic!("affinity must not read KV settings: {name}"),
+        })
+        .unwrap()
+        .unwrap();
+        assert_eq!(config.ttl, Duration::from_millis(600_500));
+        assert_eq!(config.mode, SessionAffinityMode::Soft);
+        assert!(
+            SessionAffinityConfig::from_lookup(|_| None)
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            SessionAffinityConfig::from_lookup(|name| {
+                (name == "DYN_ROUTER_SESSION_AFFINITY_MODE").then(|| "soft".into())
+            })
+            .unwrap()
+            .is_none()
+        );
+    }
+
+    #[test]
+    fn affinity_environment_rejects_invalid_values() {
+        for value in ["garbage", "NaN", "inf", "-1", "0", "0.5", "31536001"] {
+            let result = SessionAffinityConfig::from_lookup(|name| {
+                (name == "DYN_ROUTER_SESSION_AFFINITY_TTL_SECS").then(|| value.into())
+            });
+            assert!(result.is_err(), "TTL={value} must be rejected");
+        }
+        assert!(
+            SessionAffinityConfig::from_lookup(|name| {
+                (name == "DYN_ROUTER_SESSION_AFFINITY_MODE").then(|| "invalid".into())
+            })
+            .is_err()
+        );
+        for value in ["1", "31536000"] {
+            assert!(
+                SessionAffinityConfig::from_lookup(|name| {
+                    (name == "DYN_ROUTER_SESSION_AFFINITY_TTL_SECS").then(|| value.into())
+                })
+                .unwrap()
+                .is_some()
+            );
+        }
+    }
 
     const TTL: Duration = Duration::from_secs(10);
 

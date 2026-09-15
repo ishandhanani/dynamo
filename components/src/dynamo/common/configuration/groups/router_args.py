@@ -19,10 +19,13 @@ import os
 from typing import TYPE_CHECKING, Optional, Protocol, Sequence
 
 from dynamo.common.configuration.arg_group import ArgGroup
-from dynamo.common.configuration.config_base import ConfigBase
 from dynamo.common.configuration.groups.kv_router_args import (
     KvRouterArgGroup,
     KvRouterConfigBase,
+)
+from dynamo.common.configuration.groups.session_affinity_args import (
+    SessionAffinityArgGroup,
+    SessionAffinityConfigBase,
 )
 from dynamo.common.configuration.utils import add_argument, nullable_float, nullable_int
 
@@ -69,7 +72,7 @@ class _DeprecatedEnforceDisaggAction(argparse.BooleanOptionalAction):
         super().__call__(parser, namespace, values, option_string)
 
 
-class RouterConfigBase(ConfigBase):
+class RouterConfigBase(SessionAffinityConfigBase):
     """Mixin carrying the shared router configuration fields."""
 
     router_mode: str
@@ -172,6 +175,7 @@ class RouterArgGroup(ArgGroup):
         if "DYN_ENFORCE_DISAGG" in os.environ:
             logger.warning(_ENFORCE_DISAGG_DEPRECATION, "DYN_ENFORCE_DISAGG")
 
+        SessionAffinityArgGroup().add_arguments(parser)
         g = parser.add_argument_group("Router Options")
 
         if self.include_frontend_only:
@@ -363,6 +367,9 @@ class RouterConfigSource(Protocol):
     def kv_router_kwargs(self) -> dict:
         ...
 
+    def session_affinity_kwargs(self) -> dict:
+        ...
+
 
 def build_router_config(
     config: Optional[RouterConfigSource],
@@ -399,4 +406,9 @@ def build_router_config(
     kv_router_config = (
         KvRouterConfig(**config.kv_router_kwargs()) if mode == RouterMode.KV else None
     )
-    return RouterConfig(mode, kv_router_config, **config.router_kwargs())
+    return RouterConfig(
+        mode,
+        kv_router_config,
+        **config.router_kwargs(),
+        **config.session_affinity_kwargs(),
+    )
