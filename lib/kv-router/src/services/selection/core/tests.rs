@@ -2623,7 +2623,7 @@ async fn affinity_configuration_rejects_invalid_or_conflicting_config() {
             WorkerType::Aggregated,
             Default::default(),
         )
-        .session_affinity(ttl)
+        .session_affinity_config(SessionAffinityConfig::new(ttl))
         .build()
         .await;
         assert!(result.is_err());

@@ -2,7 +2,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use std::sync::Arc;
-use std::time::Duration;
 
 use tokio_util::sync::CancellationToken;
 
@@ -116,12 +115,6 @@ impl SelectionServiceBuilder {
         self
     }
 
-    /// Pin each session id to the worker that served it for `ttl` after its
-    /// last request. Bindings replicate over the replica mesh when enabled.
-    pub fn session_affinity(self, ttl: Duration) -> Self {
-        self.session_affinity_config(SessionAffinityConfig::new(ttl))
-    }
-
     /// Configure session affinity independently of KV scoring and indexing.
     pub fn session_affinity_config(mut self, config: SessionAffinityConfig) -> Self {
         self.session_affinity = Some(config);
@@ -141,7 +134,7 @@ impl SelectionServiceBuilder {
 
     pub async fn build(self) -> anyhow::Result<SelectionService> {
         if let Some(config) = self.session_affinity {
-            super::affinity::SessionAffinity::validate_ttl(config.ttl)?;
+            config.validate_config().map_err(anyhow::Error::msg)?;
         }
         self.kv_router_config
             .validate_config()

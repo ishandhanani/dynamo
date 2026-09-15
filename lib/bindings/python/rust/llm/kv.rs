@@ -28,8 +28,9 @@ use dynamo_kv_router::protocols::compute_block_hash_for_seq;
 use dynamo_kv_router::protocols::*;
 #[cfg(feature = "kv-indexer")]
 use dynamo_kv_router::services::indexer::{self, IndexerConfig};
-#[cfg(feature = "select-service")]
 use dynamo_kv_router::services::selection::affinity::SessionAffinityConfig;
+#[cfg(feature = "select-service")]
+use dynamo_kv_router::services::selection::affinity::session_affinity_config_from_lookup;
 #[cfg(feature = "select-service")]
 use dynamo_kv_router::services::selection::{
     self, KvIndexSource, OverlapScoresRequest, PotentialLoadsRequest, ReservationRequest,
@@ -640,12 +641,15 @@ impl SelectionCacheConfig {
 }
 
 fn session_affinity_ttl_from_secs(ttl: f64) -> Result<Duration, String> {
-    if !(1.0..=MAX_SESSION_AFFINITY_TTL_SECS as f64).contains(&ttl) {
-        return Err(format!(
-            "session_affinity_ttl_secs must be between 1 and {MAX_SESSION_AFFINITY_TTL_SECS}"
-        ));
-    }
-    Ok(Duration::from_secs_f64(ttl))
+    // Preserve the Python-facing error while sharing the config's validation rules.
+    let invalid_ttl = || {
+        format!("session_affinity_ttl_secs must be between 1 and {MAX_SESSION_AFFINITY_TTL_SECS}")
+    };
+    let ttl = Duration::try_from_secs_f64(ttl).map_err(|_| invalid_ttl())?;
+    SessionAffinityConfig::new(ttl)
+        .validate_config()
+        .map_err(|_| invalid_ttl())?;
+    Ok(ttl)
 }
 
 /// Range check for a whole-second TTL; `None` passes.
@@ -660,7 +664,7 @@ fn selection_affinity_config(ttl: Option<f64>) -> Result<Option<SessionAffinityC
     if let Some(ttl) = ttl {
         session_affinity_ttl_from_secs(ttl)?;
     }
-    SessionAffinityConfig::from_lookup(|name| {
+    session_affinity_config_from_lookup(|name| {
         if name == "DYN_ROUTER_SESSION_AFFINITY_TTL_SECS"
             && let Some(ttl) = ttl
         {
@@ -668,7 +672,6 @@ fn selection_affinity_config(ttl: Option<f64>) -> Result<Option<SessionAffinityC
         }
         std::env::var(name).ok()
     })
-    .map_err(|error| error.to_string())
 }
 
 /// In-process handle to a managed Dynamo `SelectionService`.

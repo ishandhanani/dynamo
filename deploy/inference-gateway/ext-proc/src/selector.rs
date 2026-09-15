@@ -14,7 +14,9 @@ use anyhow::{Context, Result, anyhow};
 
 use dynamo_kv_router::config::{KvRouterConfig, try_kv_router_config_from_dynamo_env};
 use dynamo_kv_router::protocols::RoutingConstraints;
-use dynamo_kv_router::services::selection::affinity::SessionAffinityConfig;
+use dynamo_kv_router::services::selection::affinity::{
+    SessionAffinityConfig, try_session_affinity_config_from_dynamo_env,
+};
 use dynamo_kv_router::services::selection::{
     CatalogReconciler, PromptRequest, SelectAndReserveRequest as CoreSelectAndReserveRequest,
     SelectionError, SelectionService, SelectionServiceBuilder, WorkerSelectionPolicyRegistry,
@@ -81,7 +83,8 @@ impl Selector {
     ) -> Result<Self> {
         let kv_router_config =
             try_kv_router_config_from_dynamo_env().map_err(anyhow::Error::msg)?;
-        let affinity_config = SessionAffinityConfig::from_dynamo_env()?;
+        let affinity_config =
+            try_session_affinity_config_from_dynamo_env().map_err(anyhow::Error::msg)?;
         Self::new_with_configs(cfg, kv_router_config, affinity_config, policy_registry).await
     }
 
