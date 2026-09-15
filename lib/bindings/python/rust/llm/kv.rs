@@ -661,10 +661,10 @@ fn selection_affinity_config(ttl: Option<f64>) -> Result<Option<SessionAffinityC
         session_affinity_ttl_from_secs(ttl)?;
     }
     SessionAffinityConfig::from_lookup(|name| {
-        if name == "DYN_ROUTER_SESSION_AFFINITY_TTL_SECS" {
-            if let Some(ttl) = ttl {
-                return Some(ttl.to_string());
-            }
+        if name == "DYN_ROUTER_SESSION_AFFINITY_TTL_SECS"
+            && let Some(ttl) = ttl
+        {
+            return Some(ttl.to_string());
         }
         std::env::var(name).ok()
     })
