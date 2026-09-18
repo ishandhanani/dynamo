@@ -22,4 +22,9 @@ pub struct Args {
     /// wildcard addresses.
     #[arg(long, env = "SGLANG_DISAGGREGATION_BOOTSTRAP_HOST")]
     pub bootstrap_host: Option<String>,
+
+    /// Expose the experimental byte-preserving native HTTP request plane.
+    /// Aggregated serving only; does not enable public frontend routing.
+    #[arg(long)]
+    pub enable_native_http: bool,
 }

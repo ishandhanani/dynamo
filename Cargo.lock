@@ -3088,6 +3088,7 @@ dependencies = [
  "bytes",
  "clap",
  "dynamo-backend-common",
+ "dynamo-llm",
  "dynamo-runtime",
  "dynamo-sidecar-common",
  "futures",

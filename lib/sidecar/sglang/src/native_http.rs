@@ -4,6 +4,9 @@
 //! Legacy incremental-SSE adapter for SGLang's native `/generate` API.
 
 mod transport;
+mod wire;
+
+pub(crate) use wire::NativeHttpEndpoint;
 
 use std::{collections::HashMap, io, time::Duration};
 
@@ -144,6 +147,23 @@ impl NativeHttp {
         discovery: &Discovery,
         connect_timeout: Duration,
     ) -> Result<Option<Self>, DynamoError> {
+        if discovery
+            .server_info
+            .get("incremental_streaming_output")
+            .and_then(Value::as_bool)
+            != Some(true)
+        {
+            return Ok(None);
+        }
+        Self::discover_http(grpc_endpoint, discovery, connect_timeout)
+    }
+
+    /// The byte path also supports unary and cumulative streaming engines.
+    pub(crate) fn discover_http(
+        grpc_endpoint: &GrpcEndpoint,
+        discovery: &Discovery,
+        connect_timeout: Duration,
+    ) -> Result<Option<Self>, DynamoError> {
         let Some(raw_port) = discovery.server_info.get("port") else {
             return Ok(None);
         };
@@ -155,18 +175,6 @@ impl NativeHttp {
                     "SGLang GetServerInfo.port must be in 1..=65535, got {raw_port}"
                 ))
             })?;
-        if discovery
-            .server_info
-            .get("incremental_streaming_output")
-            .and_then(Value::as_bool)
-            != Some(true)
-        {
-            tracing::warn!(
-                port,
-                "SGLang native HTTP generation is disabled because incremental streaming output is not enabled"
-            );
-            return Ok(None);
-        }
         let endpoint = HttpEndpoint::from_grpc(grpc_endpoint, port).map_err(|error| {
             client::protocol_error(format!("invalid SGLang HTTP endpoint: {error}"))
         })?;
@@ -571,6 +579,15 @@ mod tests {
     #[test]
     fn discovery_requires_incremental_streaming() {
         let grpc = GrpcEndpoint::parse("127.0.0.1:30001", "test").unwrap();
+        assert!(
+            NativeHttp::discover_http(
+                &grpc,
+                &discovery(json!({"port": 30000})),
+                Duration::from_secs(1),
+            )
+            .unwrap()
+            .is_some()
+        );
         assert!(
             NativeHttp::discover(
                 &grpc,

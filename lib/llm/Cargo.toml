@@ -90,7 +90,7 @@ dynamo-parsers-v2 = { workspace = true }
 async-stream = { workspace = true }
 async-trait = { workspace = true }
 async-nats = { workspace = true }
-bytes = { workspace = true }
+bytes = { workspace = true, features = ["serde"] }
 chrono = { workspace = true }
 dashmap = { workspace = true }
 derive_builder = { workspace = true }
