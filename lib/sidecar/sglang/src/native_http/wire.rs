@@ -62,21 +62,35 @@ impl AsyncEngine<SingleIn<Request>, ManyOut<Annotated<ResponseFrame>>, anyhow::E
         let mut headers = sglang_http::decode_headers(request.headers)?;
         // The HTTP client computes framing from the retained request bytes.
         headers.remove("content-length");
-        let response = tokio::select! {
-            biased;
-            _ = self.cancel.cancelled() => anyhow::bail!("native HTTP endpoint shutting down"),
-            _ = context.stopped() => anyhow::bail!("native HTTP request cancelled"),
-            _ = context.killed() => anyhow::bail!("native HTTP request killed"),
-            response = self.transport.send(method, request.operation.path(), headers, request.body) => response?,
-        };
-        let head = ResponseFrame::Head {
-            status: response.status().as_u16(),
-            headers: sglang_http::encode_headers(response.headers().clone()),
-        };
-        let mut upstream = response.bytes_stream();
+        let transport = self.transport.clone();
         let cancel = self.cancel.clone();
         let stream_context = context.clone();
+        // Establish the runtime response stream before waiting for HTTP headers.
+        // Its transport carries cancellation even while SGLang has not replied.
         let stream = async_stream::stream! {
+            let response = tokio::select! {
+                biased;
+                _ = cancel.cancelled() => None,
+                _ = stream_context.stopped() => None,
+                _ = stream_context.killed() => None,
+                response = transport.send(method, request.operation.path(), headers, request.body) => Some(response),
+            };
+            let response = match response {
+                Some(Ok(response)) => response,
+                Some(Err(error)) => {
+                    yield Annotated::from_error(error.to_string());
+                    return;
+                }
+                None => {
+                    yield Annotated::from_error("native HTTP request cancelled");
+                    return;
+                }
+            };
+            let head = ResponseFrame::Head {
+                status: response.status().as_u16(),
+                headers: sglang_http::encode_headers(response.headers().clone()),
+            };
+            let mut upstream = response.bytes_stream();
             yield Annotated::from_data(head);
             loop {
                 let next = tokio::select! {
@@ -147,8 +161,10 @@ mod tests {
                 b"{ \"stream\":true, \"input_ids\": [1,2], \"future\":1.00 }\n";
             let release = Arc::new(Notify::new());
             let closed = Arc::new(Notify::new());
+            let waiting_for_headers = Arc::new(Notify::new());
             let engine_closed = closed.clone();
             let engine_release = release.clone();
+            let engine_waiting = waiting_for_headers.clone();
             let first = Bytes::from_static(b": heartbeat\r\ndata: not-json\r\n\r\n");
             let last = Bytes::from_static(b"data: [DONE]\n\n");
             let unary = Bytes::from_static(b"{ \"future\":1e-05, \"engine\":\"overloaded\" }\n");
@@ -186,6 +202,7 @@ mod tests {
                     any(move |method: Method, headers: HeaderMap, body: Bytes| {
                         let release = engine_release.clone();
                         let closed = engine_closed.clone();
+                        let waiting_for_headers = engine_waiting.clone();
                         let (first, last, unary) = (first.clone(), last.clone(), unary.clone());
                         async move {
                             assert_eq!(method, Method::PUT);
@@ -200,6 +217,12 @@ mod tests {
                                     UNARY_REQUEST
                                 }
                             );
+                            if headers["x-fixture-mode"] == "cancel_before_headers" {
+                                let _dropped = OnDrop(Some(closed));
+                                waiting_for_headers.notify_one();
+                                std::future::pending::<()>().await;
+                                unreachable!();
+                            }
                             let truncated = headers["x-fixture-mode"] == "truncated";
                             let dropped =
                                 OnDrop((headers["x-fixture-mode"] == "cancel").then_some(closed));
@@ -271,7 +294,13 @@ mod tests {
             let client = NativeGenerateClient::from_client(client, RouterMode::Direct)
                 .await
                 .unwrap();
-            for mode in ["unary", "stream", "truncated", "cancel"] {
+            for mode in [
+                "unary",
+                "stream",
+                "truncated",
+                "cancel",
+                "cancel_before_headers",
+            ] {
                 let headers = HeaderMap::from_iter([
                     ("x-fixture-mode".parse().unwrap(), mode.parse().unwrap()),
                     (
@@ -294,9 +323,19 @@ mod tests {
                     }),
                     operation: Default::default(),
                 };
-                let response = forward(&client, Context::new(request), worker)
-                    .await
-                    .unwrap();
+                let mut pending = Box::pin(forward(&client, Context::new(request), worker));
+                if mode == "cancel_before_headers" {
+                    tokio::select! {
+                        _ = waiting_for_headers.notified() => {},
+                        _ = &mut pending => panic!("upstream must withhold response headers"),
+                    }
+                    drop(pending);
+                    timeout(Duration::from_secs(2), closed.notified())
+                        .await
+                        .expect("cancellation must close upstream before response headers");
+                    continue;
+                }
+                let response = pending.await.unwrap();
                 assert_eq!(
                     response.status().as_u16(),
                     if mode != "unary" { 200 } else { 429 }
