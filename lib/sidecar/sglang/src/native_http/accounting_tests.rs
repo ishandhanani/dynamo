@@ -242,6 +242,7 @@ fn disconnect_keeps_real_booking_until_engine_cleanup_acknowledgement() {
                 vec![ReservedChild {
                     kind: sglang_http::lifecycle::ChildKind::Sample,
                     reservation: NativeReservation::new(router.clone(), booking),
+                    additional_reservations: Vec::new(),
                 }],
             )
             .unwrap();
