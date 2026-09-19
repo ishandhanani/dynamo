@@ -71,7 +71,7 @@ impl AsyncEngine<SingleIn<Request>, ManyOut<Annotated<ResponseFrame>>, anyhow::E
         let cancel = self.cancel.clone();
         let stream_context = context.clone();
         // Establish the runtime response stream before waiting for HTTP headers.
-        // Its transport carries cancellation even while SGLang has not replied.
+        // Its transport carries cancellation before the upstream server replies.
         let stream = async_stream::stream! {
             let response = tokio::select! {
                 biased;
@@ -408,18 +408,17 @@ mod tests {
         .await
         .unwrap();
     }
-}
 
-// The request-plane TCP listener is process-wide. Its Tokio executor must
-// outlive every fixture that registers an endpoint on that listener.
-#[cfg(test)]
-fn test_runtime() -> &'static tokio::runtime::Runtime {
-    static RUNTIME: std::sync::OnceLock<tokio::runtime::Runtime> = std::sync::OnceLock::new();
-    RUNTIME.get_or_init(|| {
-        tokio::runtime::Builder::new_multi_thread()
-            .worker_threads(2)
-            .enable_all()
-            .build()
-            .unwrap()
-    })
+    // The request-plane TCP listener is process-wide. Its Tokio executor must
+    // outlive every fixture that registers an endpoint on that listener.
+    fn test_runtime() -> &'static tokio::runtime::Runtime {
+        static RUNTIME: std::sync::OnceLock<tokio::runtime::Runtime> = std::sync::OnceLock::new();
+        RUNTIME.get_or_init(|| {
+            tokio::runtime::Builder::new_multi_thread()
+                .worker_threads(2)
+                .enable_all()
+                .build()
+                .unwrap()
+        })
+    }
 }

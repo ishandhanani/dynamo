@@ -88,7 +88,6 @@ impl NativeGenerateBinding {
                 deadline,
                 NativeConstraints {
                     routing: constraints.unwrap_or_default(),
-                    ..Default::default()
                 },
             ),
         )
