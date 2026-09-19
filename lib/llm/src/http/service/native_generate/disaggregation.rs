@@ -131,19 +131,28 @@ impl NativeGenerateBinding {
             // The P/D logprob adapter needs JSON/SSE, not a compressed body.
             headers.insert(axum::http::header::ACCEPT_ENCODING, "identity".parse()?);
         }
+        // SGLang gives routed_dp_rank precedence over its deprecated alias.
+        // Set both: the client's decode rank may differ from the prefill rank.
         let prefill_request = http::Request {
             method: method.to_string(),
             headers: http::encode_headers(headers.clone()),
             body: with_controls(
                 &body,
                 [
+                    ("routed_dp_rank", Value::from(rank)),
                     ("data_parallel_rank", Value::from(rank)),
                     ("stream", Value::Bool(false)),
                 ],
             )?,
         };
         let decode_body = match decode_admission.target().dp_rank {
-            Some(rank) => with_controls(&body, [("data_parallel_rank", Value::from(rank))])?,
+            Some(rank) => with_controls(
+                &body,
+                [
+                    ("routed_dp_rank", Value::from(rank)),
+                    ("data_parallel_rank", Value::from(rank)),
+                ],
+            )?,
             None => body,
         };
         let decode_request = http::Request {
@@ -155,27 +164,34 @@ impl NativeGenerateBinding {
         let guard = cancellation.clone().drop_guard();
         // Poll both dispatches together: a unary prefill response may wait for
         // the decode receiver, so awaiting prefill first would deadlock.
+        // Each dispatch owns a child cancellation scope: dropping the losing
+        // stage after an HTTP rejection must not cancel the returned error body.
+        let prefill_metadata = metadata.clone();
         let heads = join_heads(
-            forward_reserved(
-                &prefill.client,
-                Context::with_id_and_metadata(
-                    prefill_request,
-                    uuid::Uuid::new_v4().to_string(),
-                    metadata.clone(),
-                ),
-                prefill_admission,
-                cancellation.clone(),
-            ),
-            forward_reserved(
-                &self.client,
-                Context::with_id_and_metadata(
-                    decode_request,
-                    uuid::Uuid::new_v4().to_string(),
-                    metadata,
-                ),
-                decode_admission,
-                cancellation.clone(),
-            ),
+            |stage_cancel| {
+                forward_reserved(
+                    &prefill.client,
+                    Context::with_id_and_metadata(
+                        prefill_request,
+                        uuid::Uuid::new_v4().to_string(),
+                        prefill_metadata,
+                    ),
+                    prefill_admission,
+                    stage_cancel,
+                )
+            },
+            |stage_cancel| {
+                forward_reserved(
+                    &self.client,
+                    Context::with_id_and_metadata(
+                        decode_request,
+                        uuid::Uuid::new_v4().to_string(),
+                        metadata,
+                    ),
+                    decode_admission,
+                    stage_cancel,
+                )
+            },
             &cancellation,
             return_logprob,
         )
@@ -208,12 +224,18 @@ enum Heads {
     Rejected(Response),
 }
 
-async fn join_heads(
-    prefill: impl std::future::Future<Output = anyhow::Result<Response>>,
-    decode: impl std::future::Future<Output = anyhow::Result<Response>>,
+async fn join_heads<P, D>(
+    prefill: impl FnOnce(CancellationToken) -> P,
+    decode: impl FnOnce(CancellationToken) -> D,
     cancellation: &CancellationToken,
     collect_prefill: bool,
-) -> anyhow::Result<Heads> {
+) -> anyhow::Result<Heads>
+where
+    P: std::future::Future<Output = anyhow::Result<Response>>,
+    D: std::future::Future<Output = anyhow::Result<Response>>,
+{
+    let prefill = prefill(cancellation.child_token());
+    let decode = decode(cancellation.child_token());
     let (prefill_tx, prefill_rx) = tokio::sync::oneshot::channel();
     let join = async {
         tokio::pin!(prefill, decode);
@@ -388,7 +410,7 @@ mod tests {
         assert!(matches!(
             tokio::time::timeout(
                 Duration::from_secs(1),
-                join_heads(prefill, decode, &CancellationToken::new(), false)
+                join_heads(|_| prefill, |_| decode, &CancellationToken::new(), false)
             )
             .await
             .unwrap()
@@ -407,9 +429,9 @@ mod tests {
             let pending = std::future::pending::<anyhow::Result<Response>>();
             let result = tokio::time::timeout(Duration::from_secs(1), async {
                 if reject_prefill {
-                    join_heads(reject, pending, &CancellationToken::new(), false).await
+                    join_heads(|_| reject, |_| pending, &CancellationToken::new(), false).await
                 } else {
-                    join_heads(pending, reject, &CancellationToken::new(), false).await
+                    join_heads(|_| pending, |_| reject, &CancellationToken::new(), false).await
                 }
             })
             .await
@@ -419,6 +441,62 @@ mod tests {
                 panic!("expected engine rejection");
             };
             assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+            assert_eq!(
+                axum::body::to_bytes(response.into_body(), 100)
+                    .await
+                    .unwrap(),
+                "engine rejection"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn native_pd_rejection_keeps_its_body_when_the_peer_is_dropped() {
+        for reject_prefill in [true, false] {
+            let cancel = CancellationToken::new();
+            let peer_stopped = Arc::new(tokio::sync::Notify::new());
+            let stage = |reject: bool, token: CancellationToken| {
+                let peer_stopped = peer_stopped.clone();
+                async move {
+                    let guard = token.clone().drop_guard();
+                    if !reject {
+                        peer_stopped.notify_one();
+                        std::future::pending::<()>().await;
+                    }
+                    peer_stopped.notified().await;
+                    let stream = futures::stream::once(async move {
+                        anyhow::ensure!(!token.is_cancelled(), "rejected response was cancelled");
+                        anyhow::Ok(Bytes::from_static(b"engine rejection"))
+                    });
+                    // The response, like forward_reserved, retains its cancel scope.
+                    let body = async_stream::stream! {
+                        let _guard = guard;
+                        for await chunk in stream { yield chunk; }
+                    };
+                    anyhow::Ok(
+                        Response::builder()
+                            .status(400)
+                            .body(Body::from_stream(body))
+                            .unwrap(),
+                    )
+                }
+            };
+            let heads = tokio::time::timeout(
+                Duration::from_secs(1),
+                join_heads(
+                    |token| stage(reject_prefill, token),
+                    |token| stage(!reject_prefill, token),
+                    &cancel,
+                    false,
+                ),
+            )
+            .await
+            .unwrap()
+            .unwrap();
+            let Heads::Rejected(response) = heads else {
+                panic!("expected rejection");
+            };
+            assert!(!cancel.is_cancelled());
             assert_eq!(
                 axum::body::to_bytes(response.into_body(), 100)
                     .await
@@ -440,9 +518,9 @@ mod tests {
             let pending = std::future::pending::<anyhow::Result<Response>>();
             let result = tokio::time::timeout(Duration::from_secs(1), async {
                 if fail_prefill {
-                    join_heads(failed, pending, &cancel, false).await
+                    join_heads(|_| failed, |_| pending, &cancel, false).await
                 } else {
-                    join_heads(pending, failed, &cancel, false).await
+                    join_heads(|_| pending, |_| failed, &cancel, false).await
                 }
             })
             .await

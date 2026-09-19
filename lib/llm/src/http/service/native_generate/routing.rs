@@ -306,7 +306,13 @@ impl NativeGenerateBinding {
                 )
                 .await?;
             let body = if let Some(rank) = admission.target().dp_rank {
-                with_controls(&body, [("data_parallel_rank", Value::from(rank))])?
+                with_controls(
+                    &body,
+                    [
+                        ("routed_dp_rank", Value::from(rank)),
+                        ("data_parallel_rank", Value::from(rank)),
+                    ],
+                )?
             } else {
                 body
             };
