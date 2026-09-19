@@ -43,7 +43,9 @@ impl NativeGenerateBinding {
         anyhow::ensure!(
             prefill_rank.is_none_or(|rank| rank >= config.data_parallel_start_rank
                 && rank - config.data_parallel_start_rank < config.data_parallel_size),
-            "native prefill DP rank is outside the admitted WorkerSet"
+            NativeRequestError(anyhow::anyhow!(
+                "native prefill DP rank is outside the admitted WorkerSet"
+            ))
         );
         let tokenizer = prefill.tokenizer.clone();
         let child_projection = projection.clone();
@@ -111,7 +113,7 @@ impl NativeGenerateBinding {
             .get("bootstrap_room")
             .is_none_or(Value::is_null)
         {
-            let room = (uuid::Uuid::new_v4().as_u128() as u64) & !4095;
+            let room = bootstrap_room();
             headers.insert("x-override-bootstrap-room", room.to_string().parse()?);
         }
         let request = http::Request {
@@ -152,6 +154,13 @@ impl NativeGenerateBinding {
         guard.disarm();
         Ok(response)
     }
+}
+
+fn bootstrap_room() -> u64 {
+    // SGLang assigns the Python integer into a torch.uint64 tensor, whose
+    // scalar setter still rejects values above i64::MAX. Reserve a whole
+    // aligned fan-out range within the supported scalar assignment range.
+    (uuid::Uuid::new_v4().as_u128() as u64) & (i64::MAX as u64) & !4095
 }
 
 enum Heads {
@@ -364,6 +373,9 @@ mod tests {
 
     #[test]
     fn native_pd_projection_omits_warmups_and_rejects_conflicting_controls() {
+        for _ in 0..128 {
+            assert!(bootstrap_room() + 4095 <= i64::MAX as u64);
+        }
         let projection = Projection::read(br#"{"input_ids":[[1],[2]],"sampling_params":{"n":3},"bootstrap_host":["engine","engine"],"bootstrap_port":1234}"#).unwrap();
         projection
             .require_control("bootstrap_host", &Value::from("engine"))
