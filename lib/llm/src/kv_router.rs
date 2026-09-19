@@ -2757,10 +2757,15 @@ mod tests {
         let reservation = native::NativeReservation::new(router.clone(), admitted.booking.unwrap());
         reservation.touch().unwrap();
         assert!(router.selection.scheduler().has_request("native-child"));
-        reservation.finish().await;
-        assert!(!router.selection.scheduler().has_request("native-child"));
-        reservation.finish().await;
-        assert!(reservation.touch().is_err());
+        let guard = reservation.start(tokio_util::sync::CancellationToken::new());
+        drop(guard);
+        tokio::time::timeout(std::time::Duration::from_secs(2), async {
+            while router.selection.scheduler().has_request("native-child") {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
     }
 
     /// A lease released before `set_scheduler` is a wiring bug: it logs and

@@ -127,7 +127,6 @@ impl NativeGenerateBinding {
                 [
                     ("routed_dp_rank", Value::from(rank)),
                     ("data_parallel_rank", Value::from(rank)),
-                    ("stream", Value::Bool(false)),
                 ],
             )?,
         };
