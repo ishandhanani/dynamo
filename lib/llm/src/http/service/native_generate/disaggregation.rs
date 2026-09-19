@@ -148,13 +148,14 @@ impl NativeGenerateBinding {
                 decode_attempt,
                 cancellation.clone(),
             ),
+            &cancellation,
         )
         .await?;
-        let (prefill_response, decode_response) = match heads {
-            Heads::Pair(prefill, decode) => (prefill, decode),
+        let decode = match heads {
+            Heads::Ready(decode) => decode,
             Heads::Rejected(response) => return Ok(response),
         };
-        let response = pair_responses(prefill_response, decode_response, cancellation);
+        let response = decode_response(decode, cancellation);
         guard.disarm();
         Ok(response)
     }
@@ -168,34 +169,85 @@ fn bootstrap_room() -> u64 {
 }
 
 enum Heads {
-    Pair(Response, Response),
+    Ready(Response),
     Rejected(Response),
 }
 
 async fn join_heads(
     prefill: impl std::future::Future<Output = anyhow::Result<Response>>,
     decode: impl std::future::Future<Output = anyhow::Result<Response>>,
+    cancellation: &CancellationToken,
 ) -> anyhow::Result<Heads> {
-    tokio::pin!(prefill, decode);
-    let (prefill, decode) = tokio::select! {
-        prefill = &mut prefill => {
-            let prefill = prefill?;
-            if !prefill.status().is_success() { return Ok(Heads::Rejected(prefill)); }
-            (prefill, decode.await?)
-        },
-        decode = &mut decode => {
-            let decode = decode?;
-            if !decode.status().is_success() { return Ok(Heads::Rejected(decode)); }
-            (prefill.await?, decode)
-        },
+    let join = async {
+        tokio::pin!(prefill, decode);
+        let decode = tokio::select! {
+            prefill = &mut prefill => {
+                let prefill = prefill?;
+                if !prefill.status().is_success() { return Ok(Heads::Rejected(prefill)); }
+                drain_prefill(prefill, cancellation.clone());
+                decode.await?
+            },
+            decode = &mut decode => {
+                let decode = decode?;
+                if !decode.status().is_success() { return Ok(Heads::Rejected(decode)); }
+                // Observe decode transport failure while prefill headers are
+                // pending. Read-ahead stays bounded until the client can read.
+                let decode = buffer_decode(decode, cancellation.clone());
+                let prefill = prefill.await?;
+                if !prefill.status().is_success() { return Ok(Heads::Rejected(prefill)); }
+                drain_prefill(prefill, cancellation.clone());
+                decode
+            },
+        };
+        if !decode.status().is_success() {
+            return Ok(Heads::Rejected(decode));
+        }
+        Ok(Heads::Ready(decode))
     };
-    if !prefill.status().is_success() {
-        return Ok(Heads::Rejected(prefill));
+    tokio::select! {
+        biased;
+        _ = cancellation.cancelled() => anyhow::bail!("native P/D transport cancelled before response headers"),
+        result = join => result,
     }
-    if !decode.status().is_success() {
-        return Ok(Heads::Rejected(decode));
-    }
-    Ok(Heads::Pair(prefill, decode))
+}
+
+fn buffer_decode(response: Response, cancellation: CancellationToken) -> Response {
+    let (parts, body) = response.into_parts();
+    let (tx, rx) = tokio::sync::mpsc::channel(1);
+    tokio::spawn(async move {
+        let mut body = body.into_data_stream();
+        loop {
+            let chunk = tokio::select! {
+                biased;
+                _ = cancellation.cancelled() => return,
+                _ = tx.closed() => { cancellation.cancel(); return; },
+                chunk = body.next() => chunk,
+            };
+            let chunk = match chunk {
+                Some(Ok(chunk)) => chunk,
+                Some(Err(error)) => {
+                    tracing::warn!(%error, "native decode response transport failed");
+                    cancellation.cancel();
+                    return;
+                }
+                None => return,
+            };
+            tokio::select! {
+                biased;
+                _ = cancellation.cancelled() => return,
+                result = tx.send(chunk) => if result.is_err() {
+                    cancellation.cancel();
+                    return;
+                },
+            }
+        }
+    });
+    Response::from_parts(
+        parts,
+        Body::from_stream(
+            tokio_stream::wrappers::ReceiverStream::new(rx).map(Ok::<_, axum::Error>),
+        ),
+    )
 }
 
 impl Projection {
@@ -217,12 +269,7 @@ impl Projection {
 
 /// Drain prefill independently with bounded transport backpressure. Decode is
 /// authoritative; a failed prefill transport cuts its body without parsing it.
-fn pair_responses(
-    prefill: Response,
-    decode: Response,
-    cancellation: CancellationToken,
-) -> Response {
-    let drain_cancel = cancellation.clone();
+fn drain_prefill(prefill: Response, drain_cancel: CancellationToken) {
     tokio::spawn(async move {
         let mut body = prefill.into_body().into_data_stream();
         loop {
@@ -240,6 +287,9 @@ fn pair_responses(
             }
         }
     });
+}
+
+fn decode_response(decode: Response, cancellation: CancellationToken) -> Response {
     let mut progress = BodyProgress::new(decode.status(), decode.headers());
     let (parts, body) = decode.into_parts();
     let guard = cancellation.clone().drop_guard();
@@ -284,11 +334,14 @@ mod tests {
             anyhow::Ok(Response::new(Body::empty()))
         };
         assert!(matches!(
-            tokio::time::timeout(Duration::from_secs(1), join_heads(prefill, decode))
-                .await
-                .unwrap()
-                .unwrap(),
-            Heads::Pair(..)
+            tokio::time::timeout(
+                Duration::from_secs(1),
+                join_heads(prefill, decode, &CancellationToken::new())
+            )
+            .await
+            .unwrap()
+            .unwrap(),
+            Heads::Ready(..)
         ));
         for reject_prefill in [true, false] {
             let reject = async {
@@ -302,9 +355,9 @@ mod tests {
             let pending = std::future::pending::<anyhow::Result<Response>>();
             let result = tokio::time::timeout(Duration::from_secs(1), async {
                 if reject_prefill {
-                    join_heads(reject, pending).await
+                    join_heads(reject, pending, &CancellationToken::new()).await
                 } else {
-                    join_heads(pending, reject).await
+                    join_heads(pending, reject, &CancellationToken::new()).await
                 }
             })
             .await
@@ -324,6 +377,64 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn native_pd_body_failure_does_not_wait_for_peer_headers() {
+        for fail_prefill in [true, false] {
+            let cancel = CancellationToken::new();
+            let failed = async {
+                anyhow::Ok(Response::new(Body::from_stream(futures::stream::once(
+                    async { Err::<Bytes, _>(std::io::Error::other("stage disconnected")) },
+                ))))
+            };
+            let pending = std::future::pending::<anyhow::Result<Response>>();
+            let result = tokio::time::timeout(Duration::from_secs(1), async {
+                if fail_prefill {
+                    join_heads(failed, pending, &cancel).await
+                } else {
+                    join_heads(pending, failed, &cancel).await
+                }
+            })
+            .await
+            .expect("body failure must cancel the pending peer header wait");
+            assert!(result.is_err());
+            assert!(cancel.is_cancelled());
+        }
+    }
+
+    #[tokio::test]
+    async fn native_pd_decode_read_ahead_preserves_bytes_and_unpolled_drop_cancels() {
+        let cancel = CancellationToken::new();
+        let response = buffer_decode(
+            Response::builder()
+                .header("x-engine", "preserved")
+                .body(Body::from_stream(futures::stream::iter([
+                    Ok::<_, std::io::Error>(Bytes::from_static(b"first")),
+                    Ok(Bytes::from_static(b"second")),
+                    Ok(Bytes::from_static(b"last")),
+                ])))
+                .unwrap(),
+            cancel.clone(),
+        );
+        assert_eq!(response.headers()["x-engine"], "preserved");
+        assert_eq!(
+            axum::body::to_bytes(response.into_body(), 100)
+                .await
+                .unwrap(),
+            "firstsecondlast"
+        );
+        assert!(!cancel.is_cancelled());
+        let response = buffer_decode(
+            Response::new(Body::from_stream(futures::stream::pending::<
+                Result<Bytes, std::io::Error>,
+            >())),
+            cancel.clone(),
+        );
+        drop(response);
+        tokio::time::timeout(Duration::from_secs(1), cancel.cancelled())
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
     async fn native_pd_drain_failure_cancels_decode_and_unpolled_drop_cancels_prefill() {
         let cancel = CancellationToken::new();
         let prefill = Response::new(Body::from_stream(futures::stream::once(async {
@@ -332,7 +443,8 @@ mod tests {
         let decode = Response::new(Body::from_stream(futures::stream::pending::<
             Result<Bytes, std::io::Error>,
         >()));
-        let response = pair_responses(prefill, decode, cancel.clone());
+        drain_prefill(prefill, cancel.clone());
+        let response = decode_response(decode, cancel.clone());
         assert!(
             tokio::time::timeout(
                 Duration::from_secs(1),
@@ -344,11 +456,7 @@ mod tests {
         );
         assert!(cancel.is_cancelled());
         let cancel = CancellationToken::new();
-        let response = pair_responses(
-            Response::new(Body::empty()),
-            Response::new(Body::from("opaque")),
-            cancel.clone(),
-        );
+        let response = decode_response(Response::new(Body::from("opaque")), cancel.clone());
         drop(response);
         assert!(cancel.is_cancelled());
     }
@@ -364,7 +472,8 @@ mod tests {
             .header("x-engine", "preserved")
             .body(Body::from("opaque"))
             .unwrap();
-        let response = pair_responses(prefill, decode, cancel.clone());
+        drain_prefill(prefill, cancel.clone());
+        let response = decode_response(decode, cancel.clone());
         assert_eq!(response.headers()["x-engine"], "preserved");
         let mut body = response.into_body().into_data_stream();
         assert_eq!(body.next().await.unwrap().unwrap(), "opaque");
