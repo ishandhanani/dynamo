@@ -65,7 +65,13 @@ impl StreamingDispatch<http::Request, Annotated<ResponseFrame>> for Engine {
         let frames = [
             ResponseFrame::Head {
                 status: 201,
-                headers: vec![("x-engine-extension".into(), Bytes::from_static(b"native"))],
+                headers: vec![
+                    ("x-engine-extension".into(), Bytes::from_static(b"native")),
+                    (
+                        "content-length".into(),
+                        b"opaque, not JSON or SSE\r\n".len().to_string().into(),
+                    ),
+                ],
             },
             ResponseFrame::Body(Bytes::from_static(b"opaque, not JSON or SSE\r\n")),
             ResponseFrame::End,
@@ -279,6 +285,7 @@ async fn public_native_generate_keeps_bytes_books_fanout_and_fences_retired_work
                 .add_worker_set("native-model", "native_frontend", workers)
         );
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let metrics = service.state().metrics_clone();
         let url = format!("http://{}/generate", listener.local_addr().unwrap());
         let stop = CancellationToken::new();
         let server = service.spawn_with_listener(stop.clone(), listener).await;
@@ -300,6 +307,19 @@ async fn public_native_generate_keeps_bytes_books_fanout_and_fences_retired_work
         assert_eq!(
             response.bytes().await.unwrap().as_ref(),
             b"opaque, not JSON or SSE\r\n"
+        );
+        use crate::http::service::metrics::{
+            Endpoint as MetricEndpoint, ErrorType, RequestType, Status,
+        };
+        assert_eq!(
+            metrics.get_request_counter(
+                "native-model",
+                &MetricEndpoint::Generate,
+                &RequestType::Unary,
+                &Status::Success,
+                &ErrorType::None
+            ),
+            1
         );
         let load = || async {
             kv.get_potential_loads(&[], None, None, None, None)
@@ -326,7 +346,13 @@ async fn public_native_generate_keeps_bytes_books_fanout_and_fences_retired_work
         );
         assert!(
             binding
-                .forward(Method::PUT, HeaderMap::new(), Bytes::from_static(BODY))
+                .forward(
+                    Method::PUT,
+                    HeaderMap::new(),
+                    Bytes::from_static(BODY),
+                    Arc::new(crate::http::service::metrics::Metrics::new()),
+                    "test-model"
+                )
                 .await
                 .is_err(),
             "retained clients must not route after withdrawal"

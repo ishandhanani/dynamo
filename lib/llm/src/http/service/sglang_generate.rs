@@ -257,7 +257,16 @@ async fn handler(
         Ok(binding) => binding,
         Err(error) => return error_response(StatusCode::SERVICE_UNAVAILABLE, error.to_string()),
     };
-    match binding.forward(method, headers, body).await {
+    match binding
+        .forward(
+            method,
+            headers,
+            body,
+            state.metrics_clone(),
+            state.manager().metric_model_for(model),
+        )
+        .await
+    {
         Ok(response) => response,
         Err(error) => {
             tracing::warn!(%error, "native SGLang routing failed before response headers");

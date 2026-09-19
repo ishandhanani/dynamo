@@ -116,6 +116,8 @@ impl NativeGenerateBinding {
         method: Method,
         headers: HeaderMap,
         body: Bytes,
+        metrics: Arc<crate::http::service::metrics::Metrics>,
+        metric_model: &str,
     ) -> anyhow::Result<Response> {
         anyhow::ensure!(
             !self.cancellation.is_cancelled() && !self.admitted_ids.borrow().is_empty(),
@@ -131,6 +133,11 @@ impl NativeGenerateBinding {
                 "native routing and lifecycle override headers are owned by Dynamo"
             );
             let projection = Projection::read(&body)?;
+            let streaming = projection
+                .value
+                .get("stream")
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
             let uses_kv = self.host.kv_router_if_enabled().is_some();
             anyhow::ensure!(
                 !uses_kv || !projection.engine_processed_input,
@@ -163,84 +170,108 @@ impl NativeGenerateBinding {
             })
             .await??;
             let metadata = crate::http::service::metadata::extract_metadata_from_http(&headers)?;
-            anyhow::Ok((children, requested_rank, default_rank, metadata))
+            anyhow::Ok((children, requested_rank, default_rank, metadata, streaming))
         };
-        let (children, requested_rank, default_rank, metadata) =
+        let (children, requested_rank, default_rank, metadata, streaming) =
             prepared.await.map_err(NativeRequestError)?;
-        let mut reservations: Vec<ReservedChild> = Vec::with_capacity(children.len());
-        let mut worker = None;
-        let deadline = Instant::now() + Duration::from_secs(30);
-        for child in children {
-            let request = PreprocessedRequest::builder()
-                .model(self.card.name().to_string())
-                .token_ids(child.tokens)
-                .stop_conditions(StopConditions::default())
-                .sampling_options(SamplingOptions::default())
-                .output_options(OutputOptions::default())
-                .routing(Some(RoutingHints {
-                    expected_output_tokens: child.max_tokens,
-                    routing_constraints: Some(dynamo_kv_router::protocols::RoutingConstraints {
-                        required_dp_rank: requested_rank,
+        let mut guard = metrics.create_inflight_guard(
+            metric_model,
+            crate::http::service::metrics::Endpoint::Generate,
+            streaming,
+            &crate::http::service::openai::get_or_create_request_id(&headers),
+        );
+        // Dropping the HTTP future or response records cancellation. The
+        // independent lifecycle owner still retains its engine reservations.
+        guard.mark_error(crate::http::service::metrics::ErrorType::Cancelled);
+        let result = async {
+            let mut reservations: Vec<ReservedChild> = Vec::with_capacity(children.len());
+            let mut worker = None;
+            let deadline = Instant::now() + Duration::from_secs(30);
+            for child in children {
+                let request = PreprocessedRequest::builder()
+                    .model(self.card.name().to_string())
+                    .token_ids(child.tokens)
+                    .stop_conditions(StopConditions::default())
+                    .sampling_options(SamplingOptions::default())
+                    .output_options(OutputOptions::default())
+                    .routing(Some(RoutingHints {
+                        expected_output_tokens: child.max_tokens,
+                        routing_constraints: Some(dynamo_kv_router::protocols::RoutingConstraints {
+                            required_dp_rank: requested_rank,
+                            ..Default::default()
+                        }),
+                        priority_jump: Some(child.priority.max(0) as f64),
+                        priority: Some(child.priority),
+                        lora_name: child.lora,
+                        cache_namespace: child.cache_namespace,
                         ..Default::default()
-                    }),
-                    priority_jump: Some(child.priority.max(0) as f64),
-                    priority: Some(child.priority),
-                    lora_name: child.lora,
-                    cache_namespace: child.cache_namespace,
-                    ..Default::default()
-                }))
-                .build()?;
-            let request = Context::with_id_and_metadata(
-                request,
-                uuid::Uuid::new_v4().to_string(),
-                metadata.clone(),
-            );
-            let reservation = admission_wait(
+                    }))
+                    .build()?;
+                let request = Context::with_id_and_metadata(
+                    request,
+                    uuid::Uuid::new_v4().to_string(),
+                    metadata.clone(),
+                );
+                let reservation = admission_wait(
+                    &reservations,
+                    deadline,
+                    self.host.reserve_native(&request, worker, default_rank),
+                )
+                .await?;
+                anyhow::ensure!(
+                    requested_rank.is_none_or(|rank| rank == reservation.worker().dp_rank),
+                    "configured KV policy selected a different DP rank than the native request constraint"
+                );
+                worker = Some(reservation.worker());
+                reservations.push(ReservedChild {
+                    kind: child.kind,
+                    reservation,
+                });
+            }
+            let worker =
+                worker.ok_or_else(|| anyhow::anyhow!("native request has no routable children"))?;
+            let descriptor = admission_wait(
                 &reservations,
                 deadline,
-                self.host.reserve_native(&request, worker, default_rank),
+                NativeAttempt::describe(&self.control, worker.worker_id),
             )
             .await?;
             anyhow::ensure!(
-                requested_rank.is_none_or(|rank| rank == reservation.worker().dp_rank),
-                "configured KV policy selected a different DP rank than the native request constraint"
+                !self.cancellation.is_cancelled()
+                    && self.admitted_ids.borrow().contains(&worker.worker_id),
+                "selected native worker is no longer admitted"
             );
-            worker = Some(reservation.worker());
-            reservations.push(ReservedChild {
-                kind: child.kind,
-                reservation,
-            });
+            let attempt = NativeAttempt::new(
+                self.control.clone(),
+                descriptor,
+                "null".to_string(),
+                reservations,
+            )?;
+            let request = http::Request {
+                method: method.to_string(),
+                headers: http::encode_headers(headers),
+                body,
+            };
+            forward_accounted(
+                &self.client,
+                Context::with_id_and_metadata(request, uuid::Uuid::new_v4().to_string(), metadata),
+                attempt,
+            )
+            .await
         }
-        let worker =
-            worker.ok_or_else(|| anyhow::anyhow!("native request has no routable children"))?;
-        let descriptor = admission_wait(
-            &reservations,
-            deadline,
-            NativeAttempt::describe(&self.control, worker.worker_id),
-        )
-        .await?;
-        anyhow::ensure!(
-            !self.cancellation.is_cancelled()
-                && self.admitted_ids.borrow().contains(&worker.worker_id),
-            "selected native worker is no longer admitted"
-        );
-        let attempt = NativeAttempt::new(
-            self.control.clone(),
-            descriptor,
-            "null".to_string(),
-            reservations,
-        )?;
-        let request = http::Request {
-            method: method.to_string(),
-            headers: http::encode_headers(headers),
-            body,
-        };
-        forward_accounted(
-            &self.client,
-            Context::with_id_and_metadata(request, uuid::Uuid::new_v4().to_string(), metadata),
-            attempt,
-        )
-        .await
+        .await;
+        match result {
+            Ok(response) => Ok(super::metrics::observe_response(response, guard)),
+            Err(error) => {
+                use crate::http::service::metrics::{ErrorType, request_was_rejected};
+                guard.mark_error(if request_was_rejected(error.as_ref()) {
+                    ErrorType::Overload
+                } else {
+                    ErrorType::Unavailable
+                });
+                Err(error)
+            }
+        }
     }
 }
 
