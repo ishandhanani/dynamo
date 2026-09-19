@@ -8,6 +8,8 @@ use axum::http::{HeaderMap, HeaderName, HeaderValue};
 use bytes::Bytes;
 use serde::{Deserialize, Serialize};
 
+pub mod lifecycle;
+
 pub const CAPABILITY: &str = "sglang_generate_http_v1";
 pub const MAX_BODY_CHUNK: usize = 64 * 1024;
 

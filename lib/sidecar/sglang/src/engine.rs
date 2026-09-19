@@ -23,7 +23,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::args::Args;
 use crate::client::{self, Client, Discovery, Pool};
-use crate::native_http::{self, NativeHttp, NativeHttpEndpoint};
+use crate::native_http::{self, LifecycleClient, NativeHttp, NativeHttpEndpoint};
 use crate::proto as pb;
 use crate::protocol::{
     build_generate_request, disaggregated_params_to_json, engine_data_from_meta, extract_logprobs,
@@ -40,6 +40,7 @@ pub struct SglangSidecarEngine {
     bootstrap_port: Option<u16>,
     enable_native_http: bool,
     native_endpoint: Mutex<Option<dynamo_runtime::component::StartedEndpoint>>,
+    lifecycle_endpoint: Mutex<Option<dynamo_runtime::component::StartedEndpoint>>,
     state: OnceCell<StartedState>,
     cancel: CancellationToken,
 }
@@ -48,6 +49,7 @@ struct StartedState {
     pool: Pool,
     native_http: Option<NativeHttp>,
     native_wire_http: Option<NativeHttp>,
+    native_lifecycle: Option<LifecycleClient>,
     kv_event_sources: Vec<DiscoveredKvEventSource>,
 }
 
@@ -148,6 +150,7 @@ impl SglangSidecarEngine {
                 bootstrap_port,
                 enable_native_http: args.enable_native_http,
                 native_endpoint: Mutex::new(None),
+                lifecycle_endpoint: Mutex::new(None),
                 state: OnceCell::new(),
                 cancel: CancellationToken::new(),
             },
@@ -268,6 +271,20 @@ impl LLMEngine for SglangSidecarEngine {
         } else {
             None
         };
+        let native_lifecycle = if let Some(http) = &native_wire_http {
+            let lifecycle = LifecycleClient::discover(http).await.map_err(|error| {
+                client::protocol_error(format!("SGLang lifecycle discovery failed: {error}"))
+            })?;
+            if lifecycle.is_some() {
+                config.runtime_data.insert(
+                    dynamo_backend_common::sglang_http::lifecycle::CAPABILITY.into(),
+                    true.into(),
+                );
+            }
+            lifecycle
+        } else {
+            None
+        };
         let native_http = native_http.filter(|_| {
             discovery
                 .server_info
@@ -288,6 +305,7 @@ impl LLMEngine for SglangSidecarEngine {
                 pool,
                 native_http,
                 native_wire_http,
+                native_lifecycle,
                 kv_event_sources,
             })
             .map_err(|_| client::engine_shutdown("sglang sidecar already started"))?;
@@ -316,6 +334,17 @@ impl LLMEngine for SglangSidecarEngine {
                     client::engine_shutdown(format!("native HTTP endpoint startup failed: {error}"))
                 })?;
             *self.native_endpoint.lock().await = Some(started);
+        }
+        if let Some(lifecycle) = &state.native_lifecycle {
+            let started = lifecycle
+                .start(&endpoint, self.cancel.clone())
+                .await
+                .map_err(|error| {
+                    client::engine_shutdown(format!(
+                        "native lifecycle endpoint startup failed: {error}"
+                    ))
+                })?;
+            *self.lifecycle_endpoint.lock().await = Some(started);
         }
         Ok(())
     }
@@ -551,12 +580,19 @@ impl LLMEngine for SglangSidecarEngine {
 
     async fn cleanup(&self) -> Result<(), DynamoError> {
         self.cancel.cancel();
-        let endpoint = self.native_endpoint.lock().await.take();
-        if let Some(endpoint) = endpoint {
-            endpoint.shutdown().await.map_err(|error| {
-                client::engine_shutdown(format!("native HTTP endpoint shutdown failed: {error}"))
-            })?;
+        let native = self.native_endpoint.lock().await.take();
+        let lifecycle = self.lifecycle_endpoint.lock().await.take();
+        let mut result = Ok(());
+        for endpoint in [native, lifecycle].into_iter().flatten() {
+            if let Err(error) = endpoint.shutdown().await
+                && result.is_ok()
+            {
+                result = Err(client::engine_shutdown(format!(
+                    "native endpoint shutdown failed: {error}"
+                )));
+            }
         }
+        result?;
         tracing::info!("sglang sidecar shutdown complete");
         Ok(())
     }

@@ -3,9 +3,11 @@
 
 //! Legacy incremental-SSE adapter for SGLang's native `/generate` API.
 
+mod lifecycle;
 mod transport;
 mod wire;
 
+pub(crate) use lifecycle::LifecycleClient;
 pub(crate) use wire::NativeHttpEndpoint;
 
 use std::{collections::HashMap, io, time::Duration};

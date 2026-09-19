@@ -61,6 +61,20 @@ impl HttpTransport {
             .send()
             .await
     }
+
+    pub(super) async fn get_with_query(
+        &self,
+        path: &str,
+        query: &[(&str, String)],
+        headers: HeaderMap,
+    ) -> Result<Response, reqwest::Error> {
+        self.client
+            .get(self.endpoint.with_path(path))
+            .query(query)
+            .headers(headers)
+            .send()
+            .await
+    }
 }
 
 #[cfg(test)]
