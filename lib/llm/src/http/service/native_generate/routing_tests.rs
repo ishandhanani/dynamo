@@ -112,6 +112,9 @@ impl StreamingDispatch<control::Request, Annotated<control::Response>> for Engin
                 incarnation: EPOCH.into(),
                 header_overrides: true,
                 native_disaggregation_version: 0,
+                session_routing_version: 0,
+                session_fencing_version: 0,
+                session_open_version: 0,
             }),
             control::Request::Attempt {
                 attempt_id,

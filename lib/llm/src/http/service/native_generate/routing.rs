@@ -266,6 +266,7 @@ impl NativeGenerateBinding {
                 method: method.to_string(),
                 headers: http::encode_headers(headers),
                 body,
+                operation: Default::default(),
             };
             forward_accounted(
                 &self.client,

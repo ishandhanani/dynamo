@@ -25,6 +25,42 @@ pub struct Request {
     pub method: String,
     pub headers: Headers,
     pub body: Bytes,
+    /// Session operations require all three session descriptor capabilities.
+    /// Omit the default to preserve the original generate wire representation.
+    #[serde(default, skip_serializing_if = "Operation::is_generate")]
+    pub operation: Operation,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Operation {
+    #[default]
+    Generate,
+    OpenSession,
+    CloseSession,
+    SessionRouting,
+}
+
+impl Operation {
+    fn is_generate(&self) -> bool {
+        *self == Self::Generate
+    }
+
+    pub fn path(self) -> &'static str {
+        match self {
+            Self::Generate => "/generate",
+            Self::OpenSession => "/open_session",
+            Self::CloseSession => "/close_session",
+            Self::SessionRouting => "/session_routing",
+        }
+    }
+
+    pub fn supports_method(self, method: &str) -> bool {
+        match self {
+            Self::Generate => matches!(method, "POST" | "PUT"),
+            Self::OpenSession | Self::CloseSession => matches!(method, "GET" | "POST"),
+            Self::SessionRouting => method == "POST",
+        }
+    }
 }
 
 /// Exactly one head, zero or more body chunks, then End. Transport failures
@@ -85,5 +121,59 @@ fn strip_hop_by_hop(headers: &mut HeaderMap) {
         "host",
     ] {
         headers.remove(name);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[derive(Serialize, Deserialize)]
+    struct LegacyRequest {
+        method: String,
+        headers: Headers,
+        body: Bytes,
+    }
+
+    #[test]
+    fn native_generate_wire_is_unchanged_for_legacy_peers() {
+        let legacy = LegacyRequest {
+            method: "POST".into(),
+            headers: Vec::new(),
+            body: Bytes::from_static(b"{ \"stream\":false }"),
+        };
+        let native = Request {
+            method: legacy.method.clone(),
+            headers: Vec::new(),
+            body: legacy.body.clone(),
+            operation: Operation::Generate,
+        };
+        for (old, current) in [
+            (
+                rmp_serde::to_vec(&legacy).unwrap(),
+                rmp_serde::to_vec(&native).unwrap(),
+            ),
+            (
+                rmp_serde::to_vec_named(&legacy).unwrap(),
+                rmp_serde::to_vec_named(&native).unwrap(),
+            ),
+        ] {
+            assert_eq!(old, current);
+            assert_eq!(
+                rmp_serde::from_slice::<Request>(&old).unwrap().operation,
+                Operation::Generate
+            );
+            assert_eq!(
+                rmp_serde::from_slice::<LegacyRequest>(&current)
+                    .unwrap()
+                    .body,
+                legacy.body
+            );
+        }
+        let descriptor: lifecycle::Descriptor = serde_json::from_value(serde_json::json!({
+            "version": 1, "incarnation": "engine", "header_overrides": true
+        }))
+        .unwrap();
+        assert!(!descriptor.supports_sessions());
     }
 }

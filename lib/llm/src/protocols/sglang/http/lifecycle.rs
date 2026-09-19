@@ -22,6 +22,20 @@ pub struct Descriptor {
     /// Older engines omit this and remain eligible for aggregated serving.
     #[serde(default)]
     pub native_disaggregation_version: u32,
+    #[serde(default)]
+    pub session_routing_version: u32,
+    #[serde(default)]
+    pub session_fencing_version: u32,
+    #[serde(default)]
+    pub session_open_version: u32,
+}
+
+impl Descriptor {
+    pub fn supports_sessions(&self) -> bool {
+        self.session_routing_version == 1
+            && self.session_fencing_version == 1
+            && self.session_open_version == 1
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
