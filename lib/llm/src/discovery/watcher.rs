@@ -551,18 +551,8 @@ impl ModelWatcher {
             let needs_native_generate = self
                 .generate_engine_capabilities
                 .contains(&crate::protocols::sglang::http::CAPABILITY)
-                && card
-                    .runtime_config
-                    .runtime_data
-                    .get(crate::protocols::sglang::http::CAPABILITY)
-                    .and_then(serde_json::Value::as_bool)
-                    == Some(true)
-                && card
-                    .runtime_config
-                    .runtime_data
-                    .get(crate::protocols::sglang::http::lifecycle::CAPABILITY)
-                    .and_then(serde_json::Value::as_bool)
-                    == Some(true);
+                && effective_worker_type(card.worker_type, card.model_type) != WorkerType::Prefill
+                && crate::http::service::native_generate::routing::supports_native(card);
             let needs_preprocessed_routing = needs_factory_chat_pipeline
                 || tokenizer.is_some()
                 || needs_generate_pipeline
@@ -712,6 +702,7 @@ impl ModelWatcher {
                             .routing_host
                             .clone(),
                         card,
+                        prefill_chooser.clone(),
                     )
                     .await?,
                 ));

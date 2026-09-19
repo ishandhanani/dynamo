@@ -1,0 +1,388 @@
+// SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// SPDX-License-Identifier: Apache-2.0
+
+use axum::body::Body;
+use futures::StreamExt;
+
+use super::*;
+use crate::http::service::native_generate::{BodyProgress, forward_accounted_with_cancellation};
+
+impl NativeGenerateBinding {
+    #[expect(clippy::too_many_arguments)]
+    pub(super) async fn forward_disaggregated(
+        &self,
+        router: &PrefillRouter,
+        method: Method,
+        mut headers: HeaderMap,
+        body: Bytes,
+        metadata: BTreeMap<String, String>,
+        projection: Projection,
+        children: Vec<Child>,
+        requested_rank: Option<u32>,
+        deadline: Instant,
+    ) -> anyhow::Result<Response> {
+        let (prefill, endpoint) = router.native_binding()?;
+        let uses_kv = prefill.host.kv_router_if_enabled().is_some();
+        let config = &prefill.card.runtime_config;
+        let explicit_rank = projection
+            .value
+            .get("disagg_prefill_dp_rank")
+            .filter(|value| !value.is_null())
+            .map(|value| serde_json::from_value::<u32>(value.clone()))
+            .transpose()
+            .map_err(|error| NativeRequestError(error.into()))?;
+        // A load-based worker policy delegates ranks in aggregated mode. P/D
+        // needs a known prefill rank before either stage starts its rendezvous.
+        let prefill_rank = explicit_rank.or_else(|| {
+            (!uses_kv).then(|| {
+                config.data_parallel_start_rank
+                    + (uuid::Uuid::new_v4().as_u128()
+                        % u128::from(config.data_parallel_size.max(1))) as u32
+            })
+        });
+        anyhow::ensure!(
+            prefill_rank.is_none_or(|rank| rank >= config.data_parallel_start_rank
+                && rank - config.data_parallel_start_rank < config.data_parallel_size),
+            "native prefill DP rank is outside the admitted WorkerSet"
+        );
+        let tokenizer = prefill.tokenizer.clone();
+        let child_projection = projection.clone();
+        let prefill_children = tokio::task::spawn_blocking(move || {
+            child_projection.children(tokenizer.as_ref(), uses_kv, true)
+        })
+        .await?
+        .map_err(NativeRequestError)?;
+        let prefill_admission = prefill
+            .reserve(
+                prefill_children,
+                prefill_rank,
+                &metadata,
+                RequestPhase::Prefill,
+                deadline,
+                Default::default(),
+            )
+            .await?;
+        let target = prefill_admission.target();
+        let rank = target
+            .dp_rank
+            .ok_or_else(|| anyhow::anyhow!("native prefill selection did not choose a DP rank"))?;
+        let (bootstrap, constraints) = router.native_bootstrap(&endpoint, target.worker_id)?;
+        let host = bootstrap
+            .bootstrap_host
+            .ok_or_else(|| anyhow::anyhow!("native prefill bootstrap host is missing"))?;
+        let port = bootstrap
+            .bootstrap_port
+            .ok_or_else(|| anyhow::anyhow!("native prefill bootstrap port is missing"))?;
+        for (key, expected) in [
+            ("bootstrap_host", Value::from(host.clone())),
+            ("bootstrap_port", Value::from(port)),
+            ("disagg_prefill_dp_rank", Value::from(rank)),
+        ] {
+            projection
+                .require_control(key, &expected)
+                .map_err(NativeRequestError)?;
+        }
+        if constraints.is_some() && self.host.kv_router_if_enabled().is_none() {
+            anyhow::bail!("native topology-constrained decode requires KV routing");
+        }
+        let decode_admission = admission_wait(
+            &prefill_admission.reservations,
+            deadline,
+            self.reserve(
+                children,
+                requested_rank,
+                &metadata,
+                RequestPhase::Decode,
+                deadline,
+                constraints.unwrap_or_default(),
+            ),
+        )
+        .await?;
+        headers.insert("x-override-bootstrap-host", host.parse()?);
+        headers.insert("x-override-bootstrap-port", port.to_string().parse()?);
+        headers.insert(
+            "x-override-disagg-prefill-dp-rank",
+            rank.to_string().parse()?,
+        );
+        // Preserve explicit scalar/list rooms. Otherwise reserve enough room
+        // IDs for the maximum admitted fan-out without unsigned overflow.
+        if projection
+            .value
+            .get("bootstrap_room")
+            .is_none_or(Value::is_null)
+        {
+            let room = (uuid::Uuid::new_v4().as_u128() as u64) & !4095;
+            headers.insert("x-override-bootstrap-room", room.to_string().parse()?);
+        }
+        let request = http::Request {
+            method: method.to_string(),
+            headers: http::encode_headers(headers),
+            body,
+        };
+        let prefill_attempt = prefill_admission.into_attempt(&prefill, "prefill")?;
+        let decode_attempt = decode_admission.into_attempt(self, "decode")?;
+        let cancellation = CancellationToken::new();
+        let guard = cancellation.clone().drop_guard();
+        // Poll both dispatches together: a unary prefill response may wait for
+        // the decode receiver, so awaiting prefill first would deadlock.
+        let heads = join_heads(
+            forward_accounted_with_cancellation(
+                &prefill.client,
+                Context::with_id_and_metadata(
+                    request.clone(),
+                    uuid::Uuid::new_v4().to_string(),
+                    metadata.clone(),
+                ),
+                prefill_attempt,
+                cancellation.clone(),
+            ),
+            forward_accounted_with_cancellation(
+                &self.client,
+                Context::with_id_and_metadata(request, uuid::Uuid::new_v4().to_string(), metadata),
+                decode_attempt,
+                cancellation.clone(),
+            ),
+        )
+        .await?;
+        let (prefill_response, decode_response) = match heads {
+            Heads::Pair(prefill, decode) => (prefill, decode),
+            Heads::Rejected(response) => return Ok(response),
+        };
+        let response = pair_responses(prefill_response, decode_response, cancellation);
+        guard.disarm();
+        Ok(response)
+    }
+}
+
+enum Heads {
+    Pair(Response, Response),
+    Rejected(Response),
+}
+
+async fn join_heads(
+    prefill: impl std::future::Future<Output = anyhow::Result<Response>>,
+    decode: impl std::future::Future<Output = anyhow::Result<Response>>,
+) -> anyhow::Result<Heads> {
+    tokio::pin!(prefill, decode);
+    let (prefill, decode) = tokio::select! {
+        prefill = &mut prefill => {
+            let prefill = prefill?;
+            if !prefill.status().is_success() { return Ok(Heads::Rejected(prefill)); }
+            (prefill, decode.await?)
+        },
+        decode = &mut decode => {
+            let decode = decode?;
+            if !decode.status().is_success() { return Ok(Heads::Rejected(decode)); }
+            (prefill.await?, decode)
+        },
+    };
+    if !prefill.status().is_success() {
+        return Ok(Heads::Rejected(prefill));
+    }
+    if !decode.status().is_success() {
+        return Ok(Heads::Rejected(decode));
+    }
+    Ok(Heads::Pair(prefill, decode))
+}
+
+impl Projection {
+    fn require_control(&self, key: &str, expected: &Value) -> anyhow::Result<()> {
+        let Some(value) = self.value.get(key).filter(|value| !value.is_null()) else {
+            return Ok(());
+        };
+        anyhow::ensure!(
+            match value {
+                Value::Array(values) =>
+                    !values.is_empty() && values.iter().all(|value| value == expected),
+                value => value == expected,
+            },
+            "{key} conflicts with the selected native prefill route"
+        );
+        Ok(())
+    }
+}
+
+/// Drain prefill independently with bounded transport backpressure. Decode is
+/// authoritative; a failed prefill transport cuts its body without parsing it.
+fn pair_responses(
+    prefill: Response,
+    decode: Response,
+    cancellation: CancellationToken,
+) -> Response {
+    let drain_cancel = cancellation.clone();
+    tokio::spawn(async move {
+        let mut body = prefill.into_body().into_data_stream();
+        loop {
+            tokio::select! {
+                _ = drain_cancel.cancelled() => return,
+                chunk = body.next() => match chunk {
+                    None => return,
+                    Some(Ok(_)) => {},
+                    Some(Err(error)) => {
+                        tracing::warn!(%error, "native prefill response transport failed");
+                        drain_cancel.cancel();
+                        return;
+                    },
+                }
+            }
+        }
+    });
+    let mut progress = BodyProgress::new(decode.status(), decode.headers());
+    let (parts, body) = decode.into_parts();
+    let guard = cancellation.clone().drop_guard();
+    // This outer guard cancels unfinished prefill even after decode completes.
+    // Keep it outside the generator until first poll so an unpolled drop works.
+    let stream: futures::stream::BoxStream<'static, anyhow::Result<Bytes>> = Box::pin(
+        async_stream::try_stream! {
+            let _guard = guard;
+            let mut body = body.into_data_stream();
+            loop {
+                let chunk = tokio::select! {
+                    biased;
+                    _ = cancellation.cancelled() => Err(anyhow::anyhow!("native P/D transport cancelled")),
+                    chunk = body.next() => Ok(chunk),
+                }?;
+                let Some(chunk) = chunk else { return; };
+                let chunk = chunk?;
+                progress.advance(chunk.len())?;
+                if progress.complete() { cancellation.cancel(); }
+                yield chunk;
+                if progress.complete() { return; }
+            }
+        },
+    );
+    Response::from_parts(parts, Body::from_stream(stream))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::http::StatusCode;
+
+    #[tokio::test]
+    async fn native_pd_heads_run_concurrently_and_rejections_do_not_wait_for_peer() {
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        let prefill = async {
+            rx.await?;
+            anyhow::Ok(Response::new(Body::empty()))
+        };
+        let decode = async {
+            tx.send(()).unwrap();
+            anyhow::Ok(Response::new(Body::empty()))
+        };
+        assert!(matches!(
+            tokio::time::timeout(Duration::from_secs(1), join_heads(prefill, decode))
+                .await
+                .unwrap()
+                .unwrap(),
+            Heads::Pair(..)
+        ));
+        for reject_prefill in [true, false] {
+            let reject = async {
+                anyhow::Ok(
+                    Response::builder()
+                        .status(StatusCode::TOO_MANY_REQUESTS)
+                        .body(Body::from("engine rejection"))
+                        .unwrap(),
+                )
+            };
+            let pending = std::future::pending::<anyhow::Result<Response>>();
+            let result = tokio::time::timeout(Duration::from_secs(1), async {
+                if reject_prefill {
+                    join_heads(reject, pending).await
+                } else {
+                    join_heads(pending, reject).await
+                }
+            })
+            .await
+            .unwrap()
+            .unwrap();
+            let Heads::Rejected(response) = result else {
+                panic!("expected engine rejection");
+            };
+            assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+            assert_eq!(
+                axum::body::to_bytes(response.into_body(), 100)
+                    .await
+                    .unwrap(),
+                "engine rejection"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn native_pd_drain_failure_cancels_decode_and_unpolled_drop_cancels_prefill() {
+        let cancel = CancellationToken::new();
+        let prefill = Response::new(Body::from_stream(futures::stream::once(async {
+            Err::<Bytes, _>(std::io::Error::other("truncated"))
+        })));
+        let decode = Response::new(Body::from_stream(futures::stream::pending::<
+            Result<Bytes, std::io::Error>,
+        >()));
+        let response = pair_responses(prefill, decode, cancel.clone());
+        assert!(
+            tokio::time::timeout(
+                Duration::from_secs(1),
+                axum::body::to_bytes(response.into_body(), 100)
+            )
+            .await
+            .unwrap()
+            .is_err()
+        );
+        assert!(cancel.is_cancelled());
+        let cancel = CancellationToken::new();
+        let response = pair_responses(
+            Response::new(Body::empty()),
+            Response::new(Body::from("opaque")),
+            cancel.clone(),
+        );
+        drop(response);
+        assert!(cancel.is_cancelled());
+    }
+
+    #[tokio::test]
+    async fn native_pd_decode_length_completion_cancels_unfinished_prefill() {
+        let cancel = CancellationToken::new();
+        let prefill = Response::new(Body::from_stream(futures::stream::pending::<
+            Result<Bytes, std::io::Error>,
+        >()));
+        let decode = Response::builder()
+            .header("content-length", "6")
+            .header("x-engine", "preserved")
+            .body(Body::from("opaque"))
+            .unwrap();
+        let response = pair_responses(prefill, decode, cancel.clone());
+        assert_eq!(response.headers()["x-engine"], "preserved");
+        let mut body = response.into_body().into_data_stream();
+        assert_eq!(body.next().await.unwrap().unwrap(), "opaque");
+        assert!(
+            cancel.is_cancelled(),
+            "HTTP framing can finish without another body poll"
+        );
+        assert!(body.next().await.is_none());
+    }
+
+    #[test]
+    fn native_pd_projection_omits_warmups_and_rejects_conflicting_controls() {
+        let projection = Projection::read(br#"{"input_ids":[[1],[2]],"sampling_params":{"n":3},"bootstrap_host":["engine","engine"],"bootstrap_port":1234}"#).unwrap();
+        projection
+            .require_control("bootstrap_host", &Value::from("engine"))
+            .unwrap();
+        assert!(
+            projection
+                .require_control("bootstrap_port", &Value::from(4321))
+                .is_err()
+        );
+        assert!(projection.require_aggregated().is_err());
+        let children = projection.children(None, true, true).unwrap();
+        assert_eq!(children.len(), 6);
+        assert!(children.iter().all(|child| child.kind == ChildKind::Sample));
+        assert_eq!(
+            children
+                .iter()
+                .map(|child| child.tokens[0])
+                .collect::<Vec<_>>(),
+            [1, 1, 1, 2, 2, 2]
+        );
+    }
+}

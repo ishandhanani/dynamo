@@ -24,6 +24,7 @@ impl RoutingHost {
         request: &SingleIn<PreprocessedRequest>,
         pinned: Option<AffinityTarget>,
         requested_rank: Option<u32>,
+        phase: RequestPhase,
     ) -> anyhow::Result<NativeReservation> {
         if let Some(router) = self.kv_router_if_enabled() {
             let planned_worker = pinned
@@ -53,7 +54,7 @@ impl RoutingHost {
                     request.context().id(),
                     &routing_request,
                     RoutingRequestParts::new(&routing_request),
-                    RequestPhase::Aggregated,
+                    phase,
                     false,
                     SelectionOptions {
                         pinned_target: None,

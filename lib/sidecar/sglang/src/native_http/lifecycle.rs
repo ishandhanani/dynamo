@@ -32,6 +32,10 @@ pub(crate) struct LifecycleClient {
 }
 
 impl LifecycleClient {
+    pub(crate) fn supports_native_disaggregation(&self) -> bool {
+        self.descriptor.native_disaggregation_version == 1
+    }
+
     pub(crate) async fn discover(http: &NativeHttp) -> anyhow::Result<Option<Self>> {
         tokio::time::timeout(CONTROL_TIMEOUT, async {
             let response = http

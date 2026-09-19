@@ -23,14 +23,18 @@ use super::{
     lifecycle::{LifecycleClient, NativeAttempt, ReservedChild},
 };
 use crate::{
-    kv_router::RoutingHost,
+    kv_router::{RoutingHost, prefill_router::PrefillRouter},
     model_card::ModelDeploymentCard,
     protocols::{
         common::{
             OutputOptions, SamplingOptions, StopConditions,
             preprocessor::{PreprocessedRequest, RoutingHints},
+            timing::RequestPhase,
         },
-        sglang::http::{self, lifecycle::ChildKind},
+        sglang::http::{
+            self,
+            lifecycle::{ChildKind, Descriptor},
+        },
     },
     tokenizers::Tokenizer,
 };
@@ -43,6 +47,46 @@ pub(crate) struct NativeGenerateBinding {
     host: Arc<RoutingHost>,
     tokenizer: Option<Tokenizer>,
     card: ModelDeploymentCard,
+    prefill: Option<Arc<PrefillRouter>>,
+}
+
+#[path = "disaggregation.rs"]
+mod disaggregation;
+
+pub(crate) fn supports_native(card: &ModelDeploymentCard) -> bool {
+    [http::CAPABILITY, http::lifecycle::CAPABILITY]
+        .iter()
+        .all(|key| {
+            card.runtime_config
+                .runtime_data
+                .get(*key)
+                .and_then(Value::as_bool)
+                == Some(true)
+        })
+}
+
+struct Admission {
+    reservations: Vec<ReservedChild>,
+    descriptor: Descriptor,
+}
+
+impl Admission {
+    fn target(&self) -> crate::session_affinity::AffinityTarget {
+        self.reservations[0].reservation.target()
+    }
+
+    fn into_attempt(
+        self,
+        binding: &NativeGenerateBinding,
+        stage: &str,
+    ) -> anyhow::Result<NativeAttempt> {
+        NativeAttempt::new(
+            binding.control.clone(),
+            self.descriptor,
+            stage.to_string(),
+            self.reservations,
+        )
+    }
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -78,6 +122,7 @@ impl NativeGenerateBinding {
         cancellation: CancellationToken,
         host: Arc<RoutingHost>,
         card: &ModelDeploymentCard,
+        prefill: Option<Arc<PrefillRouter>>,
     ) -> anyhow::Result<Self> {
         let wire = endpoint
             .component()
@@ -108,6 +153,7 @@ impl NativeGenerateBinding {
                 None
             },
             card: card.clone(),
+            prefill,
         })
     }
 
@@ -133,6 +179,9 @@ impl NativeGenerateBinding {
                 "native routing and lifecycle override headers are owned by Dynamo"
             );
             let projection = Projection::read(&body)?;
+            if self.prefill.is_none() {
+                projection.require_aggregated()?;
+            }
             let streaming = projection
                 .value
                 .get("stream")
@@ -165,14 +214,16 @@ impl NativeGenerateBinding {
                 "requested DP rank is outside the admitted WorkerSet"
             );
             let tokenizer = self.tokenizer.clone();
+            let child_projection = projection.clone();
+            let disaggregated = self.prefill.is_some();
             let children = tokio::task::spawn_blocking(move || {
-                projection.children(tokenizer.as_ref(), uses_kv)
+                child_projection.children(tokenizer.as_ref(), uses_kv, disaggregated)
             })
             .await??;
             let metadata = crate::http::service::metadata::extract_metadata_from_http(&headers)?;
-            anyhow::Ok((children, requested_rank, metadata, streaming))
+            anyhow::Ok((children, requested_rank, metadata, streaming, projection))
         };
-        let (children, requested_rank, metadata, streaming) =
+        let (children, requested_rank, metadata, streaming, projection) =
             prepared.await.map_err(NativeRequestError)?;
         let mut guard = metrics.create_inflight_guard(
             metric_model,
@@ -184,85 +235,33 @@ impl NativeGenerateBinding {
         // independent lifecycle owner still retains its engine reservations.
         guard.mark_error(crate::http::service::metrics::ErrorType::Cancelled);
         let result = async {
-            let mut reservations: Vec<ReservedChild> = Vec::with_capacity(children.len());
-            let mut worker = None;
             let deadline = Instant::now() + Duration::from_secs(30);
-            for child in children {
-                let request = PreprocessedRequest::builder()
-                    .model(self.card.name().to_string())
-                    .token_ids(child.tokens)
-                    .stop_conditions(StopConditions::default())
-                    .sampling_options(SamplingOptions::default())
-                    .output_options(OutputOptions::default())
-                    .routing(Some(RoutingHints {
-                        expected_output_tokens: child.max_tokens,
-                        routing_constraints: Some(dynamo_kv_router::protocols::RoutingConstraints {
-                            required_dp_rank: requested_rank,
-                            ..Default::default()
-                        }),
-                        priority_jump: Some(child.priority.max(0) as f64),
-                        priority: Some(child.priority),
-                        lora_name: child.lora,
-                        cache_namespace: child.cache_namespace,
-                        ..Default::default()
-                    }))
-                    .build()?;
-                for row in 0..child.decode_width {
-                    let mut row_request = request.clone();
-                    if row > 0 {
-                        // Beam rows share the leader's prompt, but each owns
-                        // decode capacity. Do not book prefill tokens twice.
-                        row_request
-                            .router_config_override
-                            .get_or_insert_default()
-                            .track_prefill_tokens = Some(false);
-                    }
-                    let request = Context::with_id_and_metadata(
-                        row_request,
-                        uuid::Uuid::new_v4().to_string(),
-                        metadata.clone(),
-                    );
-                    let reservation = admission_wait(
-                        &reservations,
+            if let Some(prefill) = &self.prefill {
+                return self
+                    .forward_disaggregated(
+                        prefill,
+                        method,
+                        headers,
+                        body,
+                        metadata,
+                        projection,
+                        children,
+                        requested_rank,
                         deadline,
-                        self.host.reserve_native(&request, worker, requested_rank),
                     )
-                    .await?;
-                    anyhow::ensure!(
-                        requested_rank.is_none_or(|rank| Some(rank) == reservation.target().dp_rank),
-                        "configured KV policy selected a different DP rank than the native request constraint"
-                    );
-                    worker = Some(reservation.target());
-                    if row == 0 {
-                        reservations.push(ReservedChild {
-                            kind: child.kind,
-                            reservation,
-                            additional_reservations: Vec::with_capacity(child.decode_width - 1),
-                        });
-                    } else {
-                        reservations.last_mut().unwrap().additional_reservations.push(reservation);
-                    }
-                }
+                    .await;
             }
-            let worker =
-                worker.ok_or_else(|| anyhow::anyhow!("native request has no routable children"))?;
-            let descriptor = admission_wait(
-                &reservations,
-                deadline,
-                NativeAttempt::describe(&self.control, worker.worker_id),
-            )
-            .await?;
-            anyhow::ensure!(
-                !self.cancellation.is_cancelled()
-                    && self.admitted_ids.borrow().contains(&worker.worker_id),
-                "selected native worker is no longer admitted"
-            );
-            let attempt = NativeAttempt::new(
-                self.control.clone(),
-                descriptor,
-                "null".to_string(),
-                reservations,
-            )?;
+            let admission = self
+                .reserve(
+                    children,
+                    requested_rank,
+                    &metadata,
+                    RequestPhase::Aggregated,
+                    deadline,
+                    Default::default(),
+                )
+                .await?;
+            let attempt = admission.into_attempt(self, "null")?;
             let request = http::Request {
                 method: method.to_string(),
                 headers: http::encode_headers(headers),
@@ -289,8 +288,107 @@ impl NativeGenerateBinding {
             }
         }
     }
+    async fn reserve(
+        &self,
+        children: Vec<Child>,
+        requested_rank: Option<u32>,
+        metadata: &BTreeMap<String, String>,
+        phase: RequestPhase,
+        deadline: Instant,
+        mut constraints: dynamo_kv_router::protocols::RoutingConstraints,
+    ) -> anyhow::Result<Admission> {
+        constraints.required_dp_rank = requested_rank;
+        let mut reservations: Vec<ReservedChild> = Vec::with_capacity(children.len());
+        let mut worker = None;
+        for child in children {
+            let request = PreprocessedRequest::builder()
+                .model(self.card.name().to_string())
+                .token_ids(child.tokens)
+                .stop_conditions(StopConditions::default())
+                .sampling_options(SamplingOptions::default())
+                .output_options(OutputOptions::default())
+                .routing(Some(RoutingHints {
+                    expected_output_tokens: child.max_tokens,
+                    routing_constraints: Some(constraints.clone()),
+                    priority_jump: Some(child.priority.max(0) as f64),
+                    priority: Some(child.priority),
+                    lora_name: child.lora,
+                    cache_namespace: child.cache_namespace,
+                    ..Default::default()
+                }))
+                .build()?;
+            let width = if phase == RequestPhase::Prefill {
+                1
+            } else {
+                child.decode_width
+            };
+            for row in 0..width {
+                let mut row_request = request.clone();
+                if row > 0 || phase == RequestPhase::Decode {
+                    // Beam rows share the leader's prompt, but each owns
+                    // decode capacity. Do not book prefill tokens twice.
+                    row_request
+                        .router_config_override
+                        .get_or_insert_default()
+                        .track_prefill_tokens = Some(false);
+                }
+                let request = Context::with_id_and_metadata(
+                    row_request,
+                    uuid::Uuid::new_v4().to_string(),
+                    metadata.clone(),
+                );
+                let reservation = admission_wait(
+                    &reservations,
+                    deadline,
+                    self.host
+                        .reserve_native(&request, worker, requested_rank, phase),
+                )
+                .await?;
+                anyhow::ensure!(
+                    requested_rank.is_none_or(|rank| Some(rank) == reservation.target().dp_rank),
+                    "configured KV policy selected a different DP rank than the native request constraint"
+                );
+                worker = Some(reservation.target());
+                if row == 0 {
+                    reservations.push(ReservedChild {
+                        kind: child.kind,
+                        reservation,
+                        additional_reservations: Vec::with_capacity(child.decode_width - 1),
+                    });
+                } else {
+                    reservations
+                        .last_mut()
+                        .unwrap()
+                        .additional_reservations
+                        .push(reservation);
+                }
+            }
+        }
+        let worker =
+            worker.ok_or_else(|| anyhow::anyhow!("native request has no routable children"))?;
+        let descriptor = admission_wait(
+            &reservations,
+            deadline,
+            NativeAttempt::describe(&self.control, worker.worker_id),
+        )
+        .await?;
+        anyhow::ensure!(
+            phase == RequestPhase::Aggregated || descriptor.native_disaggregation_version == 1,
+            "selected engine does not support native P/D v1"
+        );
+        anyhow::ensure!(
+            !self.cancellation.is_cancelled()
+                && self.admitted_ids.borrow().contains(&worker.worker_id),
+            "selected native worker is no longer admitted"
+        );
+        Ok(Admission {
+            reservations,
+            descriptor,
+        })
+    }
 }
 
+#[derive(Clone)]
 struct Projection {
     value: Value,
     dp_rank: Option<u32>,
@@ -370,17 +468,6 @@ impl Projection {
             value.get("session_params").is_none_or(Value::is_null),
             "native sessions require an owner binding"
         );
-        for field in [
-            "bootstrap_host",
-            "bootstrap_port",
-            "bootstrap_room",
-            "disagg_prefill_dp_rank",
-        ] {
-            anyhow::ensure!(
-                value.get(field).is_none_or(Value::is_null),
-                "{field} requires a disaggregated native route"
-            );
-        }
         let rank = |field: &str| {
             value
                 .get(field)
@@ -404,7 +491,32 @@ impl Projection {
         })
     }
 
-    fn children(self, tokenizer: Option<&Tokenizer>, uses_kv: bool) -> anyhow::Result<Vec<Child>> {
+    fn require_aggregated(&self) -> anyhow::Result<()> {
+        let value = &self.value;
+        for field in [
+            "bootstrap_host",
+            "bootstrap_port",
+            "bootstrap_room",
+            "disagg_prefill_dp_rank",
+        ] {
+            anyhow::ensure!(
+                value.get(field).is_none_or(Value::is_null),
+                "{field} requires a disaggregated native route"
+            );
+        }
+        Ok(())
+    }
+
+    fn children(
+        self,
+        tokenizer: Option<&Tokenizer>,
+        uses_kv: bool,
+        disaggregated: bool,
+    ) -> anyhow::Result<Vec<Child>> {
+        anyhow::ensure!(
+            !uses_kv || !self.engine_processed_input,
+            "KV routing requires engine-compatible token metadata for multimodal or embedding inputs"
+        );
         let v = &self.value;
         anyhow::ensure!(
             !uses_kv || v.get("extra_key").is_none_or(Value::is_null),
@@ -520,10 +632,11 @@ impl Projection {
         } else {
             n
         };
+        let warmups = n > 1 && !disaggregated;
         let slots = prompts
             .len()
             .checked_mul(
-                n.checked_add(usize::from(n > 1))
+                n.checked_add(usize::from(warmups))
                     .ok_or_else(|| anyhow::anyhow!("native child count overflow"))?,
             )
             .ok_or_else(|| anyhow::anyhow!("native child count overflow"))?;
@@ -531,7 +644,7 @@ impl Projection {
             slots > 0 && slots <= 4096,
             "native request exceeds lifecycle child capacity"
         );
-        let mut rows = if n > 1 { prompts.len() } else { 0 };
+        let mut rows = if warmups { prompts.len() } else { 0 };
         for params in &parameters {
             rows = width(params)?
                 .checked_mul(n)
@@ -570,7 +683,7 @@ impl Projection {
             .collect();
         let prompts: Vec<_> = prompts.into_iter().map(Arc::new).collect();
         let mut children = Vec::with_capacity(slots);
-        if n > 1 {
+        if warmups {
             for ((tokens, lora), salt) in prompts.iter().zip(&loras).zip(&salts) {
                 children.push(Child {
                     kind: ChildKind::Warmup,
