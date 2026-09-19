@@ -6,16 +6,43 @@
 use axum::{body::Body, http::StatusCode, response::Response};
 use futures::StreamExt;
 
+use super::BodyProgress;
 use crate::http::service::metrics::{ErrorType, InflightGuard};
+
+fn mark_completion(guard: &mut InflightGuard, status: StatusCode) {
+    if status.is_client_error() || status.is_server_error() {
+        guard.mark_error(match status {
+            StatusCode::TOO_MANY_REQUESTS => ErrorType::Overload,
+            StatusCode::SERVICE_UNAVAILABLE => ErrorType::Unavailable,
+            StatusCode::NOT_FOUND => ErrorType::NotFound,
+            status if status.is_client_error() => ErrorType::Validation,
+            _ => ErrorType::Internal,
+        });
+    } else {
+        guard.mark_ok();
+    }
+}
 
 pub(super) fn observe_response(response: Response, mut guard: InflightGuard) -> Response {
     let (parts, body) = response.into_parts();
     let status = parts.status;
+    let mut progress = BodyProgress::new(status, &parts.headers);
+    if progress.complete() {
+        mark_completion(&mut guard, status);
+    }
     let mut stream = body.into_data_stream();
     let body = async_stream::stream! {
         while let Some(chunk) = stream.next().await {
             match chunk {
-                Ok(bytes) => yield Ok(bytes),
+                Ok(bytes) => {
+                    if let Err(error) = progress.advance(bytes.len()) {
+                        guard.mark_error(ErrorType::Internal);
+                        yield Err(axum::Error::new(error));
+                        return;
+                    }
+                    if progress.complete() { mark_completion(&mut guard, status); }
+                    yield Ok(bytes);
+                },
                 Err(error) => {
                     guard.mark_error(ErrorType::Internal);
                     yield Err(error);
@@ -23,17 +50,12 @@ pub(super) fn observe_response(response: Response, mut guard: InflightGuard) -> 
                 }
             }
         }
-        if status.is_client_error() || status.is_server_error() {
-            guard.mark_error(match status {
-                StatusCode::TOO_MANY_REQUESTS => ErrorType::Overload,
-                StatusCode::SERVICE_UNAVAILABLE => ErrorType::Unavailable,
-                StatusCode::NOT_FOUND => ErrorType::NotFound,
-                status if status.is_client_error() => ErrorType::Validation,
-                _ => ErrorType::Internal,
-            });
-        } else {
-            guard.mark_ok();
+        if let Err(error) = progress.end() {
+            guard.mark_error(ErrorType::Internal);
+            yield Err(axum::Error::new(error));
+            return;
         }
+        mark_completion(&mut guard, status);
     };
     Response::from_parts(parts, Body::from_stream(body))
 }
@@ -44,6 +66,52 @@ mod tests {
 
     use super::*;
     use crate::http::service::metrics::{Endpoint, Metrics, RequestType, Status};
+
+    #[tokio::test]
+    async fn native_length_metrics_complete_without_a_final_body_poll() {
+        for (status, outcome, error) in [
+            (StatusCode::OK, Status::Success, ErrorType::None),
+            (
+                StatusCode::BAD_REQUEST,
+                Status::Error,
+                ErrorType::Validation,
+            ),
+        ] {
+            for payload in ["ok", ""] {
+                let metrics = Arc::new(Metrics::new());
+                let mut guard = metrics.clone().create_inflight_guard(
+                    "native",
+                    Endpoint::Generate,
+                    false,
+                    "length-test",
+                );
+                guard.mark_error(ErrorType::Cancelled);
+                let response = Response::builder()
+                    .status(status)
+                    .header("content-length", payload.len())
+                    .body(Body::from(payload))
+                    .unwrap();
+                let mut body = observe_response(response, guard)
+                    .into_body()
+                    .into_data_stream();
+                if !payload.is_empty() {
+                    assert_eq!(body.next().await.unwrap().unwrap(), payload);
+                }
+                drop(body);
+                assert_eq!(metrics.get_inflight_count("native"), 0);
+                assert_eq!(
+                    metrics.get_request_counter(
+                        "native",
+                        &Endpoint::Generate,
+                        &RequestType::Unary,
+                        &outcome,
+                        &error
+                    ),
+                    1
+                );
+            }
+        }
+    }
 
     #[tokio::test]
     async fn native_http_metrics_follow_completion_failure_and_unpolled_drop() {
