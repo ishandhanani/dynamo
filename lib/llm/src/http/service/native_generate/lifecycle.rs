@@ -35,11 +35,11 @@ pub struct NativeAttempt {
     pub(super) attempt_id: String,
     pub(super) incarnation: String,
     worker_id: u64,
-    pub(super) dp_rank: u32,
+    pub(super) dp_rank: Option<u32>,
     stage: String,
     client: Arc<LifecycleClient>,
     reservations: Vec<Option<ReservedChild>>,
-    slots: Vec<(ChildKind, u32)>,
+    slots: Vec<(ChildKind, Option<u32>)>,
     prefill_applied: HashSet<usize>,
     observed: Observed,
 }
@@ -69,11 +69,11 @@ impl NativeAttempt {
             .first()
             .ok_or_else(|| anyhow::anyhow!("native attempt has no reservation"))?
             .reservation
-            .worker();
+            .target();
         anyhow::ensure!(
             reservations
                 .iter()
-                .all(|child| child.reservation.worker() == worker),
+                .all(|child| child.reservation.target() == worker),
             "native batch reservations must share a worker and DP rank"
         );
         Ok(Self {
@@ -257,7 +257,11 @@ struct Observed {
 impl Observed {
     /// Validate the whole snapshot before releasing any booking. A malformed
     /// later child must not allow earlier slots to be freed speculatively.
-    fn validate(&self, snapshot: &Snapshot, slots: &[(ChildKind, u32)]) -> anyhow::Result<()> {
+    fn validate(
+        &self,
+        snapshot: &Snapshot,
+        slots: &[(ChildKind, Option<u32>)],
+    ) -> anyhow::Result<()> {
         anyhow::ensure!(
             snapshot.version <= i64::MAX as u64,
             "invalid lifecycle version"
@@ -294,7 +298,10 @@ impl Observed {
             );
             let (kind, rank) = slots[index];
             anyhow::ensure!(
-                child.kind == kind && child.dp_rank.is_none_or(|actual| actual == rank),
+                child.kind == kind
+                    && rank
+                        .zip(child.dp_rank)
+                        .is_none_or(|(expected, actual)| expected == actual),
                 "native child does not match its reservation"
             );
             if let Some(previous) = self.children.get(index) {
@@ -372,9 +379,9 @@ mod tests {
             children: vec![warmup.clone()],
         };
         let slots = [
-            (ChildKind::Warmup, 3),
-            (ChildKind::Sample, 3),
-            (ChildKind::Sample, 3),
+            (ChildKind::Warmup, Some(3)),
+            (ChildKind::Sample, Some(3)),
+            (ChildKind::Sample, Some(3)),
         ];
         let mut recovered = snapshot(
             vec![
@@ -406,8 +413,31 @@ mod tests {
     }
 
     #[test]
+    fn native_delegated_rank_accepts_each_child_then_fences_its_observed_rank() {
+        let slots = [(ChildKind::Sample, None); 2];
+        let mut children = vec![child(1, ChildKind::Sample), child(2, ChildKind::Sample)];
+        children[0].dp_rank = Some(0);
+        children[1].dp_rank = Some(1);
+        let mut state = snapshot(children, true);
+        Observed::default().validate(&state, &slots).unwrap();
+        assert!(
+            Observed::default()
+                .validate(&state, &[(ChildKind::Sample, Some(0)); 2])
+                .is_err()
+        );
+        let observed = Observed {
+            version: Some(state.version),
+            sealed: state.sealed,
+            children: state.children.clone(),
+        };
+        state.version += 1;
+        state.children[1].dp_rank = Some(0);
+        assert!(observed.validate(&state, &slots).is_err());
+    }
+
+    #[test]
     fn rejected_request_can_seal_empty_but_cannot_create_children_after_sealing() {
-        let slots = [(ChildKind::Sample, 3)];
+        let slots = [(ChildKind::Sample, Some(3))];
         let empty = snapshot(Vec::new(), true);
         Observed::default().validate(&empty, &slots).unwrap();
         let sealed = Observed {
