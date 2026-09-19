@@ -1100,6 +1100,7 @@ mod tests {
             (request_with_constraints(None), false),
             (
                 request_with_constraints(Some(RoutingConstraints {
+                    required_dp_rank: None,
                     required_taints: HashSet::from(["user.required".to_string()]),
                     preferred_taints: HashMap::from([("user.preferred".to_string(), 0.25)]),
                 })),
@@ -1109,6 +1110,7 @@ mod tests {
             merge_decode_topology_constraints(
                 &mut request,
                 RoutingConstraints {
+                    required_dp_rank: None,
                     required_taints: HashSet::from(["dynamo.topology/zone=us-east-1a".to_string()]),
                     preferred_taints: HashMap::from([(
                         "dynamo.topology/rack=rack-7".to_string(),
