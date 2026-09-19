@@ -22,10 +22,20 @@ impl RoutingHost {
     pub(crate) async fn reserve_native(
         self: &Arc<Self>,
         request: &SingleIn<PreprocessedRequest>,
-        pinned: Option<WorkerWithDpRank>,
-        default_rank: u32,
+        pinned: Option<AffinityTarget>,
+        requested_rank: Option<u32>,
     ) -> anyhow::Result<NativeReservation> {
         if let Some(router) = self.kv_router_if_enabled() {
+            let planned_worker = pinned
+                .map(|target| {
+                    Ok::<_, anyhow::Error>(WorkerWithDpRank::new(
+                        target.worker_id,
+                        target
+                            .dp_rank
+                            .ok_or_else(|| anyhow::anyhow!("KV admission requires a DP rank"))?,
+                    ))
+                })
+                .transpose()?;
             let admitted: std::collections::HashSet<_> =
                 self.inner.selectable_worker_ids()?.into_iter().collect();
             anyhow::ensure!(
@@ -48,7 +58,7 @@ impl RoutingHost {
                     SelectionOptions {
                         pinned_target: None,
                         affinity_target: None,
-                        planned_worker: pinned,
+                        planned_worker,
                         policy_class: request.metadata().get("policy-class").cloned(),
                         session_context: None,
                         admission: FindBestMatchAdmission::WithAdmission,
@@ -66,14 +76,10 @@ impl RoutingHost {
             self.lora.is_none(),
             "native HTTP requires explicit LoRA worker routing"
         );
-        let target = pinned.map(|worker| AffinityTarget {
-            worker_id: worker.worker_id,
-            dp_rank: Some(worker.dp_rank),
-        });
-        let selection = self.select_hosted_worker(request, target, None)?;
-        let worker = WorkerWithDpRank::new(
+        let selection = self.select_hosted_worker(request, pinned, None)?;
+        let worker = AffinityTarget::new(
             selection.initial_worker,
-            pinned.map_or(default_rank, |w| w.dp_rank),
+            pinned.and_then(|target| target.dp_rank).or(requested_rank),
         );
         Ok(NativeReservation::hosted(
             worker,

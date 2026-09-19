@@ -94,10 +94,12 @@ pub async fn forward_accounted(
         INCARNATION_HEADER.to_string(),
         attempt.incarnation.clone().into(),
     ));
-    request.headers.push((
-        "x-override-routed-dp-rank".to_string(),
-        attempt.dp_rank.to_string().into(),
-    ));
+    if let Some(rank) = attempt.dp_rank {
+        request.headers.push((
+            "x-override-routed-dp-rank".to_string(),
+            rank.to_string().into(),
+        ));
+    }
     let worker_id = attempt.worker_id();
     let cancellation = tokio_util::sync::CancellationToken::new();
     let guard = cancellation.clone().drop_guard();

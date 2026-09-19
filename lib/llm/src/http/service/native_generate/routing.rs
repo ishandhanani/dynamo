@@ -170,9 +170,9 @@ impl NativeGenerateBinding {
             })
             .await??;
             let metadata = crate::http::service::metadata::extract_metadata_from_http(&headers)?;
-            anyhow::Ok((children, requested_rank, default_rank, metadata, streaming))
+            anyhow::Ok((children, requested_rank, metadata, streaming))
         };
-        let (children, requested_rank, default_rank, metadata, streaming) =
+        let (children, requested_rank, metadata, streaming) =
             prepared.await.map_err(NativeRequestError)?;
         let mut guard = metrics.create_inflight_guard(
             metric_model,
@@ -215,14 +215,14 @@ impl NativeGenerateBinding {
                 let reservation = admission_wait(
                     &reservations,
                     deadline,
-                    self.host.reserve_native(&request, worker, default_rank),
+                    self.host.reserve_native(&request, worker, requested_rank),
                 )
                 .await?;
                 anyhow::ensure!(
-                    requested_rank.is_none_or(|rank| rank == reservation.worker().dp_rank),
+                    requested_rank.is_none_or(|rank| Some(rank) == reservation.target().dp_rank),
                     "configured KV policy selected a different DP rank than the native request constraint"
                 );
-                worker = Some(reservation.worker());
+                worker = Some(reservation.target());
                 reservations.push(ReservedChild {
                     kind: child.kind,
                     reservation,

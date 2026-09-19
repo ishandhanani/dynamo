@@ -5,7 +5,8 @@
 
 use std::sync::{Arc, Mutex};
 
-use dynamo_kv_router::{protocols::WorkerWithDpRank, scheduling::queue::BookingHandle};
+use dynamo_kv_router::scheduling::queue::BookingHandle;
+use dynamo_runtime::pipeline::RouteTarget;
 
 use super::{KvRouter, request_lease::RequestAttemptLease};
 
@@ -22,7 +23,7 @@ enum Reservation {
         lease: RequestAttemptLease,
     },
     Hosted {
-        worker: WorkerWithDpRank,
+        worker: RouteTarget,
         occupancy: Mutex<Option<dynamo_runtime::pipeline::OccupancyReservation>>,
         // Keep the selector's load context alive through engine cleanup.
         _host: Arc<super::RoutingHost>,
@@ -40,7 +41,7 @@ impl NativeReservation {
     }
 
     pub(crate) fn hosted(
-        worker: WorkerWithDpRank,
+        worker: RouteTarget,
         occupancy: Option<dynamo_runtime::pipeline::OccupancyReservation>,
         host: Arc<super::RoutingHost>,
     ) -> Self {
@@ -53,9 +54,13 @@ impl NativeReservation {
         }
     }
 
-    pub fn worker(&self) -> WorkerWithDpRank {
+    /// KV admission chooses a rank. Worker-only policies may delegate it to the engine.
+    pub fn target(&self) -> RouteTarget {
         match &self.inner {
-            Reservation::Kv { lease, .. } => lease.booking().worker,
+            Reservation::Kv { lease, .. } => {
+                let worker = lease.booking().worker;
+                RouteTarget::new(worker.worker_id, Some(worker.dp_rank))
+            }
             Reservation::Hosted { worker, .. } => *worker,
         }
     }
