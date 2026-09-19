@@ -17,3 +17,19 @@ fn native_routing_uses_first_prompt_without_expanding_samples() {
     assert!(input.clone().routing_input(None, true).is_err());
     assert!(input.routing_input(None, false).unwrap().tokens.is_empty());
 }
+
+#[test]
+fn native_routing_controls_preserve_engine_fields() {
+    let projection = Projection::read(BODY).unwrap();
+    let body = projection
+        .with_controls([("routed_dp_rank", Value::from(2))])
+        .unwrap();
+    let result = Projection::read(&body).unwrap();
+    assert_eq!(result.dp_rank, Some(2));
+    for key in ["input_ids", "sampling_params", "future_field"] {
+        assert_eq!(
+            projection.raw(key).unwrap().get(),
+            result.raw(key).unwrap().get()
+        );
+    }
+}

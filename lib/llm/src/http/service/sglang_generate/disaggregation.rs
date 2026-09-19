@@ -17,7 +17,6 @@ impl NativeGenerateBinding {
         router: &PrefillRouter,
         method: Method,
         mut headers: HeaderMap,
-        body: Bytes,
         metadata: BTreeMap<String, String>,
         projection: Projection,
         input: RoutingInput,
@@ -47,9 +46,9 @@ impl NativeGenerateBinding {
             ))
         );
         let tokenizer = prefill.tokenizer.clone();
-        let child_projection = projection.clone();
+        let prefill_projection = projection.clone();
         let prefill_input = tokio::task::spawn_blocking(move || {
-            child_projection.routing_input(tokenizer.as_ref(), uses_kv)
+            prefill_projection.routing_input(tokenizer.as_ref(), uses_kv)
         })
         .await?
         .map_err(NativeRequestError)?;
@@ -77,33 +76,36 @@ impl NativeGenerateBinding {
         if constraints.is_some() && self.host.kv_router_if_enabled().is_none() {
             anyhow::bail!("native topology-constrained decode requires KV routing");
         }
-        let decode_admission = admission_wait(
-            &prefill_admission,
-            deadline,
-            self.reserve(
+        let decode_admission = prefill_admission
+            .while_live(self.reserve(
                 input,
                 requested_rank,
                 &metadata,
                 RequestPhase::Decode,
                 deadline,
-                NativeConstraints {
-                    routing: constraints.unwrap_or_default(),
-                },
-            ),
-        )
-        .await?;
+                constraints.unwrap_or_default(),
+            ))
+            .await?;
         let room = projection
             .field::<Value>("bootstrap_room")?
             .unwrap_or_else(|| Value::from(bootstrap_room()));
-        let body = with_controls(
-            &body,
-            [
-                ("bootstrap_host", Value::from(host)),
-                ("bootstrap_port", Value::from(port)),
-                ("bootstrap_room", room),
-                ("disagg_prefill_dp_rank", Value::from(rank)),
-            ],
-        )?;
+        let bootstrap = [
+            ("bootstrap_host", Value::from(host)),
+            ("bootstrap_port", Value::from(port)),
+            ("bootstrap_room", room),
+            ("disagg_prefill_dp_rank", Value::from(rank)),
+        ];
+        let controls = |rank: Option<u32>| {
+            bootstrap
+                .iter()
+                .cloned()
+                .chain(rank.into_iter().flat_map(|rank| {
+                    [
+                        ("routed_dp_rank", Value::from(rank)),
+                        ("data_parallel_rank", Value::from(rank)),
+                    ]
+                }))
+        };
         let logprobs = projection
             .field::<Value>("return_logprob")?
             .unwrap_or(Value::Null);
@@ -121,29 +123,13 @@ impl NativeGenerateBinding {
             path: "/generate".into(),
             method: method.to_string(),
             headers: http::encode_headers(headers.clone()),
-            body: with_controls(
-                &body,
-                [
-                    ("routed_dp_rank", Value::from(rank)),
-                    ("data_parallel_rank", Value::from(rank)),
-                ],
-            )?,
-        };
-        let decode_body = match decode_admission.target().dp_rank {
-            Some(rank) => with_controls(
-                &body,
-                [
-                    ("routed_dp_rank", Value::from(rank)),
-                    ("data_parallel_rank", Value::from(rank)),
-                ],
-            )?,
-            None => body,
+            body: projection.with_controls(controls(Some(rank)))?,
         };
         let decode_request = http::Request {
             path: "/generate".into(),
             method: method.to_string(),
             headers: http::encode_headers(headers),
-            body: decode_body,
+            body: projection.with_controls(controls(decode_admission.target().dp_rank))?,
         };
         let prefill = forward_reserved(
             &prefill.client,

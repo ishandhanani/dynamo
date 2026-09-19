@@ -18,9 +18,9 @@ use serde_json::{Value, value::RawValue};
 use tokio::{sync::watch, time::Instant};
 use tokio_util::sync::CancellationToken;
 
-use crate::http::service::http_proxy::{HttpClient, forward_with_cancellation};
+use crate::http::service::http_proxy::{HttpClient, forward_reserved};
 use crate::{
-    kv_router::{RoutingHost, native::NativeReservation, prefill_router::PrefillRouter},
+    kv_router::{RouteReservation, RoutingHost, prefill_router::PrefillRouter},
     model_card::ModelDeploymentCard,
     protocols::{
         common::{
@@ -45,10 +45,7 @@ pub(crate) struct NativeGenerateBinding {
 
 #[path = "disaggregation.rs"]
 mod disaggregation;
-#[derive(Default)]
-struct NativeConstraints {
-    routing: dynamo_kv_router::protocols::RoutingConstraints,
-}
+use dynamo_kv_router::protocols::RoutingConstraints;
 
 fn check_owned_headers(headers: &HeaderMap) -> anyhow::Result<()> {
     anyhow::ensure!(
@@ -68,75 +65,9 @@ pub(crate) fn supports_native(card: &ModelDeploymentCard) -> bool {
         == Some(true)
 }
 
-async fn forward_reserved(
-    client: &HttpClient,
-    request: dynamo_runtime::pipeline::SingleIn<http::Request>,
-    admission: NativeReservation,
-    cancellation: CancellationToken,
-) -> anyhow::Result<Response> {
-    let worker_id = admission.target().worker_id;
-    let load = admission.start(cancellation.clone());
-    let response =
-        forward_with_cancellation(client, request, worker_id, cancellation.clone()).await?;
-    let (parts, body) = response.into_parts();
-    let stream = async_stream::try_stream! {
-        let _load = load;
-        let mut stream = body.into_data_stream();
-        use futures::StreamExt;
-        loop {
-            let chunk = tokio::select! {
-                biased;
-                _ = cancellation.cancelled() => Err(anyhow::anyhow!("native HTTP request cancelled")),
-                chunk = stream.next() => Ok(chunk),
-            }?;
-            let Some(chunk) = chunk else { break; };
-            yield chunk?;
-        }
-    };
-    Ok(Response::from_parts(
-        parts,
-        axum::body::Body::from_stream(
-            Box::pin(stream) as futures::stream::BoxStream<'static, anyhow::Result<Bytes>>
-        ),
-    ))
-}
-
-// Rewrite routing controls without parsing engine-owned numeric extensions.
-fn with_controls(
-    body: &Bytes,
-    controls: impl IntoIterator<Item = (&'static str, Value)>,
-) -> anyhow::Result<Bytes> {
-    let mut fields: BTreeMap<String, Box<RawValue>> = serde_json::from_slice(body)?;
-    for (key, value) in controls {
-        fields.insert(key.into(), serde_json::value::to_raw_value(&value)?);
-    }
-    Ok(serde_json::to_vec(&fields)?.into())
-}
-
 #[derive(Debug, thiserror::Error)]
 #[error("{0}")]
 pub(crate) struct NativeRequestError(anyhow::Error);
-
-// Keep the prefill booking alive while decode selection is queued.
-async fn admission_wait<T>(
-    reservation: &NativeReservation,
-    deadline: Instant,
-    operation: impl std::future::Future<Output = anyhow::Result<T>>,
-) -> anyhow::Result<T> {
-    let expiry = dynamo_kv_router::multi_worker_sequence::active_request_expiry_duration();
-    let mut heartbeat = tokio::time::interval((expiry / 3).min(Duration::from_secs(5)));
-    heartbeat.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-    tokio::pin!(operation);
-    loop {
-        tokio::select! {
-            result = &mut operation => return result,
-            _ = tokio::time::sleep_until(deadline) => anyhow::bail!("native batch admission timed out"),
-            _ = heartbeat.tick() => {
-                reservation.touch()?;
-            }
-        }
-    }
-}
 
 impl NativeGenerateBinding {
     pub(crate) async fn new(
@@ -238,7 +169,6 @@ impl NativeGenerateBinding {
                         prefill,
                         method,
                         headers,
-                        body,
                         metadata,
                         projection,
                         input,
@@ -254,17 +184,14 @@ impl NativeGenerateBinding {
                     &metadata,
                     RequestPhase::Aggregated,
                     deadline,
-                    NativeConstraints::default(),
+                    RoutingConstraints::default(),
                 )
                 .await?;
             let body = if let Some(rank) = admission.target().dp_rank {
-                with_controls(
-                    &body,
-                    [
-                        ("routed_dp_rank", Value::from(rank)),
-                        ("data_parallel_rank", Value::from(rank)),
-                    ],
-                )?
+                projection.with_controls([
+                    ("routed_dp_rank", Value::from(rank)),
+                    ("data_parallel_rank", Value::from(rank)),
+                ])?
             } else {
                 body
             };
@@ -305,9 +232,9 @@ impl NativeGenerateBinding {
         metadata: &BTreeMap<String, String>,
         phase: RequestPhase,
         deadline: Instant,
-        mut constraints: NativeConstraints,
-    ) -> anyhow::Result<NativeReservation> {
-        constraints.routing.required_dp_rank = requested_rank;
+        mut constraints: RoutingConstraints,
+    ) -> anyhow::Result<RouteReservation> {
+        constraints.required_dp_rank = requested_rank;
         let request = PreprocessedRequest::builder()
             .model(self.card.name().to_string())
             .token_ids(input.tokens)
@@ -316,7 +243,7 @@ impl NativeGenerateBinding {
             .output_options(OutputOptions::default())
             .routing(Some(RoutingHints {
                 expected_output_tokens: input.max_tokens,
-                routing_constraints: Some(constraints.routing),
+                routing_constraints: Some(constraints),
                 priority_jump: Some(input.priority.max(0) as f64),
                 priority: Some(input.priority),
                 lora_name: input.lora,
@@ -329,12 +256,8 @@ impl NativeGenerateBinding {
             uuid::Uuid::new_v4().to_string(),
             metadata.clone(),
         );
-        let reservation = tokio::time::timeout_at(
-            deadline,
-            self.host
-                .reserve_native(&request, None, requested_rank, phase),
-        )
-        .await??;
+        let reservation =
+            tokio::time::timeout_at(deadline, self.host.reserve_route(&request, phase)).await??;
         anyhow::ensure!(
             !self.cancellation.is_cancelled()
                 && self
@@ -349,7 +272,7 @@ impl NativeGenerateBinding {
 
 #[derive(Clone)]
 struct Projection {
-    fields: BTreeMap<String, Box<RawValue>>,
+    fields: Arc<BTreeMap<String, Box<RawValue>>>,
     dp_rank: Option<u32>,
     engine_processed_input: bool,
 }
@@ -363,9 +286,27 @@ struct RoutingInput {
 }
 
 impl Projection {
+    // Retain engine-owned values verbatim; only routing controls are replaced.
+    fn with_controls(
+        &self,
+        controls: impl IntoIterator<Item = (&'static str, Value)>,
+    ) -> anyhow::Result<Bytes> {
+        let controls = controls
+            .into_iter()
+            .map(|(key, value)| serde_json::value::to_raw_value(&value).map(|value| (key, value)))
+            .collect::<Result<Vec<_>, _>>()?;
+        let mut fields: BTreeMap<&str, &RawValue> = self
+            .fields
+            .iter()
+            .map(|(key, value)| (key.as_str(), value.as_ref()))
+            .collect();
+        fields.extend(controls.iter().map(|(key, value)| (*key, value.as_ref())));
+        Ok(serde_json::to_vec(&fields)?.into())
+    }
+
     fn read(body: &[u8]) -> anyhow::Result<Self> {
         let mut input = Self {
-            fields: serde_json::from_slice(body)?,
+            fields: Arc::new(serde_json::from_slice(body)?),
             dp_rank: None,
             engine_processed_input: false,
         };
@@ -430,14 +371,11 @@ impl Projection {
         let tokens = if !uses_kv {
             Vec::new()
         } else if let Some(ids) = self.field::<Value>("input_ids")? {
-            let ids = if ids
-                .as_array()
-                .and_then(|ids| ids.first())
-                .is_some_and(Value::is_array)
-            {
-                ids[0].clone()
-            } else {
-                ids
+            let ids = match ids {
+                Value::Array(mut ids) if ids.first().is_some_and(Value::is_array) => {
+                    ids.swap_remove(0)
+                }
+                ids => ids,
             };
             serde_json::from_value(ids)?
         } else {

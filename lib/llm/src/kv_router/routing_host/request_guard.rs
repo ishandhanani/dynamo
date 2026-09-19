@@ -31,6 +31,8 @@ use dynamo_runtime::{
     protocols::annotated::Annotated,
 };
 
+use super::cleanup::{KvRequestCleanup, RequestCleanup};
+
 pub(super) struct LoraLoadGuard {
     estimator: Arc<LoadEstimator>,
     lora_name: String,
@@ -383,124 +385,6 @@ struct OutputBlockTracker {
     isl_tokens: usize,
     block_size: usize,
     expected_output_tokens: Option<u32>,
-}
-
-/// Owns the shared attempt-scoped scheduler and approximate-LRU lifecycle after
-/// a KV worker is selected.
-pub(super) struct KvRequestCleanup {
-    chooser: Arc<KvRouter>,
-    context_id: String,
-    worker: WorkerWithDpRank,
-    approximate_lru: Option<ApproximateRequestLease>,
-    lifecycle: Option<RequestAttemptLease>,
-}
-
-impl KvRequestCleanup {
-    pub(super) fn new(
-        chooser: Arc<KvRouter>,
-        context_id: String,
-        worker: WorkerWithDpRank,
-        booking: Option<BookingHandle>,
-    ) -> Self {
-        let booking = booking.map(BookingHandle::commit);
-        let approximate_lru = booking.as_ref().and_then(|booking| {
-            let registration = chooser.approximate_lru_rank_registration(worker)?;
-            chooser.indexer().begin_approximate_lru_request(
-                worker,
-                registration.incarnation,
-                booking.attempt_id,
-            )
-        });
-        let lifecycle = booking.map(|booking| {
-            chooser
-                .request_lease_manager()
-                .register_local(booking, approximate_lru.clone())
-        });
-        Self {
-            chooser,
-            context_id,
-            worker,
-            approximate_lru,
-            lifecycle,
-        }
-    }
-
-    fn lifecycle(&self) -> Option<&RequestAttemptLease> {
-        self.lifecycle.as_ref()
-    }
-
-    pub(super) async fn finish(&self) {
-        if let Some(lifecycle) = &self.lifecycle {
-            lifecycle.finish().await;
-        }
-    }
-}
-
-/// Policy-specific state released by the host's common request lifecycle.
-enum RequestCleanup {
-    Kv(KvRequestCleanup),
-    Stateless {
-        worker_id: u64,
-    },
-    Occupancy {
-        worker_id: u64,
-        reservation: Option<OccupancyReservation>,
-    },
-}
-
-impl RequestCleanup {
-    fn worker_id(&self) -> u64 {
-        match self {
-            Self::Kv(cleanup) => cleanup.worker.worker_id,
-            Self::Stateless { worker_id } => *worker_id,
-            Self::Occupancy { worker_id, .. } => *worker_id,
-        }
-    }
-
-    fn retarget_worker(&mut self, worker_id: u64) -> Option<u64> {
-        match self {
-            Self::Kv(_) => {
-                debug_assert!(false, "KV cleanup target cannot be retargeted");
-                None
-            }
-            Self::Stateless { worker_id: current } => {
-                *current = worker_id;
-                None
-            }
-            Self::Occupancy {
-                worker_id: current,
-                reservation,
-            } => {
-                let occupancy = reservation
-                    .as_mut()
-                    .map(|reservation| reservation.retarget(worker_id));
-                *current = worker_id;
-                occupancy
-            }
-        }
-    }
-
-    fn context_id(&self) -> Option<&str> {
-        match self {
-            Self::Kv(cleanup) => Some(&cleanup.context_id),
-            Self::Stateless { .. } | Self::Occupancy { .. } => None,
-        }
-    }
-
-    fn lifecycle(&self) -> Option<&RequestAttemptLease> {
-        match self {
-            Self::Kv(cleanup) => cleanup.lifecycle(),
-            Self::Stateless { .. } | Self::Occupancy { .. } => None,
-        }
-    }
-
-    async fn finish(&mut self) {
-        match self {
-            Self::Kv(cleanup) => cleanup.finish().await,
-            Self::Occupancy { reservation, .. } => drop(reservation.take()),
-            Self::Stateless { .. } => {}
-        }
-    }
 }
 
 impl OutputBlockTracker {

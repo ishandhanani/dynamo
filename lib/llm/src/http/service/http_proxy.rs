@@ -83,6 +83,39 @@ pub(crate) async fn forward_with_cancellation(
     }
 }
 
+pub(crate) async fn forward_reserved(
+    client: &HttpClient,
+    request: dynamo_runtime::pipeline::SingleIn<Request>,
+    admission: crate::kv_router::RouteReservation,
+    cancellation: tokio_util::sync::CancellationToken,
+) -> anyhow::Result<Response> {
+    let worker_id = admission.target().worker_id;
+    let load = admission.start(cancellation.clone());
+    let response =
+        forward_with_cancellation(client, request, worker_id, cancellation.clone()).await?;
+    let (parts, body) = response.into_parts();
+    let stream = async_stream::try_stream! {
+        let _load = load;
+        let mut stream = body.into_data_stream();
+        use futures::StreamExt;
+        loop {
+            let chunk = tokio::select! {
+                biased;
+                _ = cancellation.cancelled() => Err(anyhow::anyhow!("native HTTP request cancelled")),
+                chunk = stream.next() => Ok(chunk),
+            }?;
+            let Some(chunk) = chunk else { break; };
+            yield chunk?;
+        }
+    };
+    Ok(Response::from_parts(
+        parts,
+        axum::body::Body::from_stream(
+            Box::pin(stream) as futures::stream::BoxStream<'static, anyhow::Result<bytes::Bytes>>
+        ),
+    ))
+}
+
 async fn response(
     mut stream: ManyOut<Annotated<ResponseFrame>>,
     mut cancellation: Option<tokio_util::sync::DropGuard>,
