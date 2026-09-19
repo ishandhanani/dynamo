@@ -56,8 +56,8 @@ impl AsyncEngine<SingleIn<Request>, ManyOut<Annotated<ResponseFrame>>, anyhow::E
         let context = context.context();
         let method = Method::from_bytes(request.method.as_bytes())?;
         anyhow::ensure!(
-            method == Method::POST || method == Method::PUT,
-            "native generate requires POST or PUT"
+            request.operation.supports_method(method.as_str()),
+            "invalid method for native HTTP operation"
         );
         let mut headers = sglang_http::decode_headers(request.headers)?;
         // The HTTP client computes framing from the retained request bytes.
@@ -67,7 +67,7 @@ impl AsyncEngine<SingleIn<Request>, ManyOut<Annotated<ResponseFrame>>, anyhow::E
             _ = self.cancel.cancelled() => anyhow::bail!("native HTTP endpoint shutting down"),
             _ = context.stopped() => anyhow::bail!("native HTTP request cancelled"),
             _ = context.killed() => anyhow::bail!("native HTTP request killed"),
-            response = self.transport.send(method, "/generate", headers, request.body) => response?,
+            response = self.transport.send(method, request.operation.path(), headers, request.body) => response?,
         };
         let head = ResponseFrame::Head {
             status: response.status().as_u16(),
@@ -152,61 +152,90 @@ mod tests {
             let first = Bytes::from_static(b": heartbeat\r\ndata: not-json\r\n\r\n");
             let last = Bytes::from_static(b"data: [DONE]\n\n");
             let unary = Bytes::from_static(b"{ \"future\":1e-05, \"engine\":\"overloaded\" }\n");
-            let app = Router::new().route(
-                "/generate",
-                any(move |method: Method, headers: HeaderMap, body: Bytes| {
-                    let release = engine_release.clone();
-                    let closed = engine_closed.clone();
-                    let (first, last, unary) = (first.clone(), last.clone(), unary.clone());
-                    async move {
-                        assert_eq!(method, Method::PUT);
-                        assert!(!headers.contains_key("x-client-hop"));
-                        assert_eq!(headers["x-override-routed-dp-rank"], "3");
-                        let streaming = headers["x-fixture-mode"] != "unary";
-                        assert_eq!(
-                            body.as_ref(),
-                            if streaming {
-                                STREAM_REQUEST
-                            } else {
-                                UNARY_REQUEST
-                            }
-                        );
-                        let truncated = headers["x-fixture-mode"] == "truncated";
-                        let dropped =
-                            OnDrop((headers["x-fixture-mode"] == "cancel").then_some(closed));
-                        let body = Body::from_stream(async_stream::stream! {
-                            let _dropped = dropped;
-                            if streaming {
-                                yield Ok::<_, std::io::Error>(first);
-                            release.notified().await;
-                            if truncated {
-                                yield Err(std::io::Error::other("upstream disconnected"));
-                            } else {
-                                yield Ok(last);
-                            }
-                            } else {
-                                yield Ok(unary);
-                            }
-                        });
-                        Response::builder()
-                            .status(if streaming { 200 } else { 429 })
-                            .header(
-                                "content-type",
-                                if streaming {
-                                    "text/event-stream"
-                                } else {
-                                    "application/json"
-                                },
-                            )
-                            .header("set-cookie", "a=1")
-                            .header("set-cookie", "b=2")
-                            .header("connection", "x-engine-hop")
-                            .header("x-engine-hop", "private")
-                            .body(body)
-                            .unwrap()
+            async fn session_control(
+                method: Method,
+                uri: axum::http::Uri,
+                headers: HeaderMap,
+                body: Bytes,
+            ) -> Response {
+                assert_eq!(
+                    method,
+                    if uri.path() == "/session_routing" {
+                        Method::POST
+                    } else {
+                        Method::GET
                     }
-                }),
-            );
+                );
+                assert_eq!(headers["x-sglang-session-incarnation"], "exact-open");
+                assert_eq!(
+                    body.as_ref(),
+                    b"{ \"future\":1e400, \"session_id\":\"s\" }\n"
+                );
+                Response::builder()
+                    .status(201)
+                    .header("x-native-control", uri.path())
+                    .body(Body::from(b"\"engine-session-id\"\n".as_slice()))
+                    .unwrap()
+            }
+            let app = Router::new()
+                .route("/open_session", any(session_control))
+                .route("/close_session", any(session_control))
+                .route("/session_routing", any(session_control))
+                .route(
+                    "/generate",
+                    any(move |method: Method, headers: HeaderMap, body: Bytes| {
+                        let release = engine_release.clone();
+                        let closed = engine_closed.clone();
+                        let (first, last, unary) = (first.clone(), last.clone(), unary.clone());
+                        async move {
+                            assert_eq!(method, Method::PUT);
+                            assert!(!headers.contains_key("x-client-hop"));
+                            assert_eq!(headers["x-override-routed-dp-rank"], "3");
+                            let streaming = headers["x-fixture-mode"] != "unary";
+                            assert_eq!(
+                                body.as_ref(),
+                                if streaming {
+                                    STREAM_REQUEST
+                                } else {
+                                    UNARY_REQUEST
+                                }
+                            );
+                            let truncated = headers["x-fixture-mode"] == "truncated";
+                            let dropped =
+                                OnDrop((headers["x-fixture-mode"] == "cancel").then_some(closed));
+                            let body = Body::from_stream(async_stream::stream! {
+                                let _dropped = dropped;
+                                if streaming {
+                                    yield Ok::<_, std::io::Error>(first);
+                                release.notified().await;
+                                if truncated {
+                                    yield Err(std::io::Error::other("upstream disconnected"));
+                                } else {
+                                    yield Ok(last);
+                                }
+                                } else {
+                                    yield Ok(unary);
+                                }
+                            });
+                            Response::builder()
+                                .status(if streaming { 200 } else { 429 })
+                                .header(
+                                    "content-type",
+                                    if streaming {
+                                        "text/event-stream"
+                                    } else {
+                                        "application/json"
+                                    },
+                                )
+                                .header("set-cookie", "a=1")
+                                .header("set-cookie", "b=2")
+                                .header("connection", "x-engine-hop")
+                                .header("x-engine-hop", "private")
+                                .body(body)
+                                .unwrap()
+                        }
+                    }),
+                );
             let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
             let http = NativeHttp {
                 transport: HttpTransport::new(
@@ -263,6 +292,7 @@ mod tests {
                     } else {
                         STREAM_REQUEST
                     }),
+                    operation: Default::default(),
                 };
                 let response = forward(&client, Context::new(request), worker)
                     .await
@@ -300,6 +330,38 @@ mod tests {
                     b"{ \"future\":1e-05, \"engine\":\"overloaded\" }\n"
                 };
                 assert_eq!(received, expected);
+            }
+            for operation in [
+                sglang_http::Operation::OpenSession,
+                sglang_http::Operation::CloseSession,
+                sglang_http::Operation::SessionRouting,
+            ] {
+                let request = Request {
+                    method: if operation == sglang_http::Operation::SessionRouting {
+                        "POST"
+                    } else {
+                        "GET"
+                    }
+                    .into(),
+                    headers: vec![(
+                        "x-sglang-session-incarnation".into(),
+                        Bytes::from_static(b"exact-open"),
+                    )],
+                    body: Bytes::from_static(b"{ \"future\":1e400, \"session_id\":\"s\" }\n"),
+                    operation,
+                };
+                let response = forward(&client, Context::new(request), worker)
+                    .await
+                    .unwrap();
+                assert_eq!(response.status(), 201);
+                assert_eq!(response.headers()["x-native-control"], operation.path());
+                assert_eq!(
+                    axum::body::to_bytes(response.into_body(), 128)
+                        .await
+                        .unwrap()
+                        .as_ref(),
+                    b"\"engine-session-id\"\n"
+                );
             }
             started.shutdown().await.unwrap();
             runtime.shutdown();

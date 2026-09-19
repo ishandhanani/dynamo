@@ -252,6 +252,7 @@ fn disconnect_keeps_real_booking_until_engine_cleanup_acknowledgement() {
                     method: "POST".into(),
                     headers: Vec::new(),
                     body: Bytes::from_static(b"{ \"input_ids\": [1, 2], \"stream\": true }"),
+                    operation: Default::default(),
                 }),
                 attempt,
             )

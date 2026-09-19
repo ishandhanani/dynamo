@@ -120,6 +120,7 @@ impl NativeGenerateBinding {
             method: method.to_string(),
             headers: http::encode_headers(headers),
             body,
+            operation: Default::default(),
         };
         let prefill_attempt = prefill_admission.into_attempt(&prefill, "prefill")?;
         let decode_attempt = decode_admission.into_attempt(self, "decode")?;
