@@ -65,7 +65,7 @@ async fn admission_wait<T>(
             result = &mut operation => return result,
             _ = tokio::time::sleep_until(deadline) => anyhow::bail!("native batch admission timed out"),
             _ = heartbeat.tick() => {
-                for child in reservations { child.reservation.touch()?; }
+                for child in reservations { child.touch()?; }
             }
         }
     }
@@ -207,26 +207,42 @@ impl NativeGenerateBinding {
                         ..Default::default()
                     }))
                     .build()?;
-                let request = Context::with_id_and_metadata(
-                    request,
-                    uuid::Uuid::new_v4().to_string(),
-                    metadata.clone(),
-                );
-                let reservation = admission_wait(
-                    &reservations,
-                    deadline,
-                    self.host.reserve_native(&request, worker, requested_rank),
-                )
-                .await?;
-                anyhow::ensure!(
-                    requested_rank.is_none_or(|rank| Some(rank) == reservation.target().dp_rank),
-                    "configured KV policy selected a different DP rank than the native request constraint"
-                );
-                worker = Some(reservation.target());
-                reservations.push(ReservedChild {
-                    kind: child.kind,
-                    reservation,
-                });
+                for row in 0..child.decode_width {
+                    let mut row_request = request.clone();
+                    if row > 0 {
+                        // Beam rows share the leader's prompt, but each owns
+                        // decode capacity. Do not book prefill tokens twice.
+                        row_request
+                            .router_config_override
+                            .get_or_insert_default()
+                            .track_prefill_tokens = Some(false);
+                    }
+                    let request = Context::with_id_and_metadata(
+                        row_request,
+                        uuid::Uuid::new_v4().to_string(),
+                        metadata.clone(),
+                    );
+                    let reservation = admission_wait(
+                        &reservations,
+                        deadline,
+                        self.host.reserve_native(&request, worker, requested_rank),
+                    )
+                    .await?;
+                    anyhow::ensure!(
+                        requested_rank.is_none_or(|rank| Some(rank) == reservation.target().dp_rank),
+                        "configured KV policy selected a different DP rank than the native request constraint"
+                    );
+                    worker = Some(reservation.target());
+                    if row == 0 {
+                        reservations.push(ReservedChild {
+                            kind: child.kind,
+                            reservation,
+                            additional_reservations: Vec::with_capacity(child.decode_width - 1),
+                        });
+                    } else {
+                        reservations.last_mut().unwrap().additional_reservations.push(reservation);
+                    }
+                }
             }
             let worker =
                 worker.ok_or_else(|| anyhow::anyhow!("native request has no routable children"))?;
@@ -283,6 +299,7 @@ struct Projection {
 
 struct Child {
     kind: ChildKind,
+    decode_width: usize,
     tokens: Arc<Vec<u32>>,
     max_tokens: Option<u32>,
     priority: i32,
@@ -461,9 +478,6 @@ impl Projection {
             value => vec![value.unwrap_or(&Value::Null); prompts.len()],
         };
         let count = |p: &Value| -> anyhow::Result<usize> {
-            if p.get("beam_width").and_then(Value::as_u64).unwrap_or(1) > 1 {
-                anyhow::bail!("native beam lifecycle admission is not yet supported");
-            }
             Ok(p.get("n")
                 .map(|v| serde_json::from_value(v.clone()))
                 .transpose()?
@@ -481,6 +495,27 @@ impl Projection {
                     .all(|p| count(p).is_ok_and(|other| other == n)),
             "native batch sampling requires one positive n"
         );
+        let width = |p: &Value| -> anyhow::Result<usize> {
+            Ok(p.get("beam_width")
+                .filter(|v| !v.is_null())
+                .map(|v| serde_json::from_value::<usize>(v.clone()))
+                .transpose()?
+                .unwrap_or(1)
+                .max(1))
+        };
+        // Native beam normalization uses the first prompt's beam setting.
+        // `n` is the number of returned beams, not parallel sampling fan-out.
+        let n = if parameters
+            .first()
+            .map(|p| width(p))
+            .transpose()?
+            .unwrap_or(1)
+            > 1
+        {
+            1
+        } else {
+            n
+        };
         let slots = prompts
             .len()
             .checked_mul(
@@ -492,6 +527,14 @@ impl Projection {
             slots > 0 && slots <= 4096,
             "native request exceeds lifecycle child capacity"
         );
+        let mut rows = if n > 1 { prompts.len() } else { 0 };
+        for params in &parameters {
+            rows = width(params)?
+                .checked_mul(n)
+                .and_then(|count| rows.checked_add(count))
+                .ok_or_else(|| anyhow::anyhow!("native decode row count overflow"))?;
+        }
+        anyhow::ensure!(rows <= 4096, "native request exceeds decode row capacity");
         let priority = v
             .get("priority")
             .filter(|v| !v.is_null())
@@ -527,6 +570,7 @@ impl Projection {
             for ((tokens, lora), salt) in prompts.iter().zip(&loras).zip(&salts) {
                 children.push(Child {
                     kind: ChildKind::Warmup,
+                    decode_width: 1,
                     tokens: tokens.clone(),
                     max_tokens: Some(0),
                     priority,
@@ -546,6 +590,7 @@ impl Projection {
             for _ in 0..n {
                 children.push(Child {
                     kind: ChildKind::Sample,
+                    decode_width: width(params)?,
                     tokens: tokens.clone(),
                     max_tokens,
                     priority,

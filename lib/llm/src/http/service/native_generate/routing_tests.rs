@@ -36,6 +36,9 @@ use crate::{
 const EPOCH: &str = "11111111111111111111111111111111";
 const BODY: &[u8] = br#"{"input_ids": [[1,2], [3]], "stream":false, "routed_dp_rank":1, "sampling_params":{"n":2,"future_option":1e400}, "future_field":{"number":1e400,"float":1.234567890123456789} }"#;
 
+const BEAM_BODY: &[u8] =
+    br#"{"input_ids":[[1,2],[3]],"routed_dp_rank":1,"sampling_params":{"beam_width":4,"n":2}}"#;
+
 #[derive(Default)]
 struct Engine {
     worker_id: u64,
@@ -54,7 +57,7 @@ impl StreamingDispatch<http::Request, Annotated<ResponseFrame>> for Engine {
         let (request, _, instance) = addressed.into_parts();
         assert_eq!(instance.unwrap().id(), self.worker_id);
         assert_eq!(request.method, "PUT");
-        assert_eq!(request.body.as_ref(), BODY);
+        assert!([BODY, BEAM_BODY].contains(&request.body.as_ref()));
         assert!(
             request
                 .headers
@@ -131,6 +134,7 @@ impl StreamingDispatch<control::Request, Annotated<control::Response>> for Engin
                                     && value.as_ref() == attempt_id.as_bytes())
                         );
                         let terminal = self.cleanup.load(Ordering::SeqCst);
+                        let beam = received.body.as_ref() == BEAM_BODY;
                         control::Response::Snapshot(control::Snapshot {
                             incarnation,
                             attempt_id,
@@ -139,11 +143,11 @@ impl StreamingDispatch<control::Request, Annotated<control::Response>> for Engin
                             sealed: true,
                             cancel_requested: false,
                             terminal,
-                            children: (0..6)
+                            children: (0..if beam { 2 } else { 6 })
                                 .map(|i| control::Child {
                                     child_id: format!("{i:032x}"),
                                     rid: format!("rid-{i}"),
-                                    kind: if i < 2 {
+                                    kind: if !beam && i < 2 {
                                         ChildKind::Warmup
                                     } else {
                                         ChildKind::Sample
@@ -290,37 +294,12 @@ async fn public_native_generate_keeps_bytes_books_fanout_and_fences_retired_work
         let stop = CancellationToken::new();
         let server = service.spawn_with_listener(stop.clone(), listener).await;
         let client = reqwest::Client::builder().no_proxy().build().unwrap();
-        let request = || {
+        let request = |body: &'static [u8]| {
             client
                 .put(&url)
                 .header("content-type", "application/json")
-                .body(BODY)
+                .body(body)
         };
-        let response = request().send().await.unwrap();
-        assert_eq!(
-            response.status(),
-            StatusCode::CREATED,
-            "{}",
-            response.text().await.unwrap()
-        );
-        assert_eq!(response.headers()["x-engine-extension"], "native");
-        assert_eq!(
-            response.bytes().await.unwrap().as_ref(),
-            b"opaque, not JSON or SSE\r\n"
-        );
-        use crate::http::service::metrics::{
-            Endpoint as MetricEndpoint, ErrorType, RequestType, Status,
-        };
-        assert_eq!(
-            metrics.get_request_counter(
-                "native-model",
-                &MetricEndpoint::Generate,
-                &RequestType::Unary,
-                &Status::Success,
-                &ErrorType::None
-            ),
-            1
-        );
         let load = || async {
             kv.get_potential_loads(&[], None, None, None, None)
                 .await
@@ -329,19 +308,49 @@ async fn public_native_generate_keeps_bytes_books_fanout_and_fences_retired_work
                 .map(|load| load.active_requests)
                 .sum::<usize>()
         };
-        assert_eq!(
-            load().await,
-            6,
-            "HTTP completion cannot release native children"
-        );
-        engine.cleanup.store(true, Ordering::SeqCst);
-        while !engine.acknowledged.load(Ordering::SeqCst) {
-            tokio::time::sleep(Duration::from_millis(5)).await;
+        for (index, (body, rows)) in [(BODY, 6), (BEAM_BODY, 8)].into_iter().enumerate() {
+            *engine.received.lock().unwrap() = None;
+            engine.cleanup.store(false, Ordering::SeqCst);
+            engine.acknowledged.store(false, Ordering::SeqCst);
+            let response = request(body).send().await.unwrap();
+            assert_eq!(
+                response.status(),
+                StatusCode::CREATED,
+                "{}",
+                response.text().await.unwrap()
+            );
+            assert_eq!(response.headers()["x-engine-extension"], "native");
+            assert_eq!(
+                response.bytes().await.unwrap().as_ref(),
+                b"opaque, not JSON or SSE\r\n"
+            );
+            use crate::http::service::metrics::{
+                Endpoint as MetricEndpoint, ErrorType, RequestType, Status,
+            };
+            assert_eq!(
+                metrics.get_request_counter(
+                    "native-model",
+                    &MetricEndpoint::Generate,
+                    &RequestType::Unary,
+                    &Status::Success,
+                    &ErrorType::None
+                ),
+                (index + 1) as u64
+            );
+            assert_eq!(
+                load().await,
+                rows,
+                "HTTP completion cannot release native children"
+            );
+            engine.cleanup.store(true, Ordering::SeqCst);
+            while !engine.acknowledged.load(Ordering::SeqCst) {
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+            assert_eq!(load().await, 0);
         }
-        assert_eq!(load().await, 0);
         admissions.send_replace(vec![]);
         assert_eq!(
-            request().send().await.unwrap().status(),
+            request(BODY).send().await.unwrap().status(),
             StatusCode::SERVICE_UNAVAILABLE
         );
         assert!(
@@ -417,4 +426,26 @@ fn native_projection_leaves_unrelated_numbers_opaque() {
     assert_eq!(Projection::read(body).unwrap().dp_rank, Some(1));
     assert!(Projection::read(br#"{"input_ids":[1],"routed_dp_rank":1e400}"#).is_err());
     assert!(Projection::read(br#"{"input_ids":[1],"future_field":1e}"#).is_err());
+}
+
+#[test]
+fn native_beam_projection_books_rows_under_each_leader() {
+    let children = Projection::read(BEAM_BODY)
+        .unwrap()
+        .children(None, true)
+        .unwrap();
+    assert_eq!(children.len(), 2);
+    assert!(
+        children
+            .iter()
+            .all(|child| child.kind == ChildKind::Sample && child.decode_width == 4)
+    );
+    assert_eq!(children[0].tokens.as_slice(), &[1, 2]);
+    let too_many = br#"{"input_ids":[1],"sampling_params":{"beam_width":4097}}"#;
+    assert!(
+        Projection::read(too_many)
+            .unwrap()
+            .children(None, true)
+            .is_err()
+    );
 }

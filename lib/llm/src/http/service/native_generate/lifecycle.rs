@@ -29,6 +29,34 @@ const CANCEL_TIMEOUT: Duration = Duration::from_secs(90);
 pub struct ReservedChild {
     pub kind: ChildKind,
     pub reservation: NativeReservation,
+    /// A beam group's bare decode rows share the leader's lifecycle events.
+    pub additional_reservations: Vec<NativeReservation>,
+}
+
+impl ReservedChild {
+    fn reservations(&self) -> impl Iterator<Item = &NativeReservation> {
+        std::iter::once(&self.reservation).chain(&self.additional_reservations)
+    }
+
+    pub(super) fn touch(&self) -> anyhow::Result<()> {
+        for reservation in self.reservations() {
+            reservation.touch()?;
+        }
+        Ok(())
+    }
+
+    async fn prefill_complete(&self) -> anyhow::Result<()> {
+        for reservation in self.reservations() {
+            reservation.prefill_complete().await?;
+        }
+        Ok(())
+    }
+
+    async fn finish(&self) {
+        for reservation in self.reservations() {
+            reservation.finish().await;
+        }
+    }
 }
 
 pub struct NativeAttempt {
@@ -73,7 +101,8 @@ impl NativeAttempt {
         anyhow::ensure!(
             reservations
                 .iter()
-                .all(|child| child.reservation.target() == worker),
+                .flat_map(ReservedChild::reservations)
+                .all(|reservation| reservation.target() == worker),
             "native batch reservations must share a worker and DP rank"
         );
         Ok(Self {
@@ -156,7 +185,7 @@ impl NativeAttempt {
                 _ = heartbeat.tick() => {
                     let mut expired = false;
                     for child in self.reservations.iter().flatten() {
-                        expired |= child.reservation.touch().is_err();
+                        expired |= child.touch().is_err();
                     }
                     if last_control.elapsed() >= LOST_CONTROL_TIMEOUT || expired {
                         cancel_started.get_or_insert_with(Instant::now);
@@ -234,12 +263,12 @@ impl NativeAttempt {
             };
             let child = snapshot.children.get(index);
             if child.is_some_and(|child| child.terminal) || (child.is_none() && snapshot.sealed) {
-                reserved.reservation.finish().await;
+                reserved.finish().await;
                 *slot = None;
             } else if child.is_some_and(|child| child.prefill_complete)
                 && !self.prefill_applied.contains(&index)
             {
-                reserved.reservation.prefill_complete().await?;
+                reserved.prefill_complete().await?;
                 self.prefill_applied.insert(index);
             }
         }
