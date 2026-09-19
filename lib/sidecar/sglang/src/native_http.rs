@@ -7,6 +7,23 @@ mod lifecycle;
 mod transport;
 mod wire;
 
+#[cfg(test)]
+mod accounting_tests;
+
+// The request-plane TCP listener is process-wide. Its Tokio executor must
+// outlive every fixture that registers an endpoint on that listener.
+#[cfg(test)]
+fn test_runtime() -> &'static tokio::runtime::Runtime {
+    static RUNTIME: std::sync::OnceLock<tokio::runtime::Runtime> = std::sync::OnceLock::new();
+    RUNTIME.get_or_init(|| {
+        tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(2)
+            .enable_all()
+            .build()
+            .unwrap()
+    })
+}
+
 pub(crate) use lifecycle::LifecycleClient;
 pub(crate) use wire::NativeHttpEndpoint;
 
