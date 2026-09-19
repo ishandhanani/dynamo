@@ -3,7 +3,7 @@
 
 //! Native request routing projection. This never reconstructs a generation body.
 
-use std::{sync::Arc, time::Duration};
+use std::{collections::BTreeMap, sync::Arc, time::Duration};
 
 use axum::{
     http::{HeaderMap, Method},
@@ -14,7 +14,7 @@ use dynamo_runtime::{
     component::Endpoint,
     pipeline::{Context, RouterMode},
 };
-use serde_json::Value;
+use serde_json::{Value, value::RawValue};
 use tokio::{sync::watch, time::Instant};
 use tokio_util::sync::CancellationToken;
 
@@ -292,8 +292,63 @@ struct Child {
 
 impl Projection {
     fn read(body: &[u8]) -> anyhow::Result<Self> {
-        let value: Value = serde_json::from_slice(body)?;
-        anyhow::ensure!(value.is_object(), "native request must be a JSON object");
+        // Borrow raw fields before inspecting routing inputs. Parsing the entire
+        // request as Value rejects engine extensions such as an unused 1e400.
+        // Keep duplicate-key behavior (last value wins) aligned with SGLang.
+        let fields: BTreeMap<String, &RawValue> = serde_json::from_slice(body)?;
+        let mut value = serde_json::Map::new();
+        for key in [
+            "text",
+            "input_ids",
+            "input_embeds",
+            "image_data",
+            "video_data",
+            "audio_data",
+            "stream",
+            "routed_dp_rank",
+            "data_parallel_rank",
+            "priority",
+            "lora_path",
+            "cache_salt",
+            "extra_key",
+            "session_params",
+            "bootstrap_host",
+            "bootstrap_port",
+            "bootstrap_room",
+            "disagg_prefill_dp_rank",
+        ] {
+            if let Some(raw) = fields.get(key) {
+                value.insert(key.into(), serde_json::from_str(raw.get())?);
+            }
+        }
+        if let Some(raw) = fields.get("sampling_params") {
+            let project = |raw: &RawValue| -> anyhow::Result<Value> {
+                if raw.get() == "null" {
+                    return Ok(Value::Null);
+                }
+                let fields: BTreeMap<String, &RawValue> = serde_json::from_str(raw.get())?;
+                let mut value = serde_json::Map::new();
+                for key in ["n", "max_new_tokens", "beam_width"] {
+                    if let Some(raw) = fields.get(key) {
+                        value.insert(key.into(), serde_json::from_str(raw.get())?);
+                    }
+                }
+                Ok(Value::Object(value))
+            };
+            let params = if raw.get().starts_with('[') {
+                let items: Vec<&RawValue> = serde_json::from_str(raw.get())?;
+                Value::Array(
+                    items
+                        .into_iter()
+                        .map(project)
+                        .collect::<anyhow::Result<_>>()?,
+                )
+            } else {
+                project(raw)?
+            };
+            value.insert("sampling_params".into(), params);
+        }
+        let value = Value::Object(value);
         anyhow::ensure!(
             value.get("session_params").is_none_or(Value::is_null),
             "native sessions require an owner binding"
