@@ -38,6 +38,7 @@ use crate::local_model::runtime_config::SGLANG_GENERATE_CAPABILITY;
 use crate::protocols::common::preprocessor::PreprocessedRequest;
 use crate::protocols::common::{OutputOptions, SamplingOptions, StopConditions};
 use crate::protocols::sglang::generate::SglangGenerateRequest;
+use crate::protocols::sglang::http::Operation as NativeOperation;
 use crate::protocols::sglang::stream::SglangGenerateStream;
 
 const X_REQUEST_ID_HEADER: &str = "x-request-id";
@@ -92,9 +93,15 @@ pub fn router(state: Arc<service_v2::State>, path: Option<String>) -> (Vec<Route
     let docs = vec![
         RouteDoc::new(axum::http::Method::POST, &path),
         RouteDoc::new(axum::http::Method::PUT, &path),
+        RouteDoc::new(axum::http::Method::GET, "/open_session"),
+        RouteDoc::new(axum::http::Method::POST, "/open_session"),
+        RouteDoc::new(axum::http::Method::GET, "/close_session"),
+        RouteDoc::new(axum::http::Method::POST, "/close_session"),
     ];
     let router = Router::new()
         .route(&path, post(handler).put(handler))
+        .route("/open_session", post(open_session).get(open_session))
+        .route("/close_session", post(close_session).get(close_session))
         .layer(axum::extract::DefaultBodyLimit::max(get_body_limit()))
         .with_state(state);
     (docs, router)
@@ -221,9 +228,37 @@ async fn handler(
     State(state): State<Arc<service_v2::State>>,
     request: axum::extract::Request,
 ) -> Response {
+    native_handler(state, request, NativeOperation::Generate).await
+}
+
+async fn open_session(
+    State(state): State<Arc<service_v2::State>>,
+    request: axum::extract::Request,
+) -> Response {
+    native_handler(state, request, NativeOperation::OpenSession).await
+}
+
+async fn close_session(
+    State(state): State<Arc<service_v2::State>>,
+    request: axum::extract::Request,
+) -> Response {
+    native_handler(state, request, NativeOperation::CloseSession).await
+}
+
+async fn native_handler(
+    state: Arc<service_v2::State>,
+    request: axum::extract::Request,
+    operation: NativeOperation,
+) -> Response {
     let native = state.manager().list_native_generate_models();
     let headers = request.headers().clone();
     if native.is_empty() {
+        if operation != NativeOperation::Generate {
+            return error_response(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "native session control is unavailable".into(),
+            );
+        }
         let json = Json::<SglangGenerateRequest>::from_request(request, &state).await;
         return legacy_handler(State(state), headers, json).await;
     }
@@ -253,20 +288,46 @@ async fn handler(
     if let Err(response) = check_model_serving_ready(&state, model) {
         return adapt_openai_error(response);
     }
-    let binding = match state.manager().native_generate(model) {
+    let mut binding = match state.manager().native_generate(model, None) {
         Ok(binding) => binding,
         Err(error) => return error_response(StatusCode::SERVICE_UNAVAILABLE, error.to_string()),
     };
-    match binding
-        .forward(
-            method,
-            headers,
-            body,
-            state.metrics_clone(),
-            state.manager().metric_model_for(model),
-        )
-        .await
-    {
+    if operation != NativeOperation::OpenSession {
+        let id = match super::native_generate::routing::request_session_id(&body, operation) {
+            Ok(id) => id,
+            Err(error) => return error_response(StatusCode::BAD_REQUEST, error.to_string()),
+        };
+        if let Some(id) = id {
+            let endpoint = match binding.session_endpoint(&id).await {
+                Ok(endpoint) => endpoint,
+                Err(error) => {
+                    return error_response(StatusCode::SERVICE_UNAVAILABLE, error.to_string());
+                }
+            };
+            binding = match state.manager().native_generate(model, Some(&endpoint)) {
+                Ok(binding) => binding,
+                Err(error) => {
+                    return error_response(StatusCode::SERVICE_UNAVAILABLE, error.to_string());
+                }
+            };
+        }
+    }
+    let result = if operation == NativeOperation::Generate {
+        binding
+            .forward(
+                method,
+                headers,
+                body,
+                state.metrics_clone(),
+                state.manager().metric_model_for(model),
+            )
+            .await
+    } else {
+        binding
+            .session_control(operation, method, headers, body)
+            .await
+    };
+    match result {
         Ok(response) => response,
         Err(error) => {
             tracing::warn!(%error, "native SGLang routing failed before response headers");

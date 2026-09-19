@@ -1175,6 +1175,10 @@ pub(super) static SGLANG_ENABLE_GENERATE_ENV: &str = "DYN_SGLANG_ENABLE_GENERATE
 /// (default: `/generate`).
 pub(super) static HTTP_SVC_SGLANG_GENERATE_PATH_ENV: &str = "DYN_HTTP_SVC_SGLANG_GENERATE_PATH";
 fn validate_generate_route_path(path: &str) -> Result<()> {
+    anyhow::ensure!(
+        !matches!(path, "/open_session" | "/close_session"),
+        "Generate route conflicts with a native session route: {path:?}"
+    );
     if !path.starts_with("/") {
         anyhow::bail!("Generate route path must start with '/': {path:?}");
     }
@@ -2798,7 +2802,14 @@ mod tests {
 
     #[test]
     fn generate_route_path_validation_rejects_invalid_paths() {
-        for path in ["", "native/vllm", "/:model", "/*path"] {
+        for path in [
+            "",
+            "native/vllm",
+            "/:model",
+            "/*path",
+            "/open_session",
+            "/close_session",
+        ] {
             assert!(validate_generate_route_path(path).is_err());
         }
     }
