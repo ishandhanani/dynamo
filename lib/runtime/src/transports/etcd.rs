@@ -454,6 +454,29 @@ impl Client {
             .map_err(|err| err.into())
     }
 
+    /// Delete only this exact value, without deleting a concurrently replaced owner.
+    /// Returns false if the key is missing or its value changed.
+    pub async fn kv_compare_and_delete(
+        &self,
+        key: impl AsRef<str>,
+        expected: impl AsRef<[u8]>,
+    ) -> Result<bool> {
+        let key = key.as_ref();
+        let txn = Txn::new()
+            .when(vec![
+                Compare::version(key, CompareOp::Greater, 0),
+                Compare::value(key, CompareOp::Equal, expected.as_ref().to_vec()),
+            ])
+            .and_then(vec![TxnOp::delete(key, None)]);
+        Ok(self
+            .connector
+            .get_client()
+            .kv_client()
+            .txn(txn)
+            .await?
+            .succeeded())
+    }
+
     pub async fn kv_get_prefix(&self, prefix: impl AsRef<str>) -> Result<Vec<KeyValue>> {
         let mut get_response = self
             .connector
@@ -1270,6 +1293,88 @@ mod tests {
     use crate::{DistributedRuntime, distributed::DistributedConfig};
 
     use super::*;
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn native_owner_lease_survives_frontend_shutdown_and_fences_delete() {
+        let frontend_runtime = Runtime::from_current().unwrap();
+        let worker_runtime = Runtime::from_current().unwrap();
+        let observer_runtime = Runtime::from_current().unwrap();
+        let options = ClientOptions {
+            lease_ttl: 5,
+            ..Default::default()
+        };
+        let frontend = Client::new(options.clone(), frontend_runtime.clone())
+            .await
+            .unwrap();
+        let worker = Client::new(options.clone(), worker_runtime.clone())
+            .await
+            .unwrap();
+        let observer = Client::new(options, observer_runtime.clone())
+            .await
+            .unwrap();
+        let key = format!("__native_owner_test/{}", uuid::Uuid::new_v4());
+        let frontend_marker = format!("{key}/frontend");
+        frontend
+            .kv_create(&frontend_marker, b"live".to_vec(), None)
+            .await
+            .unwrap();
+        assert_eq!(
+            frontend
+                .kv_create(&key, b"first-open".to_vec(), Some(worker.lease_id()))
+                .await
+                .unwrap(),
+            None
+        );
+        frontend_runtime.shutdown();
+        async fn wait_missing(client: &Client, key: &str) {
+            tokio::time::timeout(Duration::from_secs(10), async {
+                while !client.kv_get(key, None).await.unwrap().is_empty() {
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                }
+            })
+            .await
+            .unwrap();
+        }
+        wait_missing(&observer, &frontend_marker).await;
+        assert_eq!(
+            observer.kv_get(key.as_str(), None).await.unwrap()[0].value(),
+            b"first-open"
+        );
+        assert_eq!(
+            observer
+                .kv_compare_and_put(&key, b"first-open", b"second-open", Some(worker.lease_id()))
+                .await
+                .unwrap(),
+            CompareAndPutOutcome::Updated
+        );
+        assert!(
+            !observer
+                .kv_compare_and_delete(&key, b"first-open")
+                .await
+                .unwrap()
+        );
+        assert_eq!(
+            observer.kv_get(key.as_str(), None).await.unwrap()[0].value(),
+            b"second-open"
+        );
+        assert!(
+            observer
+                .kv_compare_and_delete(&key, b"second-open")
+                .await
+                .unwrap()
+        );
+        assert!(!observer.kv_compare_and_delete(&key, b"").await.unwrap());
+        observer
+            .kv_create(&key, b"third-open".to_vec(), Some(worker.lease_id()))
+            .await
+            .unwrap();
+        worker_runtime.shutdown();
+        wait_missing(&observer, &key).await;
+        observer_runtime.shutdown();
+        tokio::task::spawn_blocking(move || drop((frontend, worker, observer)))
+            .await
+            .unwrap();
+    }
 
     #[test]
     fn test_ectd_client() {
