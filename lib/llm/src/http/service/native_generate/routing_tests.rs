@@ -34,7 +34,7 @@ use crate::{
 };
 
 const EPOCH: &str = "11111111111111111111111111111111";
-const BODY: &[u8] = b"{\"input_ids\": [[1,2], [3]], \"stream\":false, \"routed_dp_rank\":1, \"sampling_params\":{\"n\":2}, \"future_field\":1.234567890123456789 }";
+const BODY: &[u8] = br#"{"input_ids": [[1,2], [3]], "stream":false, "routed_dp_rank":1, "sampling_params":{"n":2,"future_option":1e400}, "future_field":{"number":1e400,"float":1.234567890123456789} }"#;
 
 #[derive(Default)]
 struct Engine {
@@ -402,4 +402,19 @@ fn native_projection_counts_embeddings_and_rejects_unsafe_sampling() {
                 .is_err()
         );
     }
+}
+
+#[test]
+fn native_projection_leaves_unrelated_numbers_opaque() {
+    let body = br#"{"input_ids":[[1],[2]],"sampling_params":[{"n":2,"future_option":1e400},{"n":2,"future_option":-1e400}],"future_field":1e400}"#;
+    let children = Projection::read(body)
+        .unwrap()
+        .children(None, true)
+        .unwrap();
+    assert_eq!(children.len(), 6);
+    // Duplicate routing fields use the last value, including escaped keys.
+    let body = br#"{"input_ids":[1],"routed_dp_rank":0,"routed_dp_ran\u006b":1}"#;
+    assert_eq!(Projection::read(body).unwrap().dp_rank, Some(1));
+    assert!(Projection::read(br#"{"input_ids":[1],"routed_dp_rank":1e400}"#).is_err());
+    assert!(Projection::read(br#"{"input_ids":[1],"future_field":1e}"#).is_err());
 }
