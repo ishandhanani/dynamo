@@ -98,6 +98,7 @@ pub struct DistributedRuntime {
     runtime: Runtime,
 
     nats_client: Option<transports::nats::Client>,
+    etcd_client: Option<transports::etcd::Client>,
     network_manager: Arc<NetworkManager>,
     tcp_server: Arc<OnceCell<Arc<transports::tcp::server::TcpStreamServer>>>,
     quic_response_server:
@@ -204,6 +205,7 @@ impl DistributedRuntime {
         )));
 
         // Initialize discovery client based on backend configuration
+        let mut etcd_client = None;
         let (discovery_client, discovery_metadata) = match discovery_backend {
             DiscoveryBackend::Kubernetes => {
                 tracing::info!("Initializing Kubernetes discovery backend");
@@ -225,9 +227,10 @@ impl DistributedRuntime {
                 let runtime_clone = runtime.clone();
                 let store = match kv_selector {
                     kv::Selector::Etcd(etcd_config) => {
-                        let etcd_client = etcd::Client::new(*etcd_config, runtime_clone).await.inspect_err(|err|
+                        let client = etcd::Client::new(*etcd_config, runtime_clone).await.inspect_err(|err|
                             tracing::error!(%err, "Could not connect to etcd. Pass `--discovery-backend ..` to use a different backend or start etcd."))?;
-                        kv::Manager::etcd(etcd_client)
+                        etcd_client = Some(client.clone());
+                        kv::Manager::etcd(client)
                     }
                     kv::Selector::File(root) => kv::Manager::file(runtime.primary_token(), root),
                     kv::Selector::Memory => kv::Manager::memory(),
@@ -260,6 +263,7 @@ impl DistributedRuntime {
             runtime,
             network_manager: Arc::new(network_manager),
             nats_client,
+            etcd_client,
             tcp_server: Arc::new(OnceCell::new()),
             quic_response_server: Arc::new(OnceCell::new()),
             system_status_server: Arc::new(OnceLock::new()),
@@ -473,6 +477,13 @@ impl DistributedRuntime {
     /// Returns the discovery interface for service registration and discovery
     pub fn discovery(&self) -> Arc<dyn Discovery> {
         self.discovery_client.clone()
+    }
+
+    /// The existing etcd discovery connection, when that backend is selected.
+    /// Its discovery worker IDs are etcd lease IDs, so ownership records can
+    /// follow the selected worker's lifetime rather than the writing frontend.
+    pub fn etcd_client(&self) -> Option<&transports::etcd::Client> {
+        self.etcd_client.as_ref()
     }
 
     /// Register an endpoint until the last runtime-wide owner drops its lease.
