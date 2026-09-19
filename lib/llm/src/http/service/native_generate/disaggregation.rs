@@ -96,7 +96,10 @@ impl NativeGenerateBinding {
                 &metadata,
                 RequestPhase::Decode,
                 deadline,
-                constraints.unwrap_or_default(),
+                NativeConstraints {
+                    routing: constraints.unwrap_or_default(),
+                    ..Default::default()
+                },
             ),
         )
         .await?;

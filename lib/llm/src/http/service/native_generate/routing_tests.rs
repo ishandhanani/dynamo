@@ -259,6 +259,10 @@ async fn public_native_generate_keeps_bytes_books_fanout_and_fences_retired_work
             .insert(control::CAPABILITY.into(), true.into());
         let binding = Arc::new(NativeGenerateBinding {
             prefill: None,
+            endpoint: dynamo_runtime::protocols::EndpointId::from(
+                "native_frontend.workers.generate",
+            ),
+            sessions: None,
             admitted_ids: admitted.clone(),
             cancellation: CancellationToken::new(),
             client: NativeGenerateClient::from_client_with_dispatch(
@@ -387,6 +391,37 @@ async fn public_native_generate_keeps_bytes_books_fanout_and_fences_retired_work
     })
     .await
     .unwrap();
+}
+
+#[test]
+fn native_session_projection_defers_empty_suffix_but_requires_effective_history() {
+    let body =
+        br#"{"input_ids":[],"session_params":{"id":"s","rid":"turn","offset":0,"future":1e400}}"#;
+    assert_eq!(
+        request_session_id(body, http::Operation::Generate)
+            .unwrap()
+            .as_deref(),
+        Some("s")
+    );
+    let projection = Projection::read(body).unwrap();
+    assert_eq!(projection.value["session_params"]["offset"], 0);
+    assert!(
+        projection.clone().children(None, true, false).unwrap()[0]
+            .tokens
+            .is_empty()
+    );
+    assert!(
+        projection.children(None, true, true).is_err(),
+        "native P/D session history is not synchronized"
+    );
+    assert!(
+        Projection::read(br#"{"input_ids":[]}"#)
+            .unwrap()
+            .children(None, true, false)
+            .is_err()
+    );
+    assert!(request_session_id(br#"{"session_params":{}}"#, http::Operation::Generate).is_err());
+    assert!(request_session_id(br#"{"session_id":""}"#, http::Operation::OpenSession).is_err());
 }
 
 #[test]

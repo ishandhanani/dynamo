@@ -1296,6 +1296,7 @@ impl ModelManager {
     pub(crate) fn native_generate(
         &self,
         model: &str,
+        endpoint: Option<&EndpointId>,
     ) -> Result<
         Arc<crate::http::service::native_generate::routing::NativeGenerateBinding>,
         ModelManagerError,
@@ -1305,7 +1306,7 @@ impl ModelManager {
             .models
             .get(model)
             .ok_or_else(|| ModelManagerError::ModelNotFound(model.to_string()))?
-            .native_generate()
+            .native_generate(endpoint)
     }
 
     pub fn list_generate_models_for_capability(&self, capability: &str) -> Vec<String> {

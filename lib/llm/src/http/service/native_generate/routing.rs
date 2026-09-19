@@ -13,6 +13,8 @@ use bytes::Bytes;
 use dynamo_runtime::{
     component::Endpoint,
     pipeline::{Context, RouterMode},
+    protocols::EndpointId,
+    traits::DistributedRuntimeProvider,
 };
 use serde_json::{Value, value::RawValue};
 use tokio::{sync::watch, time::Instant};
@@ -48,10 +50,36 @@ pub(crate) struct NativeGenerateBinding {
     tokenizer: Option<Tokenizer>,
     card: ModelDeploymentCard,
     prefill: Option<Arc<PrefillRouter>>,
+    endpoint: EndpointId,
+    sessions: Option<session_directory::Directory>,
 }
 
 #[path = "disaggregation.rs"]
 mod disaggregation;
+#[path = "session_directory.rs"]
+mod session_directory;
+#[path = "sessions.rs"]
+mod sessions;
+pub(crate) use sessions::request_session_id;
+
+#[derive(Default)]
+struct NativeConstraints {
+    routing: dynamo_kv_router::protocols::RoutingConstraints,
+    pinned: Option<crate::session_affinity::AffinityTarget>,
+}
+
+fn check_owned_headers(headers: &HeaderMap) -> anyhow::Result<()> {
+    anyhow::ensure!(
+        !headers
+            .keys()
+            .any(|name| name.as_str().starts_with("x-override-")
+                || name.as_str().starts_with("x-sglang-session-")
+                || name == http::lifecycle::ATTEMPT_HEADER
+                || name == http::lifecycle::INCARNATION_HEADER),
+        "native routing and lifecycle override headers are owned by Dynamo"
+    );
+    Ok(())
+}
 
 pub(crate) fn supports_native(card: &ModelDeploymentCard) -> bool {
     [http::CAPABILITY, http::lifecycle::CAPABILITY]
@@ -154,13 +182,19 @@ impl NativeGenerateBinding {
             },
             card: card.clone(),
             prefill,
+            endpoint: endpoint.id(),
+            sessions: endpoint
+                .drt()
+                .etcd_client()
+                .cloned()
+                .map(|client| session_directory::Directory::new(client, card.name())),
         })
     }
 
     pub(crate) async fn forward(
         &self,
         method: Method,
-        headers: HeaderMap,
+        mut headers: HeaderMap,
         body: Bytes,
         metrics: Arc<crate::http::service::metrics::Metrics>,
         metric_model: &str,
@@ -170,14 +204,7 @@ impl NativeGenerateBinding {
             "native WorkerSet is retired or unavailable"
         );
         let prepared = async {
-            anyhow::ensure!(
-                !headers
-                    .keys()
-                    .any(|name| name.as_str().starts_with("x-override-")
-                        || name == http::lifecycle::ATTEMPT_HEADER
-                        || name == http::lifecycle::INCARNATION_HEADER),
-                "native routing and lifecycle override headers are owned by Dynamo"
-            );
+            check_owned_headers(&headers)?;
             let projection = Projection::read(&body)?;
             if self.prefill.is_none() {
                 projection.require_aggregated()?;
@@ -223,7 +250,7 @@ impl NativeGenerateBinding {
             let metadata = crate::http::service::metadata::extract_metadata_from_http(&headers)?;
             anyhow::Ok((children, requested_rank, metadata, streaming, projection))
         };
-        let (children, requested_rank, metadata, streaming, projection) =
+        let (mut children, requested_rank, metadata, streaming, projection) =
             prepared.await.map_err(NativeRequestError)?;
         let mut guard = metrics.create_inflight_guard(
             metric_model,
@@ -236,6 +263,12 @@ impl NativeGenerateBinding {
         guard.mark_error(crate::http::service::metrics::ErrorType::Cancelled);
         let result = async {
             let deadline = Instant::now() + Duration::from_secs(30);
+            let owner = tokio::time::timeout_at(
+                deadline,
+                self.resolve_session(&projection, &mut children, requested_rank),
+            )
+            .await??;
+            let requested_rank = owner.as_ref().map(|owner| owner.dp_rank).or(requested_rank);
             if let Some(prefill) = &self.prefill {
                 return self
                     .forward_disaggregated(
@@ -258,9 +291,28 @@ impl NativeGenerateBinding {
                     &metadata,
                     RequestPhase::Aggregated,
                     deadline,
-                    Default::default(),
+                    NativeConstraints {
+                        pinned: owner.as_ref().map(|owner| {
+                            crate::session_affinity::AffinityTarget::new(
+                                owner.worker_id,
+                                Some(owner.dp_rank),
+                            )
+                        }),
+                        ..Default::default()
+                    },
                 )
                 .await?;
+            if let Some(owner) = owner {
+                anyhow::ensure!(
+                    admission.descriptor.supports_sessions()
+                        && admission.descriptor.incarnation == owner.worker_incarnation,
+                    "native session owner changed during admission"
+                );
+                headers.insert(
+                    "x-sglang-session-incarnation",
+                    owner.session_incarnation.parse()?,
+                );
+            }
             let attempt = admission.into_attempt(self, "null")?;
             let request = http::Request {
                 method: method.to_string(),
@@ -296,11 +348,11 @@ impl NativeGenerateBinding {
         metadata: &BTreeMap<String, String>,
         phase: RequestPhase,
         deadline: Instant,
-        mut constraints: dynamo_kv_router::protocols::RoutingConstraints,
+        mut constraints: NativeConstraints,
     ) -> anyhow::Result<Admission> {
-        constraints.required_dp_rank = requested_rank;
+        constraints.routing.required_dp_rank = requested_rank;
         let mut reservations: Vec<ReservedChild> = Vec::with_capacity(children.len());
-        let mut worker = None;
+        let mut worker = constraints.pinned;
         for child in children {
             let request = PreprocessedRequest::builder()
                 .model(self.card.name().to_string())
@@ -310,7 +362,7 @@ impl NativeGenerateBinding {
                 .output_options(OutputOptions::default())
                 .routing(Some(RoutingHints {
                     expected_output_tokens: child.max_tokens,
-                    routing_constraints: Some(constraints.clone()),
+                    routing_constraints: Some(constraints.routing.clone()),
                     priority_jump: Some(child.priority.max(0) as f64),
                     priority: Some(child.priority),
                     lora_name: child.lora,
@@ -345,6 +397,10 @@ impl NativeGenerateBinding {
                         .reserve_native(&request, worker, requested_rank, phase),
                 )
                 .await?;
+                anyhow::ensure!(
+                    worker.is_none_or(|target| target == reservation.target()),
+                    "configured policy selected a different native pinned target"
+                );
                 anyhow::ensure!(
                     requested_rank.is_none_or(|rank| Some(rank) == reservation.target().dp_rank),
                     "configured KV policy selected a different DP rank than the native request constraint"
@@ -427,7 +483,6 @@ impl Projection {
             "lora_path",
             "cache_salt",
             "extra_key",
-            "session_params",
             "bootstrap_host",
             "bootstrap_port",
             "bootstrap_room",
@@ -436,6 +491,23 @@ impl Projection {
             if let Some(raw) = fields.get(key) {
                 value.insert(key.into(), serde_json::from_str(raw.get())?);
             }
+        }
+        if let Some(raw) = fields.get("session_params").filter(|v| v.get() != "null") {
+            let fields: BTreeMap<String, &RawValue> = serde_json::from_str(raw.get())?;
+            let mut params = serde_json::Map::new();
+            for key in [
+                "id",
+                "rid",
+                "offset",
+                "replace",
+                "drop_previous_output",
+                "incarnation",
+            ] {
+                if let Some(raw) = fields.get(key) {
+                    params.insert(key.into(), serde_json::from_str(raw.get())?);
+                }
+            }
+            value.insert("session_params".into(), Value::Object(params));
         }
         if let Some(raw) = fields.get("sampling_params") {
             let project = |raw: &RawValue| -> anyhow::Result<Value> {
@@ -465,10 +537,6 @@ impl Projection {
             value.insert("sampling_params".into(), params);
         }
         let value = Value::Object(value);
-        anyhow::ensure!(
-            value.get("session_params").is_none_or(Value::is_null),
-            "native sessions require an owner binding"
-        );
         let rank = |field: &str| {
             value
                 .get(field)
@@ -514,6 +582,14 @@ impl Projection {
         uses_kv: bool,
         disaggregated: bool,
     ) -> anyhow::Result<Vec<Child>> {
+        let has_session = self
+            .value
+            .get("session_params")
+            .is_some_and(|v| !v.is_null());
+        anyhow::ensure!(
+            !has_session || !disaggregated,
+            "native P/D sessions require engine history synchronization"
+        );
         anyhow::ensure!(
             !uses_kv || !self.engine_processed_input,
             "KV routing requires engine-compatible token metadata for multimodal or embedding inputs"
@@ -580,7 +656,7 @@ impl Projection {
             }
         };
         anyhow::ensure!(
-            !uses_kv || prompts.iter().all(|tokens| !tokens.is_empty()),
+            !uses_kv || has_session || prompts.iter().all(|tokens| !tokens.is_empty()),
             "native KV routing requires nonempty effective prompt tokens"
         );
         let params = v.get("sampling_params");

@@ -301,12 +301,19 @@ impl Model {
 
     pub(crate) fn native_generate(
         &self,
+        endpoint: Option<&dynamo_runtime::protocols::EndpointId>,
     ) -> Result<
         Arc<crate::http::service::native_generate::routing::NativeGenerateBinding>,
         ModelManagerError,
     > {
-        self.select_worker_set_with(|ws| ws.native_generate.clone())
-            .ok_or_else(|| self.engine_error(self.has_native_generate()))
+        self.select_worker_set_with(|ws| {
+            if endpoint.is_none_or(|endpoint| ws.endpoint_id() == Some(endpoint)) {
+                ws.native_generate.clone()
+            } else {
+                None
+            }
+        })
+        .ok_or_else(|| self.engine_error(self.has_native_generate()))
     }
 
     pub fn has_generate_engine_for_capability(&self, capability: &str) -> bool {
