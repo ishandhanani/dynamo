@@ -308,6 +308,15 @@ async fn public_native_generate_keeps_bytes_books_fanout_and_fences_retired_work
                 .map(|load| load.active_requests)
                 .sum::<usize>()
         };
+        for body in [br#"{"input_ids":[]}"#.as_slice(), br#"{"input_ids":[[]]}"#] {
+            let response = request(body).send().await.unwrap();
+            assert_eq!(
+                response.status(),
+                StatusCode::BAD_REQUEST,
+                "{}",
+                response.text().await.unwrap()
+            );
+        }
         for (index, (body, rows)) in [(BODY, 6), (BEAM_BODY, 8)].into_iter().enumerate() {
             *engine.received.lock().unwrap() = None;
             engine.cleanup.store(false, Ordering::SeqCst);

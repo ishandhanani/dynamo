@@ -466,6 +466,10 @@ impl Projection {
                 vec![Vec::new(); texts.len()]
             }
         };
+        anyhow::ensure!(
+            !uses_kv || prompts.iter().all(|tokens| !tokens.is_empty()),
+            "native KV routing requires nonempty effective prompt tokens"
+        );
         let params = v.get("sampling_params");
         let parameters: Vec<&Value> = match params {
             Some(Value::Array(items)) => {
