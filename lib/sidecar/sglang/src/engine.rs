@@ -309,7 +309,7 @@ impl LLMEngine for SglangSidecarEngine {
             let started = HttpProxy::start(
                 &endpoint,
                 http.transport.clone(),
-                &["/generate"],
+                &["/generate", "/start_profile", "/stop_profile"],
                 self.cancel.clone(),
             )
             .await
