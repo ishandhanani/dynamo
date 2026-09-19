@@ -88,11 +88,6 @@ impl SglangSidecarEngine {
         let transport = args.sidecar.grpc.config();
         let discovery = bootstrap_discover(&endpoint, &transport)?;
         let disaggregation_mode = discovery_mode(&discovery)?;
-        if args.enable_native_http && disaggregation_mode != DisaggregationMode::Aggregated {
-            return Err(client::invalid_arg(
-                "--enable-native-http currently requires aggregated serving",
-            ));
-        }
         let bootstrap_host = if disaggregation_mode.is_prefill() {
             resolve_bootstrap_host(
                 args.bootstrap_host.as_deref(),
@@ -275,6 +270,15 @@ impl LLMEngine for SglangSidecarEngine {
             let lifecycle = LifecycleClient::discover(http).await.map_err(|error| {
                 client::protocol_error(format!("SGLang lifecycle discovery failed: {error}"))
             })?;
+            if self.disaggregation_mode != DisaggregationMode::Aggregated
+                && !lifecycle
+                    .as_ref()
+                    .is_some_and(LifecycleClient::supports_native_disaggregation)
+            {
+                return Err(client::invalid_arg(
+                    "native P/D requires SGLang native_disaggregation_version=1",
+                ));
+            }
             if lifecycle.is_some() {
                 config.runtime_data.insert(
                     dynamo_backend_common::sglang_http::lifecycle::CAPABILITY.into(),

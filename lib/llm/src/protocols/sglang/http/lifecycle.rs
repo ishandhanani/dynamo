@@ -18,6 +18,10 @@ pub struct Descriptor {
     pub version: u32,
     pub incarnation: String,
     pub header_overrides: bool,
+    /// Same-body P/D, including parallel sampling and engine logprob handoff.
+    /// Older engines omit this and remain eligible for aggregated serving.
+    #[serde(default)]
+    pub native_disaggregation_version: u32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

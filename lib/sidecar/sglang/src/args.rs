@@ -24,7 +24,7 @@ pub struct Args {
     pub bootstrap_host: Option<String>,
 
     /// Expose the experimental byte-preserving native HTTP request plane.
-    /// Aggregated serving only; does not enable public frontend routing.
+    /// P/D requires engine support for same-body dispatch and metadata handoff.
     #[arg(long)]
     pub enable_native_http: bool,
 }

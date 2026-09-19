@@ -72,8 +72,23 @@ pub async fn forward(
 /// engine. The request and response bodies remain opaque, including unary JSON.
 pub async fn forward_accounted(
     client: &NativeGenerateClient,
+    request: SingleIn<Request>,
+    attempt: lifecycle::NativeAttempt,
+) -> anyhow::Result<Response> {
+    forward_accounted_with_cancellation(
+        client,
+        request,
+        attempt,
+        tokio_util::sync::CancellationToken::new(),
+    )
+    .await
+}
+
+async fn forward_accounted_with_cancellation(
+    client: &NativeGenerateClient,
     mut request: SingleIn<Request>,
     attempt: lifecycle::NativeAttempt,
+    cancellation: tokio_util::sync::CancellationToken,
 ) -> anyhow::Result<Response> {
     use crate::protocols::sglang::http::lifecycle::{ATTEMPT_HEADER, INCARNATION_HEADER};
 
@@ -101,7 +116,6 @@ pub async fn forward_accounted(
         ));
     }
     let worker_id = attempt.worker_id();
-    let cancellation = tokio_util::sync::CancellationToken::new();
     let guard = cancellation.clone().drop_guard();
     attempt.start(cancellation);
     response(client.direct(request, worker_id).await?, Some(guard)).await

@@ -421,11 +421,32 @@ impl PrefillRouter {
             )?)
         };
 
+        let native = match &target {
+            WorkerSetTarget::Committed(target)
+                if crate::http::service::native_generate::routing::supports_native(
+                    &target.card,
+                ) =>
+            {
+                Some(Arc::new(
+                    crate::http::service::native_generate::routing::NativeGenerateBinding::new(
+                        endpoint,
+                        target.admitted_ids.clone(),
+                        context.parent_token.clone(),
+                        router.clone(),
+                        &target.card,
+                        None,
+                    )
+                    .await?,
+                ))
+            }
+            _ => None,
+        };
         Ok(PrefillBinding {
             target_id,
             endpoint_id,
             router,
             prefill_router_mode,
+            native,
         })
     }
 

@@ -111,6 +111,7 @@ impl StreamingDispatch<control::Request, Annotated<control::Response>> for Engin
                 version: 1,
                 incarnation: EPOCH.into(),
                 header_overrides: true,
+                native_disaggregation_version: 0,
             }),
             control::Request::Attempt {
                 attempt_id,
@@ -254,6 +255,7 @@ async fn public_native_generate_keeps_bytes_books_fanout_and_fences_retired_work
             .runtime_data
             .insert(control::CAPABILITY.into(), true.into());
         let binding = Arc::new(NativeGenerateBinding {
+            prefill: None,
             admitted_ids: admitted.clone(),
             cancellation: CancellationToken::new(),
             client: NativeGenerateClient::from_client_with_dispatch(
@@ -389,7 +391,7 @@ fn native_projection_counts_embeddings_and_rejects_unsafe_sampling() {
     let salted = br#"{"input_ids":[[1],[2]],"sampling_params":{"n":2},"cache_salt":["private",""],"lora_path":["adapter","other"]}"#;
     let children = Projection::read(salted)
         .unwrap()
-        .children(None, true)
+        .children(None, true, false)
         .unwrap();
     assert_eq!(children.len(), 6);
     assert_eq!(children[2].cache_namespace.as_deref(), Some("private"));
@@ -399,7 +401,7 @@ fn native_projection_counts_embeddings_and_rejects_unsafe_sampling() {
     let body = br#"{"input_embeds":[[[0.1,0.2]],[[0.3,0.4]]],"sampling_params":{"n":2}}"#;
     let children = Projection::read(body)
         .unwrap()
-        .children(None, false)
+        .children(None, false, false)
         .unwrap();
     assert_eq!(children.len(), 6);
     assert_eq!(
@@ -416,7 +418,7 @@ fn native_projection_counts_embeddings_and_rejects_unsafe_sampling() {
         assert!(
             Projection::read(body)
                 .unwrap()
-                .children(None, true)
+                .children(None, true, false)
                 .is_err()
         );
     }
@@ -427,7 +429,7 @@ fn native_projection_leaves_unrelated_numbers_opaque() {
     let body = br#"{"input_ids":[[1],[2]],"sampling_params":[{"n":2,"future_option":1e400},{"n":2,"future_option":-1e400}],"future_field":1e400}"#;
     let children = Projection::read(body)
         .unwrap()
-        .children(None, true)
+        .children(None, true, false)
         .unwrap();
     assert_eq!(children.len(), 6);
     // Duplicate routing fields use the last value, including escaped keys.
@@ -441,7 +443,7 @@ fn native_projection_leaves_unrelated_numbers_opaque() {
 fn native_beam_projection_books_rows_under_each_leader() {
     let children = Projection::read(BEAM_BODY)
         .unwrap()
-        .children(None, true)
+        .children(None, true, false)
         .unwrap();
     assert_eq!(children.len(), 2);
     assert!(
@@ -454,7 +456,7 @@ fn native_beam_projection_books_rows_under_each_leader() {
     assert!(
         Projection::read(too_many)
             .unwrap()
-            .children(None, true)
+            .children(None, true, false)
             .is_err()
     );
 }
