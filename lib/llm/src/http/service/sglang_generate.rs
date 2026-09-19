@@ -292,18 +292,25 @@ async fn native_handler(
         Ok(binding) => binding,
         Err(error) => return error_response(StatusCode::SERVICE_UNAVAILABLE, error.to_string()),
     };
-    if operation != NativeOperation::OpenSession {
-        let id = match super::native_generate::routing::request_session_id(&body, operation) {
-            Ok(id) => id,
-            Err(error) => return error_response(StatusCode::BAD_REQUEST, error.to_string()),
+    let id = match super::native_generate::routing::request_session_id(&body, operation) {
+        Ok(id) => id,
+        Err(error) => return error_response(StatusCode::BAD_REQUEST, error.to_string()),
+    };
+    if let Some(id) = id {
+        let endpoint = match binding.session_endpoint(&id).await {
+            Ok(Some(endpoint)) => Some(endpoint),
+            Ok(None) if operation == NativeOperation::OpenSession => None,
+            Ok(None) => {
+                return error_response(
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    "native session has no live owner".into(),
+                );
+            }
+            Err(error) => {
+                return error_response(StatusCode::SERVICE_UNAVAILABLE, error.to_string());
+            }
         };
-        if let Some(id) = id {
-            let endpoint = match binding.session_endpoint(&id).await {
-                Ok(endpoint) => endpoint,
-                Err(error) => {
-                    return error_response(StatusCode::SERVICE_UNAVAILABLE, error.to_string());
-                }
-            };
+        if let Some(endpoint) = endpoint {
             binding = match state.manager().native_generate(model, Some(&endpoint)) {
                 Ok(binding) => binding,
                 Err(error) => {

@@ -70,18 +70,20 @@ impl NativeGenerateBinding {
             .ok_or_else(|| anyhow::anyhow!("native session ownership requires etcd discovery"))
     }
 
-    pub(crate) async fn session_endpoint(&self, session_id: &str) -> anyhow::Result<EndpointId> {
+    pub(crate) async fn session_endpoint(
+        &self,
+        session_id: &str,
+    ) -> anyhow::Result<Option<EndpointId>> {
         let owner = self
             .sessions
             .as_ref()
             .ok_or_else(|| anyhow::anyhow!("native session ownership requires etcd discovery"))?
             .get(session_id)
-            .await?
-            .ok_or_else(|| anyhow::anyhow!("native session has no live owner"))?;
-        Ok(owner.owner.endpoint)
+            .await?;
+        Ok(owner.map(|stored| stored.owner.endpoint))
     }
 
-    async fn check_session_owner(&self, owner: &Owner) -> anyhow::Result<()> {
+    async fn describe_session_owner(&self, owner: &Owner) -> anyhow::Result<Descriptor> {
         anyhow::ensure!(
             owner.endpoint == self.endpoint
                 && !self.cancellation.is_cancelled()
@@ -93,9 +95,42 @@ impl NativeGenerateBinding {
             descriptor.supports_sessions(),
             "selected engine does not support native session control v1"
         );
+        Ok(descriptor)
+    }
+
+    async fn check_session_owner(&self, owner: &Owner) -> anyhow::Result<()> {
+        let descriptor = self.describe_session_owner(owner).await?;
         anyhow::ensure!(
             descriptor.incarnation == owner.worker_incarnation,
             "native session worker restarted"
+        );
+        Ok(())
+    }
+
+    async fn reclaim_absent_session(&self, id: &str) -> anyhow::Result<()> {
+        let directory = self.session_directory()?;
+        let Some(stored) = directory.get(id).await? else {
+            return Ok(());
+        };
+        let descriptor = self.describe_session_owner(&stored.owner).await?;
+        if descriptor.incarnation == stored.owner.worker_incarnation {
+            anyhow::ensure!(
+                stored.owner.phase != Phase::Opening,
+                "native session open outcome is still unknown"
+            );
+            let snapshot = self
+                .session_snapshot(&stored.owner, &serde_json::json!({"id": id}), None)
+                .await?;
+            anyhow::ensure!(
+                snapshot.session_incarnation.as_deref() != Some(&stored.owner.session_incarnation),
+                NativeRequestError(anyhow::anyhow!("native session is already open"))
+            );
+        }
+        // A changed worker incarnation fences even a delayed Opening. In the
+        // same incarnation, only a known completed open/close can be reclaimed.
+        anyhow::ensure!(
+            directory.remove(&stored).await?,
+            "native session owner changed during cleanup"
         );
         Ok(())
     }
@@ -158,6 +193,13 @@ impl NativeGenerateBinding {
         let snapshot = self
             .session_snapshot(&owner.owner, &serde_json::json!({"id":session_id}), None)
             .await?;
+        if owner.owner.phase == Phase::Open
+            && snapshot.session_incarnation.as_deref() != Some(&owner.owner.session_incarnation)
+        {
+            // Generation still fails; this only removes confirmed stale state
+            // so an explicit later open can reuse the ID.
+            directory.remove(&owner).await?;
+        }
         anyhow::ensure!(
             snapshot.session_incarnation.as_deref() == Some(&owner.owner.session_incarnation),
             "native session incarnation is absent or changed"
@@ -278,6 +320,7 @@ impl NativeGenerateBinding {
         let supplied_id = id.is_some();
         let id = id.unwrap_or_else(|| uuid::Uuid::new_v4().simple().to_string());
         let stored = if operation == http::Operation::OpenSession {
+            self.reclaim_absent_session(&id).await?;
             let workers = self.admitted_ids.borrow().clone();
             anyhow::ensure!(
                 !workers.is_empty() && !self.cancellation.is_cancelled(),
