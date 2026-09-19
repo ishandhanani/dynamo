@@ -134,8 +134,12 @@ mod tests {
         }
     }
 
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn runtime_round_trip_preserves_unary_and_live_stream() {
+    #[test]
+    fn runtime_round_trip_preserves_unary_and_live_stream() {
+        super::super::test_runtime().block_on(check_runtime_round_trip());
+    }
+
+    async fn check_runtime_round_trip() {
         timeout(Duration::from_secs(20), async {
             const UNARY_REQUEST: &[u8] =
                 b"{ \"stream\":false, \"input_ids\": [1,2], \"future\":1.00 }\n";
