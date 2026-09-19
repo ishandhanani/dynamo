@@ -1930,6 +1930,7 @@ async fn request_constraints_preserve_worker_only_affinity() {
     bind_affinity_target(&router, &taint_session, target).await;
     let mut taint_input = request();
     taint_input.routing_mut().routing_constraints = Some(RoutingConstraints {
+        required_dp_rank: None,
         required_taints: HashSet::from(["request-pool".to_string()]),
         ..Default::default()
     });
@@ -2138,6 +2139,7 @@ async fn migration_exclusion_preserves_hard_affinity_without_widening_or_escapin
 
     let mut constrained_input = request();
     constrained_input.routing_mut().routing_constraints = Some(RoutingConstraints {
+        required_dp_rank: None,
         required_taints: HashSet::from(["retry-pool".to_string()]),
         ..Default::default()
     });

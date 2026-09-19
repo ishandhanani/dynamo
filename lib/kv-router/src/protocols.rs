@@ -373,6 +373,9 @@ pub enum KvTransferEnforcement {
 /// `dynamo.topology/zone=us-east-1a`.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 pub struct RoutingConstraints {
+    /// Restrict rank selection without pinning a worker (native engine routing).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub required_dp_rank: Option<DpRank>,
     #[serde(default, skip_serializing_if = "HashSet::is_empty")]
     pub required_taints: HashSet<String>,
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
@@ -381,11 +384,13 @@ pub struct RoutingConstraints {
 
 impl RoutingConstraints {
     pub fn is_empty(&self) -> bool {
-        self.required_taints.is_empty() && self.preferred_taints.is_empty()
+        self.required_dp_rank.is_none()
+            && self.required_taints.is_empty()
+            && self.preferred_taints.is_empty()
     }
 
     pub fn has_hard_constraints(&self) -> bool {
-        !self.required_taints.is_empty()
+        self.required_dp_rank.is_some() || !self.required_taints.is_empty()
     }
 
     pub fn is_compatible_with_worker_taints(&self, worker_taints: &HashSet<String>) -> bool {

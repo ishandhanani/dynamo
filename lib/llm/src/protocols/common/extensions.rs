@@ -610,6 +610,7 @@ pub fn routing_constraints_to_kv(
     constraints: RoutingConstraints,
 ) -> dynamo_kv_router::protocols::RoutingConstraints {
     dynamo_kv_router::protocols::RoutingConstraints {
+        required_dp_rank: None,
         required_taints: constraints.required_taints,
         preferred_taints: constraints.preferred_taints,
     }

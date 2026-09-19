@@ -3542,6 +3542,7 @@ policy_classes:
 
         let (mut req, rx) = make_request("tainted", 256);
         req.routing_constraints = crate::protocols::RoutingConstraints {
+            required_dp_rank: None,
             required_taints: HashSet::from(["mdc-b".to_string()]),
             preferred_taints: HashMap::new(),
         };

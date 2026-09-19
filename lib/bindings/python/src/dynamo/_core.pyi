@@ -932,6 +932,7 @@ class RoutingConstraints:
     Request-side routing constraints.
 
     ``required_taints`` is a hard eligibility filter.
+    ``required_dp_rank`` restricts the rank without pinning a worker.
     ``preferred_taints`` maps taint -> signed weight.
     Positive weights prefer matching workers, negative weights avoid them,
     and ``0.0`` is neutral. Matching weights are summed and squashed with
@@ -940,11 +941,13 @@ class RoutingConstraints:
     """
     required_taints: Set[str]
     preferred_taints: Dict[str, float]
+    required_dp_rank: Optional[int]
 
     def __init__(
         self,
         required_taints: Optional[Set[str]] = None,
         preferred_taints: Optional[Dict[str, float]] = None,
+        required_dp_rank: Optional[int] = None,
     ) -> None: ...
 
 class OverlapScores:
