@@ -1283,6 +1283,31 @@ impl ModelManager {
     }
 
     /// List Generate models with an engine that advertises `capability`.
+    pub(crate) fn list_native_generate_models(&self) -> Vec<String> {
+        self.catalog
+            .load()
+            .models
+            .iter()
+            .filter(|(_, model)| model.has_native_generate())
+            .map(|(name, _)| name.clone())
+            .collect()
+    }
+
+    pub(crate) fn native_generate(
+        &self,
+        model: &str,
+    ) -> Result<
+        Arc<crate::http::service::native_generate::routing::NativeGenerateBinding>,
+        ModelManagerError,
+    > {
+        self.catalog
+            .load()
+            .models
+            .get(model)
+            .ok_or_else(|| ModelManagerError::ModelNotFound(model.to_string()))?
+            .native_generate()
+    }
+
     pub fn list_generate_models_for_capability(&self, capability: &str) -> Vec<String> {
         self.catalog
             .load()
