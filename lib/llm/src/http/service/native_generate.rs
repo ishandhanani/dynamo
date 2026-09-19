@@ -12,6 +12,7 @@ use futures::StreamExt;
 use crate::protocols::sglang::http::{Request, ResponseFrame, decode_headers};
 
 pub mod lifecycle;
+pub(crate) mod routing;
 
 pub type NativeGenerateClient = PushRouter<Request, Annotated<ResponseFrame>>;
 

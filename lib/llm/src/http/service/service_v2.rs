@@ -1233,6 +1233,7 @@ impl HttpServiceConfigBuilder {
         let generate_engine_capabilities = [
             vllm_generate_enabled.then_some(VLLM_INFERENCE_V1_GENERATE_CAPABILITY),
             sglang_generate_enabled.then_some(SGLANG_GENERATE_CAPABILITY),
+            sglang_generate_enabled.then_some(crate::protocols::sglang::http::CAPABILITY),
         ]
         .into_iter()
         .flatten()
@@ -2742,7 +2743,8 @@ mod tests {
                     enabled.generate_engine_capabilities(),
                     vec![
                         VLLM_INFERENCE_V1_GENERATE_CAPABILITY,
-                        SGLANG_GENERATE_CAPABILITY
+                        SGLANG_GENERATE_CAPABILITY,
+                        crate::protocols::sglang::http::CAPABILITY,
                     ]
                 );
 
@@ -2755,7 +2757,12 @@ mod tests {
                 ] {
                     temp_env::with_var(variable, Some("1"), || {
                         let enabled = HttpService::builder().build().unwrap();
-                        assert_eq!(enabled.generate_engine_capabilities(), vec![capability]);
+                        let expected = if capability == SGLANG_GENERATE_CAPABILITY {
+                            vec![capability, crate::protocols::sglang::http::CAPABILITY]
+                        } else {
+                            vec![capability]
+                        };
+                        assert_eq!(enabled.generate_engine_capabilities(), expected);
                     });
                 }
             },
