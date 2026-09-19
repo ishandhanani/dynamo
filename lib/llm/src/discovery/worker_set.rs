@@ -217,7 +217,7 @@ pub struct WorkerSet {
     pub(crate) realtime_engine: Option<RealtimeBidirectionalEngine>,
     pub(crate) generate_engine: Option<GenerateStreamingEngine>,
     pub(crate) native_generate:
-        Option<Arc<crate::http::service::native_generate::routing::NativeGenerateBinding>>,
+        Option<Arc<crate::http::service::sglang_generate::routing::NativeGenerateBinding>>,
 
     /// Owns load monitoring for routed surfaces that do not use `RoutingHost`.
     load_context: Option<Arc<RoutingLoadContext>>,

@@ -4,7 +4,7 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use dynamo_backend_common::sglang_http::{self, MAX_BODY_CHUNK, Request, ResponseFrame};
+use dynamo_backend_common::http::{self, MAX_BODY_CHUNK, Request, ResponseFrame};
 use dynamo_runtime::{
     component::{Endpoint, StartedEndpoint},
     pipeline::{
@@ -17,26 +17,30 @@ use futures::StreamExt;
 use reqwest::Method;
 use tokio_util::sync::CancellationToken;
 
-use super::{NativeHttp, transport::HttpTransport};
+mod transport;
+pub use transport::HttpTransport;
 
-pub(crate) struct NativeHttpEndpoint {
+pub struct HttpProxy {
     transport: HttpTransport,
     cancel: CancellationToken,
+    paths: &'static [&'static str],
 }
 
-impl NativeHttpEndpoint {
-    pub(crate) async fn start(
+impl HttpProxy {
+    pub async fn start(
         primary: &Endpoint,
-        http: &NativeHttp,
+        transport: HttpTransport,
+        paths: &'static [&'static str],
         cancel: CancellationToken,
     ) -> anyhow::Result<StartedEndpoint> {
         let handler = Arc::new(Self {
-            transport: http.transport.clone(),
+            transport,
             cancel,
+            paths,
         });
         primary
             .component()
-            .endpoint(sglang_http::endpoint_name(&primary.id().name))
+            .endpoint(http::endpoint_name(&primary.id().name))
             .endpoint_builder()
             .handler(Ingress::for_engine(handler)?)
             .start_with_registration()
@@ -46,7 +50,7 @@ impl NativeHttpEndpoint {
 
 #[async_trait]
 impl AsyncEngine<SingleIn<Request>, ManyOut<Annotated<ResponseFrame>>, anyhow::Error>
-    for NativeHttpEndpoint
+    for HttpProxy
 {
     async fn generate(
         &self,
@@ -56,10 +60,11 @@ impl AsyncEngine<SingleIn<Request>, ManyOut<Annotated<ResponseFrame>>, anyhow::E
         let context = context.context();
         let method = Method::from_bytes(request.method.as_bytes())?;
         anyhow::ensure!(
-            matches!(method, Method::POST | Method::PUT),
-            "invalid method for native HTTP operation"
+            self.paths
+                .contains(&request.path.split('?').next().unwrap_or_default()),
+            "HTTP path is not enabled by this sidecar"
         );
-        let mut headers = sglang_http::decode_headers(request.headers)?;
+        let mut headers = http::decode_headers(request.headers)?;
         // The HTTP client computes framing from the retained request bytes.
         headers.remove("content-length");
         let transport = self.transport.clone();
@@ -73,7 +78,7 @@ impl AsyncEngine<SingleIn<Request>, ManyOut<Annotated<ResponseFrame>>, anyhow::E
                 _ = cancel.cancelled() => None,
                 _ = stream_context.stopped() => None,
                 _ = stream_context.killed() => None,
-                response = transport.send(method, "/generate", headers, request.body) => Some(response),
+                response = transport.send(method, &request.path, headers, request.body) => Some(response),
             };
             let response = match response {
                 Some(Ok(response)) => response,
@@ -88,7 +93,7 @@ impl AsyncEngine<SingleIn<Request>, ManyOut<Annotated<ResponseFrame>>, anyhow::E
             };
             let head = ResponseFrame::Head {
                 status: response.status().as_u16(),
-                headers: sglang_http::encode_headers(response.headers().clone()),
+                headers: http::encode_headers(response.headers().clone()),
             };
             let mut upstream = response.bytes_stream();
             yield Annotated::from_data(head);
@@ -126,12 +131,12 @@ impl AsyncEngine<SingleIn<Request>, ManyOut<Annotated<ResponseFrame>>, anyhow::E
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::HttpEndpoint;
     use axum::{Router, body::Body, http::HeaderMap, response::Response, routing::any};
     use bytes::Bytes;
-    use dynamo_llm::http::service::native_generate::{NativeGenerateClient, forward};
+    use dynamo_llm::http::service::http_proxy::{HttpClient, forward};
     use dynamo_runtime::pipeline::{Context, network::egress::push_router::RouterMode};
     use dynamo_runtime::{DistributedRuntime, Runtime, distributed::DistributedConfig};
-    use dynamo_sidecar_common::HttpEndpoint;
     use tokio::{
         net::TcpListener,
         sync::Notify,
@@ -150,10 +155,14 @@ mod tests {
 
     #[test]
     fn runtime_round_trip_preserves_unary_and_live_stream() {
-        super::super::test_runtime().block_on(check_runtime_round_trip());
+        test_runtime().block_on(check_runtime_round_trip());
     }
 
     async fn check_runtime_round_trip() {
+        const GZIP: &[u8] = &[
+            31, 139, 8, 0, 0, 0, 0, 0, 0, 3, 171, 86, 202, 207, 86, 178, 42, 41, 42, 77, 173, 5, 0,
+            144, 95, 212, 167, 11, 0, 0, 0,
+        ];
         timeout(Duration::from_secs(20), async {
             const UNARY_REQUEST: &[u8] =
                 b"{ \"stream\":false, \"input_ids\": [1,2], \"future\":1.00 }\n";
@@ -169,7 +178,7 @@ mod tests {
             let last = Bytes::from_static(b"data: [DONE]\n\n");
             let unary = Bytes::from_static(b"{ \"future\":1e-05, \"engine\":\"overloaded\" }\n");
             let app = Router::new().route(
-                "/generate",
+                "/fixture",
                 any(move |method: Method, headers: HeaderMap, body: Bytes| {
                     let release = engine_release.clone();
                     let closed = engine_closed.clone();
@@ -230,18 +239,29 @@ mod tests {
                     }
                 }),
             );
+            let app = app.route(
+                "/bytes",
+                any(|method: Method, uri: axum::http::Uri| async move {
+                    assert_eq!(method, Method::GET);
+                    assert_eq!(uri.query(), Some("format=raw"));
+                    Response::builder()
+                        .status(307)
+                        .header("location", "/must-not-follow")
+                        .header("content-encoding", "gzip")
+                        .body(Body::from(GZIP))
+                        .unwrap()
+                }),
+            );
             let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-            let http = NativeHttp {
-                transport: HttpTransport::new(
-                    HttpEndpoint::parse(
-                        &format!("http://{}", listener.local_addr().unwrap()),
-                        "test",
-                    )
-                    .unwrap(),
-                    Duration::from_secs(5),
+            let transport = HttpTransport::new(
+                HttpEndpoint::parse(
+                    &format!("http://{}", listener.local_addr().unwrap()),
+                    "test",
                 )
                 .unwrap(),
-            };
+                Duration::from_secs(5),
+            )
+            .unwrap();
             let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
             let runtime = Runtime::from_current().unwrap();
             let drt = DistributedRuntime::new(runtime.clone(), DistributedConfig::process_local())
@@ -253,18 +273,57 @@ mod tests {
                 .component("sidecar")
                 .unwrap()
                 .endpoint("generate");
-            let started = NativeHttpEndpoint::start(&primary, &http, CancellationToken::new())
-                .await
-                .unwrap();
+            let started = HttpProxy::start(
+                &primary,
+                transport,
+                &["/fixture", "/bytes"],
+                CancellationToken::new(),
+            )
+            .await
+            .unwrap();
             let worker = started.instance().id();
             let endpoint = primary
                 .component()
-                .endpoint(sglang_http::endpoint_name("generate"));
+                .endpoint(http::endpoint_name("generate"));
             let client = endpoint.client().await.unwrap();
             client.wait_for_instances().await.unwrap();
-            let client = NativeGenerateClient::from_client(client, RouterMode::Direct)
+            let client = HttpClient::from_client(client, RouterMode::Direct)
                 .await
                 .unwrap();
+            let response = forward(
+                &client,
+                Context::new(Request {
+                    method: "GET".into(),
+                    path: "/bytes?format=raw".into(),
+                    headers: vec![],
+                    body: Bytes::new(),
+                }),
+                worker,
+            )
+            .await
+            .unwrap();
+            assert_eq!(response.status(), 307);
+            assert_eq!(response.headers()["content-encoding"], "gzip");
+            assert_eq!(
+                axum::body::to_bytes(response.into_body(), 1024)
+                    .await
+                    .unwrap(),
+                GZIP
+            );
+            assert!(
+                forward(
+                    &client,
+                    Context::new(Request {
+                        method: "GET".into(),
+                        path: "/not-registered".into(),
+                        headers: vec![],
+                        body: Bytes::new(),
+                    }),
+                    worker
+                )
+                .await
+                .is_err()
+            );
             for mode in [
                 "unary",
                 "stream",
@@ -286,7 +345,8 @@ mod tests {
                 ]);
                 let request = Request {
                     method: "PUT".into(),
-                    headers: sglang_http::encode_headers(headers),
+                    path: "/fixture".into(),
+                    headers: http::encode_headers(headers),
                     body: Bytes::from_static(if mode == "unary" {
                         UNARY_REQUEST
                     } else {
@@ -348,4 +408,18 @@ mod tests {
         .await
         .unwrap();
     }
+}
+
+// The request-plane TCP listener is process-wide. Its Tokio executor must
+// outlive every fixture that registers an endpoint on that listener.
+#[cfg(test)]
+fn test_runtime() -> &'static tokio::runtime::Runtime {
+    static RUNTIME: std::sync::OnceLock<tokio::runtime::Runtime> = std::sync::OnceLock::new();
+    RUNTIME.get_or_init(|| {
+        tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(2)
+            .enable_all()
+            .build()
+            .unwrap()
+    })
 }

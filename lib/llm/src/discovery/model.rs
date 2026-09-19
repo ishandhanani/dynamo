@@ -294,7 +294,7 @@ impl Model {
         self.worker_sets.iter().any(|entry| {
             entry
                 .value()
-                .supports_runtime_capability(crate::protocols::sglang::http::CAPABILITY)
+                .supports_runtime_capability(crate::protocols::sglang::HTTP_CAPABILITY)
                 && entry.value().card().lora.is_none()
         })
     }
@@ -302,7 +302,7 @@ impl Model {
     pub(crate) fn native_generate(
         &self,
     ) -> Result<
-        Arc<crate::http::service::native_generate::routing::NativeGenerateBinding>,
+        Arc<crate::http::service::sglang_generate::routing::NativeGenerateBinding>,
         ModelManagerError,
     > {
         self.select_worker_set_with(|ws| ws.native_generate.clone())

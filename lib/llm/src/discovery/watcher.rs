@@ -150,7 +150,7 @@ fn supports_generate_capability(card: &ModelDeploymentCard, capability: &str) ->
 fn supports_enabled_engine_generate(card: &ModelDeploymentCard, capabilities: &[&str]) -> bool {
     capabilities
         .iter()
-        .filter(|capability| **capability != crate::protocols::sglang::http::CAPABILITY)
+        .filter(|capability| **capability != crate::protocols::sglang::HTTP_CAPABILITY)
         .any(|capability| supports_generate_capability(card, capability))
 }
 
@@ -550,9 +550,9 @@ impl ModelWatcher {
                 supports_enabled_engine_generate(card, &self.generate_engine_capabilities);
             let needs_native_generate = self
                 .generate_engine_capabilities
-                .contains(&crate::protocols::sglang::http::CAPABILITY)
+                .contains(&crate::protocols::sglang::HTTP_CAPABILITY)
                 && effective_worker_type(card.worker_type, card.model_type) != WorkerType::Prefill
-                && crate::http::service::native_generate::routing::supports_native(card);
+                && crate::http::service::sglang_generate::routing::supports_native(card);
             let needs_preprocessed_routing = needs_factory_chat_pipeline
                 || tokenizer.is_some()
                 || needs_generate_pipeline
@@ -692,7 +692,7 @@ impl ModelWatcher {
 
             if needs_native_generate {
                 worker_set.native_generate = Some(Arc::new(
-                    crate::http::service::native_generate::routing::NativeGenerateBinding::new(
+                    crate::http::service::sglang_generate::routing::NativeGenerateBinding::new(
                         &endpoint,
                         admitted_ids.clone(),
                         cancellation.clone(),

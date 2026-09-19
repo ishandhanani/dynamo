@@ -2,13 +2,12 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! Versioned native HTTP request plane, separate from the token pipeline.
-//! Bodies use binary MessagePack fields; JSON/SSE semantics belong to SGLang.
+//! Bodies use binary MessagePack fields; endpoint semantics belong to the caller.
 
 use axum::http::{HeaderMap, HeaderName, HeaderValue};
 use bytes::Bytes;
 use serde::{Deserialize, Serialize};
 
-pub const CAPABILITY: &str = "sglang_generate_http_v1";
 pub const MAX_BODY_CHUNK: usize = 64 * 1024;
 
 pub fn endpoint_name(primary: &str) -> String {
@@ -21,6 +20,7 @@ pub type Headers = Vec<(String, Bytes)>;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Request {
     pub method: String,
+    pub path: String,
     pub headers: Headers,
     pub body: Bytes,
 }

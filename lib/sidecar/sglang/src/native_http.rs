@@ -3,25 +3,6 @@
 
 //! Legacy incremental-SSE adapter for SGLang's native `/generate` API.
 
-mod transport;
-mod wire;
-
-// The request-plane TCP listener is process-wide. Its Tokio executor must
-// outlive every fixture that registers an endpoint on that listener.
-#[cfg(test)]
-fn test_runtime() -> &'static tokio::runtime::Runtime {
-    static RUNTIME: std::sync::OnceLock<tokio::runtime::Runtime> = std::sync::OnceLock::new();
-    RUNTIME.get_or_init(|| {
-        tokio::runtime::Builder::new_multi_thread()
-            .worker_threads(2)
-            .enable_all()
-            .build()
-            .unwrap()
-    })
-}
-
-pub(crate) use wire::NativeHttpEndpoint;
-
 use std::{collections::HashMap, io, time::Duration};
 
 use bytes::Bytes;
@@ -40,7 +21,7 @@ use tokio_util::{
 };
 
 use crate::{client, client::Discovery, protocol};
-use transport::HttpTransport;
+use dynamo_sidecar_common::http::HttpTransport;
 
 const PAYLOAD_KEY: &str = "sglang_tito";
 const MAX_EVENT_BYTES: usize = 64 * 1024 * 1024;
@@ -152,7 +133,7 @@ pub(crate) fn request(
 
 #[derive(Clone)]
 pub(crate) struct NativeHttp {
-    transport: HttpTransport,
+    pub(crate) transport: HttpTransport,
 }
 
 impl NativeHttp {
@@ -498,12 +479,12 @@ mod tests {
     use tokio::sync::watch;
     use tokio_util::sync::CancellationToken;
 
-    use super::transport::HttpTransport;
     use super::{
         NativeHttp, NativeRequest, authentication_error, request, response_error,
         response_has_output,
     };
     use crate::client::Discovery;
+    use dynamo_sidecar_common::http::HttpTransport;
 
     fn canonical_request() -> PreprocessedRequest {
         PreprocessedRequest::builder()

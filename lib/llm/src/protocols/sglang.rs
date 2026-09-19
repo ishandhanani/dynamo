@@ -4,5 +4,5 @@
 //! SGLang-native HTTP protocol types.
 
 pub mod generate;
-pub mod http;
+pub const HTTP_CAPABILITY: &str = "sglang_generate_http_v1";
 pub(crate) mod stream;

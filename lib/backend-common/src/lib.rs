@@ -32,7 +32,8 @@ pub mod worker;
 pub use args::CommonArgs;
 pub use disagg::DisaggregationMode;
 pub use dynamo_llm::model_type::ModelInput;
-pub use dynamo_llm::protocols::sglang::http as sglang_http;
+pub use dynamo_llm::protocols::http;
+pub use dynamo_llm::protocols::sglang::HTTP_CAPABILITY as SGLANG_HTTP_CAPABILITY;
 pub use engine::{
     AsyncEngineContext, BootstrapInfo, CompletionUsage, ComponentSnapshot, EngineConfig,
     FinishReason, FirstTokenNotifier, GenerateContext, GuidedDecodingOptions, HEALTH_CHECK_KEY,

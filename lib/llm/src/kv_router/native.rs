@@ -1,12 +1,13 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-//! A native HTTP child owns the same scheduler booking as a token request.
+//! An HTTP request owns one routing booking until completion or disconnect.
 
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use dynamo_kv_router::scheduling::queue::BookingHandle;
 use dynamo_runtime::pipeline::RouteTarget;
+use tokio_util::sync::CancellationToken;
 
 use super::{KvRouter, request_lease::RequestAttemptLease};
 
@@ -21,7 +22,7 @@ enum Reservation {
     },
     Hosted {
         worker: RouteTarget,
-        occupancy: Mutex<Option<dynamo_runtime::pipeline::OccupancyReservation>>,
+        occupancy: Option<dynamo_runtime::pipeline::OccupancyReservation>,
         // Keep the selector's load context alive through HTTP completion.
         _host: Arc<super::RoutingHost>,
     },
@@ -45,7 +46,7 @@ impl NativeReservation {
         Self {
             inner: Reservation::Hosted {
                 worker,
-                occupancy: Mutex::new(occupancy),
+                occupancy,
                 _host: host,
             },
         }
@@ -73,12 +74,39 @@ impl NativeReservation {
         Ok(())
     }
 
-    pub(crate) async fn finish(&self) {
-        match &self.inner {
+    async fn finish(self) {
+        match self.inner {
             Reservation::Kv { lease, .. } => lease.finish().await,
             Reservation::Hosted { occupancy, .. } => {
-                occupancy.lock().unwrap().take();
+                drop(occupancy);
             }
         }
+    }
+    // Renew router leases while HTTP is in flight; release on HTTP completion,
+    // rejection or disconnect, without an engine cleanup handshake.
+    pub(crate) fn start(self, cancellation: CancellationToken) -> tokio_util::sync::DropGuard {
+        let done = CancellationToken::new();
+        let completed = done.clone();
+        tokio::spawn(async move {
+            let expiry = dynamo_kv_router::multi_worker_sequence::active_request_expiry_duration();
+            let mut heartbeat =
+                tokio::time::interval((expiry / 3).min(std::time::Duration::from_secs(5)));
+            heartbeat.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+            loop {
+                tokio::select! {
+                    biased;
+                    _ = completed.cancelled() => break,
+                    _ = cancellation.cancelled() => break,
+                    _ = heartbeat.tick() => {
+                        if self.touch().is_err() {
+                            cancellation.cancel();
+                            break;
+                        }
+                    }
+                }
+            }
+            self.finish().await;
+        });
+        done.drop_guard()
     }
 }

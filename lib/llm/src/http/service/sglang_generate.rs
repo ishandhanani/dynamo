@@ -217,6 +217,8 @@ fn preprocessed_request(
         .map_err(|error| anyhow::anyhow!("failed to build PreprocessedRequest: {error}"))
 }
 
+pub(crate) mod routing;
+
 async fn handler(
     State(state): State<Arc<service_v2::State>>,
     request: axum::extract::Request,
@@ -270,7 +272,7 @@ async fn handler(
         Ok(response) => response,
         Err(error) => {
             tracing::warn!(%error, "native SGLang routing failed before response headers");
-            let status = if error.is::<super::native_generate::routing::NativeRequestError>()
+            let status = if error.is::<routing::NativeRequestError>()
                 || find_invalid_argument_in_chain(error.as_ref()).is_some()
             {
                 StatusCode::BAD_REQUEST

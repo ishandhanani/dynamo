@@ -246,14 +246,14 @@ struct PrefillBinding {
     /// `PrefillRouter` because it is unknowable until a target is discovered,
     /// and changes when the binding is rebuilt.
     prefill_router_mode: RouterMode,
-    native: Option<Arc<crate::http::service::native_generate::routing::NativeGenerateBinding>>,
+    native: Option<Arc<crate::http::service::sglang_generate::routing::NativeGenerateBinding>>,
 }
 
 impl PrefillRouter {
     pub(crate) fn native_binding(
         &self,
     ) -> anyhow::Result<(
-        Arc<crate::http::service::native_generate::routing::NativeGenerateBinding>,
+        Arc<crate::http::service::sglang_generate::routing::NativeGenerateBinding>,
         EndpointId,
     )> {
         let binding = self.binding.load_full().ok_or(PrefillError::NotActivated)?;

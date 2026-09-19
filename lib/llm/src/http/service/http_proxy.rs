@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-//! HTTP reconstruction for an already-selected native SGLang worker.
+//! HTTP reconstruction for an already-selected HTTP worker.
 //! Selection, capability admission and lifecycle accounting belong to the caller.
 
 use axum::{body::Body, response::Response};
@@ -9,21 +9,20 @@ use dynamo_runtime::pipeline::{ManyOut, SingleIn, network::egress::push_router::
 use dynamo_runtime::protocols::annotated::Annotated;
 use futures::StreamExt;
 
-use crate::protocols::sglang::http::{Request, ResponseFrame, decode_headers};
+use crate::protocols::http::{Request, ResponseFrame, decode_headers};
 
-mod metrics;
-pub(crate) mod routing;
+pub(crate) mod metrics;
 
-pub type NativeGenerateClient = PushRouter<Request, Annotated<ResponseFrame>>;
+pub type HttpClient = PushRouter<Request, Annotated<ResponseFrame>>;
 
 /// Hyper may stop polling immediately after Content-Length bytes, without
 /// polling our final End frame. Completion must also follow HTTP framing.
-struct BodyProgress {
+pub(crate) struct BodyProgress {
     remaining: Option<u64>,
 }
 
 impl BodyProgress {
-    fn new(status: axum::http::StatusCode, headers: &axum::http::HeaderMap) -> Self {
+    pub(crate) fn new(status: axum::http::StatusCode, headers: &axum::http::HeaderMap) -> Self {
         let remaining = if status.is_informational() || matches!(status.as_u16(), 204 | 304) {
             Some(0)
         } else {
@@ -35,7 +34,7 @@ impl BodyProgress {
         Self { remaining }
     }
 
-    fn advance(&mut self, bytes: usize) -> anyhow::Result<()> {
+    pub(crate) fn advance(&mut self, bytes: usize) -> anyhow::Result<()> {
         if let Some(remaining) = &mut self.remaining {
             *remaining = remaining
                 .checked_sub(bytes as u64)
@@ -44,11 +43,11 @@ impl BodyProgress {
         Ok(())
     }
 
-    fn complete(&self) -> bool {
+    pub(crate) fn complete(&self) -> bool {
         self.remaining == Some(0)
     }
 
-    fn end(&self) -> anyhow::Result<()> {
+    pub(crate) fn end(&self) -> anyhow::Result<()> {
         anyhow::ensure!(
             self.remaining.is_none_or(|remaining| remaining == 0),
             "native HTTP body was truncated"
@@ -60,31 +59,34 @@ impl BodyProgress {
 /// Dispatch once to the selected worker. No fallback or generation replay.
 /// The caller must supply a client restricted to the admitted native WorkerSet.
 pub async fn forward(
-    client: &NativeGenerateClient,
+    client: &HttpClient,
     request: SingleIn<Request>,
     worker_id: u64,
 ) -> anyhow::Result<Response> {
-    response(client.direct(request, worker_id).await?, None).await
+    let head_only = request.content().method == "HEAD";
+    response(client.direct(request, worker_id).await?, None, head_only).await
 }
 
 /// Dispatch once; HTTP cancellation drops the runtime stream and upstream request.
-async fn forward_with_cancellation(
-    client: &NativeGenerateClient,
+pub(crate) async fn forward_with_cancellation(
+    client: &HttpClient,
     request: SingleIn<Request>,
     worker_id: u64,
     cancellation: tokio_util::sync::CancellationToken,
 ) -> anyhow::Result<Response> {
+    let head_only = request.content().method == "HEAD";
     let guard = cancellation.clone().drop_guard();
     tokio::select! {
         biased;
         _ = cancellation.cancelled() => anyhow::bail!("native HTTP request cancelled"),
-        result = async { response(client.direct(request, worker_id).await?, Some(guard)).await } => result,
+        result = async { response(client.direct(request, worker_id).await?, Some(guard), head_only).await } => result,
     }
 }
 
 async fn response(
     mut stream: ManyOut<Annotated<ResponseFrame>>,
     mut cancellation: Option<tokio_util::sync::DropGuard>,
+    head_only: bool,
 ) -> anyhow::Result<Response> {
     let first = stream
         .next()
@@ -97,6 +99,9 @@ async fn response(
     let headers = decode_headers(headers)?;
     let status = axum::http::StatusCode::from_u16(status)?;
     let mut progress = BodyProgress::new(status, &headers);
+    if head_only {
+        progress.remaining = Some(0);
+    }
     if progress.complete()
         && let Some(guard) = cancellation.take()
     {
@@ -160,7 +165,7 @@ mod tests {
                 )),
                 context.context(),
             );
-            let response = response(stream, Some(cancel.clone().drop_guard()))
+            let response = response(stream, Some(cancel.clone().drop_guard()), false)
                 .await
                 .unwrap();
             let mut body = response.into_body().into_data_stream();
@@ -196,7 +201,7 @@ mod tests {
                 Annotated::from_data(ResponseFrame::End),
             ]);
             let stream = ResponseStream::new(Box::pin(frames), Context::new(()).context());
-            let response = response(stream, Some(cancel.clone().drop_guard()))
+            let response = response(stream, Some(cancel.clone().drop_guard()), false)
                 .await
                 .unwrap();
             if consume {

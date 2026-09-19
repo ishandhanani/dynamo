@@ -1297,7 +1297,7 @@ impl ModelManager {
         &self,
         model: &str,
     ) -> Result<
-        Arc<crate::http::service::native_generate::routing::NativeGenerateBinding>,
+        Arc<crate::http::service::sglang_generate::routing::NativeGenerateBinding>,
         ModelManagerError,
     > {
         self.catalog

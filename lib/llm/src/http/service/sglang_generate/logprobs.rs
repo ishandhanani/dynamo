@@ -11,11 +11,10 @@ use serde_json::Value;
 
 pub(super) const MAX_BODY: usize = 64 * 1024 * 1024;
 
-pub(super) async fn merge_response(
-    decode: Response,
-    prefill: tokio::sync::oneshot::Receiver<Bytes>,
-) -> anyhow::Result<Response> {
-    let prefill: Value = serde_json::from_slice(&prefill.await?)?;
+pub(super) async fn merge_response(decode: Response, prefill: Bytes) -> anyhow::Result<Response> {
+    let Ok(prefill) = serde_json::from_slice::<Value>(&prefill) else {
+        return Ok(decode);
+    };
     let streaming = decode
         .headers()
         .get(header::CONTENT_TYPE)
@@ -48,8 +47,11 @@ pub(super) async fn merge_response(
         Body::from_stream(stream)
     } else {
         let original = axum::body::to_bytes(body, MAX_BODY).await?;
-        let mut decode: Value = serde_json::from_slice(&original)?;
-        if merge_json(&prefill, &mut decode) {
+        let mut decode = serde_json::from_slice::<Value>(&original).ok();
+        if decode
+            .as_mut()
+            .is_some_and(|decode| merge_json(&prefill, decode))
+        {
             Body::from(serde_json::to_vec(&decode)?)
         } else {
             Body::from(original)
@@ -73,7 +75,9 @@ fn event_end(bytes: &[u8], scan: &mut usize) -> Option<usize> {
 }
 
 fn merge_event(event: Bytes, prefill: &Value) -> anyhow::Result<Bytes> {
-    let text = std::str::from_utf8(&event)?;
+    let Ok(text) = std::str::from_utf8(&event) else {
+        return Ok(event);
+    };
     let data = text
         .lines()
         .filter_map(|line| {
@@ -85,7 +89,9 @@ fn merge_event(event: Bytes, prefill: &Value) -> anyhow::Result<Bytes> {
     if data.is_empty() || data.trim() == "[DONE]" {
         return Ok(event);
     }
-    let mut decode: Value = serde_json::from_str(&data)?;
+    let Ok(mut decode) = serde_json::from_str::<Value>(&data) else {
+        return Ok(event);
+    };
     if !merge_json(prefill, &mut decode) {
         return Ok(event);
     }
@@ -156,9 +162,7 @@ mod tests {
         let prefill = json!({"meta_info":{"input_token_logprobs":[[null,1],[-0.1,2]]}});
         let decode = json!({"text":"out","meta_info":{"input_token_logprobs":[[-0.2,3]],"output_token_logprobs":[[-0.3,4]],"future":7}});
         for streaming in [false, true] {
-            let (tx, rx) = tokio::sync::oneshot::channel();
-            tx.send(Bytes::from(serde_json::to_vec(&prefill).unwrap()))
-                .unwrap();
+            let prompt = Bytes::from(serde_json::to_vec(&prefill).unwrap());
             let wire = if streaming {
                 format!("event: token\r\ndata: {decode}\r\n\r\ndata: [DONE]\n\n")
             } else {
@@ -181,7 +185,7 @@ mod tests {
                 .header("x-engine", "kept")
                 .body(Body::from_stream(futures::stream::iter(chunks)))
                 .unwrap();
-            let merged = merge_response(response, rx).await.unwrap();
+            let merged = merge_response(response, prompt).await.unwrap();
             assert!(!merged.headers().contains_key("content-length"));
             assert_eq!(merged.headers()["x-engine"], "kept");
             let body = axum::body::to_bytes(merged.into_body(), 4096)
@@ -221,6 +225,7 @@ mod tests {
         assert_eq!(decode["meta_info"]["input_token_logprobs"], json!([2, 3]));
         for event in [
             b": keepalive\n\n".as_slice(),
+            b"data: not-json\n\n",
             b"data: [DONE]\r\n\r\n",
             b"data: {\"error\":\"engine\"}\n\n",
         ] {
