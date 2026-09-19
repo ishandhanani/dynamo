@@ -29,6 +29,7 @@ pub mod frontend_extension;
 pub mod generate;
 pub mod health;
 pub mod metrics;
+pub mod native_generate;
 pub mod openapi_docs;
 pub mod realtime;
 pub mod service_v2;

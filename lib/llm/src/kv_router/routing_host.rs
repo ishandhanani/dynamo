@@ -47,6 +47,7 @@ mod builtin;
 mod cancellation;
 mod kv;
 mod kv_selection;
+mod native;
 mod occupancy;
 mod request_guard;
 

@@ -5,13 +5,13 @@
 //!
 //! The public body is parsed only far enough to project Dynamo routing controls;
 //! engine-owned fields stay opaque and are forwarded to the SGLang worker.
-//! Only SGLang's incremental SSE mode is currently exposed.
+//! Capable sidecars preserve native HTTP; older workers use the incremental SSE adapter.
 
 use std::sync::Arc;
 
 use axum::{
     Json, Router,
-    extract::{State, rejection::JsonRejection},
+    extract::{FromRequest, State, rejection::JsonRejection},
     http::{HeaderMap, StatusCode},
     response::{
         IntoResponse, Response,
@@ -218,6 +218,73 @@ fn preprocessed_request(
 }
 
 async fn handler(
+    State(state): State<Arc<service_v2::State>>,
+    request: axum::extract::Request,
+) -> Response {
+    let native = state.manager().list_native_generate_models();
+    let headers = request.headers().clone();
+    if native.is_empty() {
+        let json = Json::<SglangGenerateRequest>::from_request(request, &state).await;
+        return legacy_handler(State(state), headers, json).await;
+    }
+    if let Err(response) = check_ready(&state) {
+        return adapt_openai_error(response);
+    }
+    let method = request.method().clone();
+    let body = match bytes::Bytes::from_request(request, &state).await {
+        Ok(body) => body,
+        Err(error) => return error.into_response(),
+    };
+    let mut models = native;
+    models.extend(
+        state
+            .manager()
+            .list_generate_models_for_capability(SGLANG_GENERATE_CAPABILITY),
+    );
+    let models = canonical_generate_models(state.manager(), models);
+    if models.len() != 1 {
+        return error_response(
+            StatusCode::BAD_REQUEST,
+            "multiple SGLang models are registered; configure a model-specific generate endpoint"
+                .to_string(),
+        );
+    }
+    let model = &models[0];
+    if let Err(response) = check_model_serving_ready(&state, model) {
+        return adapt_openai_error(response);
+    }
+    let binding = match state.manager().native_generate(model) {
+        Ok(binding) => binding,
+        Err(error) => return error_response(StatusCode::SERVICE_UNAVAILABLE, error.to_string()),
+    };
+    match binding
+        .forward(
+            method,
+            headers,
+            body,
+            state.metrics_clone(),
+            state.manager().metric_model_for(model),
+        )
+        .await
+    {
+        Ok(response) => response,
+        Err(error) => {
+            tracing::warn!(%error, "native SGLang routing failed before response headers");
+            let status = if error.is::<super::native_generate::routing::NativeRequestError>()
+                || find_invalid_argument_in_chain(error.as_ref()).is_some()
+            {
+                StatusCode::BAD_REQUEST
+            } else if super::metrics::request_was_rejected(error.as_ref()) {
+                StatusCode::TOO_MANY_REQUESTS
+            } else {
+                StatusCode::SERVICE_UNAVAILABLE
+            };
+            error_response(status, error.to_string())
+        }
+    }
+}
+
+async fn legacy_handler(
     State(state): State<Arc<service_v2::State>>,
     headers: HeaderMap,
     request: Result<Json<SglangGenerateRequest>, JsonRejection>,

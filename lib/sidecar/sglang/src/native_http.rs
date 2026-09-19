@@ -1,16 +1,36 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-//! Opaque transport for SGLang's native streaming `/generate` API.
+//! Legacy incremental-SSE adapter for SGLang's native `/generate` API.
+
+mod transport;
+mod wire;
+
+// The request-plane TCP listener is process-wide. Its Tokio executor must
+// outlive every fixture that registers an endpoint on that listener.
+#[cfg(test)]
+fn test_runtime() -> &'static tokio::runtime::Runtime {
+    static RUNTIME: std::sync::OnceLock<tokio::runtime::Runtime> = std::sync::OnceLock::new();
+    RUNTIME.get_or_init(|| {
+        tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(2)
+            .enable_all()
+            .build()
+            .unwrap()
+    })
+}
+
+pub(crate) use wire::NativeHttpEndpoint;
 
 use std::{collections::HashMap, io, time::Duration};
 
+use bytes::Bytes;
 use dynamo_backend_common::{
     DisaggregationMode, DynamoError, GenerateContext, LLMEngineOutput, PreprocessedRequest,
 };
 use dynamo_sidecar_common::{GrpcEndpoint, HttpEndpoint};
 use futures::{StreamExt, TryStreamExt, stream::BoxStream};
-use reqwest::{Response, StatusCode, header};
+use reqwest::{Method, Response, StatusCode, header};
 use serde_json::{Map, Value};
 use tokio::time::Instant;
 use tokio_util::{
@@ -20,6 +40,7 @@ use tokio_util::{
 };
 
 use crate::{client, client::Discovery, protocol};
+use transport::HttpTransport;
 
 const PAYLOAD_KEY: &str = "sglang_tito";
 const MAX_EVENT_BYTES: usize = 64 * 1024 * 1024;
@@ -131,12 +152,28 @@ pub(crate) fn request(
 
 #[derive(Clone)]
 pub(crate) struct NativeHttp {
-    client: reqwest::Client,
-    endpoint: HttpEndpoint,
+    transport: HttpTransport,
 }
 
 impl NativeHttp {
     pub(crate) fn discover(
+        grpc_endpoint: &GrpcEndpoint,
+        discovery: &Discovery,
+        connect_timeout: Duration,
+    ) -> Result<Option<Self>, DynamoError> {
+        if discovery
+            .server_info
+            .get("incremental_streaming_output")
+            .and_then(Value::as_bool)
+            != Some(true)
+        {
+            return Ok(None);
+        }
+        Self::discover_http(grpc_endpoint, discovery, connect_timeout)
+    }
+
+    /// The byte path also supports unary and cumulative streaming engines.
+    pub(crate) fn discover_http(
         grpc_endpoint: &GrpcEndpoint,
         discovery: &Discovery,
         connect_timeout: Duration,
@@ -152,28 +189,13 @@ impl NativeHttp {
                     "SGLang GetServerInfo.port must be in 1..=65535, got {raw_port}"
                 ))
             })?;
-        if discovery
-            .server_info
-            .get("incremental_streaming_output")
-            .and_then(Value::as_bool)
-            != Some(true)
-        {
-            tracing::warn!(
-                port,
-                "SGLang native HTTP generation is disabled because incremental streaming output is not enabled"
-            );
-            return Ok(None);
-        }
         let endpoint = HttpEndpoint::from_grpc(grpc_endpoint, port).map_err(|error| {
             client::protocol_error(format!("invalid SGLang HTTP endpoint: {error}"))
         })?;
-        let client = reqwest::Client::builder()
-            .connect_timeout(connect_timeout)
-            .build()
-            .map_err(|error| {
-                client::invalid_arg(format!("could not configure SGLang HTTP client: {error}"))
-            })?;
-        Ok(Some(Self { client, endpoint }))
+        let transport = HttpTransport::new(endpoint, connect_timeout).map_err(|error| {
+            client::invalid_arg(format!("could not configure SGLang HTTP client: {error}"))
+        })?;
+        Ok(Some(Self { transport }))
     }
 
     pub(crate) async fn await_ready(
@@ -181,10 +203,18 @@ impl NativeHttp {
         deadline: Instant,
         retry_interval: Duration,
     ) -> Result<(), DynamoError> {
-        let endpoint = self.endpoint.with_path("/health");
+        let endpoint = self.transport.endpoint.with_path("/health");
         loop {
-            let response =
-                tokio::time::timeout_at(deadline, self.client.get(endpoint.clone()).send()).await;
+            let response = tokio::time::timeout_at(
+                deadline,
+                self.transport.send(
+                    Method::GET,
+                    "/health",
+                    header::HeaderMap::new(),
+                    Bytes::new(),
+                ),
+            )
+            .await;
             let failure = match response {
                 Ok(Ok(response)) if response.status().is_success() => return Ok(()),
                 Ok(Ok(response)) => {
@@ -217,12 +247,23 @@ impl NativeHttp {
     }
 
     async fn open(&self, body: &Value) -> Result<Response, DynamoError> {
+        // Keep the legacy JSON envelope conversion outside the byte transport.
+        let body = serde_json::to_vec(body).map_err(|error| {
+            client::protocol_error(format!("could not encode SGLang request: {error}"))
+        })?;
+        let headers = header::HeaderMap::from_iter([
+            (
+                header::ACCEPT,
+                header::HeaderValue::from_static("text/event-stream"),
+            ),
+            (
+                header::CONTENT_TYPE,
+                header::HeaderValue::from_static("application/json"),
+            ),
+        ]);
         let response = self
-            .client
-            .post(self.endpoint.with_path("/generate"))
-            .header(header::ACCEPT, "text/event-stream")
-            .json(body)
-            .send()
+            .transport
+            .send(Method::POST, "/generate", headers, body.into())
             .await
             .map_err(request_error)?;
         let status = response.status();
@@ -246,7 +287,7 @@ impl NativeHttp {
         Box::pin(async_stream::stream! {
             let is_prefill = request.is_prefill;
             let mut prefill_handoff = request.prefill_handoff;
-            tracing::debug!(request_id = %ctx.id(), endpoint = %self.endpoint.with_path("/generate"), "sending native request to SGLang HTTP");
+            tracing::debug!(request_id = %ctx.id(), endpoint = %self.transport.endpoint.with_path("/generate"), "sending native request to SGLang HTTP");
             let opened = tokio::select! {
                 biased;
                 _ = ctx.stopped() => None,
@@ -457,6 +498,7 @@ mod tests {
     use tokio::sync::watch;
     use tokio_util::sync::CancellationToken;
 
+    use super::transport::HttpTransport;
     use super::{
         NativeHttp, NativeRequest, authentication_error, request, response_error,
         response_has_output,
@@ -488,8 +530,11 @@ mod tests {
     fn native_http(port: u16) -> NativeHttp {
         let grpc = GrpcEndpoint::parse("127.0.0.1:30001", "test").unwrap();
         NativeHttp {
-            client: reqwest::Client::new(),
-            endpoint: HttpEndpoint::from_grpc(&grpc, port).unwrap(),
+            transport: HttpTransport::new(
+                HttpEndpoint::from_grpc(&grpc, port).unwrap(),
+                Duration::from_secs(1),
+            )
+            .unwrap(),
         }
     }
 
@@ -548,6 +593,15 @@ mod tests {
     #[test]
     fn discovery_requires_incremental_streaming() {
         let grpc = GrpcEndpoint::parse("127.0.0.1:30001", "test").unwrap();
+        assert!(
+            NativeHttp::discover_http(
+                &grpc,
+                &discovery(json!({"port": 30000})),
+                Duration::from_secs(1),
+            )
+            .unwrap()
+            .is_some()
+        );
         assert!(
             NativeHttp::discover(
                 &grpc,

@@ -246,6 +246,43 @@ struct PrefillBinding {
     /// `PrefillRouter` because it is unknowable until a target is discovered,
     /// and changes when the binding is rebuilt.
     prefill_router_mode: RouterMode,
+    native: Option<Arc<crate::http::service::native_generate::routing::NativeGenerateBinding>>,
+}
+
+impl PrefillRouter {
+    pub(crate) fn native_binding(
+        &self,
+    ) -> anyhow::Result<(
+        Arc<crate::http::service::native_generate::routing::NativeGenerateBinding>,
+        EndpointId,
+    )> {
+        let binding = self.binding.load_full().ok_or(PrefillError::NotActivated)?;
+        let native = binding
+            .native
+            .clone()
+            .ok_or_else(|| anyhow::anyhow!("prefill WorkerSet does not support native HTTP"))?;
+        Ok((native, binding.endpoint_id.clone()))
+    }
+
+    pub(crate) fn native_bootstrap(
+        &self,
+        endpoint: &EndpointId,
+        worker_id: u64,
+    ) -> anyhow::Result<(
+        crate::local_model::runtime_config::DisaggregatedEndpoint,
+        Option<RoutingConstraints>,
+    )> {
+        let bootstrap = self
+            .model_manager
+            .get_disaggregated_endpoint(endpoint, worker_id)
+            .ok_or_else(|| {
+                anyhow::anyhow!("selected native prefill worker has no bootstrap endpoint")
+            })?;
+        let constraints = self
+            .model_manager
+            .get_kv_transfer_routing_constraints(endpoint, worker_id)?;
+        Ok((bootstrap, constraints))
+    }
 }
 
 struct PrefillBuildContext {
@@ -1100,6 +1137,7 @@ mod tests {
             (request_with_constraints(None), false),
             (
                 request_with_constraints(Some(RoutingConstraints {
+                    required_dp_rank: None,
                     required_taints: HashSet::from(["user.required".to_string()]),
                     preferred_taints: HashMap::from([("user.preferred".to_string(), 0.25)]),
                 })),
@@ -1109,6 +1147,7 @@ mod tests {
             merge_decode_topology_constraints(
                 &mut request,
                 RoutingConstraints {
+                    required_dp_rank: None,
                     required_taints: HashSet::from(["dynamo.topology/zone=us-east-1a".to_string()]),
                     preferred_taints: HashMap::from([(
                         "dynamo.topology/rack=rack-7".to_string(),
