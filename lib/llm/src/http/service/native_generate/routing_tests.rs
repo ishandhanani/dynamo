@@ -326,7 +326,13 @@ async fn public_native_generate_keeps_bytes_books_fanout_and_fences_retired_work
         );
         assert!(
             binding
-                .forward(Method::PUT, HeaderMap::new(), Bytes::from_static(BODY))
+                .forward(
+                    Method::PUT,
+                    HeaderMap::new(),
+                    Bytes::from_static(BODY),
+                    Arc::new(crate::http::service::metrics::Metrics::new()),
+                    "test-model"
+                )
                 .await
                 .is_err(),
             "retained clients must not route after withdrawal"
