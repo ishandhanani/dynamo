@@ -5,6 +5,8 @@
 //! WorkerSet owns a complete pipeline (engines, KV router, prefill router) built
 //! from its specific ModelDeploymentCard.
 
+use crate::http::service::sglang_generate::routing::NativeGenerateBinding;
+
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -216,8 +218,7 @@ pub struct WorkerSet {
     pub(crate) tensor_engine: Option<TensorStreamingEngine>,
     pub(crate) realtime_engine: Option<RealtimeBidirectionalEngine>,
     pub(crate) generate_engine: Option<GenerateStreamingEngine>,
-    pub(crate) native_generate:
-        Option<Arc<crate::http::service::sglang_generate::routing::NativeGenerateBinding>>,
+    pub(crate) native_generate: Option<Arc<NativeGenerateBinding>>,
 
     /// Owns load monitoring for routed surfaces that do not use `RoutingHost`.
     load_context: Option<Arc<RoutingLoadContext>>,

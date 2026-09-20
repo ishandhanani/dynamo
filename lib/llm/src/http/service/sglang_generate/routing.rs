@@ -10,21 +10,22 @@ use axum::{
     response::Response,
 };
 use bytes::Bytes;
-use dynamo_runtime::{
-    component::Endpoint,
-    pipeline::{Context, RouterMode},
-};
+use dynamo_runtime::pipeline::{Context, RouterMode};
 use serde_json::{Value, value::RawValue};
-use tokio::{sync::watch, time::Instant};
+use tokio::time::Instant;
 use tokio_util::sync::CancellationToken;
 
-use crate::http::service::http_proxy::{HttpClient, forward_reserved};
+use crate::http::service::{
+    http_proxy::{HttpClient, forward_reserved, metrics::observe_response},
+    metrics::{Endpoint as MetricEndpoint, ErrorType, Metrics, request_was_rejected},
+    openai::get_or_create_request_id,
+};
 use crate::{
+    discovery::CommittedWorkerSetTarget,
     kv_router::{RouteReservation, RoutingHost, prefill_router::PrefillRouter},
     model_card::ModelDeploymentCard,
     protocols::{
         common::{
-            OutputOptions, SamplingOptions, StopConditions,
             preprocessor::{PreprocessedRequest, RoutingHints},
             timing::RequestPhase,
         },
@@ -34,12 +35,11 @@ use crate::{
 };
 
 pub(crate) struct NativeGenerateBinding {
-    admitted_ids: watch::Receiver<Vec<u64>>,
+    target: CommittedWorkerSetTarget,
     cancellation: CancellationToken,
     client: HttpClient,
     host: Arc<RoutingHost>,
     tokenizer: Option<Tokenizer>,
-    card: ModelDeploymentCard,
     prefill: Option<Arc<PrefillRouter>>,
 }
 
@@ -47,22 +47,11 @@ pub(crate) struct NativeGenerateBinding {
 mod disaggregation;
 use dynamo_kv_router::protocols::RoutingConstraints;
 
-fn check_owned_headers(headers: &HeaderMap) -> anyhow::Result<()> {
-    anyhow::ensure!(
-        !headers
-            .keys()
-            .any(|name| name.as_str().starts_with("x-override-")),
-        "native routing override headers are owned by Dynamo"
-    );
-    Ok(())
-}
-
 pub(crate) fn supports_native(card: &ModelDeploymentCard) -> bool {
     card.runtime_config
         .runtime_data
         .get(crate::protocols::sglang::HTTP_CAPABILITY)
-        .and_then(Value::as_bool)
-        == Some(true)
+        == Some(&Value::Bool(true))
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -71,30 +60,31 @@ pub(crate) struct NativeRequestError(anyhow::Error);
 
 impl NativeGenerateBinding {
     pub(crate) async fn new(
-        endpoint: &Endpoint,
-        admitted_ids: watch::Receiver<Vec<u64>>,
+        target: CommittedWorkerSetTarget,
         cancellation: CancellationToken,
         host: Arc<RoutingHost>,
-        card: &ModelDeploymentCard,
         prefill: Option<Arc<PrefillRouter>>,
     ) -> anyhow::Result<Self> {
+        let endpoint = &target.endpoint;
         let wire = endpoint
             .component()
             .endpoint(http::endpoint_name(&endpoint.id().name))
             .client()
             .await?
-            .with_admitted_instances_and_cancellation(admitted_ids.clone(), cancellation.clone());
+            .with_admitted_instances_and_cancellation(
+                target.admitted_ids.clone(),
+                cancellation.clone(),
+            );
         Ok(Self {
-            admitted_ids,
             cancellation,
             client: HttpClient::from_client(wire, RouterMode::Direct).await?,
             host,
-            tokenizer: if card.has_tokenizer() {
-                Some(card.native_generate_tokenizer()?)
-            } else {
-                None
-            },
-            card: card.clone(),
+            tokenizer: target
+                .card
+                .has_tokenizer()
+                .then(|| target.card.native_generate_tokenizer())
+                .transpose()?,
+            target,
             prefill,
         })
     }
@@ -104,169 +94,144 @@ impl NativeGenerateBinding {
         method: Method,
         headers: HeaderMap,
         body: Bytes,
-        metrics: Arc<crate::http::service::metrics::Metrics>,
+        metrics: Arc<Metrics>,
         metric_model: &str,
     ) -> anyhow::Result<Response> {
-        anyhow::ensure!(
-            !self.cancellation.is_cancelled() && !self.admitted_ids.borrow().is_empty(),
-            "native WorkerSet is retired or unavailable"
-        );
-        let prepared = async {
-            check_owned_headers(&headers)?;
-            let projection = Projection::read(&body)?;
-            let streaming = projection.field("stream")?.unwrap_or(false);
-            let uses_kv = self.host.kv_router_if_enabled().is_some();
-            anyhow::ensure!(
-                !uses_kv || !projection.engine_processed_input,
-                "KV routing requires engine-compatible token metadata for multimodal or embedding inputs; select a load-based policy explicitly"
-            );
-            let header_rank = headers
-                .get("x-data-parallel-rank")
-                .map(|value| -> anyhow::Result<u32> { Ok(value.to_str()?.parse()?) })
-                .transpose()?;
-            anyhow::ensure!(
-                header_rank
-                    .zip(projection.dp_rank)
-                    .is_none_or(|(a, b)| a == b),
-                "conflicting body and header DP ranks"
-            );
-            let requested_rank = projection.dp_rank.or(header_rank);
-            let config = &self.card.runtime_config;
-            let default_rank = requested_rank.unwrap_or(config.data_parallel_start_rank);
-            anyhow::ensure!(
-                (config.data_parallel_start_rank
-                    ..config
-                        .data_parallel_start_rank
-                        .saturating_add(config.data_parallel_size))
-                    .contains(&default_rank),
-                "requested DP rank is outside the admitted WorkerSet"
-            );
-            let tokenizer = self.tokenizer.clone();
-            let projection_for_routing = projection.clone();
-            let input = tokio::task::spawn_blocking(move || {
-                projection_for_routing.routing_input(tokenizer.as_ref(), uses_kv)
-            })
-            .await??;
-            let metadata = crate::http::service::metadata::extract_metadata_from_http(&headers)?;
-            anyhow::Ok((input, requested_rank, metadata, streaming, projection))
-        };
-        let (input, requested_rank, metadata, streaming, projection) =
-            prepared.await.map_err(NativeRequestError)?;
+        let projection = Projection::read(&body, &headers).map_err(NativeRequestError)?;
+        let streaming = projection
+            .field("stream")
+            .map_err(NativeRequestError)?
+            .unwrap_or(false);
+        let metadata = crate::http::service::metadata::extract_metadata_from_http(&headers)?;
         let mut guard = metrics.create_inflight_guard(
             metric_model,
-            crate::http::service::metrics::Endpoint::Generate,
+            MetricEndpoint::Generate,
             streaming,
-            &crate::http::service::openai::get_or_create_request_id(&headers),
+            &get_or_create_request_id(&headers),
         );
-        // Dropping the HTTP future or response records cancellation. The
-        // HTTP response body owns its routing reservations.
-        guard.mark_error(crate::http::service::metrics::ErrorType::Cancelled);
-        let result = async {
-            let deadline = Instant::now() + Duration::from_secs(30);
-            if let Some(prefill) = &self.prefill {
-                return self
-                    .forward_disaggregated(
-                        prefill,
-                        method,
-                        headers,
-                        metadata,
-                        projection,
-                        input,
-                        requested_rank,
-                        deadline,
-                    )
-                    .await;
-            }
-            let admission = self
-                .reserve(
-                    input,
-                    requested_rank,
-                    &metadata,
-                    RequestPhase::Aggregated,
-                    deadline,
-                    RoutingConstraints::default(),
-                )
-                .await?;
-            let body = if let Some(rank) = admission.target().dp_rank {
-                projection.with_controls([
-                    ("routed_dp_rank", Value::from(rank)),
-                    ("data_parallel_rank", Value::from(rank)),
-                ])?
-            } else {
-                body
-            };
-            let request = http::Request {
+        guard.mark_error(ErrorType::Cancelled);
+        let request = NativeRequest {
+            input: projection,
+            metadata,
+            deadline: Instant::now() + Duration::from_secs(30),
+            wire: http::Request {
                 path: "/generate".into(),
                 method: method.to_string(),
                 headers: http::encode_headers(headers),
                 body,
-            };
-            forward_reserved(
-                &self.client,
-                Context::with_id_and_metadata(request, uuid::Uuid::new_v4().to_string(), metadata),
-                admission,
-                CancellationToken::new(),
-            )
-            .await
-        }
-        .await;
-        match result {
-            Ok(response) => Ok(crate::http::service::http_proxy::metrics::observe_response(
-                response, guard,
-            )),
-            Err(error) => {
-                use crate::http::service::metrics::{ErrorType, request_was_rejected};
-                guard.mark_error(if request_was_rejected(error.as_ref()) {
-                    ErrorType::Overload
-                } else {
-                    ErrorType::Unavailable
-                });
-                Err(error)
+            },
+        };
+        let response = async {
+            if let Some(prefill) = &self.prefill {
+                return self.forward_disaggregated(prefill, request).await;
             }
+            let admission = self
+                .reserve(&request, RequestPhase::Aggregated, Default::default())
+                .await?;
+            self.send(&request, admission, Vec::new()).await
         }
+        .await
+        .inspect_err(|error| {
+            guard.mark_error(if request_was_rejected(error.as_ref()) {
+                ErrorType::Overload
+            } else {
+                ErrorType::Unavailable
+            });
+        })?;
+        Ok(observe_response(response, guard))
     }
     async fn reserve(
         &self,
-        input: RoutingInput,
-        requested_rank: Option<u32>,
-        metadata: &BTreeMap<String, String>,
+        request: &NativeRequest,
         phase: RequestPhase,
-        deadline: Instant,
         mut constraints: RoutingConstraints,
     ) -> anyhow::Result<RouteReservation> {
+        let target = &self.target;
+        let config = &target.card.runtime_config;
+        let uses_kv = self.host.kv_router_if_enabled().is_some();
+        let requested_rank = if phase == RequestPhase::Prefill {
+            request
+                .input
+                .field::<u32>("disagg_prefill_dp_rank")
+                .map_err(NativeRequestError)?
+                .or_else(|| {
+                    (!uses_kv).then(|| {
+                        config.data_parallel_start_rank
+                            + rand::random::<u32>() % config.data_parallel_size.max(1)
+                    })
+                })
+        } else {
+            request.input.dp_rank
+        };
+        let ranks = config.data_parallel_start_rank
+            ..config
+                .data_parallel_start_rank
+                .saturating_add(config.data_parallel_size);
+        anyhow::ensure!(
+            requested_rank.is_none_or(|rank| ranks.contains(&rank)),
+            NativeRequestError(anyhow::anyhow!("DP rank is outside the admitted WorkerSet"))
+        );
+        let tokenizer = self.tokenizer.clone();
+        let projection = request.input.clone();
+        let input = tokio::task::spawn_blocking(move || {
+            projection.routing_input(tokenizer.as_ref(), uses_kv)
+        })
+        .await?
+        .map_err(NativeRequestError)?;
         constraints.required_dp_rank = requested_rank;
-        let request = PreprocessedRequest::builder()
-            .model(self.card.name().to_string())
-            .token_ids(input.tokens)
-            .stop_conditions(StopConditions::default())
-            .sampling_options(SamplingOptions::default())
-            .output_options(OutputOptions::default())
+        let routing = PreprocessedRequest::builder()
+            .model(target.card.name().to_string())
+            .token_ids(input.0)
+            .stop_conditions(Default::default())
+            .sampling_options(Default::default())
+            .output_options(Default::default())
             .routing(Some(RoutingHints {
-                expected_output_tokens: input.max_tokens,
                 routing_constraints: Some(constraints),
-                priority_jump: Some(input.priority.max(0) as f64),
-                priority: Some(input.priority),
-                lora_name: input.lora,
-                cache_namespace: input.cache_namespace,
-                ..Default::default()
+                ..input.1
             }))
             .build()?;
-        let request = Context::with_id_and_metadata(
-            request,
+        let routing = Context::with_id_and_metadata(
+            routing,
             uuid::Uuid::new_v4().to_string(),
-            metadata.clone(),
+            request.metadata.clone(),
         );
         let reservation =
-            tokio::time::timeout_at(deadline, self.host.reserve_route(&request, phase)).await??;
+            tokio::time::timeout_at(request.deadline, self.host.reserve_route(&routing, phase))
+                .await??;
         anyhow::ensure!(
             !self.cancellation.is_cancelled()
-                && self
+                && target
                     .admitted_ids
                     .borrow()
-                    .contains(&reservation.target().worker_id),
+                    .contains(&reservation.target.worker_id),
             "selected native worker is no longer admitted"
         );
         Ok(reservation)
+    }
+    async fn send(
+        &self,
+        request: &NativeRequest,
+        admission: RouteReservation,
+        mut controls: Vec<(&'static str, Value)>,
+    ) -> anyhow::Result<Response> {
+        if let Some(rank) = admission.target.dp_rank {
+            controls.push(("routed_dp_rank", Value::from(rank)));
+            controls.push(("data_parallel_rank", Value::from(rank)));
+        }
+        let mut wire = request.wire.clone();
+        if !controls.is_empty() {
+            wire.body = request.input.with_controls(controls)?;
+        }
+        forward_reserved(
+            &self.client,
+            Context::with_id_and_metadata(
+                wire,
+                uuid::Uuid::new_v4().to_string(),
+                request.metadata.clone(),
+            ),
+            admission,
+        )
+        .await
     }
 }
 
@@ -274,15 +239,13 @@ impl NativeGenerateBinding {
 struct Projection {
     fields: Arc<BTreeMap<String, Box<RawValue>>>,
     dp_rank: Option<u32>,
-    engine_processed_input: bool,
 }
 
-struct RoutingInput {
-    tokens: Arc<Vec<u32>>,
-    max_tokens: Option<u32>,
-    priority: i32,
-    lora: Option<String>,
-    cache_namespace: Option<String>,
+struct NativeRequest {
+    input: Projection,
+    wire: http::Request,
+    metadata: BTreeMap<String, String>,
+    deadline: Instant,
 }
 
 impl Projection {
@@ -304,22 +267,32 @@ impl Projection {
         Ok(serde_json::to_vec(&fields)?.into())
     }
 
-    fn read(body: &[u8]) -> anyhow::Result<Self> {
+    fn read(body: &[u8], headers: &HeaderMap) -> anyhow::Result<Self> {
+        anyhow::ensure!(
+            !headers
+                .keys()
+                .any(|n| n.as_str().starts_with("x-override-")),
+            "routing override headers are owned by Dynamo"
+        );
         let mut input = Self {
             fields: Arc::new(serde_json::from_slice(body)?),
             dp_rank: None,
-            engine_processed_input: false,
         };
-        let rank = input.field::<u32>("routed_dp_rank")?;
-        let alias = input.field::<u32>("data_parallel_rank")?;
+        let header_rank = headers
+            .get("x-data-parallel-rank")
+            .map(|v| -> anyhow::Result<u32> { Ok(v.to_str()?.parse()?) })
+            .transpose()?;
+        let ranks = [
+            input.field("routed_dp_rank")?,
+            input.field("data_parallel_rank")?,
+            header_rank,
+        ];
+        let mut ranks = ranks.into_iter().flatten();
+        input.dp_rank = ranks.next();
         anyhow::ensure!(
-            rank.zip(alias).is_none_or(|(a, b)| a == b),
+            ranks.all(|r| Some(r) == input.dp_rank),
             "conflicting native DP ranks"
         );
-        input.dp_rank = rank.or(alias);
-        input.engine_processed_input = ["input_embeds", "image_data", "video_data", "audio_data"]
-            .iter()
-            .any(|key| input.raw(key).is_some());
         Ok(input)
     }
 
@@ -359,13 +332,22 @@ impl Projection {
         self,
         tokenizer: Option<&Tokenizer>,
         uses_kv: bool,
-    ) -> anyhow::Result<RoutingInput> {
+    ) -> anyhow::Result<(Arc<Vec<u32>>, RoutingHints)> {
         anyhow::ensure!(
             self.raw("session_params").is_none(),
             "native sessions are outside this endpoint's scope"
         );
         anyhow::ensure!(
-            !uses_kv || (!self.engine_processed_input && self.raw("extra_key").is_none()),
+            !uses_kv
+                || [
+                    "input_embeds",
+                    "image_data",
+                    "video_data",
+                    "audio_data",
+                    "extra_key"
+                ]
+                .iter()
+                .all(|key| self.raw(key).is_none()),
             "these inputs require a load-based routing policy"
         );
         let tokens = if !uses_kv {
@@ -396,18 +378,23 @@ impl Projection {
         struct SamplingHint {
             max_new_tokens: Option<u32>,
         }
-        Ok(RoutingInput {
-            tokens: Arc::new(tokens),
-            max_tokens: self
-                .first::<SamplingHint>("sampling_params")?
-                .unwrap_or_default()
-                .max_new_tokens,
-            priority: self.field("priority")?.unwrap_or_default(),
-            lora: self.first("lora_path")?,
-            cache_namespace: self
-                .first::<String>("cache_salt")?
-                .filter(|s| !s.is_empty()),
-        })
+        let priority: i32 = self.field("priority")?.unwrap_or_default();
+        Ok((
+            Arc::new(tokens),
+            RoutingHints {
+                expected_output_tokens: self
+                    .first::<SamplingHint>("sampling_params")?
+                    .unwrap_or_default()
+                    .max_new_tokens,
+                priority: Some(priority),
+                priority_jump: Some(priority.max(0) as f64),
+                lora_name: self.first("lora_path")?,
+                cache_namespace: self
+                    .first::<String>("cache_salt")?
+                    .filter(|s| !s.is_empty()),
+                ..Default::default()
+            },
+        ))
     }
 }
 

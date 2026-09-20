@@ -6,18 +6,14 @@
 use axum::{body::Body, http::StatusCode, response::Response};
 use futures::StreamExt;
 
-use super::BodyProgress;
 use crate::http::service::metrics::{ErrorType, InflightGuard};
 
 fn mark_completion(guard: &mut InflightGuard, status: StatusCode) {
     if status.is_client_error() || status.is_server_error() {
-        guard.mark_error(match status {
-            StatusCode::TOO_MANY_REQUESTS => ErrorType::Overload,
-            StatusCode::SERVICE_UNAVAILABLE => ErrorType::Unavailable,
-            StatusCode::NOT_FOUND => ErrorType::NotFound,
-            status if status.is_client_error() => ErrorType::Validation,
-            _ => ErrorType::Internal,
-        });
+        use crate::http::service::openai::{backend_http_error_class, metric_error_type_for_class};
+        guard.mark_error(metric_error_type_for_class(backend_http_error_class(
+            status,
+        )));
     } else {
         guard.mark_ok();
     }
@@ -26,8 +22,16 @@ fn mark_completion(guard: &mut InflightGuard, status: StatusCode) {
 pub(crate) fn observe_response(response: Response, mut guard: InflightGuard) -> Response {
     let (parts, body) = response.into_parts();
     let status = parts.status;
-    let mut progress = BodyProgress::new(status, &parts.headers);
-    if progress.complete() {
+    // Hyper can stop polling after Content-Length bytes, before our End frame.
+    let mut remaining = parts
+        .headers
+        .get("content-length")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.parse::<u64>().ok());
+    if status.is_informational() || matches!(status.as_u16(), 204 | 304) {
+        remaining = Some(0);
+    }
+    if remaining == Some(0) {
         mark_completion(&mut guard, status);
     }
     let mut stream = body.into_data_stream();
@@ -35,12 +39,8 @@ pub(crate) fn observe_response(response: Response, mut guard: InflightGuard) -> 
         while let Some(chunk) = stream.next().await {
             match chunk {
                 Ok(bytes) => {
-                    if let Err(error) = progress.advance(bytes.len()) {
-                        guard.mark_error(ErrorType::Internal);
-                        yield Err(axum::Error::new(error));
-                        return;
-                    }
-                    if progress.complete() { mark_completion(&mut guard, status); }
+                    remaining = remaining.map(|n| n.saturating_sub(bytes.len() as u64));
+                    if remaining == Some(0) { mark_completion(&mut guard, status); }
                     yield Ok(bytes);
                 },
                 Err(error) => {
@@ -49,11 +49,6 @@ pub(crate) fn observe_response(response: Response, mut guard: InflightGuard) -> 
                     return;
                 }
             }
-        }
-        if let Err(error) = progress.end() {
-            guard.mark_error(ErrorType::Internal);
-            yield Err(axum::Error::new(error));
-            return;
         }
         mark_completion(&mut guard, status);
     };

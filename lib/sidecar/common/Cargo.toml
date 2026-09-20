@@ -28,8 +28,3 @@ tonic = { workspace = true }
 tonic-v14 = { workspace = true, optional = true }
 tracing = { workspace = true }
 url = { workspace = true }
-
-[dev-dependencies]
-axum = { workspace = true }
-dynamo-llm = { workspace = true }
-reqwest = { workspace = true, features = ["gzip"] }

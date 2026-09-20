@@ -2551,7 +2551,6 @@ dependencies = [
  "anyhow",
  "async-stream",
  "async-trait",
- "bytes",
  "clap",
  "dynamo-backend-common",
  "dynamo-runtime",

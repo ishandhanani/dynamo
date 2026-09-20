@@ -1,6 +1,8 @@
 // SPDX-FileCopyrightText: Copyright (c) 2024-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
+use crate::http::service::sglang_generate::routing::NativeGenerateBinding;
+
 use std::{
     collections::{HashMap, HashSet},
     sync::{
@@ -1282,24 +1284,10 @@ impl ModelManager {
             .collect()
     }
 
-    /// List Generate models with an engine that advertises `capability`.
-    pub(crate) fn list_native_generate_models(&self) -> Vec<String> {
-        self.catalog
-            .load()
-            .models
-            .iter()
-            .filter(|(_, model)| model.has_native_generate())
-            .map(|(name, _)| name.clone())
-            .collect()
-    }
-
     pub(crate) fn native_generate(
         &self,
         model: &str,
-    ) -> Result<
-        Arc<crate::http::service::sglang_generate::routing::NativeGenerateBinding>,
-        ModelManagerError,
-    > {
+    ) -> Result<Arc<NativeGenerateBinding>, ModelManagerError> {
         self.catalog
             .load()
             .models
@@ -1308,6 +1296,7 @@ impl ModelManager {
             .native_generate()
     }
 
+    /// List Generate models with an engine that advertises `capability`.
     pub fn list_generate_models_for_capability(&self, capability: &str) -> Vec<String> {
         self.catalog
             .load()

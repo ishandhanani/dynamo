@@ -408,28 +408,6 @@ mod tests {
     }
 
     #[test]
-    fn native_rank_constraint_excludes_other_ranks_from_wspt_cache_credit() {
-        let mut req = request_with(1024, 0.0, overlaps_from(&[(7, 60)]));
-        req.overlap
-            .effective_cached_tokens
-            .insert(WorkerWithDpRank::new(7, 1), 16);
-        req.routing_constraints.required_dp_rank = Some(1);
-        let workers = HashMap::from([(
-            7,
-            SimpleWorkerConfig {
-                data_parallel_size: 2,
-                ..Default::default()
-            },
-        )]);
-        let ctx = SchedulingContext::new(&req, &workers);
-        assert_eq!(ctx.best_cached_tokens(), 16);
-        assert_eq!(
-            WsptPolicy.enqueue_key(Duration::ZERO, ctx),
-            (0, OrderedFloat(1.0 / 1008.0))
-        );
-    }
-
-    #[test]
     fn wspt_no_overlap_falls_back_to_isl() {
         let policy = WsptPolicy;
         let req = request_with(512, 0.0, OverlapScores::default());

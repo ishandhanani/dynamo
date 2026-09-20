@@ -1,6 +1,8 @@
 // SPDX-FileCopyrightText: Copyright (c) 2024-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
+use crate::http::service::sglang_generate::routing::NativeGenerateBinding;
+
 use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
@@ -692,16 +694,17 @@ impl ModelWatcher {
 
             if needs_native_generate {
                 worker_set.native_generate = Some(Arc::new(
-                    crate::http::service::sglang_generate::routing::NativeGenerateBinding::new(
-                        &endpoint,
-                        admitted_ids.clone(),
+                    NativeGenerateBinding::new(
+                        worker_set
+                            .topology_target()
+                            .expect("committed target")
+                            .clone(),
                         cancellation.clone(),
                         preprocessed_routing
                             .as_ref()
                             .expect("native routing host exists")
                             .routing_host
                             .clone(),
-                        card,
                         prefill_chooser.clone(),
                     )
                     .await?,

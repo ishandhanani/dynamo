@@ -1,6 +1,8 @@
 // SPDX-FileCopyrightText: Copyright (c) 2025-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
+use crate::http::service::sglang_generate::routing::NativeGenerateBinding;
+
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
@@ -428,12 +430,10 @@ impl PrefillRouter {
                 ) =>
             {
                 Some(Arc::new(
-                    crate::http::service::sglang_generate::routing::NativeGenerateBinding::new(
-                        endpoint,
-                        target.admitted_ids.clone(),
+                    NativeGenerateBinding::new(
+                        target.clone(),
                         context.parent_token.clone(),
                         router.clone(),
-                        &target.card,
                         None,
                     )
                     .await?,

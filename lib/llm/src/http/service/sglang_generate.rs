@@ -223,7 +223,9 @@ async fn handler(
     State(state): State<Arc<service_v2::State>>,
     request: axum::extract::Request,
 ) -> Response {
-    let native = state.manager().list_native_generate_models();
+    let native = state
+        .manager()
+        .list_generate_models_for_capability(crate::protocols::sglang::HTTP_CAPABILITY);
     let headers = request.headers().clone();
     if native.is_empty() {
         let json = Json::<SglangGenerateRequest>::from_request(request, &state).await;

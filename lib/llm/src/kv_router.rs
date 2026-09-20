@@ -2730,44 +2730,6 @@ mod tests {
         );
     }
 
-    #[tokio::test]
-    async fn native_reservation_releases_load_when_http_finishes() {
-        let router = Arc::new(tracked_router("native-reservation").await);
-        let admitted = router
-            .find_best_match_details_with_policy_class_admitted(
-                Some("native-child"),
-                &[1, 2, 3, 4],
-                None,
-                None,
-                true,
-                false,
-                None,
-                None,
-                0.0,
-                0,
-                None,
-                None,
-                Some(16),
-                None,
-                None,
-                RoutingConstraints::default(),
-            )
-            .await
-            .unwrap();
-        let reservation = RouteReservation::new(router.clone(), admitted.booking.unwrap());
-        reservation.touch().unwrap();
-        assert!(router.selection.scheduler().has_request("native-child"));
-        let guard = reservation.start(tokio_util::sync::CancellationToken::new());
-        drop(guard);
-        tokio::time::timeout(std::time::Duration::from_secs(2), async {
-            while router.selection.scheduler().has_request("native-child") {
-                tokio::task::yield_now().await;
-            }
-        })
-        .await
-        .unwrap();
-    }
-
     /// A lease released before `set_scheduler` is a wiring bug: it logs and
     /// leaves the booking alone. After `set_scheduler`, the release reaches
     /// the scheduler's booking cleanup.

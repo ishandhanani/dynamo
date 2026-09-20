@@ -1,6 +1,8 @@
 // SPDX-FileCopyrightText: Copyright (c) 2025-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
+use crate::http::service::sglang_generate::routing::NativeGenerateBinding;
+
 use std::sync::atomic::AtomicU8;
 use std::sync::{Arc, OnceLock};
 
@@ -246,22 +248,17 @@ struct PrefillBinding {
     /// `PrefillRouter` because it is unknowable until a target is discovered,
     /// and changes when the binding is rebuilt.
     prefill_router_mode: RouterMode,
-    native: Option<Arc<crate::http::service::sglang_generate::routing::NativeGenerateBinding>>,
+    native: Option<Arc<NativeGenerateBinding>>,
 }
 
 impl PrefillRouter {
-    pub(crate) fn native_binding(
-        &self,
-    ) -> anyhow::Result<(
-        Arc<crate::http::service::sglang_generate::routing::NativeGenerateBinding>,
-        EndpointId,
-    )> {
-        let binding = self.binding.load_full().ok_or(PrefillError::NotActivated)?;
-        let native = binding
+    pub(crate) fn native_binding(&self) -> anyhow::Result<Arc<NativeGenerateBinding>> {
+        self.binding
+            .load_full()
+            .ok_or(PrefillError::NotActivated)?
             .native
             .clone()
-            .ok_or_else(|| anyhow::anyhow!("prefill WorkerSet does not support native HTTP"))?;
-        Ok((native, binding.endpoint_id.clone()))
+            .ok_or_else(|| anyhow::anyhow!("prefill WorkerSet does not support native HTTP"))
     }
 
     pub(crate) fn native_bootstrap(

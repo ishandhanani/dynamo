@@ -45,7 +45,6 @@ use crate::{
 
 mod builtin;
 mod cancellation;
-mod cleanup;
 mod kv;
 mod kv_selection;
 mod reservation;
@@ -55,11 +54,10 @@ mod request_guard;
 
 use builtin::BuiltinWorkerSelector;
 use cancellation::{CleanupBudget, DispatchCancellation, StagedKv, await_with_cleanup_policy};
-use cleanup::KvRequestCleanup;
 use kv_selection::{RoutingRequestParts, SelectionOptions, WorkerSelection};
 use occupancy::HostedOccupancy;
 pub(crate) use request_guard::prompt_private_blocks;
-use request_guard::{LoraLoadGuard, RequestGuard};
+use request_guard::{KvRequestCleanup, LoraLoadGuard, RequestGuard};
 
 const OUTPUT_REPLAY_ID_ANNOTATION_KEY: &str = "output_replay_id";
 const OUTPUT_REPLAY_CONSUMER_RUNTIME_KEY: &str = "output_replay_consumer";

@@ -6,6 +6,11 @@
 //!
 //! Requests are routed to a WorkerSet selected by weighted random (proportional to worker count).
 
+use crate::{
+    http::service::sglang_generate::routing::NativeGenerateBinding,
+    protocols::sglang::HTTP_CAPABILITY,
+};
+
 use std::sync::Arc;
 
 use dashmap::DashMap;
@@ -289,30 +294,19 @@ impl Model {
             .any(|entry| entry.value().has_generate_engine())
     }
 
-    /// Check whether a Generate worker also advertises `capability`.
-    pub(crate) fn has_native_generate(&self) -> bool {
-        self.worker_sets.iter().any(|entry| {
-            entry
-                .value()
-                .supports_runtime_capability(crate::protocols::sglang::HTTP_CAPABILITY)
-                && entry.value().card().lora.is_none()
-        })
-    }
-
-    pub(crate) fn native_generate(
-        &self,
-    ) -> Result<
-        Arc<crate::http::service::sglang_generate::routing::NativeGenerateBinding>,
-        ModelManagerError,
-    > {
+    pub(crate) fn native_generate(&self) -> Result<Arc<NativeGenerateBinding>, ModelManagerError> {
         self.select_worker_set_with(|ws| ws.native_generate.clone())
-            .ok_or_else(|| self.engine_error(self.has_native_generate()))
+            .ok_or_else(|| {
+                self.engine_error(self.has_generate_engine_for_capability(HTTP_CAPABILITY))
+            })
     }
 
+    /// Check whether a Generate worker also advertises `capability`.
     pub fn has_generate_engine_for_capability(&self, capability: &str) -> bool {
         self.worker_sets.iter().any(|entry| {
             let worker_set = entry.value();
-            worker_set.has_generate_engine() && worker_set.supports_runtime_capability(capability)
+            (worker_set.has_generate_engine() || worker_set.native_generate.is_some())
+                && worker_set.supports_runtime_capability(capability)
         })
     }
 

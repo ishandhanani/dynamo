@@ -7,24 +7,27 @@ const BODY: &[u8] = br#"{"input_ids": [[1,2], [3]], "stream":false, "routed_dp_r
 
 #[test]
 fn native_routing_uses_first_prompt_without_expanding_samples() {
-    let input = Projection::read(BODY)
+    let input = Projection::read(BODY, &HeaderMap::new())
         .unwrap()
         .routing_input(None, true)
         .unwrap();
-    assert_eq!(&*input.tokens, &[1, 2]);
-    let input =
-        Projection::read(br#"{"image_data":"opaque","sampling_params":{"n":128}}"#).unwrap();
+    assert_eq!(&*input.0, &[1, 2]);
+    let input = Projection::read(
+        br#"{"image_data":"opaque","sampling_params":{"n":128}}"#,
+        &HeaderMap::new(),
+    )
+    .unwrap();
     assert!(input.clone().routing_input(None, true).is_err());
-    assert!(input.routing_input(None, false).unwrap().tokens.is_empty());
+    assert!(input.routing_input(None, false).unwrap().0.is_empty());
 }
 
 #[test]
 fn native_routing_controls_preserve_engine_fields() {
-    let projection = Projection::read(BODY).unwrap();
+    let projection = Projection::read(BODY, &HeaderMap::new()).unwrap();
     let body = projection
         .with_controls([("routed_dp_rank", Value::from(2))])
         .unwrap();
-    let result = Projection::read(&body).unwrap();
+    let result = Projection::read(&body, &HeaderMap::new()).unwrap();
     assert_eq!(result.dp_rank, Some(2));
     for key in ["input_ids", "sampling_params", "future_field"] {
         assert_eq!(

@@ -27,7 +27,6 @@ dynamo-sidecar-common = { workspace = true }
 anyhow = { workspace = true }
 async-stream = { workspace = true }
 async-trait = { workspace = true }
-bytes = { workspace = true }
 clap = { version = "4", features = ["derive", "env"] }
 futures = { workspace = true }
 rand = { workspace = true }
@@ -45,8 +44,4 @@ tonic = { workspace = true }
 tonic-build = { workspace = true }
 
 [dev-dependencies]
-axum = { workspace = true }
-dynamo-llm = { workspace = true }
 dynamo-backend-common = { workspace = true, features = ["testing"] }
-# Exercise byte preservation even when another dependency enables decompression.
-reqwest = { workspace = true, features = ["gzip"] }

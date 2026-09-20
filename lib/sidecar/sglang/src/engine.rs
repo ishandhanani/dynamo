@@ -29,7 +29,7 @@ use crate::protocol::{
     build_generate_request, disaggregated_params_to_json, engine_data_from_meta, extract_logprobs,
     meta_u32, output_ids_to_u32, terminal_from_meta,
 };
-use dynamo_sidecar_common::http::HttpProxy;
+use dynamo_sidecar_common::{HttpEndpoint, http::HttpProxy};
 
 const RETRY_LOG_INTERVAL: Duration = Duration::from_secs(30);
 
@@ -48,7 +48,7 @@ pub struct SglangSidecarEngine {
 struct StartedState {
     pool: Pool,
     native_http: Option<NativeHttp>,
-    native_wire_http: Option<NativeHttp>,
+    native_wire_http: Option<HttpEndpoint>,
     kv_event_sources: Vec<DiscoveredKvEventSource>,
 }
 
@@ -222,15 +222,11 @@ impl LLMEngine for SglangSidecarEngine {
             self.bootstrap_host.clone(),
             self.bootstrap_port,
         )?;
-        let discover_http = if self.enable_native_http {
-            NativeHttp::discover_http
-        } else {
-            NativeHttp::discover
-        };
-        let native_http = match discover_http(
+        let native_http = match NativeHttp::discover(
             &self.endpoint,
             &discovery,
             self.transport.connect_attempt_timeout,
+            self.enable_native_http,
         )? {
             Some(native_http) => {
                 match native_http
@@ -253,24 +249,19 @@ impl LLMEngine for SglangSidecarEngine {
             None => None,
         };
         let native_wire_http = if self.enable_native_http {
-            let http = native_http.clone().ok_or_else(|| {
+            let http = native_http.as_ref().ok_or_else(|| {
                 client::invalid_arg("--enable-native-http requires a discovered SGLang HTTP port")
             })?;
             config.runtime_data.insert(
                 dynamo_backend_common::SGLANG_HTTP_CAPABILITY.into(),
                 true.into(),
             );
-            Some(http)
+            Some(http.endpoint.clone())
         } else {
             None
         };
-        let native_http = native_http.filter(|_| {
-            discovery
-                .server_info
-                .get("incremental_streaming_output")
-                .and_then(Value::as_bool)
-                == Some(true)
-        });
+        let native_http =
+            native_http.filter(|_| discovery.server_info["incremental_streaming_output"] == true);
         if native_http.is_some() {
             config
                 .runtime_data
@@ -308,7 +299,8 @@ impl LLMEngine for SglangSidecarEngine {
         if let Some(http) = &state.native_wire_http {
             let started = HttpProxy::start(
                 &endpoint,
-                http.transport.clone(),
+                http.clone(),
+                self.transport.connect_attempt_timeout,
                 &["/generate", "/start_profile", "/stop_profile"],
                 self.cancel.clone(),
             )
