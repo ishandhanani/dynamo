@@ -1,8 +1,6 @@
 // SPDX-FileCopyrightText: Copyright (c) 2025-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-use crate::http::service::sglang_generate::routing::NativeGenerateBinding;
-
 use std::sync::atomic::AtomicU8;
 use std::sync::{Arc, OnceLock};
 
@@ -29,6 +27,7 @@ use futures::stream::{self, StreamExt};
 
 use crate::{
     discovery::{ModelManager, WorkerSetTarget, WorkerSetTargetId},
+    http::service::sglang_generate::routing::NativeGenerateBinding,
     kv_router::{RoutingHost, SelectionPolicySource},
     protocols::common::{
         extensions::{SESSION_AFFINITY_CONTEXT_KEY, SessionAffinityId},

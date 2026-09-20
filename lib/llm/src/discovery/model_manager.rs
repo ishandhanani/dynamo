@@ -1,8 +1,6 @@
 // SPDX-FileCopyrightText: Copyright (c) 2024-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-use crate::http::service::sglang_generate::routing::NativeGenerateBinding;
-
 use std::{
     collections::{HashMap, HashSet},
     sync::{
@@ -36,6 +34,7 @@ use dynamo_runtime::{
 };
 
 use crate::{
+    http::service::sglang_generate::routing::NativeGenerateBinding,
     kv_router::{
         KvEventSourceRequirement, KvRouter, SelectionPolicySource, router_endpoint_id,
         shared_cache::HicacheSharedKvCache,

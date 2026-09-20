@@ -305,8 +305,10 @@ impl Model {
     pub fn has_generate_engine_for_capability(&self, capability: &str) -> bool {
         self.worker_sets.iter().any(|entry| {
             let worker_set = entry.value();
-            (worker_set.has_generate_engine() || worker_set.native_generate.is_some())
-                && worker_set.supports_runtime_capability(capability)
+            if capability == HTTP_CAPABILITY {
+                return worker_set.native_generate.is_some();
+            }
+            worker_set.has_generate_engine() && worker_set.supports_runtime_capability(capability)
         })
     }
 
@@ -892,6 +894,9 @@ mod tests {
             VLLM_ENABLE_TOWER_CONNECTOR_LORA_RUNTIME_KEY.to_string(),
             tower_connector_lora_enabled.into(),
         );
+        card.runtime_config
+            .runtime_data
+            .insert(HTTP_CAPABILITY.into(), true.into());
         let engine: GenerateStreamingEngine = Arc::new(StubGenerateEngine);
         let mut worker_set =
             WorkerSet::new(namespace.to_string(), format!("{namespace}-checksum"), card);
@@ -1060,6 +1065,7 @@ mod tests {
         worker_tx_b.send(vec![]).expect("disable worker set B");
         model.add_worker_set("ns-a".to_string(), worker_set_a);
         model.add_worker_set("ns-b".to_string(), worker_set_b);
+        assert!(!model.has_generate_engine_for_capability(HTTP_CAPABILITY));
 
         let selection_a = model
             .get_generate_engine_for_capability_with_routing(VLLM_INFERENCE_V1_GENERATE_CAPABILITY)

@@ -5,8 +5,6 @@
 //! WorkerSet owns a complete pipeline (engines, KV router, prefill router) built
 //! from its specific ModelDeploymentCard.
 
-use crate::http::service::sglang_generate::routing::NativeGenerateBinding;
-
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -21,6 +19,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::{
     discovery::{LoadThresholdHandle, allocator::AllocatorTrimOnDrop},
+    http::service::sglang_generate::routing::NativeGenerateBinding,
     kv_router::{EncoderRouter, RoutingLoadContext, prefill_router::PrefillRouterLifecycle},
     model_card::ModelDeploymentCard,
     types::{

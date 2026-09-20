@@ -1,8 +1,6 @@
 // SPDX-FileCopyrightText: Copyright (c) 2025-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-use crate::http::service::sglang_generate::routing::NativeGenerateBinding;
-
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
@@ -24,6 +22,7 @@ use dynamo_runtime::{
 use super::{PrefillBinding, PrefillBuildContext, PrefillLifecycleState, PrefillRouter};
 use crate::{
     discovery::{LoadThresholdHandle, ModelManager, WorkerSetTarget},
+    http::service::sglang_generate::routing::NativeGenerateBinding,
     kv_router::{RouterLoadSource, RoutingHost, RoutingLoadContext, SelectionPolicySource},
     model_card::ModelDeploymentCard,
     protocols::common::{

@@ -1,8 +1,6 @@
 // SPDX-FileCopyrightText: Copyright (c) 2024-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-use crate::http::service::sglang_generate::routing::NativeGenerateBinding;
-
 use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
@@ -30,6 +28,7 @@ use crate::{
     discovery::{LoadThresholdHandle, WORKER_TYPE_DECODE, WorkerSet},
     entrypoint::{self, ChatEngineFactoryCallback, RouterConfig},
     http::service::metrics::Metrics,
+    http::service::sglang_generate::routing::NativeGenerateBinding,
     kv_router::{
         EncoderRouter, PrefillRouter, RouterLoadSource, RoutingLoadContext, SelectionPolicySource,
     },
