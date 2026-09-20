@@ -132,7 +132,9 @@ impl NativeGenerateBinding {
         }
         .await
         .inspect_err(|error| {
-            guard.mark_error(if request_was_rejected(error.as_ref()) {
+            guard.mark_error(if error.is::<NativeRequestError>() {
+                ErrorType::Validation
+            } else if request_was_rejected(error.as_ref()) {
                 ErrorType::Overload
             } else {
                 ErrorType::Unavailable
