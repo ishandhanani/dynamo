@@ -23,7 +23,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::args::Args;
 use crate::client::{self, Client, Discovery, Pool};
-use crate::native_http::{self, NativeHttp};
+use crate::native_http::NativeHttp;
 use crate::proto as pb;
 use crate::protocol::{
     build_generate_request, disaggregated_params_to_json, engine_data_from_meta, extract_logprobs,
@@ -48,8 +48,7 @@ pub struct SglangSidecarEngine {
 
 struct StartedState {
     pool: Pool,
-    native_http: Option<NativeHttp>,
-    native_wire_http: Option<HttpEndpoint>,
+    native_http: Option<HttpEndpoint>,
     kv_event_sources: Vec<DiscoveredKvEventSource>,
 }
 
@@ -223,51 +222,25 @@ impl LLMEngine for SglangSidecarEngine {
             self.bootstrap_host.clone(),
             self.bootstrap_port,
         )?;
-        let native_http = match NativeHttp::discover(
-            &self.endpoint,
-            &discovery,
-            self.transport.connect_attempt_timeout,
-            self.enable_native_http,
-        )? {
-            Some(native_http) => {
-                match native_http
-                    .await_ready(deadline, self.transport.retry_interval)
-                    .await
-                {
-                    Ok(()) => Some(native_http),
-                    Err(error) => {
-                        if self.enable_native_http {
-                            return Err(error);
-                        }
-                        tracing::warn!(
-                            %error,
-                            "SGLang native HTTP generation is unavailable; continuing with gRPC"
-                        );
-                        None
-                    }
-                }
-            }
-            None => None,
-        };
-        let native_wire_http = if self.enable_native_http {
-            let http = native_http.as_ref().ok_or_else(|| {
+        let native_http = if self.enable_native_http {
+            let http = NativeHttp::discover(
+                &self.endpoint,
+                &discovery,
+                self.transport.connect_attempt_timeout,
+            )?
+            .ok_or_else(|| {
                 client::invalid_arg("--enable-native-http requires a discovered SGLang HTTP port")
             })?;
+            http.await_ready(deadline, self.transport.retry_interval)
+                .await?;
             config.runtime_data.insert(
                 dynamo_backend_common::SGLANG_HTTP_CAPABILITY.into(),
                 true.into(),
             );
-            Some(http.endpoint.clone())
+            Some(http.endpoint)
         } else {
             None
         };
-        let native_http =
-            native_http.filter(|_| discovery.server_info["incremental_streaming_output"] == true);
-        if native_http.is_some() {
-            config
-                .runtime_data
-                .insert("sglang_generate".into(), true.into());
-        }
         let kv_event_sources = discover_kv_event_sources(&discovery, &config, &self.endpoint)?;
         let connection_count = pool.len();
         let kv_event_source_count = kv_event_sources.len();
@@ -275,7 +248,6 @@ impl LLMEngine for SglangSidecarEngine {
             .set(StartedState {
                 pool,
                 native_http,
-                native_wire_http,
                 kv_event_sources,
             })
             .map_err(|_| client::engine_shutdown("sglang sidecar already started"))?;
@@ -297,7 +269,7 @@ impl LLMEngine for SglangSidecarEngine {
             .state
             .get()
             .ok_or_else(|| client::engine_shutdown("endpoint ready before start"))?;
-        if let Some(http) = &state.native_wire_http {
+        if let Some(http) = &state.native_http {
             let started = HttpProxy::start(
                 &endpoint,
                 http.with_path("/"),
@@ -323,20 +295,6 @@ impl LLMEngine for SglangSidecarEngine {
             .state
             .get()
             .ok_or_else(|| client::engine_shutdown("generate called before start"))?;
-        if let Some(native_request) = native_http::request(
-            &request,
-            ctx.id(),
-            self.disaggregation_mode,
-            self.bootstrap_host.as_deref(),
-            self.bootstrap_port,
-        )? {
-            let native_http = state.native_http.clone().ok_or_else(|| {
-                client::invalid_arg(
-                    "native SGLang Generate is unavailable because no ready incremental HTTP endpoint was discovered",
-                )
-            })?;
-            return Ok(native_http.generate(native_request, ctx, self.cancel.clone()));
-        }
         let mut grpc_client = state.pool.stream_client();
 
         let prompt_tokens = request.token_ids.len() as u32;
