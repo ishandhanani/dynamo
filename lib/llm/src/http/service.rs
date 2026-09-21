@@ -28,6 +28,7 @@ pub mod error;
 pub mod frontend_extension;
 pub mod generate;
 pub mod health;
+pub mod http_proxy;
 pub mod metrics;
 pub mod openapi_docs;
 pub mod realtime;

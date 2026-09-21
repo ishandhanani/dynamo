@@ -17,18 +17,20 @@ use dynamo_backend_common::{
 use dynamo_sidecar_common::{GrpcEndpoint, GrpcTransportConfig, SidecarStartupError};
 use futures::stream::BoxStream;
 use serde_json::Value;
-use tokio::sync::OnceCell;
+use tokio::sync::{Mutex, OnceCell};
 use tokio::time::Instant;
 use tokio_util::sync::CancellationToken;
 
 use crate::args::Args;
 use crate::client::{self, Client, Discovery, Pool};
-use crate::native_http::{self, NativeHttp};
+use crate::native_http::NativeHttp;
 use crate::proto as pb;
 use crate::protocol::{
     build_generate_request, disaggregated_params_to_json, engine_data_from_meta, extract_logprobs,
     meta_u32, output_ids_to_u32, terminal_from_meta,
 };
+use dynamo_backend_common::http_proxy::HttpProxy;
+use dynamo_sidecar_common::HttpEndpoint;
 
 const RETRY_LOG_INTERVAL: Duration = Duration::from_secs(30);
 
@@ -38,13 +40,15 @@ pub struct SglangSidecarEngine {
     disaggregation_mode: DisaggregationMode,
     bootstrap_host: Option<String>,
     bootstrap_port: Option<u16>,
+    enable_native_http: bool,
+    native_endpoint: Mutex<Option<dynamo_runtime::component::StartedEndpoint>>,
     state: OnceCell<StartedState>,
     cancel: CancellationToken,
 }
 
 struct StartedState {
     pool: Pool,
-    native_http: Option<NativeHttp>,
+    native_http: Option<HttpEndpoint>,
     kv_event_sources: Vec<DiscoveredKvEventSource>,
 }
 
@@ -138,6 +142,8 @@ impl SglangSidecarEngine {
                 disaggregation_mode,
                 bootstrap_host,
                 bootstrap_port,
+                enable_native_http: args.enable_native_http,
+                native_endpoint: Mutex::new(None),
                 state: OnceCell::new(),
                 cancel: CancellationToken::new(),
             },
@@ -216,33 +222,25 @@ impl LLMEngine for SglangSidecarEngine {
             self.bootstrap_host.clone(),
             self.bootstrap_port,
         )?;
-        let native_http = match NativeHttp::discover(
-            &self.endpoint,
-            &discovery,
-            self.transport.connect_attempt_timeout,
-        )? {
-            Some(native_http) => {
-                match native_http
-                    .await_ready(deadline, self.transport.retry_interval)
-                    .await
-                {
-                    Ok(()) => Some(native_http),
-                    Err(error) => {
-                        tracing::warn!(
-                            %error,
-                            "SGLang native HTTP generation is unavailable; continuing with gRPC"
-                        );
-                        None
-                    }
-                }
-            }
-            None => None,
+        let native_http = if self.enable_native_http {
+            let http = NativeHttp::discover(
+                &self.endpoint,
+                &discovery,
+                self.transport.connect_attempt_timeout,
+            )?
+            .ok_or_else(|| {
+                client::invalid_arg("--enable-native-http requires a discovered SGLang HTTP port")
+            })?;
+            http.await_ready(deadline, self.transport.retry_interval)
+                .await?;
+            config.runtime_data.insert(
+                dynamo_backend_common::SGLANG_HTTP_CAPABILITY.into(),
+                true.into(),
+            );
+            Some(http.endpoint)
+        } else {
+            None
         };
-        if native_http.is_some() {
-            config
-                .runtime_data
-                .insert("sglang_generate".into(), true.into());
-        }
         let kv_event_sources = discover_kv_event_sources(&discovery, &config, &self.endpoint)?;
         let connection_count = pool.len();
         let kv_event_source_count = kv_event_sources.len();
@@ -263,6 +261,31 @@ impl LLMEngine for SglangSidecarEngine {
         Ok(config)
     }
 
+    async fn on_endpoint_ready(
+        &self,
+        endpoint: dynamo_runtime::component::Endpoint,
+    ) -> Result<(), DynamoError> {
+        let state = self
+            .state
+            .get()
+            .ok_or_else(|| client::engine_shutdown("endpoint ready before start"))?;
+        if let Some(http) = &state.native_http {
+            let started = HttpProxy::start(
+                &endpoint,
+                http.with_path("/"),
+                self.transport.connect_attempt_timeout,
+                &["/generate", "/start_profile", "/stop_profile"],
+                self.cancel.clone(),
+            )
+            .await
+            .map_err(|error| {
+                client::engine_shutdown(format!("native HTTP endpoint startup failed: {error}"))
+            })?;
+            *self.native_endpoint.lock().await = Some(started);
+        }
+        Ok(())
+    }
+
     async fn generate(
         &self,
         request: PreprocessedRequest,
@@ -272,20 +295,6 @@ impl LLMEngine for SglangSidecarEngine {
             .state
             .get()
             .ok_or_else(|| client::engine_shutdown("generate called before start"))?;
-        if let Some(native_request) = native_http::request(
-            &request,
-            ctx.id(),
-            self.disaggregation_mode,
-            self.bootstrap_host.as_deref(),
-            self.bootstrap_port,
-        )? {
-            let native_http = state.native_http.clone().ok_or_else(|| {
-                client::invalid_arg(
-                    "native SGLang Generate is unavailable because no ready incremental HTTP endpoint was discovered",
-                )
-            })?;
-            return Ok(native_http.generate(native_request, ctx, self.cancel.clone()));
-        }
         let mut grpc_client = state.pool.stream_client();
 
         let prompt_tokens = request.token_ids.len() as u32;
@@ -494,6 +503,11 @@ impl LLMEngine for SglangSidecarEngine {
 
     async fn cleanup(&self) -> Result<(), DynamoError> {
         self.cancel.cancel();
+        if let Some(endpoint) = self.native_endpoint.lock().await.take() {
+            endpoint.shutdown().await.map_err(|error| {
+                client::engine_shutdown(format!("native endpoint shutdown failed: {error}"))
+            })?;
+        }
         tracing::info!("sglang sidecar shutdown complete");
         Ok(())
     }

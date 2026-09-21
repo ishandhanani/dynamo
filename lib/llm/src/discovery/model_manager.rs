@@ -34,6 +34,7 @@ use dynamo_runtime::{
 };
 
 use crate::{
+    http::service::sglang_generate::routing::NativeGenerateBinding,
     kv_router::{
         KvEventSourceRequirement, KvRouter, SelectionPolicySource, router_endpoint_id,
         shared_cache::HicacheSharedKvCache,
@@ -1280,6 +1281,18 @@ impl ModelManager {
             .filter(|(_, model)| model.has_generate_engine())
             .map(|(name, _)| name.clone())
             .collect()
+    }
+
+    pub(crate) fn native_generate(
+        &self,
+        model: &str,
+    ) -> Result<Arc<NativeGenerateBinding>, ModelManagerError> {
+        self.catalog
+            .load()
+            .models
+            .get(model)
+            .ok_or_else(|| ModelManagerError::ModelNotFound(model.to_string()))?
+            .native_generate()
     }
 
     /// List Generate models with an engine that advertises `capability`.

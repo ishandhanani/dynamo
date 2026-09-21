@@ -72,6 +72,7 @@ pub use embedded::{install_worker_selection_policy_registry, worker_selection_po
 pub use encoder_router::EncoderRouter;
 pub use indexer::Indexer;
 pub use prefill_router::PrefillRouter;
+pub(crate) use routing_host::RouteReservation;
 pub use routing_host::{KvPushRouter, RoutingHost};
 pub use routing_load::{
     ManagedKvRouter, RouterLoadSource, RoutingLoadContext, SchedulerLoadSender,

@@ -47,6 +47,8 @@ mod builtin;
 mod cancellation;
 mod kv;
 mod kv_selection;
+mod reservation;
+pub(crate) use reservation::RouteReservation;
 mod occupancy;
 mod request_guard;
 

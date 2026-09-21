@@ -27,6 +27,7 @@ use futures::stream::{self, StreamExt};
 
 use crate::{
     discovery::{ModelManager, WorkerSetTarget, WorkerSetTargetId},
+    http::service::sglang_generate::routing::NativeGenerateBinding,
     kv_router::{RoutingHost, SelectionPolicySource},
     protocols::common::{
         extensions::{SESSION_AFFINITY_CONTEXT_KEY, SessionAffinityId},
@@ -246,6 +247,38 @@ struct PrefillBinding {
     /// `PrefillRouter` because it is unknowable until a target is discovered,
     /// and changes when the binding is rebuilt.
     prefill_router_mode: RouterMode,
+    native: Option<Arc<NativeGenerateBinding>>,
+}
+
+impl PrefillRouter {
+    pub(crate) fn native_binding(&self) -> anyhow::Result<Arc<NativeGenerateBinding>> {
+        self.binding
+            .load_full()
+            .ok_or(PrefillError::NotActivated)?
+            .native
+            .clone()
+            .ok_or_else(|| anyhow::anyhow!("prefill WorkerSet does not support native HTTP"))
+    }
+
+    pub(crate) fn native_bootstrap(
+        &self,
+        endpoint: &EndpointId,
+        worker_id: u64,
+    ) -> anyhow::Result<(
+        crate::local_model::runtime_config::DisaggregatedEndpoint,
+        Option<RoutingConstraints>,
+    )> {
+        let bootstrap = self
+            .model_manager
+            .get_disaggregated_endpoint(endpoint, worker_id)
+            .ok_or_else(|| {
+                anyhow::anyhow!("selected native prefill worker has no bootstrap endpoint")
+            })?;
+        let constraints = self
+            .model_manager
+            .get_kv_transfer_routing_constraints(endpoint, worker_id)?;
+        Ok((bootstrap, constraints))
+    }
 }
 
 struct PrefillBuildContext {

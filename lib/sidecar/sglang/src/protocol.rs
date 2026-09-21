@@ -156,6 +156,15 @@ pub(crate) fn routed_dp_rank(
 }
 
 fn validate_request(request: &PreprocessedRequest) -> Result<(), DynamoError> {
+    if request
+        .extra_args
+        .as_ref()
+        .is_some_and(|args| args.get("sglang_tito").is_some())
+    {
+        return Err(client::invalid_arg(
+            "native SGLang requests require the HTTP endpoint and an updated frontend",
+        ));
+    }
     if request.token_ids.is_empty() {
         return Err(client::invalid_arg("token_ids must not be empty"));
     }
@@ -600,6 +609,13 @@ mod tests {
             })
             .build()
             .unwrap()
+    }
+
+    #[test]
+    fn native_token_envelope_requires_http_endpoint() {
+        let mut request = request();
+        request.extra_args = Some(serde_json::json!({"sglang_tito": {"input_ids": [1]}}));
+        assert!(super::validate_request(&request).is_err());
     }
 
     #[test]

@@ -22,6 +22,7 @@ use dynamo_runtime::{
 use super::{PrefillBinding, PrefillBuildContext, PrefillLifecycleState, PrefillRouter};
 use crate::{
     discovery::{LoadThresholdHandle, ModelManager, WorkerSetTarget},
+    http::service::sglang_generate::routing::NativeGenerateBinding,
     kv_router::{RouterLoadSource, RoutingHost, RoutingLoadContext, SelectionPolicySource},
     model_card::ModelDeploymentCard,
     protocols::common::{
@@ -421,11 +422,30 @@ impl PrefillRouter {
             )?)
         };
 
+        let native = match &target {
+            WorkerSetTarget::Committed(target)
+                if crate::http::service::sglang_generate::routing::supports_native(
+                    &target.card,
+                ) =>
+            {
+                Some(Arc::new(
+                    NativeGenerateBinding::new(
+                        target.clone(),
+                        context.parent_token.clone(),
+                        router.clone(),
+                        None,
+                    )
+                    .await?,
+                ))
+            }
+            _ => None,
+        };
         Ok(PrefillBinding {
             target_id,
             endpoint_id,
             router,
             prefill_router_mode,
+            native,
         })
     }
 

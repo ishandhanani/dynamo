@@ -50,6 +50,7 @@ type LlmPushRouter = PushRouter<PreprocessedRequest, Annotated<LLMEngineOutput>>
 
 #[derive(Clone)]
 pub struct PreprocessedRouting {
+    pub(crate) routing_host: Arc<crate::kv_router::RoutingHost>,
     backend_engine:
         ServiceEngine<SingleIn<PreprocessedRequest>, ManyOut<Annotated<LLMEngineOutput>>>,
     prefill_router: Arc<PrefillRouter>,
@@ -309,8 +310,9 @@ pub(crate) async fn build_preprocessed_routing_with_session_affinity_mode(
             .set_decode_routing_host(routing_host.clone())
             .context("install conditional-disagg decode RoutingHost")?;
     }
-    let backend_engine: ServiceEngine<_, _> = routing_host;
+    let backend_engine: ServiceEngine<_, _> = routing_host.clone();
     Ok(PreprocessedRouting {
+        routing_host,
         backend_engine,
         prefill_router,
         encoder_router,

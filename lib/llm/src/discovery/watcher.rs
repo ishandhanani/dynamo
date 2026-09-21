@@ -28,6 +28,7 @@ use crate::{
     discovery::{LoadThresholdHandle, WORKER_TYPE_DECODE, WorkerSet},
     entrypoint::{self, ChatEngineFactoryCallback, RouterConfig},
     http::service::metrics::Metrics,
+    http::service::sglang_generate::routing::NativeGenerateBinding,
     kv_router::{
         EncoderRouter, PrefillRouter, RouterLoadSource, RoutingLoadContext, SelectionPolicySource,
     },
@@ -150,6 +151,7 @@ fn supports_generate_capability(card: &ModelDeploymentCard, capability: &str) ->
 fn supports_enabled_engine_generate(card: &ModelDeploymentCard, capabilities: &[&str]) -> bool {
     capabilities
         .iter()
+        .filter(|capability| **capability != crate::protocols::sglang::HTTP_CAPABILITY)
         .any(|capability| supports_generate_capability(card, capability))
 }
 
@@ -464,7 +466,7 @@ impl ModelWatcher {
             group: spec.key.id(),
             generation: spec.generation,
             card: Arc::new(card.clone()),
-            admitted_ids,
+            admitted_ids: admitted_ids.clone(),
         });
         worker_set.set_instance_watcher(instance_watcher);
 
@@ -547,8 +549,15 @@ impl ModelWatcher {
                 card.model_type.supports_chat() && self.chat_engine_factory.is_some();
             let needs_generate_pipeline =
                 supports_enabled_engine_generate(card, &self.generate_engine_capabilities);
-            let needs_preprocessed_routing =
-                needs_factory_chat_pipeline || tokenizer.is_some() || needs_generate_pipeline;
+            let needs_native_generate = self
+                .generate_engine_capabilities
+                .contains(&crate::protocols::sglang::HTTP_CAPABILITY)
+                && effective_worker_type(card.worker_type, card.model_type) != WorkerType::Prefill
+                && crate::http::service::sglang_generate::routing::supports_native(card);
+            let needs_preprocessed_routing = needs_factory_chat_pipeline
+                || tokenizer.is_some()
+                || needs_generate_pipeline
+                || needs_native_generate;
 
             let load_thresholds =
                 LoadThresholdHandle::new(router_config.load_threshold_config.clone());
@@ -681,6 +690,25 @@ impl ModelWatcher {
             } else {
                 None
             };
+
+            if needs_native_generate {
+                worker_set.native_generate = Some(Arc::new(
+                    NativeGenerateBinding::new(
+                        worker_set
+                            .topology_target()
+                            .expect("committed target")
+                            .clone(),
+                        cancellation.clone(),
+                        preprocessed_routing
+                            .as_ref()
+                            .expect("native routing host exists")
+                            .routing_host
+                            .clone(),
+                        prefill_chooser.clone(),
+                    )
+                    .await?,
+                ));
+            }
 
             // Add chat engine only if the model supports chat
             if card.model_type.supports_chat() {

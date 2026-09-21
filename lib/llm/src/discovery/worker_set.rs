@@ -19,6 +19,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::{
     discovery::{LoadThresholdHandle, allocator::AllocatorTrimOnDrop},
+    http::service::sglang_generate::routing::NativeGenerateBinding,
     kv_router::{EncoderRouter, RoutingLoadContext, prefill_router::PrefillRouterLifecycle},
     model_card::ModelDeploymentCard,
     types::{
@@ -216,6 +217,7 @@ pub struct WorkerSet {
     pub(crate) tensor_engine: Option<TensorStreamingEngine>,
     pub(crate) realtime_engine: Option<RealtimeBidirectionalEngine>,
     pub(crate) generate_engine: Option<GenerateStreamingEngine>,
+    pub(crate) native_generate: Option<Arc<NativeGenerateBinding>>,
 
     /// Owns load monitoring for routed surfaces that do not use `RoutingHost`.
     load_context: Option<Arc<RoutingLoadContext>>,
@@ -263,6 +265,7 @@ impl WorkerSet {
             tensor_engine: None,
             realtime_engine: None,
             generate_engine: None,
+            native_generate: None,
             load_context: None,
             load_thresholds: None,
             prefill_router: None,
@@ -385,6 +388,7 @@ impl WorkerSet {
             || self.has_audios_engine()
             || self.has_realtime_engine()
             || self.has_generate_engine()
+            || self.native_generate.is_some()
     }
 
     /// Whether this set tracks an Encode worker. Encode WorkerSets carry
@@ -514,6 +518,9 @@ impl WorkerSet {
             // inject the adapter identity. Fail closed instead of serving the base weights.
             realtime_engine: None,
             generate_engine,
+            // Native bodies carry their own LoRA identity; an adapter view must
+            // not silently forward a base-model request to the adapter's route.
+            native_generate: None,
             load_context: self.load_context.clone(),
             load_thresholds: self.load_thresholds.clone(),
             prefill_router: self.prefill_router.clone(),

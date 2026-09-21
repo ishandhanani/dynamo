@@ -821,7 +821,7 @@ impl ErrorMessage {
     }
 }
 
-fn backend_http_error_class(status: StatusCode) -> ErrorClass {
+pub(super) fn backend_http_error_class(status: StatusCode) -> ErrorClass {
     if status == overload_status_code() {
         return ErrorClass::CapacityExhausted;
     }
