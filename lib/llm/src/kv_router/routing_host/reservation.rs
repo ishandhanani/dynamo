@@ -71,14 +71,8 @@ impl RoutingHost {
             "external dispatch requires explicit LoRA worker routing"
         );
         let selection = self.select_hosted_worker(request, None, None)?;
-        let requested_rank = request
-            .content()
-            .routing
-            .as_ref()
-            .and_then(|hints| hints.routing_constraints.as_ref())
-            .and_then(|constraints| constraints.required_dp_rank);
         Ok(RouteReservation::new(
-            RouteTarget::new(selection.initial_worker, requested_rank),
+            RouteTarget::new(selection.initial_worker, None),
             None,
             selection.occupancy_reservation,
         ))

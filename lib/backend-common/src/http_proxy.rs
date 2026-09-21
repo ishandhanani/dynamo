@@ -1,11 +1,10 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-use crate::HttpEndpoint;
 use std::{sync::Arc, time::Duration};
 
+use crate::http::{self, MAX_BODY_CHUNK, Request, ResponseFrame};
 use async_trait::async_trait;
-use dynamo_backend_common::http::{self, MAX_BODY_CHUNK, Request, ResponseFrame};
 use dynamo_runtime::{
     component::{Endpoint, StartedEndpoint},
     pipeline::{
@@ -20,7 +19,7 @@ use tokio_util::sync::CancellationToken;
 
 pub struct HttpProxy {
     client: reqwest::Client,
-    endpoint: HttpEndpoint,
+    endpoint: reqwest::Url,
     cancel: CancellationToken,
     paths: &'static [&'static str],
 }
@@ -28,7 +27,7 @@ pub struct HttpProxy {
 impl HttpProxy {
     pub async fn start(
         primary: &Endpoint,
-        endpoint: HttpEndpoint,
+        endpoint: reqwest::Url,
         connect_timeout: Duration,
         paths: &'static [&'static str],
         cancel: CancellationToken,
@@ -89,7 +88,8 @@ impl AsyncEngine<SingleIn<Request>, ManyOut<Annotated<ResponseFrame>>, anyhow::E
             }
         };
         let client = self.client.clone();
-        let mut url = self.endpoint.with_path(path);
+        let mut url = self.endpoint.clone();
+        url.set_path(path);
         url.set_query(query);
         let stream = async_stream::try_stream! {
             let response = client.request(method, url).headers(headers).body(request.body).send().await?;

@@ -25,10 +25,18 @@ fn native_routing_uses_first_prompt_without_expanding_samples() {
 fn native_routing_controls_preserve_engine_fields() {
     let projection = Projection::read(BODY, &HeaderMap::new()).unwrap();
     let body = projection
-        .with_controls([("routed_dp_rank", Value::from(2))])
+        .with_controls([
+            ("routed_dp_rank", Value::from(2)),
+            ("data_parallel_rank", Value::from(2)),
+            ("disagg_prefill_dp_rank", Value::from(3)),
+        ])
         .unwrap();
     let result = Projection::read(&body, &HeaderMap::new()).unwrap();
     assert_eq!(result.dp_rank, Some(2));
+    assert_eq!(
+        result.field::<u32>("disagg_prefill_dp_rank").unwrap(),
+        Some(3)
+    );
     for key in ["input_ids", "sampling_params", "future_field"] {
         assert_eq!(
             projection.raw(key).unwrap().get(),

@@ -3076,17 +3076,10 @@ dependencies = [
 name = "dynamo-sidecar-common"
 version = "1.6.0"
 dependencies = [
- "anyhow",
- "async-stream",
- "async-trait",
- "bytes",
  "clap",
  "dynamo-backend-common",
- "dynamo-runtime",
  "futures",
- "reqwest 0.12.28",
  "tokio",
- "tokio-util",
  "tonic 0.13.1",
  "tonic 0.14.6",
  "tracing",

@@ -458,9 +458,9 @@ impl<'a, C: WorkerConfigLike> SchedulingContext<'a, C> {
                 .effective_cached_tokens
                 .iter()
                 .filter(|(worker, _)| {
-                    self.eligibility
-                        .validate_worker_rank(self.workers, **worker)
-                        .is_ok()
+                    self.workers.get(&worker.worker_id).is_some_and(|config| {
+                        self.eligibility.allows_worker(worker.worker_id, config)
+                    })
                 })
                 .map(|(_, cached_tokens)| *cached_tokens)
                 .max()

@@ -146,22 +146,26 @@ impl NativeGenerateBinding {
         &self,
         request: &NativeRequest,
         phase: RequestPhase,
-        mut constraints: RoutingConstraints,
+        constraints: RoutingConstraints,
     ) -> anyhow::Result<RouteReservation> {
         let target = &self.target;
         let config = &target.card.runtime_config;
         let uses_kv = self.host.kv_router_if_enabled().is_some();
-        let requested_rank = if phase == RequestPhase::Prefill {
-            request
-                .input
-                .field::<u32>("disagg_prefill_dp_rank")
-                .map_err(NativeRequestError)?
-                .or_else(|| {
-                    (!uses_kv).then(|| {
+        // KV routing selects and books a rank. Load policies book only a worker,
+        // so their engine rank controls stay here rather than in the scheduler.
+        let requested_rank = if uses_kv {
+            None
+        } else if phase == RequestPhase::Prefill {
+            Some(
+                request
+                    .input
+                    .field::<u32>("disagg_prefill_dp_rank")
+                    .map_err(NativeRequestError)?
+                    .unwrap_or_else(|| {
                         config.data_parallel_start_rank
                             + rand::random::<u32>() % config.data_parallel_size.max(1)
-                    })
-                })
+                    }),
+            )
         } else {
             request.input.dp_rank
         };
@@ -180,7 +184,6 @@ impl NativeGenerateBinding {
         })
         .await?
         .map_err(NativeRequestError)?;
-        constraints.required_dp_rank = requested_rank;
         let routing = PreprocessedRequest::builder()
             .model(target.card.name().to_string())
             .token_ids(input.0)
@@ -197,9 +200,12 @@ impl NativeGenerateBinding {
             uuid::Uuid::new_v4().to_string(),
             request.metadata.clone(),
         );
-        let reservation =
+        let mut reservation =
             tokio::time::timeout_at(request.deadline, self.host.reserve_route(&routing, phase))
                 .await??;
+        if !uses_kv {
+            reservation.target.dp_rank = requested_rank;
+        }
         anyhow::ensure!(
             !self.cancellation.is_cancelled()
                 && target

@@ -185,7 +185,6 @@ fn fixture_with_preferred_taints(
         pinned_worker: None,
         allowed_worker_ids: None,
         routing_constraints: RoutingConstraints {
-            required_dp_rank: None,
             required_taints: HashSet::new(),
             preferred_taints: PREFERRED_TAINTS
                 .iter()

@@ -29,7 +29,8 @@ use crate::protocol::{
     build_generate_request, disaggregated_params_to_json, engine_data_from_meta, extract_logprobs,
     meta_u32, output_ids_to_u32, terminal_from_meta,
 };
-use dynamo_sidecar_common::{HttpEndpoint, http::HttpProxy};
+use dynamo_backend_common::http_proxy::HttpProxy;
+use dynamo_sidecar_common::HttpEndpoint;
 
 const RETRY_LOG_INTERVAL: Duration = Duration::from_secs(30);
 
@@ -299,7 +300,7 @@ impl LLMEngine for SglangSidecarEngine {
         if let Some(http) = &state.native_wire_http {
             let started = HttpProxy::start(
                 &endpoint,
-                http.clone(),
+                http.with_path("/"),
                 self.transport.connect_attempt_timeout,
                 &["/generate", "/start_profile", "/stop_profile"],
                 self.cancel.clone(),

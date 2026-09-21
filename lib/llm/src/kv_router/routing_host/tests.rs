@@ -163,6 +163,16 @@ async fn builtin_host_constructs_only_declared_capabilities() {
     guard.abort().await;
     assert_eq!(host.inner.occupancy_for_test(1), 0);
 
+    let reservation = host
+        .reserve_route(&Context::new(request()), RequestPhase::Aggregated)
+        .await
+        .unwrap();
+    assert_eq!(reservation.target.dp_rank, None);
+    let worker = reservation.target.worker_id;
+    assert_eq!(host.inner.occupancy_for_test(worker), 1);
+    drop(reservation);
+    assert_eq!(host.inner.occupancy_for_test(worker), 0);
+
     drop(host);
     runtime.shutdown();
 }
@@ -1414,6 +1424,51 @@ async fn potential_loads(router: &RoutingHost) -> Vec<dynamo_kv_router::protocol
         .unwrap()
 }
 
+#[tokio::test]
+#[serial_test::serial]
+async fn external_reservation_books_and_releases_the_selected_dp_rank() {
+    let config = ModelRuntimeConfig {
+        data_parallel_size: 2,
+        ..Default::default()
+    };
+    let (host, runtime) = router_with_worker_configs(None, HashMap::from([(7, config)])).await;
+    for phase in [
+        RequestPhase::Aggregated,
+        RequestPhase::Prefill,
+        RequestPhase::Decode,
+    ] {
+        let reservation = host
+            .reserve_route(&Context::new(request()), phase)
+            .await
+            .unwrap();
+        let rank = reservation.target.dp_rank.unwrap();
+        assert!(rank < 2);
+        let loads = potential_loads(&host).await;
+        assert_eq!(
+            active_requests_for(&loads, reservation.target.worker_id, rank),
+            1
+        );
+        assert_eq!(
+            loads.iter().map(|load| load.active_requests).sum::<usize>(),
+            1
+        );
+        drop(reservation);
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while potential_loads(&host)
+                .await
+                .iter()
+                .any(|load| load.active_requests != 0)
+            {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+    }
+    drop(host);
+    runtime.shutdown();
+}
+
 fn active_requests_for(
     loads: &[dynamo_kv_router::protocols::PotentialLoad],
     worker_id: u64,
@@ -1930,7 +1985,6 @@ async fn request_constraints_preserve_worker_only_affinity() {
     bind_affinity_target(&router, &taint_session, target).await;
     let mut taint_input = request();
     taint_input.routing_mut().routing_constraints = Some(RoutingConstraints {
-        required_dp_rank: None,
         required_taints: HashSet::from(["request-pool".to_string()]),
         ..Default::default()
     });
@@ -2139,7 +2193,6 @@ async fn migration_exclusion_preserves_hard_affinity_without_widening_or_escapin
 
     let mut constrained_input = request();
     constrained_input.routing_mut().routing_constraints = Some(RoutingConstraints {
-        required_dp_rank: None,
         required_taints: HashSet::from(["retry-pool".to_string()]),
         ..Default::default()
     });

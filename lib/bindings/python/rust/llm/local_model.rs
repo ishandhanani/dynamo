@@ -25,8 +25,6 @@ fn validate_model_runtime_config(config: &RsModelRuntimeConfig) -> PyResult<()> 
 #[derive(Clone, Debug, Default)]
 pub struct RoutingConstraints {
     #[pyo3(get, set)]
-    pub required_dp_rank: Option<u32>,
-    #[pyo3(get, set)]
     pub required_taints: HashSet<String>,
     #[pyo3(get, set)]
     pub preferred_taints: HashMap<String, f32>,
@@ -35,14 +33,12 @@ pub struct RoutingConstraints {
 #[pymethods]
 impl RoutingConstraints {
     #[new]
-    #[pyo3(signature = (required_taints=None, preferred_taints=None, required_dp_rank=None))]
+    #[pyo3(signature = (required_taints=None, preferred_taints=None))]
     fn new(
         required_taints: Option<HashSet<String>>,
         preferred_taints: Option<HashMap<String, f32>>,
-        required_dp_rank: Option<u32>,
     ) -> Self {
         Self {
-            required_dp_rank,
             required_taints: required_taints.unwrap_or_default(),
             preferred_taints: preferred_taints.unwrap_or_default(),
         }
@@ -52,7 +48,6 @@ impl RoutingConstraints {
 impl From<RoutingConstraints> for RsRoutingConstraints {
     fn from(value: RoutingConstraints) -> Self {
         Self {
-            required_dp_rank: value.required_dp_rank,
             required_taints: value.required_taints,
             preferred_taints: value.preferred_taints,
         }
@@ -62,7 +57,6 @@ impl From<RoutingConstraints> for RsRoutingConstraints {
 impl From<RsRoutingConstraints> for RoutingConstraints {
     fn from(value: RsRoutingConstraints) -> Self {
         Self {
-            required_dp_rank: value.required_dp_rank,
             required_taints: value.required_taints,
             preferred_taints: value.preferred_taints,
         }

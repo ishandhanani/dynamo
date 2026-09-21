@@ -6,7 +6,6 @@
 mod args;
 mod endpoint;
 mod error;
-pub mod http;
 mod transport;
 
 #[cfg(feature = "tonic-v14")]

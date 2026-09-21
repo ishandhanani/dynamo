@@ -45,23 +45,6 @@ pub struct RoutingEligibility<'a> {
 }
 
 impl<'a> RoutingEligibility<'a> {
-    fn allows_rank(&self, rank: DpRank) -> bool {
-        self.routing_constraints
-            .required_dp_rank
-            .is_none_or(|required| required == rank)
-    }
-
-    fn allows_rank_range<C: WorkerConfigLike>(&self, config: &C) -> bool {
-        self.routing_constraints
-            .required_dp_rank
-            .is_none_or(|rank| {
-                (config.data_parallel_start_rank()
-                    ..config
-                        .data_parallel_start_rank()
-                        .saturating_add(config.data_parallel_size()))
-                    .contains(&rank)
-            })
-    }
     #[inline]
     pub fn new(
         allowed_worker_ids: Option<&'a HashSet<WorkerId>>,
@@ -144,7 +127,6 @@ impl<'a> RoutingEligibility<'a> {
         config: &C,
     ) -> bool {
         self.matches_worker_id_constraints(worker_id)
-            && self.allows_rank_range(config)
             && self.is_worker_available(worker_id)
             && self
                 .routing_constraints
@@ -154,7 +136,6 @@ impl<'a> RoutingEligibility<'a> {
     #[inline]
     pub fn allows_worker<C: WorkerConfigLike>(&self, worker_id: WorkerId, config: &C) -> bool {
         self.allows_worker_id(worker_id)
-            && self.allows_rank_range(config)
             && self
                 .routing_constraints
                 .is_compatible_with_worker_taints(config.taints())
@@ -205,8 +186,7 @@ impl<'a> RoutingEligibility<'a> {
                 worker_id: worker.worker_id,
             });
         }
-        if !self.allows_rank(worker.dp_rank)
-            || !self.matches_affinity_target(worker.worker_id)
+        if !self.matches_affinity_target(worker.worker_id)
             || self
                 .affinity_target
                 .and_then(|target| target.dp_rank)
@@ -270,13 +250,10 @@ impl<'a> RoutingEligibility<'a> {
             let dp_end = dp_start + config.data_parallel_size();
             if let Some(dp_rank) = target.dp_rank {
                 return (dp_start..dp_end).contains(&dp_rank)
-                    && self.allows_rank(dp_rank)
                     && predicate(WorkerWithDpRank::new(target.worker_id, dp_rank), config);
             }
             for dp_rank in dp_start..dp_end {
-                if self.allows_rank(dp_rank)
-                    && predicate(WorkerWithDpRank::new(target.worker_id, dp_rank), config)
-                {
+                if predicate(WorkerWithDpRank::new(target.worker_id, dp_rank), config) {
                     return true;
                 }
             }
@@ -291,9 +268,7 @@ impl<'a> RoutingEligibility<'a> {
             let dp_start = config.data_parallel_start_rank();
             let dp_end = dp_start + config.data_parallel_size();
             for dp_rank in dp_start..dp_end {
-                if self.allows_rank(dp_rank)
-                    && predicate(WorkerWithDpRank::new(worker_id, dp_rank), config)
-                {
+                if predicate(WorkerWithDpRank::new(worker_id, dp_rank), config) {
                     return true;
                 }
             }
@@ -315,9 +290,9 @@ impl<'a> RoutingEligibility<'a> {
         }
         let ranks = config.data_parallel_start_rank()
             ..config.data_parallel_start_rank() + config.data_parallel_size();
-        target.dp_rank.map_or(!ranks.is_empty(), |rank| {
-            ranks.contains(&rank) && self.allows_rank(rank)
-        })
+        target
+            .dp_rank
+            .map_or(!ranks.is_empty(), |rank| ranks.contains(&rank))
     }
 
     pub fn for_each_eligible_worker_rank<C, F>(&self, workers: &HashMap<WorkerId, C>, mut visit: F)
@@ -337,9 +312,7 @@ impl<'a> RoutingEligibility<'a> {
             return Ok(());
         };
 
-        if self.matches_worker_id_constraints(pinned_worker.worker_id)
-            && self.allows_rank(pinned_worker.dp_rank)
-        {
+        if self.matches_worker_id_constraints(pinned_worker.worker_id) {
             return Ok(());
         }
 
@@ -427,41 +400,10 @@ mod tests {
     }
 
     #[test]
-    fn native_rank_constraint_filters_candidates_pins_and_unavailable_ranks() {
-        let workers = workers();
-        let constraints = RoutingConstraints {
-            required_dp_rank: Some(3),
-            ..Default::default()
-        };
-        let eligibility = RoutingEligibility::new(None, None, None, &constraints);
-        let mut selected = Vec::new();
-        eligibility.for_each_eligible_worker_rank(&workers, |worker, _| selected.push(worker));
-        assert_eq!(selected, vec![WorkerWithDpRank::new(7, 3)]);
-        assert!(
-            eligibility
-                .validate_worker_rank(&workers, WorkerWithDpRank::new(7, 2))
-                .is_err()
-        );
-        let pin =
-            RoutingEligibility::new(None, None, Some(WorkerWithDpRank::new(7, 2)), &constraints);
-        assert!(pin.validate_pinned_worker_allowed().is_err());
-        assert!(!pin.any_eligible_worker_rank(&workers, |_, _| true));
-        let unavailable = RoutingConstraints {
-            required_dp_rank: Some(8),
-            ..Default::default()
-        };
-        let eligibility = RoutingEligibility::new(None, None, None, &unavailable);
-        assert!(!eligibility.has_eligible_worker_ignoring_overload(
-            workers.iter().map(|(id, config)| (*id, config))
-        ));
-    }
-
-    #[test]
     fn routing_eligibility_accepts_allowed_rank_matching_constraints() {
         let workers = workers();
         let allowed = HashSet::from([7]);
         let constraints = RoutingConstraints {
-            required_dp_rank: None,
             required_taints: HashSet::from(["zone-a".to_string()]),
             preferred_taints: HashMap::new(),
         };
@@ -569,7 +511,6 @@ mod tests {
     fn routing_eligibility_rejects_unsatisfied_required_taints() {
         let workers = workers();
         let constraints = RoutingConstraints {
-            required_dp_rank: None,
             required_taints: HashSet::from(["zone-b".to_string()]),
             preferred_taints: HashMap::new(),
         };
@@ -588,7 +529,6 @@ mod tests {
         let allowed_worker_ids = HashSet::from([1, 2]);
         let overloaded_worker_ids = HashSet::from([2]);
         let routing_constraints = RoutingConstraints {
-            required_dp_rank: None,
             required_taints: HashSet::from(["mdc-a".to_string()]),
             preferred_taints: HashMap::new(),
         };
@@ -642,7 +582,6 @@ mod tests {
         ]);
         let allowed = HashSet::from([7]);
         let constraints = RoutingConstraints {
-            required_dp_rank: None,
             required_taints: HashSet::from(["zone-a".to_string()]),
             preferred_taints: HashMap::new(),
         };
@@ -683,7 +622,6 @@ mod tests {
         ]);
         let overloaded = HashSet::from([7]);
         let constraints = RoutingConstraints {
-            required_dp_rank: None,
             required_taints: HashSet::from(["zone-a".to_string()]),
             preferred_taints: HashMap::new(),
         };
