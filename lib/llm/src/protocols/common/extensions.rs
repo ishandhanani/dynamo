@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright (c) 2024-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use axum::http::HeaderMap;
 use derive_builder::Builder;
@@ -100,6 +100,145 @@ pub struct AgentCompaction {
     pub strategy: Option<String>,
 }
 
+/// Coding-agent harness that produced the invocation.
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentHarness {
+    ClaudeCode,
+    Codex,
+    OpenCode,
+}
+
+/// Normalized role of an invocation in an agent workflow.
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentRequestClass {
+    Primary,
+    Subagent,
+    Workflow,
+    Auxiliary,
+}
+
+/// Normalized operation performed by an agent invocation.
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentOperation {
+    Inference,
+    Compaction,
+    Prewarm,
+    Memory,
+}
+
+/// Identity reported by the agent harness for this invocation.
+#[derive(Serialize, Deserialize, Builder, Debug, Clone, Default, PartialEq, Eq)]
+pub struct AgentActor {
+    /// Harness-provided agent name, if available.
+    #[builder(default, setter(strip_option))]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+
+    /// Harness-provided agent type, role, or subagent kind.
+    #[builder(default, setter(strip_option))]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_type: Option<String>,
+}
+
+/// Lineage and context-window metadata for one agent turn.
+#[derive(Serialize, Deserialize, Builder, Debug, Clone, Default, PartialEq, Eq)]
+pub struct AgentTurn {
+    /// Stable client installation identifier, if the harness exposes one.
+    #[builder(default, setter(strip_option))]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub client_instance_id: Option<String>,
+
+    /// Client session identifier when the harness exposes it separately from affinity routing.
+    #[builder(default, setter(strip_option))]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub client_session_id: Option<String>,
+
+    /// Invocation-local turn identifier.
+    #[builder(default, setter(strip_option))]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
+
+    /// Parent turn identifier.
+    #[builder(default, setter(strip_option))]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent_id: Option<String>,
+
+    /// Root turn identifier for the agent workflow.
+    #[builder(default, setter(strip_option))]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub root_id: Option<String>,
+
+    /// Logical context window identifier.
+    #[builder(default, setter(strip_option))]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context_id: Option<String>,
+
+    /// Harness window identifier within the current context.
+    #[builder(default, setter(strip_option))]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub window_id: Option<String>,
+
+    /// Monotonic context-window position, when available.
+    #[builder(default, setter(strip_option))]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context_sequence: Option<u64>,
+
+    /// Harness-reported trigger for this turn.
+    #[builder(default, setter(strip_option))]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub trigger: Option<String>,
+
+    /// Unix timestamp for turn start, in milliseconds.
+    #[builder(default, setter(strip_option))]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub started_at_unix_ms: Option<i64>,
+
+    /// Session that this turn was forked from, when distinct from the parent session.
+    #[builder(default, setter(strip_option))]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub forked_from_session_id: Option<String>,
+
+    /// Exclusive parent-history ordinal at the fork point.
+    #[builder(default, setter(strip_option))]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub forked_after_history_ordinal: Option<u64>,
+}
+
+/// Normalized metadata for the agent invocation represented by this request.
+#[derive(Serialize, Deserialize, Builder, Debug, Clone, PartialEq, Eq)]
+pub struct AgentInvocation {
+    pub harness: AgentHarness,
+
+    #[builder(default, setter(strip_option))]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub request_class: Option<AgentRequestClass>,
+
+    #[builder(default, setter(strip_option))]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub operation: Option<AgentOperation>,
+
+    #[builder(default, setter(strip_option))]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub actor: Option<AgentActor>,
+
+    /// The harness reports that the prior context was replaced by compaction.
+    #[builder(default, setter(strip_option))]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context_replaced: Option<bool>,
+
+    /// Durations of tool calls that completed before this invocation, in milliseconds.
+    #[builder(default)]
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub previous_tool_durations_ms: BTreeMap<String, u64>,
+
+    #[builder(default, setter(strip_option))]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub turn: Option<AgentTurn>,
+}
+
 /// Identity metadata for agentic workloads.
 // Not `deny_unknown_fields`: `AgentContext` is part of the frontend->worker wire
 // format (`PreprocessedRequest.agent_context`), so additive fields must be tolerated
@@ -130,6 +269,11 @@ pub struct AgentContext {
     // TODO(v1.6): Make required after v1.3 falls outside the N-2 window.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub input_trigger: Option<InputTrigger>,
+
+    /// Normalized details of the agent invocation that produced this request.
+    #[builder(default, setter(strip_option))]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub invocation: Option<AgentInvocation>,
 }
 
 impl AgentContext {
@@ -371,6 +515,7 @@ impl From<AgentContextHeaderValues> for AgentContext {
             session_final: values.session_final,
             compaction: values.compaction,
             input_trigger: None,
+            invocation: values.invocation,
         }
     }
 }

@@ -257,6 +257,7 @@ mod tests {
                 session_final: None,
                 compaction: None,
                 input_trigger: None,
+                invocation: None,
             }),
             request: None,
             tool: Some(RequestTraceToolEvent {

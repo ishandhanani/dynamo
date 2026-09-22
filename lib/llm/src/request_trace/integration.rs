@@ -376,6 +376,7 @@ mod tests {
                 strategy: Some("memento".to_string()),
             }),
             input_trigger: Some(InputTrigger::ToolResult),
+            invocation: None,
         });
         let mut context = Context::new(());
         context.insert(
@@ -451,6 +452,7 @@ mod tests {
             session_final: None,
             compaction: None,
             input_trigger: None,
+            invocation: None,
         });
         let tracker = Some(Arc::new(RequestTracker::new()));
         let context = Context::new(());

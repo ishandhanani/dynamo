@@ -375,6 +375,7 @@ pub(crate) fn to_worker_selection_session_context(
         session_final,
         compaction: _,
         input_trigger,
+        invocation: _,
     } = context;
     let input_trigger = input_trigger.map(|trigger| match trigger {
         InputTrigger::UserMessage => WorkerSelectionInputTrigger::UserMessage,
@@ -2039,6 +2040,7 @@ mod tests {
             session_final: Some(true),
             compaction: None,
             input_trigger: Some(InputTrigger::ToolResult),
+            invocation: None,
         };
 
         let selection_context = to_worker_selection_session_context(&context);

@@ -6405,6 +6405,7 @@ mod tests {
                     ..Default::default()
                 }),
                 input_trigger: None,
+                invocation: None,
             },
         );
 

@@ -10347,6 +10347,7 @@ mod tests {
                 ..Default::default()
             }),
             input_trigger: None,
+            invocation: None,
         };
         let mut context = PipelineContext::new(());
         context.insert(AGENT_CONTEXT_CONTEXT_KEY, agent_context.clone());

@@ -284,6 +284,7 @@ impl From<RequestTraceToolEventIngress> for RequestTraceRecord {
                 session_final: None,
                 compaction: None,
                 input_trigger: None,
+                invocation: None,
             }),
             request: None,
             tool: Some(ingress.tool),
