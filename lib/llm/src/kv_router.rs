@@ -270,6 +270,7 @@ pub(crate) fn to_worker_selection_session_context(
         compaction: _,
         kv_hints,
         input_trigger,
+        invocation: _,
     } = context;
     let input_trigger = input_trigger.map(|trigger| match trigger {
         InputTrigger::UserMessage => WorkerSelectionInputTrigger::UserMessage,
@@ -2341,6 +2342,7 @@ mod tests {
                 evict_session: true,
             }),
             input_trigger: Some(InputTrigger::ToolResult),
+            invocation: None,
         };
 
         let selection_context = to_worker_selection_session_context(&context);

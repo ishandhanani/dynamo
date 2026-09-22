@@ -5526,6 +5526,7 @@ mod tests {
                 }),
                 kv_hints: None,
                 input_trigger: None,
+                invocation: None,
             },
         );
 
