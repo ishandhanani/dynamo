@@ -204,4 +204,12 @@ Use `session_id` to group requests before, during, and after compaction. Compact
 For chat streams, Dynamo records finish metadata after parser and jail rewrites. Completion streams record the final OpenAI-compatible completion finish reason.
 
 > [!WARNING]
-> Request tracing currently covers eligible Rust OpenAI chat-completions and completions requests. It skips unsupported replay shapes, including `n > 1`, `best_of > 1`, `prompt_embeds`, multimodal inputs, and requests without a tracker or usable KV cache block size. Sinks use best-effort delivery and can drop records when they lag, so check warnings and validate row counts before treating a capture as complete.
+> Request tracing covers eligible Rust OpenAI chat-completions and completions requests, plus the native SGLang HTTP path described below. It skips unsupported replay shapes, including `n > 1`, `best_of > 1`, `prompt_embeds`, multimodal inputs, and requests without a tracker or usable KV cache block size. Sinks use best-effort delivery and can drop records when they lag, so check warnings and validate row counts before treating a capture as complete.
+
+## Native SGLang HTTP Requests
+
+**Experimental.** With `DYN_REQUEST_TRACE=1`, native SGLang `/generate` requests use the same trace sinks and Perfetto converter. Eligible requests record the request ID, model, agent context from headers, input token count, prompt replay hashes, selected workers and DP ranks, and total HTTP request time. Prefill and decode selections appear in one request record.
+
+This path forwards the engine response without parsing it. Output token counts, cached token counts, time to first token, inter-token latency, engine finish reasons and tool-call metadata are absent. HTTP completion or disconnection ends the trace; it does not confirm that engine cleanup has completed. These records show the HTTP lifetime and routing placement, not a complete generation replay.
+
+Tracing supports a single text or token-ID prompt with one output choice and a usable KV cache block size. Text requires the engine's tokenizer. Batches, multiple output choices, embeddings, multimodal requests and custom cache keys remain valid native requests where supported, but do not produce request traces. Tracing does not change the response body or streaming mode. No harness tool-event connection is required.

@@ -18,7 +18,7 @@ use tokio_util::sync::CancellationToken;
 use crate::http::service::{
     http_proxy::{HttpClient, forward_reserved, metrics::observe_response},
     metrics::{Endpoint as MetricEndpoint, ErrorType, Metrics, request_was_rejected},
-    openai::get_or_create_request_id,
+    openai::{context_from_headers, get_or_create_request_id},
 };
 use crate::{
     discovery::CommittedWorkerSetTarget,
@@ -26,11 +26,14 @@ use crate::{
     model_card::ModelDeploymentCard,
     protocols::{
         common::{
+            SamplingOptions,
+            extensions::{AGENT_CONTEXT_CONTEXT_KEY, AgentContext},
             preprocessor::{PreprocessedRequest, RoutingHints},
-            timing::RequestPhase,
+            timing::{RequestPhase, RequestTracker},
         },
         http,
     },
+    request_trace::{self, HttpRequestTrace},
     tokenizers::Tokenizer,
 };
 
@@ -102,17 +105,23 @@ impl NativeGenerateBinding {
             .field("stream")
             .map_err(NativeRequestError)?
             .unwrap_or(false);
-        let metadata = crate::http::service::metadata::extract_metadata_from_http(&headers)?;
+        let request_id = get_or_create_request_id(&headers);
+        let context = context_from_headers((), request_id.clone(), &headers)
+            .map_err(|(_, axum::Json(error))| anyhow::anyhow!(error.message().to_string()))?;
         let mut guard = metrics.create_inflight_guard(
             metric_model,
             MetricEndpoint::Generate,
             streaming,
-            &get_or_create_request_id(&headers),
+            &request_id,
         );
         guard.mark_error(ErrorType::Cancelled);
-        let request = NativeRequest {
+        let mut request = NativeRequest {
             input: projection,
-            metadata,
+            context,
+            trace_tracker: (request_trace::is_enabled()
+                && request_trace::policy().emit_request_end_records())
+            .then(|| Arc::new(RequestTracker::new())),
+            trace: None,
             deadline: Instant::now() + Duration::from_secs(30),
             wire: http::Request {
                 path: "/generate".into(),
@@ -123,10 +132,10 @@ impl NativeGenerateBinding {
         };
         let response = async {
             if let Some(prefill) = &self.prefill {
-                return self.forward_disaggregated(prefill, request).await;
+                return self.forward_disaggregated(prefill, &mut request).await;
             }
             let admission = self
-                .reserve(&request, RequestPhase::Aggregated, Default::default())
+                .reserve(&mut request, RequestPhase::Aggregated, Default::default())
                 .await?;
             self.send(&request, admission, Vec::new()).await
         }
@@ -140,11 +149,15 @@ impl NativeGenerateBinding {
                 ErrorType::Unavailable
             });
         })?;
-        Ok(observe_response(response, guard))
+        let response = observe_response(response, guard);
+        Ok(match request.trace.take() {
+            Some(trace) => trace.wrap_response(response),
+            None => response,
+        })
     }
     async fn reserve(
         &self,
-        request: &NativeRequest,
+        request: &mut NativeRequest,
         phase: RequestPhase,
         constraints: RoutingConstraints,
     ) -> anyhow::Result<RouteReservation> {
@@ -179,8 +192,21 @@ impl NativeGenerateBinding {
         );
         let tokenizer = self.tokenizer.clone();
         let projection = request.input.clone();
-        let input = tokio::task::spawn_blocking(move || {
-            projection.routing_input(tokenizer.as_ref(), uses_kv)
+        let is_trace_enabled = request.trace_tracker.is_some();
+        let (input, trace_input) = tokio::task::spawn_blocking(move || {
+            let trace_sampling = is_trace_enabled
+                .then(|| projection.trace_sampling())
+                .flatten();
+            let input = projection.routing_input(tokenizer.as_ref(), uses_kv)?;
+            let trace_input = trace_sampling.and_then(|sampling| {
+                let tokens = if uses_kv {
+                    input.0.clone()
+                } else {
+                    projection.routing_input(tokenizer.as_ref(), true).ok()?.0
+                };
+                Some((tokens, sampling))
+            });
+            Ok::<_, anyhow::Error>((input, trace_input))
         })
         .await?
         .map_err(NativeRequestError)?;
@@ -195,16 +221,44 @@ impl NativeGenerateBinding {
                 ..input.1
             }))
             .build()?;
+        if let Some(tracker) = request.trace_tracker.take()
+            && let Some((tokens, sampling)) = trace_input
+        {
+            let mut traced = routing.clone();
+            traced.token_ids = tokens;
+            traced.sampling_options = sampling;
+            traced.agent_context = request
+                .context
+                .get::<AgentContext>(AGENT_CONTEXT_CONTEXT_KEY)
+                .ok()
+                .map(|agent| agent.as_ref().clone());
+            tracker.record_isl(traced.token_ids.len(), None);
+            request.trace = HttpRequestTrace::new(
+                &traced,
+                tracker,
+                &request.context,
+                target.card.kv_cache_block_size as usize,
+            );
+        }
         let routing = Context::with_id_and_metadata(
             routing,
             uuid::Uuid::new_v4().to_string(),
-            request.metadata.clone(),
+            request.context.metadata().clone(),
         );
         let mut reservation =
             tokio::time::timeout_at(request.deadline, self.host.reserve_route(&routing, phase))
                 .await??;
         if !uses_kv {
             reservation.target.dp_rank = requested_rank;
+        }
+        if let Some(trace) = &request.trace {
+            trace
+                .record_worker(
+                    reservation.target.worker_id,
+                    reservation.target.dp_rank,
+                    phase,
+                )
+                .await;
         }
         anyhow::ensure!(
             !self.cancellation.is_cancelled()
@@ -235,7 +289,7 @@ impl NativeGenerateBinding {
             Context::with_id_and_metadata(
                 wire,
                 uuid::Uuid::new_v4().to_string(),
-                request.metadata.clone(),
+                request.context.metadata().clone(),
             ),
             admission,
         )
@@ -252,11 +306,47 @@ struct Projection {
 struct NativeRequest {
     input: Projection,
     wire: http::Request,
-    metadata: BTreeMap<String, String>,
+    context: Context<()>,
+    trace_tracker: Option<Arc<RequestTracker>>,
+    trace: Option<HttpRequestTrace>,
     deadline: Instant,
 }
 
 impl Projection {
+    // The trace schema represents one text/token prompt. Other native shapes still pass through.
+    fn trace_sampling(&self) -> Option<SamplingOptions> {
+        if [
+            "input_embeds",
+            "image_data",
+            "video_data",
+            "audio_data",
+            "extra_key",
+        ]
+        .iter()
+        .any(|key| self.raw(key).is_some())
+        {
+            return None;
+        }
+        if let Some(ids) = self.field::<Value>("input_ids").ok()? {
+            if !ids.as_array()?.iter().all(Value::is_u64) {
+                return None;
+            }
+        } else {
+            self.field::<String>("text").ok()??;
+        }
+        #[derive(serde::Deserialize, Default)]
+        struct Sampling {
+            n: Option<u8>,
+            best_of: Option<u8>,
+        }
+        let sampling: Sampling = self.field("sampling_params").ok()?.unwrap_or_default();
+        Some(SamplingOptions {
+            n: sampling.n,
+            best_of: sampling.best_of,
+            ..Default::default()
+        })
+    }
+
     // Retain engine-owned values verbatim; only routing controls are replaced.
     fn with_controls(
         &self,
@@ -337,7 +427,7 @@ impl Projection {
     // Route a batch as one HTTP request using its first prompt. SGLang owns
     // sample/beam expansion; accounting follows HTTP rather than child requests.
     fn routing_input(
-        self,
+        &self,
         tokenizer: Option<&Tokenizer>,
         uses_kv: bool,
     ) -> anyhow::Result<(Arc<Vec<u32>>, RoutingHints)> {

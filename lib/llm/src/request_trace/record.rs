@@ -104,8 +104,8 @@ pub(crate) fn emit_request_end(
     });
 }
 
-pub(crate) fn emit_agent_request_end(
-    agent_context: AgentContext,
+pub(crate) fn emit_request_end_metrics(
+    agent_context: Option<AgentContext>,
     mut request: RequestTraceMetrics,
 ) {
     sanitize_request(&mut request);
@@ -114,7 +114,7 @@ pub(crate) fn emit_agent_request_end(
         event_type: RequestTraceEventType::RequestEnd,
         event_time_unix_ms: event_time_unix_ms_from_request(&request),
         event_source: Some(RequestTraceEventSource::Dynamo),
-        agent_context: Some(agent_context),
+        agent_context,
         request: Some(request),
         tool: None,
         payload: None,
