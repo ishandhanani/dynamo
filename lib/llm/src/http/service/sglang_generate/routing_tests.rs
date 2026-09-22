@@ -6,6 +6,44 @@ use super::*;
 const BODY: &[u8] = br#"{"input_ids": [[1,2], [3]], "stream":false, "routed_dp_rank":1, "sampling_params":{"n":2,"future_option":1e400}, "future_field":{"number":1e400,"float":1.234567890123456789} }"#;
 
 #[test]
+fn native_trace_projection_preserves_replay_eligibility() {
+    for body in [
+        r#"{"input_ids":[1,2,3],"sampling_params":{"n":1,"future_option":1e400}}"#,
+        r#"{"text":"hello","stream":false}"#,
+    ] {
+        assert!(
+            Projection::read(body.as_bytes(), &HeaderMap::new())
+                .unwrap()
+                .trace_sampling()
+                .is_some()
+        );
+    }
+    for body in [
+        r#"{"input_ids":[[1,2],[3]]}"#,
+        r#"{"text":["one","two"]}"#,
+        r#"{"input_ids":[1],"image_data":"opaque"}"#,
+        r#"{"input_embeds":[1.0]}"#,
+        r#"{"text":"hello","sampling_params":[{"n":1}]}"#,
+    ] {
+        assert!(
+            Projection::read(body.as_bytes(), &HeaderMap::new())
+                .unwrap()
+                .trace_sampling()
+                .is_none()
+        );
+    }
+    // Preserve sampling counts for the shared trace eligibility check.
+    let projection = Projection::read(
+        br#"{"input_ids":[1],"sampling_params":{"n":2,"best_of":3}}"#,
+        &HeaderMap::new(),
+    )
+    .unwrap();
+    let sampling = projection.trace_sampling().unwrap();
+    assert_eq!(sampling.n, Some(2));
+    assert_eq!(sampling.best_of, Some(3));
+}
+
+#[test]
 fn native_routing_uses_first_prompt_without_expanding_samples() {
     let input = Projection::read(BODY, &HeaderMap::new())
         .unwrap()

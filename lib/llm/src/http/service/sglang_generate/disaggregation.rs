@@ -12,11 +12,11 @@ impl NativeGenerateBinding {
     pub(super) async fn forward_disaggregated(
         &self,
         router: &PrefillRouter,
-        mut request: NativeRequest,
+        request: &mut NativeRequest,
     ) -> anyhow::Result<Response> {
         let prefill = router.native_binding()?;
         let prefill_admission = prefill
-            .reserve(&request, RequestPhase::Prefill, Default::default())
+            .reserve(request, RequestPhase::Prefill, Default::default())
             .await?;
         let target = prefill_admission.target;
         let rank = target
@@ -33,7 +33,7 @@ impl NativeGenerateBinding {
         }
         let decode_admission = self
             .reserve(
-                &request,
+                request,
                 RequestPhase::Decode,
                 constraints.unwrap_or_default(),
             )
@@ -62,8 +62,8 @@ impl NativeGenerateBinding {
                 .headers
                 .push(("accept-encoding".into(), Bytes::from_static(b"identity")));
         }
-        let prefill = prefill.send(&request, prefill_admission, bootstrap.to_vec());
-        let decode = self.send(&request, decode_admission, bootstrap.to_vec());
+        let prefill = prefill.send(request, prefill_admission, bootstrap.to_vec());
+        let decode = self.send(request, decode_admission, bootstrap.to_vec());
         let (decode, prompt) = dispatch(prefill, decode, collect).await?;
         match prompt {
             Some(prompt) => logprobs::merge_response(decode, prompt).await,

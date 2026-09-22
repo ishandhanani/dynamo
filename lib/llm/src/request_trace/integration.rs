@@ -9,7 +9,9 @@ use dynamo_runtime::protocols::annotated::Annotated;
 use futures::{Stream, StreamExt};
 
 use crate::protocols::common::preprocessor::PreprocessedRequest;
-use crate::protocols::common::timing::RequestTracker;
+use crate::protocols::common::timing::{
+    RequestPhase, RequestTracker, WORKER_TYPE_DECODE, WORKER_TYPE_PREFILL,
+};
 use crate::protocols::openai::{
     chat_completions::NvCreateChatCompletionStreamResponse, completions::NvCreateCompletionResponse,
 };
@@ -25,6 +27,92 @@ struct RequestTraceRequestEndState {
 pub(crate) struct RequestEndTraceState {
     agent: Option<AgentContextTraceState>,
     request: RequestTraceRequestEndState,
+}
+
+/// Holds a native HTTP trace through response completion or cancellation.
+pub(crate) struct HttpRequestTrace {
+    state: Option<RequestEndTraceState>,
+    request_id: String,
+    model: String,
+    x_request_id: Option<String>,
+}
+
+impl HttpRequestTrace {
+    pub(crate) fn new(
+        request: &PreprocessedRequest,
+        tracker: Arc<RequestTracker>,
+        context: &Context<()>,
+        block_size: usize,
+    ) -> Option<Self> {
+        let state = build_request_end_trace_state(request, &Some(tracker), context, block_size)?;
+        Some(Self {
+            state: Some(state),
+            request_id: context.id().to_owned(),
+            model: request.model.clone(),
+            x_request_id: context
+                .get::<String>(super::X_REQUEST_ID_CONTEXT_KEY)
+                .ok()
+                .map(|id| id.as_ref().clone()),
+        })
+    }
+
+    pub(crate) async fn record_worker(&self, worker: u64, rank: Option<u32>, phase: RequestPhase) {
+        if let Some(state) = &self.state {
+            let tracker = &state.request.request_tracker;
+            let _phase = tracker.set_phase(phase).await;
+            let worker_type = match phase {
+                RequestPhase::Prefill => WORKER_TYPE_PREFILL,
+                _ => WORKER_TYPE_DECODE,
+            };
+            tracker.record_worker(worker, rank, worker_type);
+        }
+    }
+
+    pub(crate) fn wrap_response(
+        self,
+        response: axum::response::Response,
+    ) -> axum::response::Response {
+        let (parts, body) = response.into_parts();
+        let (body, done) = crate::telemetry::stream::notify_on_completion(body.into_data_stream());
+        tokio::spawn(async move {
+            done.await;
+            drop(self);
+        });
+        axum::response::Response::from_parts(parts, axum::body::Body::from_stream(body))
+    }
+}
+
+impl Drop for HttpRequestTrace {
+    fn drop(&mut self) {
+        let Some(state) = self.state.take() else {
+            return;
+        };
+        state.request.request_tracker.record_finish();
+        let (agent, mut metrics) = match state.agent {
+            Some(agent) => {
+                let (agent, metrics) = super::request_metrics_from_agent_state(
+                    agent,
+                    std::mem::take(&mut self.request_id),
+                );
+                (Some(agent), metrics)
+            }
+            None => (
+                None,
+                super::request_metrics(
+                    std::mem::take(&mut self.request_id),
+                    self.x_request_id.take(),
+                    std::mem::take(&mut self.model),
+                    Some(&state.request.request_tracker),
+                ),
+            ),
+        };
+        // HTTP chunks are not tokens. No engine output or timing is inferred from them.
+        metrics.output_tokens = None;
+        metrics.replay = Some(super::into_owned_replay_metrics(
+            state.request.replay_metrics,
+        ));
+        super::record::emit_request_end_metrics(agent, metrics);
+    }
 }
 
 fn request_trace_rejection(common_request: &PreprocessedRequest) -> Option<&'static str> {
@@ -156,7 +244,7 @@ where
             metrics.replay = Some(super::into_owned_replay_metrics(
                 request_state.replay_metrics,
             ));
-            super::record::emit_agent_request_end(agent_context, metrics);
+            super::record::emit_request_end_metrics(Some(agent_context), metrics);
         } else {
             super::record::emit_request_end(
                 request_id.clone(),
@@ -458,5 +546,174 @@ mod tests {
         let state = build_request_end_trace_state_for_policy(&request, &tracker, &context, 2, true);
 
         assert!(state.is_none());
+    }
+
+    #[tokio::test]
+    async fn native_http_trace_preserves_response_and_reports_only_observed_fields() {
+        use crate::protocols::common::{
+            extensions::agent_context_from_headers, timing::RequestPhase,
+        };
+        use axum::{
+            body::{Body, to_bytes},
+            http::{HeaderMap, StatusCode},
+            response::Response,
+        };
+
+        BUS.init(128);
+        let mut receiver = BUS.subscribe();
+        for (name, status, body) in [
+            ("unary", StatusCode::OK, "{\"future_meta\":1e400}"),
+            (
+                "sse",
+                StatusCode::OK,
+                "data: {\"custom\":true}\n\ndata: [DONE]\n\n",
+            ),
+            (
+                "rejected",
+                StatusCode::TOO_MANY_REQUESTS,
+                "engine rejection",
+            ),
+        ] {
+            let request_id = format!("native-http-{name}");
+            let tracker = Arc::new(RequestTracker::new());
+            tracker.record_isl(3, None);
+            let mut request = preprocessed_request(SamplingOptions::default());
+            let mut headers = HeaderMap::new();
+            headers.insert(
+                "x-dynamo-session-id",
+                "native-agent-session".parse().unwrap(),
+            );
+            request.agent_context = agent_context_from_headers(&headers);
+            assert!(request.agent_context.is_some());
+            let context = Context::with_id_and_metadata((), request_id.clone(), Default::default());
+            let trace = HttpRequestTrace {
+                state: build_request_end_trace_state_for_policy(
+                    &request,
+                    &Some(tracker),
+                    &context,
+                    2,
+                    true,
+                ),
+                request_id: request_id.clone(),
+                model: request.model,
+                x_request_id: None,
+            };
+            trace
+                .record_worker(11, Some(1), RequestPhase::Prefill)
+                .await;
+            trace.record_worker(22, Some(2), RequestPhase::Decode).await;
+            let response = Response::builder()
+                .status(status)
+                .header("x-engine", "one")
+                .header("x-engine", "two")
+                .body(Body::from(body))
+                .unwrap();
+            let response = trace.wrap_response(response);
+            assert_eq!(response.status(), status);
+            assert_eq!(response.headers().get_all("x-engine").iter().count(), 2);
+            assert_eq!(to_bytes(response.into_body(), 4096).await.unwrap(), body);
+            let record = next_native_record(&mut receiver, &request_id).await;
+            assert_eq!(
+                record.agent_context.unwrap().session_id,
+                "native-agent-session"
+            );
+            let metrics = record.request.unwrap();
+            assert_eq!(metrics.model.as_deref(), Some("test-model"));
+            assert_eq!(metrics.input_tokens, Some(3));
+            assert_eq!(
+                metrics.replay.unwrap().input_sequence_hashes,
+                super::super::replay::input_sequence_hashes(&[1, 2, 3], 2)
+            );
+            let worker = metrics.worker.unwrap();
+            assert_eq!(
+                (worker.prefill_worker_id, worker.prefill_dp_rank),
+                (Some(11), Some(1))
+            );
+            assert_eq!(
+                (worker.decode_worker_id, worker.decode_dp_rank),
+                (Some(22), Some(2))
+            );
+            assert!(metrics.total_time_ms.is_some());
+            assert!(metrics.request_received_ms.is_some());
+            assert!(metrics.output_tokens.is_none());
+            assert!(metrics.ttft_ms.is_none());
+            assert!(metrics.avg_itl_ms.is_none());
+            assert!(metrics.prefill_time_ms.is_none());
+            assert!(metrics.finish_reason_metadata.is_none());
+        }
+    }
+
+    #[tokio::test]
+    async fn native_http_trace_finishes_on_cancellation_and_dispatch_failure() {
+        BUS.init(128);
+        let mut receiver = BUS.subscribe();
+        for failure in ["dispatch", "cancelled", "body"] {
+            let request_id = format!("native-http-failure-{failure}");
+            let request = preprocessed_request(SamplingOptions::default());
+            let context = Context::with_id_and_metadata((), request_id.clone(), Default::default());
+            let trace = HttpRequestTrace {
+                state: build_request_end_trace_state_for_policy(
+                    &request,
+                    &Some(Arc::new(RequestTracker::new())),
+                    &context,
+                    2,
+                    true,
+                ),
+                request_id: request_id.clone(),
+                model: request.model,
+                x_request_id: Some("client-call".into()),
+            };
+            match failure {
+                "dispatch" => drop(trace),
+                "cancelled" => {
+                    let body = axum::body::Body::from_stream(futures::stream::pending::<
+                        Result<bytes::Bytes, std::io::Error>,
+                    >());
+                    drop(trace.wrap_response(axum::response::Response::new(body)));
+                }
+                _ => {
+                    let body = axum::body::Body::from_stream(futures::stream::iter([Err::<
+                        bytes::Bytes,
+                        _,
+                    >(
+                        std::io::Error::other("truncated response"),
+                    )]));
+                    let response = trace.wrap_response(axum::response::Response::new(body));
+                    assert!(
+                        axum::body::to_bytes(response.into_body(), 4096)
+                            .await
+                            .is_err()
+                    );
+                }
+            }
+            let record = next_native_record(&mut receiver, &request_id).await;
+            assert!(record.agent_context.is_none());
+            let metrics = record.request.unwrap();
+            assert!(metrics.total_time_ms.is_some());
+            assert_eq!(metrics.x_request_id.as_deref(), Some("client-call"));
+            let json = serde_json::to_value(metrics).unwrap();
+            assert!(json.get("output_tokens").is_none());
+            assert!(json.get("finish_reason_metadata").is_none());
+        }
+    }
+
+    async fn next_native_record(
+        receiver: &mut tokio::sync::broadcast::Receiver<crate::request_trace::RequestTraceRecord>,
+        request_id: &str,
+    ) -> crate::request_trace::RequestTraceRecord {
+        tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                let record = receiver.recv().await.unwrap();
+                if record
+                    .request
+                    .as_ref()
+                    .is_some_and(|request| request.request_id == request_id)
+                {
+                    return record;
+                }
+            }
+        })
+        .await
+        .unwrap()
     }
 }
