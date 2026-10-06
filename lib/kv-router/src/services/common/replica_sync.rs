@@ -24,66 +24,23 @@ use crate::services::common::zmq::{
     create_bound_pub_socket, create_sub_socket_topics, validate_endpoint,
 };
 #[cfg(feature = "standalone-selection")]
-use crate::services::selection::affinity::{AffinityReplicaSink, AffinityTarget, AffinityVersion};
+pub(crate) use crate::services::selection::affinity::AffinityBindingEvent;
+#[cfg(feature = "standalone-selection")]
+use crate::services::selection::affinity::{AffinityEventSink, AffinityReplicaSink};
 
 pub(crate) const REPLICA_EVENT_CHANNEL_CAPACITY: usize = 100_000;
 const PEER_COMMAND_CHANNEL_CAPACITY: usize = 64;
 const REPLICA_TOPIC: &[u8] = b"dynamo.slot-tracker.v1";
-/// Session-affinity bindings ride the same mesh on their own topic, so peers
-/// that do not subscribe to it never see them.
-const AFFINITY_TOPIC: &[u8] = b"dynamo.session-affinity.v1";
+/// Session-affinity bindings ride the same mesh on their own topics, so peers
+/// that do not subscribe to them never see them. The payload is the shared
+/// [`AffinityBindingEvent`] on both topics; v2 is the topic every host's
+/// transport uses, v1 is published and applied alongside it for one release
+/// so a mixed-version mesh stays converged.
+// Compatibility with v1.6 selection replicas during v1.7 rolling upgrades.
+// TODO(v1.8): Publish and subscribe on `AFFINITY_TOPIC_V2` only.
+const AFFINITY_TOPIC_V1: &[u8] = b"dynamo.session-affinity.v1";
+const AFFINITY_TOPIC_V2: &[u8] = b"dynamo.session-affinity.v2";
 const AFFINITY_EVENT_CHANNEL_CAPACITY: usize = 4_096;
-
-/// One replicated session binding.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub(crate) struct AffinityBindingEvent {
-    #[serde(flatten)]
-    pub partition: RoutingPartitionId,
-    pub session_id: String,
-    pub worker_id: u64,
-    pub dp_rank: Option<u32>,
-    pub sequence: u64,
-    pub writer_id: u64,
-}
-
-#[cfg(feature = "standalone-selection")]
-impl AffinityBindingEvent {
-    pub(crate) fn target(&self) -> AffinityTarget {
-        AffinityTarget::new(self.worker_id, self.dp_rank)
-    }
-
-    pub(crate) fn version(&self) -> AffinityVersion {
-        AffinityVersion {
-            sequence: self.sequence,
-            writer_id: self.writer_id,
-        }
-    }
-}
-
-#[cfg(feature = "standalone-selection")]
-/// Publishes bindings from a [`super::super::selection::affinity::SessionAffinity`]
-/// into the mesh. Best effort: a full channel drops the update.
-struct AffinityMeshSink {
-    partition: RoutingPartitionId,
-    tx: mpsc::Sender<AffinityBindingEvent>,
-}
-
-#[cfg(feature = "standalone-selection")]
-impl AffinityReplicaSink for AffinityMeshSink {
-    fn publish(&self, session_id: &str, target: AffinityTarget, version: AffinityVersion) {
-        let update = AffinityBindingEvent {
-            partition: self.partition.clone(),
-            session_id: session_id.to_string(),
-            worker_id: target.worker_id,
-            dp_rank: target.dp_rank,
-            sequence: version.sequence,
-            writer_id: version.writer_id,
-        };
-        if let Err(error) = self.tx.try_send(update) {
-            tracing::trace!(%error, "dropping best-effort session affinity replica update");
-        }
-    }
-}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct ScopedReplicaEvent {
@@ -176,16 +133,17 @@ impl ReplicaSyncConfig {
 
     #[cfg(feature = "standalone-selection")]
     /// Sink that publishes session bindings into the mesh, when this runtime
-    /// carries them.
+    /// carries them. Best effort: a full channel drops the update.
     pub(crate) fn affinity_sink(
         &self,
         partition: &RoutingPartitionId,
     ) -> Option<Arc<dyn AffinityReplicaSink>> {
         self.affinity_tx.clone().map(|tx| {
-            Arc::new(AffinityMeshSink {
-                tx,
-                partition: partition.clone(),
-            }) as Arc<dyn AffinityReplicaSink>
+            Arc::new(AffinityEventSink::new(partition.clone(), move |event| {
+                if let Err(error) = tx.try_send(event) {
+                    tracing::trace!(%error, "dropping best-effort session affinity replica update");
+                }
+            })) as Arc<dyn AffinityReplicaSink>
         })
     }
 
@@ -550,8 +508,10 @@ pub(crate) fn start_replica_publisher(
                     continue;
                 }
             };
-            if let Err(error) = socket.send_multipart(frames).await {
-                tracing::error!(event = %message, error = %error, "Failed to publish replica message");
+            for frames in frames {
+                if let Err(error) = socket.send_multipart(frames).await {
+                    tracing::error!(event = %message, error = %error, "Failed to publish replica message");
+                }
             }
         }
     });
@@ -565,12 +525,24 @@ enum OutboundReplicaMessage {
 }
 
 impl OutboundReplicaMessage {
-    fn encode(&self) -> Result<Vec<Vec<u8>>, rmp_serde::encode::Error> {
-        let (topic, payload) = match self {
-            Self::Sequence(event) => (REPLICA_TOPIC, rmp_serde::to_vec_named(event)?),
-            Self::Affinity(binding) => (AFFINITY_TOPIC, rmp_serde::to_vec_named(binding)?),
-        };
-        Ok(vec![topic.to_vec(), payload])
+    /// One multipart message per topic the event goes out on; a binding goes
+    /// out on both affinity topics for the compatibility window.
+    fn encode(&self) -> Result<Vec<Vec<Vec<u8>>>, rmp_serde::encode::Error> {
+        Ok(match self {
+            Self::Sequence(event) => {
+                vec![vec![
+                    REPLICA_TOPIC.to_vec(),
+                    rmp_serde::to_vec_named(event)?,
+                ]]
+            }
+            Self::Affinity(binding) => {
+                let payload = rmp_serde::to_vec_named(binding)?;
+                vec![
+                    vec![AFFINITY_TOPIC_V2.to_vec(), payload.clone()],
+                    vec![AFFINITY_TOPIC_V1.to_vec(), payload],
+                ]
+            }
+        })
     }
 }
 
@@ -707,7 +679,7 @@ impl PeerManager {
         A: Fn(AffinityBindingEvent) + Send + Sync + 'static,
     {
         let topics: &[&[u8]] = if handle_affinity.is_some() {
-            &[REPLICA_TOPIC, AFFINITY_TOPIC]
+            &[REPLICA_TOPIC, AFFINITY_TOPIC_V1, AFFINITY_TOPIC_V2]
         } else {
             &[REPLICA_TOPIC]
         };
@@ -871,7 +843,9 @@ fn handle_replica_message<F, A>(
                 tracing::debug!("Dropping malformed active-sequence replica payload: {error}");
             }
         },
-        AFFINITY_TOPIC => match (
+        // Both topics carry the same payload; applying a binding twice is
+        // idempotent (the second apply refreshes the same version).
+        AFFINITY_TOPIC_V1 | AFFINITY_TOPIC_V2 => match (
             handle_affinity,
             rmp_serde::from_slice::<AffinityBindingEvent>(payload),
         ) {

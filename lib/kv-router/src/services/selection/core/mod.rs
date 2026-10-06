@@ -508,7 +508,9 @@ impl SelectionCore {
         }
     }
 
-    /// Apply a session binding a replica published.
+    /// Apply a session binding a replica published, through the partition's
+    /// resolver (which drops the publisher's own events and bindings to
+    /// workers this partition cannot schedule).
     pub(crate) fn dispatch_affinity_event(&self, event: AffinityBindingEvent) {
         let Some(entry) = self.entry(&event.partition) else {
             tracing::trace!(
@@ -517,40 +519,14 @@ impl SelectionCore {
             );
             return;
         };
-        let Some(table) = entry.affinity.get().map(|resolver| resolver.table()) else {
+        let Some(resolver) = entry.affinity.get() else {
             tracing::trace!(
                 key = %event.partition,
                 "Dropping session affinity replica update: no affinity table"
             );
             return;
         };
-        if self
-            .replica_config
-            .as_ref()
-            .is_some_and(|config| config.process_id() == event.writer_id)
-        {
-            return;
-        }
-        table.observe_replica_sequence(event.sequence);
-        if self
-            .catalog
-            .get(event.worker_id)
-            .is_none_or(|record| record.key() != event.partition)
-        {
-            tracing::trace!(
-                key = %event.partition,
-                worker_id = event.worker_id,
-                "Dropping session affinity replica update: worker not in partition"
-            );
-            return;
-        }
-        let (target, version, worker_id) = (event.target(), event.version(), event.worker_id);
-        let outcome = table.apply_replica_update(event.session_id, target, version);
-        tracing::trace!(
-            worker_id,
-            ?outcome,
-            "Applied session affinity replica update"
-        );
+        resolver.apply_replica_event(&entry.key, event);
     }
 
     fn ready_entry(&self, key: &RoutingPartitionId) -> Result<Arc<SelectionEntry>, SelectionError> {

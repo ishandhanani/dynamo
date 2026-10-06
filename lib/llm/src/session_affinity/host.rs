@@ -14,6 +14,7 @@ use std::{
     time::Duration,
 };
 
+use dynamo_kv_router::RoutingPartitionId;
 use dynamo_kv_router::services::selection::affinity::{
     AffinityError, AffinityLease, AffinityResolver, SessionAffinity, SessionAffinityConfig,
     TargetLiveness,
@@ -50,6 +51,9 @@ pub(crate) fn from_table(target: TableTarget) -> AffinityTarget {
 
 struct Inner {
     resolver: Arc<AffinityResolver>,
+    /// The partition replicated bindings are scoped to: the embedded
+    /// partition's key for KV routing, the default key for builtin modes.
+    partition: RoutingPartitionId,
     replica: tokio::sync::OnceCell<ReplicaSyncRuntime>,
 }
 
@@ -64,10 +68,14 @@ pub struct HostAffinity {
 
 impl HostAffinity {
     /// Wrap a resolver another component owns (an embedded selection partition).
-    pub(crate) fn from_resolver(resolver: Arc<AffinityResolver>) -> Self {
+    pub(crate) fn from_resolver(
+        resolver: Arc<AffinityResolver>,
+        partition: RoutingPartitionId,
+    ) -> Self {
         Self {
             inner: Arc::new(Inner {
                 resolver,
+                partition,
                 replica: tokio::sync::OnceCell::new(),
             }),
         }
@@ -75,7 +83,8 @@ impl HostAffinity {
 
     /// A resolver over this host's own table, for hosts without a selection
     /// partition (builtin routing modes). `liveness` is the host's view of
-    /// which bound workers can still take requests.
+    /// which bound workers can still take requests; bindings replicate under
+    /// the default partition key.
     pub fn standalone(
         ttl: Duration,
         mode: SessionAffinityMode,
@@ -83,9 +92,10 @@ impl HostAffinity {
     ) -> Result<Self, Error> {
         let table = SessionAffinity::with_config(SessionAffinityConfig::new(ttl).with_mode(mode))
             .map_err(affinity_error)?;
-        Ok(Self::from_resolver(Arc::new(AffinityResolver::new(
-            table, liveness,
-        ))))
+        Ok(Self::from_resolver(
+            Arc::new(AffinityResolver::new(table, liveness)),
+            crate::kv_router::embedded::embedded_partition_key(None),
+        ))
     }
 
     /// [`Self::standalone`] with runtime replication over `client`'s event
@@ -104,13 +114,19 @@ impl HostAffinity {
         Ok(Some(affinity))
     }
 
+    /// Replicate this host's bindings over `client`'s event plane and apply
+    /// the bindings other frontends publish for the same partition.
     pub(crate) async fn enable_replica_sync(&self, client: Client) -> Result<(), Error> {
         self.inner
             .replica
             .get_or_try_init(|| async {
                 let table = self.inner.resolver.table();
-                let (replica, router_id) =
-                    ReplicaSyncRuntime::start(client, table.downgrade()).await?;
+                let (replica, router_id) = ReplicaSyncRuntime::start(
+                    client,
+                    Arc::downgrade(&self.inner.resolver),
+                    self.inner.partition.clone(),
+                )
+                .await?;
                 if !table.enable_replication(router_id, replica.sink()) {
                     return Err(anyhow::anyhow!(
                         "session affinity table already has a replica sink installed"
