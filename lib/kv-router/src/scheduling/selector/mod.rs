@@ -36,14 +36,6 @@ pub trait WorkerSelector<C: WorkerConfigLike> {
     /// Optional worker data required by this selector.
     fn required_worker_inputs(&self) -> WorkerInputs;
 
-    /// Whether an eligible affinity target exclusively constrains worker selection.
-    ///
-    /// The default selector uses exclusive affinity. Custom policies receive affinity as
-    /// advisory context and may choose another eligible worker.
-    fn uses_exclusive_affinity_target(&self) -> bool {
-        false
-    }
-
     fn select_worker(
         &self,
         input: WorkerSelectionInput<'_, C>,
@@ -385,6 +377,19 @@ fn select_worker_with_policy<C: WorkerConfigLike>(
     let selected = match state {
         #[cfg(any(test, feature = "bench"))]
         WorkerSelectionPolicyStateRef::Reference(kv_router_config, picker) => {
+            // The reference selector mirrors the builtin default policy, which
+            // keeps a `Soft` binding while its target is a candidate. It has no
+            // picker stage to express that in, so narrow here; `Hard` arrives
+            // already narrowed by the scheduler.
+            let eligibility = match request.affinity {
+                Some(affinity)
+                    if !affinity.is_hard()
+                        && eligibility.affinity_target_is_eligible(workers, affinity.target) =>
+                {
+                    eligibility.with_affinity_target(affinity.target)
+                }
+                _ => eligibility,
+            };
             let scorer = DefaultWorkerScorer {
                 kv_router_config,
                 worker_type,
@@ -464,13 +469,31 @@ fn select_worker_with_policy<C: WorkerConfigLike>(
 }
 
 #[cfg(test)]
-mod test_support {
+pub(crate) mod test_support {
     use std::collections::HashSet;
 
     use rustc_hash::FxHashMap;
 
     use super::*;
     use crate::scheduling::{OverlapSignals, ScheduleMode};
+
+    /// Picks the first candidate that is not the request's affinity target.
+    pub(crate) struct AvoidAffinityPicker;
+
+    impl WorkerPicker for AvoidAffinityPicker {
+        fn pick(
+            &mut self,
+            context: &WorkerSelectionContext<'_>,
+            input: WorkerInputView<'_>,
+        ) -> Result<usize, WorkerSelectionPolicyError> {
+            let bound = context.affinity_target().map(|target| target.worker_id);
+            Ok(input
+                .candidates()
+                .iter()
+                .position(|candidate| Some(candidate.worker().worker_id) != bound)
+                .unwrap_or(0))
+        }
+    }
 
     #[derive(Clone, Default)]
     pub(super) struct TaintedWorkerConfig {

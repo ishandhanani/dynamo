@@ -396,9 +396,11 @@ impl SessionContext {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AffinityStrength {
     /// The target is the only candidate while it is eligible. An ineligible
-    /// target (departed, out of the caller's set, unavailable, overloaded, or
-    /// filtered) falls back to normal selection; the host decides what the
-    /// resulting dispatch means for the binding.
+    /// target (departed, out of the caller's set, unavailable, or overloaded)
+    /// falls back to normal selection; the host decides what the resulting
+    /// dispatch means for the binding. Policy filters run after narrowing, so a
+    /// filter that rejects the target fails selection with
+    /// `AllEligibleWorkersFiltered`.
     Hard,
     /// A preference the selection policy reads from
     /// [`WorkerSelectionContext::affinity_target`](crate::plugins::worker_selection::WorkerSelectionContext::affinity_target).
@@ -417,19 +419,20 @@ pub struct AffinityRequirement {
 }
 
 impl AffinityRequirement {
-    pub fn new(target: WorkerAffinityTarget, strength: AffinityStrength) -> Self {
-        Self { target, strength }
-    }
-
     pub fn hard(target: WorkerAffinityTarget) -> Self {
-        Self::new(target, AffinityStrength::Hard)
+        Self {
+            target,
+            strength: AffinityStrength::Hard,
+        }
     }
 
     pub fn soft(target: WorkerAffinityTarget) -> Self {
-        Self::new(target, AffinityStrength::Soft)
+        Self {
+            target,
+            strength: AffinityStrength::Soft,
+        }
     }
 
-    #[inline]
     pub fn is_hard(&self) -> bool {
         self.strength == AffinityStrength::Hard
     }

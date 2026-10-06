@@ -580,10 +580,6 @@ impl DefaultWorkerPicker {
 }
 
 impl<C: WorkerConfigLike> WorkerSelector<C> for DefaultWorkerSelector {
-    fn uses_exclusive_affinity_target(&self) -> bool {
-        true
-    }
-
     fn required_worker_inputs(&self) -> WorkerInputs {
         WorkerInputs::CACHE | WorkerInputs::LOAD
     }
@@ -1072,15 +1068,12 @@ mod tests {
         request.affinity = Some(AffinityRequirement::soft(worker1.into()));
         request.worker_loads =
             worker_loads_with_active_decode(FxHashMap::from_iter([(worker0, 0), (worker1, 100)]));
-        let eligibility = request
-            .eligibility()
-            .with_affinity_target(request.affinity.unwrap().target);
 
         let result = selector
             .select_worker(WorkerSelectionInput::configured(
                 &workers,
                 &request,
-                eligibility,
+                request.eligibility(),
                 16,
             ))
             .unwrap();
@@ -1090,15 +1083,12 @@ mod tests {
         request.affinity = Some(AffinityRequirement::soft(WorkerAffinityTarget::new(
             0, None,
         )));
-        let eligibility = request
-            .eligibility()
-            .with_affinity_target(request.affinity.unwrap().target);
 
         let result = selector
             .select_worker(WorkerSelectionInput::configured(
                 &workers,
                 &request,
-                eligibility,
+                request.eligibility(),
                 16,
             ))
             .unwrap();

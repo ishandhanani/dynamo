@@ -10,6 +10,7 @@ use super::reservations::{
 use super::*;
 use crate::protocols::{ActiveSequenceEvent, ActiveSequenceEventData};
 use crate::protocols::{RoutingConstraints, StorageTier};
+use crate::scheduling::selector::test_support::AvoidAffinityPicker;
 use crate::services::common::replica_sync::HostReplicaChannels;
 use crate::services::indexer::backend::test_util::store_event;
 use std::collections::HashSet;
@@ -2857,23 +2858,6 @@ async fn hard_mode_rejects_dispatch_away_from_a_live_binding() {
     let third = core.select_and_reserve(request).await.expect("rebind");
     assert_eq!(third.worker_id, other);
     assert_eq!(bound_worker(&core, "s"), Some(other));
-}
-
-struct AvoidAffinityPicker;
-
-impl crate::scheduling::selector::WorkerPicker for AvoidAffinityPicker {
-    fn pick(
-        &mut self,
-        context: &crate::scheduling::selector::WorkerSelectionContext<'_>,
-        input: crate::scheduling::selector::WorkerInputView<'_>,
-    ) -> Result<usize, crate::scheduling::WorkerSelectionPolicyError> {
-        let bound = context.affinity_target().map(|target| target.worker_id);
-        Ok(input
-            .candidates()
-            .iter()
-            .position(|candidate| Some(candidate.worker().worker_id) != bound)
-            .unwrap_or(0))
-    }
 }
 
 #[tokio::test]

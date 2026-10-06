@@ -56,7 +56,6 @@ pub(super) struct ComposedPolicyState {
 pub struct WorkerSelectionPolicy {
     worker_label: &'static str,
     state: WorkerSelectionPolicyState,
-    exclusive_affinity: bool,
 }
 
 impl WorkerSelectionPolicy {
@@ -106,7 +105,6 @@ impl WorkerSelectionPolicy {
             .fold(picker_inputs, |inputs, (required, _)| inputs | *required);
         Self {
             worker_label,
-            exclusive_affinity: false,
             state: WorkerSelectionPolicyState::Composed(RefCell::new(ComposedPolicyState {
                 filters,
                 scorers,
@@ -123,13 +121,6 @@ impl WorkerSelectionPolicy {
         }
     }
 
-    /// Ask the host to constrain selection to an eligible affinity target.
-    /// Explicit request pins remain mandatory regardless of this option.
-    pub fn with_exclusive_affinity(mut self, exclusive: bool) -> Self {
-        self.exclusive_affinity = exclusive;
-        self
-    }
-
     /// Construct the native reference implementation for parity tests and benchmarks.
     ///
     /// `worker_label` selects the built-in scoring and logging contract. Typed hosts use
@@ -139,7 +130,6 @@ impl WorkerSelectionPolicy {
         let picker = DefaultWorkerPicker::new();
         Self {
             worker_label,
-            exclusive_affinity: false,
             state: WorkerSelectionPolicyState::Reference(Box::new(kv_router_config), picker),
         }
     }
@@ -330,14 +320,6 @@ pub(super) fn collect_policy_candidates<C: WorkerConfigLike>(
 }
 
 impl<C: WorkerConfigLike> WorkerSelector<C> for WorkerSelectionPolicy {
-    fn uses_exclusive_affinity_target(&self) -> bool {
-        #[cfg(any(test, feature = "bench"))]
-        if matches!(&self.state, WorkerSelectionPolicyState::Reference(..)) {
-            return true;
-        }
-        self.exclusive_affinity
-    }
-
     fn required_worker_inputs(&self) -> WorkerInputs {
         match &self.state {
             #[cfg(any(test, feature = "bench"))]
@@ -392,10 +374,6 @@ mod tests {
     use super::*;
     use crate::scheduling::{AffinityRequirement, WorkerSelectionInputTrigger};
 
-    fn uses_exclusive_affinity(selector: &impl WorkerSelector<TaintedWorkerConfig>) -> bool {
-        selector.uses_exclusive_affinity_target()
-    }
-
     struct FirstPicker;
 
     impl WorkerPicker for FirstPicker {
@@ -433,7 +411,6 @@ mod tests {
             ))
             .unwrap();
         let policy = WorkerSelectionPolicy::reference(config, "test");
-        assert!(uses_exclusive_affinity(&policy));
         let actual = policy
             .select_worker(WorkerSelectionInput::configured(
                 &workers,
@@ -829,7 +806,6 @@ mod tests {
             Vec::new(),
             Box::new(AffinityPicker),
         );
-        assert!(!uses_exclusive_affinity(&policy));
 
         let selected = policy
             .select_worker(WorkerSelectionInput::configured(
