@@ -21,6 +21,7 @@ from dynamo.common.configuration.groups.router_args import (
     RouterArgGroup,
     RouterConfigBase,
 )
+from dynamo._core import validate_session_affinity_ttl_secs
 from dynamo.common.configuration.utils import (
     add_argument,
     add_negatable_bool_argument,
@@ -31,7 +32,6 @@ from dynamo.common.configuration.utils import (
 from . import __version__
 
 _U32_MAX = 2**32 - 1
-_MAX_SESSION_AFFINITY_TTL_SECS = 31_536_000
 
 
 def validate_model_name(value: str) -> str:
@@ -141,12 +141,10 @@ class FrontendConfig(RouterConfigBase, KvRouterConfigBase, AisPerfConfigBase):
             )
         if self.min_initial_workers < 0:
             raise ValueError("--router-min-initial-workers must be >= 0")
-        if self.session_affinity_ttl_secs is not None and not (
-            1 <= self.session_affinity_ttl_secs <= _MAX_SESSION_AFFINITY_TTL_SECS
-        ):
-            raise ValueError(
-                "--router-session-affinity-ttl-secs must be between 1 and "
-                f"{_MAX_SESSION_AFFINITY_TTL_SECS}"
+        if self.session_affinity_ttl_secs is not None:
+            # The same range check the router applies, naming this flag.
+            validate_session_affinity_ttl_secs(
+                self.session_affinity_ttl_secs, "--router-session-affinity-ttl-secs"
             )
         if self.tokenizer_backend not in self._VALID_TOKENIZER_BACKENDS:
             raise ValueError(

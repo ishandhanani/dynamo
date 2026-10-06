@@ -30,6 +30,7 @@ use tokio_util::sync::CancellationToken;
 
 pub use crate::protocols::WorkerAffinityTarget as AffinityTarget;
 
+pub const MIN_SESSION_AFFINITY_TTL_SECS: u64 = 1;
 pub const MAX_SESSION_AFFINITY_TTL_SECS: u64 = 31_536_000;
 pub const MAX_SESSION_AFFINITY_ENTRIES: usize = 65_536;
 pub const MAX_SESSION_AFFINITY_ID_BYTES: usize = 256;
@@ -121,7 +122,10 @@ enum AffinityEntry {
 }
 
 /// How a table binds sessions; see [`SessionAffinityMode`] for the
-/// dispatch-time semantics of `mode`.
+/// dispatch-time semantics of `mode`. This is the one session-affinity
+/// configuration every host builds, and [`Self::validate`] is its one
+/// validator: the standalone service, the frontend, the Python bindings, and
+/// the EPP all check a TTL through it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SessionAffinityConfig {
     pub ttl: Duration,
@@ -144,6 +148,46 @@ impl SessionAffinityConfig {
         self.mode = mode;
         self
     }
+
+    /// Parse an idle TTL given in seconds, fractional seconds allowed, within
+    /// the supported range. Non-finite values are rejected.
+    pub fn ttl_from_secs_f64(secs: f64) -> Result<Duration, AffinityError> {
+        if !secs.is_finite()
+            || secs < MIN_SESSION_AFFINITY_TTL_SECS as f64
+            || secs > MAX_SESSION_AFFINITY_TTL_SECS as f64
+        {
+            return Err(invalid_ttl());
+        }
+        Ok(Duration::from_secs_f64(secs))
+    }
+
+    /// Check the TTL range and the limits; `with_config` runs this before
+    /// starting a table.
+    pub fn validate(&self) -> Result<(), AffinityError> {
+        if !(Duration::from_secs(MIN_SESSION_AFFINITY_TTL_SECS)
+            ..=Duration::from_secs(MAX_SESSION_AFFINITY_TTL_SECS))
+            .contains(&self.ttl)
+        {
+            return Err(invalid_ttl());
+        }
+        if self.max_entries == 0 {
+            return Err(AffinityError::InvalidArgument(
+                "session affinity entry limit must be greater than zero".to_string(),
+            ));
+        }
+        if self.max_session_id_bytes == 0 {
+            return Err(AffinityError::InvalidArgument(
+                "session affinity ID limit must be greater than zero".to_string(),
+            ));
+        }
+        Ok(())
+    }
+}
+
+fn invalid_ttl() -> AffinityError {
+    AffinityError::InvalidArgument(format!(
+        "session affinity TTL must be between {MIN_SESSION_AFFINITY_TTL_SECS} and {MAX_SESSION_AFFINITY_TTL_SECS} seconds"
+    ))
 }
 
 struct Inner {
@@ -240,19 +284,8 @@ pub enum AcquireStep {
 }
 
 impl SessionAffinity {
-    pub(crate) fn validate_ttl(ttl: Duration) -> Result<(), AffinityError> {
-        if !(Duration::from_secs(1)..=Duration::from_secs(MAX_SESSION_AFFINITY_TTL_SECS))
-            .contains(&ttl)
-        {
-            return Err(AffinityError::InvalidArgument(format!(
-                "session affinity TTL must be between 1 and {MAX_SESSION_AFFINITY_TTL_SECS} seconds"
-            )));
-        }
-        Ok(())
-    }
-
     pub fn with_config(config: SessionAffinityConfig) -> Result<Self, AffinityError> {
-        Self::validate_ttl(config.ttl)?;
+        config.validate()?;
         let inner = Arc::new(Inner {
             entries: DashMap::new(),
             ttl: config.ttl,
@@ -1198,6 +1231,44 @@ mod tests {
         assert_eq!(table.lease_count("s"), Some(1));
         drop(lease);
         assert_eq!(table.lease_count("s"), Some(0));
+    }
+
+    #[test]
+    fn config_validates_the_ttl_range_once_for_every_host() {
+        for secs in [-1.0, 0.0, 0.5, f64::NAN, f64::INFINITY, 31_536_001.0, 1e300] {
+            let error = SessionAffinityConfig::ttl_from_secs_f64(secs)
+                .expect_err("out-of-range or non-finite TTLs are rejected");
+            assert!(matches!(error, AffinityError::InvalidArgument(_)));
+            assert!(
+                error.to_string().contains("session affinity TTL"),
+                "{error}"
+            );
+        }
+        for secs in [1.0, 1.5, 31_536_000.0] {
+            let ttl = SessionAffinityConfig::ttl_from_secs_f64(secs).expect("in range");
+            SessionAffinityConfig::new(ttl).validate().expect("valid");
+        }
+        assert!(
+            SessionAffinityConfig::new(Duration::ZERO)
+                .validate()
+                .is_err()
+        );
+        assert!(
+            SessionAffinityConfig {
+                max_entries: 0,
+                ..SessionAffinityConfig::new(TTL)
+            }
+            .validate()
+            .is_err()
+        );
+        assert!(
+            SessionAffinityConfig {
+                max_session_id_bytes: 0,
+                ..SessionAffinityConfig::new(TTL)
+            }
+            .validate()
+            .is_err()
+        );
     }
 
     #[tokio::test]
