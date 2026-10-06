@@ -1,12 +1,7 @@
 // SPDX-FileCopyrightText: Copyright (c) 2024-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-use std::{
-    collections::HashSet,
-    future::{Future, ready},
-    sync::Arc,
-    time::Duration,
-};
+use std::{collections::HashSet, future::Future, sync::Arc, time::Duration};
 
 use dynamo_kv_router::{
     protocols::{TokensWithHashes, WorkerConfigLike, WorkerWithDpRank},
@@ -40,9 +35,9 @@ use crate::{
         timing::{RequestPhase, RoutingData, WORKER_TYPE_DECODE, WORKER_TYPE_PREFILL},
     },
     session_affinity::{
-        AffinityCoordinator, AffinityTarget, Hold, SessionAffinityMode, affinity_error,
-        affinity_id, explicit_target, from_table, invalid_argument, subagent_group_affinity_id,
-        to_table, tracked_stream,
+        AffinityTarget, Hold, HostAffinity, SessionAffinityMode, affinity_error, affinity_id,
+        explicit_target, from_table, invalid_argument, subagent_group_affinity_id, to_table,
+        tracked_stream,
     },
 };
 
@@ -273,6 +268,15 @@ struct LoraSelection {
     load_guard: LoraLoadGuard,
 }
 
+/// A builtin host's view of its request's session, from [`RoutingHost::resolve_hosted_session`].
+#[derive(Default)]
+struct HostedResolution {
+    hold: Option<Hold>,
+    affinity: Option<dynamo_kv_router::scheduling::AffinityRequirement>,
+    /// A binding dropped because its worker is gone; the session is re-binding.
+    dropped: Option<AffinityTarget>,
+}
+
 struct HostedSelection {
     initial_worker: u64,
     target_constraint: Option<AffinityTarget>,
@@ -297,7 +301,7 @@ pub struct RoutingHost {
     inner: PushRouter<PreprocessedRequest, Annotated<LLMEngineOutput>>,
     policy: RoutingPolicy,
     request_metrics: Arc<RouterRequestMetrics>,
-    affinity: Option<AffinityCoordinator>,
+    affinity: Option<HostAffinity>,
     session_affinity_mode: SessionAffinityMode,
     hosted_occupancy: Option<HostedOccupancy>,
     lora: Option<LoraRouting>,
@@ -378,10 +382,10 @@ impl RoutingHost {
         session_affinity_ttl: Option<Duration>,
     ) -> Result<Self, Error> {
         let affinity = session_affinity_ttl
-            .map(|ttl| kv_router.affinity_coordinator(ttl, SessionAffinityMode::Hard))
+            .map(|ttl| kv_router.host_affinity(ttl, SessionAffinityMode::Hard))
             .transpose()?;
 
-        Ok(Self::new_with_coordinator(inner, kv_router, affinity))
+        Ok(Self::new_with_affinity(inner, kv_router, affinity))
     }
 
     pub fn new_with_load_context(
@@ -392,10 +396,10 @@ impl RoutingHost {
         session_affinity_mode: SessionAffinityMode,
     ) -> Result<Self, Error> {
         let affinity = session_affinity_ttl
-            .map(|ttl| kv_router.affinity_coordinator(ttl, session_affinity_mode))
+            .map(|ttl| kv_router.host_affinity(ttl, session_affinity_mode))
             .transpose()?;
 
-        Ok(Self::new_with_load_context_and_coordinator(
+        Ok(Self::new_with_load_context_and_affinity(
             inner,
             kv_router,
             load_context,
@@ -403,21 +407,21 @@ impl RoutingHost {
         ))
     }
 
-    pub(crate) fn new_with_coordinator(
+    pub(crate) fn new_with_affinity(
         inner: PushRouter<PreprocessedRequest, Annotated<LLMEngineOutput>>,
         kv_router: Arc<KvRouter>,
-        affinity: Option<AffinityCoordinator>,
+        affinity: Option<HostAffinity>,
     ) -> Self {
-        Self::new_with_optional_load_context_and_coordinator(inner, kv_router, None, affinity)
+        Self::new_with_optional_load_context_and_affinity(inner, kv_router, None, affinity)
     }
 
-    pub(crate) fn new_with_load_context_and_coordinator(
+    pub(crate) fn new_with_load_context_and_affinity(
         inner: PushRouter<PreprocessedRequest, Annotated<LLMEngineOutput>>,
         kv_router: Arc<KvRouter>,
         load_context: Arc<crate::kv_router::RoutingLoadContext>,
-        affinity: Option<AffinityCoordinator>,
+        affinity: Option<HostAffinity>,
     ) -> Self {
-        Self::new_with_optional_load_context_and_coordinator(
+        Self::new_with_optional_load_context_and_affinity(
             inner,
             kv_router,
             Some(load_context),
@@ -425,11 +429,11 @@ impl RoutingHost {
         )
     }
 
-    fn new_with_optional_load_context_and_coordinator(
+    fn new_with_optional_load_context_and_affinity(
         inner: PushRouter<PreprocessedRequest, Annotated<LLMEngineOutput>>,
         kv_router: Arc<KvRouter>,
         load_context: Option<Arc<crate::kv_router::RoutingLoadContext>>,
-        affinity: Option<AffinityCoordinator>,
+        affinity: Option<HostAffinity>,
     ) -> Self {
         // Eagerly register router request metrics (as zeros) so they are
         // scrapeable before any requests arrive. Both the frontend pipeline
@@ -443,7 +447,7 @@ impl RoutingHost {
             request_metrics,
             session_affinity_mode: affinity
                 .as_ref()
-                .map(AffinityCoordinator::mode)
+                .map(HostAffinity::mode)
                 .unwrap_or_default(),
             affinity,
             hosted_occupancy: None,
@@ -460,10 +464,10 @@ impl RoutingHost {
         Self::new_builtin_with_capabilities(inner, load_context, None, None)
     }
 
-    pub(crate) fn new_builtin_with_coordinator(
+    pub(crate) fn new_builtin_with_affinity(
         inner: PushRouter<PreprocessedRequest, Annotated<LLMEngineOutput>>,
         load_context: Arc<crate::kv_router::RoutingLoadContext>,
-        affinity: Option<AffinityCoordinator>,
+        affinity: Option<HostAffinity>,
     ) -> Result<Self, Error> {
         Self::new_builtin_with_capabilities(inner, load_context, affinity, None)
     }
@@ -471,7 +475,7 @@ impl RoutingHost {
     pub(crate) fn new_builtin_with_capabilities(
         inner: PushRouter<PreprocessedRequest, Annotated<LLMEngineOutput>>,
         load_context: Arc<crate::kv_router::RoutingLoadContext>,
-        affinity: Option<AffinityCoordinator>,
+        affinity: Option<HostAffinity>,
         lora: Option<(Arc<LoraFilter>, Arc<LoadEstimator>)>,
     ) -> Result<Self, Error> {
         if affinity.is_some() && lora.is_some() {
@@ -520,7 +524,7 @@ impl RoutingHost {
             request_metrics,
             session_affinity_mode: affinity
                 .as_ref()
-                .map(AffinityCoordinator::mode)
+                .map(HostAffinity::mode)
                 .unwrap_or_default(),
             affinity,
             hosted_occupancy,
@@ -647,32 +651,25 @@ impl RoutingHost {
 
     /// Commit a held session to the dispatched worker and keep the lease for
     /// as long as the response stream runs; a request without a session
-    /// passes its stream through. The KV plane commits through the
-    /// partition's resolver, which fails a departed binding over to the
-    /// dispatched worker; the builtin plane commits through its coordinator.
+    /// passes its stream through. The resolver fails a departed binding over
+    /// to the dispatched worker.
     fn bind_affinity(
         &self,
         hold: Option<Hold>,
         dispatched_target: AffinityTarget,
         stream: ManyOut<Annotated<LLMEngineOutput>>,
     ) -> Result<ManyOut<Annotated<LLMEngineOutput>>, Error> {
-        let Some(hold) = hold else {
+        let (Some(hold), Some(affinity)) = (hold, self.affinity.as_ref()) else {
             return Ok(stream);
         };
-        if let RoutingPolicy::Kv(kv_router) = &self.policy {
-            let Some(resolver) = kv_router.affinity_resolver() else {
-                return Ok(stream);
-            };
-            return match resolver.commit(hold, to_table(dispatched_target)) {
-                Ok(Some(lease)) => Ok(tracked_stream(lease, stream)),
-                Ok(None) => Ok(stream),
-                Err(error) => Err(affinity_error(error)),
-            };
+        match affinity
+            .resolver()
+            .commit(hold, to_table(dispatched_target))
+        {
+            Ok(Some(lease)) => Ok(tracked_stream(lease, stream)),
+            Ok(None) => Ok(stream),
+            Err(error) => Err(affinity_error(error)),
         }
-        let Some(affinity) = self.affinity.as_ref() else {
-            return Ok(stream);
-        };
-        affinity.commit_to_stream(hold, dispatched_target, stream)
     }
 
     /// Check request-supplied targets only at initial selection, not after a route preview
@@ -709,130 +706,71 @@ impl RoutingHost {
         Ok(())
     }
 
-    fn affinity_target_is_valid(&self, target: AffinityTarget) -> bool {
-        if !self.inner.client.is_instance_discovered(target.worker_id) {
-            return false;
-        }
-        let Some(kv_router) = self.kv_router_if_enabled() else {
-            return true;
-        };
-        let workers = kv_router.workers_with_configs.borrow();
-        let Some(config) = workers.get(&target.worker_id) else {
-            return true;
-        };
-        let Some(dp_rank) = target.dp_rank else {
-            return true;
-        };
-        let start = config.data_parallel_start_rank();
-        let end = start.saturating_add(config.data_parallel_size());
-        (start..end).contains(&dp_rank)
-    }
-
-    /// Take a session-affinity slot under the same cleanup policy as every other
-    /// routing stage.
+    /// Resolve the request's session for a builtin routing mode: the hold to
+    /// commit after dispatch, the binding as the requirement the host maps onto
+    /// its placement rules, and whether a stale binding was dropped on the way.
+    /// Query-only requests read the binding without holding it.
     ///
-    /// `acquire_with_context` cancels its own wait as soon as the context stops,
-    /// and it runs upstream of every other stage. A decode leg with staged KV
-    /// would therefore die here — before any of the wrapped stages could let it
-    /// through — whenever a concurrent request for the same session is still
-    /// `Initializing`. On that path we wait through the stop instead, drawing on
-    /// the request's shared budget so the wait is still bounded.
-    #[allow(clippy::too_many_arguments)]
-    async fn acquire_affinity_slot(
-        &self,
-        affinity: &AffinityCoordinator,
-        session_id: &SessionAffinityId,
-        requested_target: Option<AffinityTarget>,
-        context: &dyn AsyncEngineContext,
-        phase: RequestPhase,
-        staged_kv: StagedKv,
-        budget: &CleanupBudget,
-    ) -> Result<Hold, Error> {
-        match DispatchCancellation::for_request(phase, staged_kv) {
-            DispatchCancellation::CancelWhenStopped => {
-                affinity
-                    .acquire_with_context(session_id, requested_target, context)
-                    .await
-            }
-            DispatchCancellation::DispatchWhenStopped => await_with_cleanup_policy(
-                context,
-                phase,
-                staged_kv,
-                "affinity.acquire",
-                budget,
-                affinity.acquire(session_id, requested_target),
-            )
-            .await
-            .and_then(|result| result),
-        }
-    }
-
-    async fn select_with_session_affinity<T, Select, SelectionFuture>(
+    /// The wait on another request's initialization runs upstream of every
+    /// stage the cleanup policy wraps. A decode leg with staged KV must reach
+    /// its worker even after the client disconnects, so it waits through a stop
+    /// under the request's shared cleanup budget instead of being cancelled.
+    async fn resolve_hosted_session(
         &self,
         request: &SingleIn<PreprocessedRequest>,
         phase: RequestPhase,
         is_query_only: bool,
         budget: &CleanupBudget,
-        mut select: Select,
-    ) -> Result<(T, Option<Hold>), Error>
-    where
-        Select: FnMut(Option<AffinityTarget>) -> SelectionFuture,
-        SelectionFuture: Future<Output = Result<T, Error>>,
-    {
-        let staged_kv = StagedKv::for_request(request.content());
+    ) -> Result<HostedResolution, Error> {
         let Some(affinity) = self.affinity.as_ref() else {
-            return Ok((select(None).await?, None));
+            return Ok(HostedResolution::default());
         };
         let Some(session_id) = affinity_id(request)? else {
-            return Ok((select(None).await?, None));
+            return Ok(HostedResolution::default());
         };
         let explicit = explicit_target(request.content(), phase)?;
         let session_id = self
             .group_binding_id(request, explicit)
             .unwrap_or(session_id);
+        let requested = explicit.map(to_table);
+        let resolver = affinity.resolver();
         if is_query_only {
-            let target = affinity.query_target(&session_id, explicit)?;
-            return Ok((select(target).await?, None));
+            return Ok(HostedResolution {
+                hold: None,
+                affinity: resolver
+                    .query(session_id.as_str(), requested)
+                    .map_err(affinity_error)?,
+                dropped: None,
+            });
         }
-
-        let request_context = request.context();
-        let operation = self
-            .acquire_affinity_slot(
-                affinity,
-                &session_id,
-                explicit,
-                request_context.as_ref(),
+        let context = request.context();
+        let staged_kv = StagedKv::for_request(request.content());
+        let resolution = match DispatchCancellation::for_request(phase, staged_kv) {
+            DispatchCancellation::CancelWhenStopped => resolver
+                .resolve(session_id.as_str(), requested, async {
+                    tokio::select! {
+                        _ = context.stopped() => {}
+                        _ = context.killed() => {}
+                    }
+                })
+                .await
+                .map_err(affinity_error)?,
+            DispatchCancellation::DispatchWhenStopped => await_with_cleanup_policy(
+                context.as_ref(),
                 phase,
                 staged_kv,
+                "affinity.resolve",
                 budget,
+                resolver.resolve(session_id.as_str(), requested, std::future::pending()),
             )
-            .await?;
-        let target = operation.target().map(from_table);
-        match select(target).await {
-            Ok(selection) => Ok((selection, Some(operation))),
-            Err(error) if is_cancelled(&error) => Err(error),
-            Err(_error)
-                if self.session_affinity_mode == SessionAffinityMode::Hard
-                    && explicit.is_none()
-                    && target.is_some_and(|target| !self.affinity_target_is_valid(target)) =>
-            {
-                operation.invalidate();
-                let retry = self
-                    .acquire_affinity_slot(
-                        affinity,
-                        &session_id,
-                        None,
-                        request_context.as_ref(),
-                        phase,
-                        staged_kv,
-                        budget,
-                    )
-                    .await?;
-                let selection = select(retry.target().map(from_table)).await?;
-                Ok((selection, Some(retry)))
-            }
-            Err(error) => Err(error),
-        }
+            .await?
+            .map_err(affinity_error)?,
+        };
+        Ok(HostedResolution {
+            hold: resolution.hold,
+            affinity: resolution.affinity,
+            dropped: resolution.dropped.map(from_table),
+        })
     }
 
     pub(crate) async fn select_and_dispatch_prefill<M, F>(

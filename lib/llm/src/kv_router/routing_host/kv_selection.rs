@@ -23,7 +23,7 @@ use crate::{
         TokenIdType,
         common::{preprocessor::RoutingHints, timing::RequestPhase},
     },
-    session_affinity::{Hold, invalid_argument},
+    session_affinity::{Hold, HostAffinity, invalid_argument},
 };
 
 pub(super) struct WorkerSelection {
@@ -150,7 +150,7 @@ impl RoutingHost {
                 // released with the selection and the binding is kept.
                 if let (Some(hold), Some(resolver)) = (
                     admitted.affinity_hold.as_ref(),
-                    self.kv_router().affinity_resolver(),
+                    self.affinity.as_ref().map(HostAffinity::resolver),
                 ) {
                     resolver
                         .check_dispatch(hold, worker.into())

@@ -129,13 +129,15 @@ impl SelectionPartition {
         &self,
         config: SessionAffinityConfig,
         liveness: Arc<dyn TargetLiveness>,
-    ) -> Result<&AffinityResolver, SelectionError> {
-        self.0.session_affinity_with(config, Some(liveness))
+    ) -> Result<Arc<AffinityResolver>, SelectionError> {
+        self.0
+            .session_affinity_with(config, Some(liveness))
+            .map(Arc::clone)
     }
 
     /// This partition's session resolver, if session affinity is configured.
     pub fn session_resolver(&self) -> Option<&AffinityResolver> {
-        self.0.affinity.get()
+        self.0.affinity.get().map(Arc::as_ref)
     }
 }
 
@@ -149,7 +151,8 @@ struct SelectionEntry {
     replica_inbox: Option<ReplicaInbox>,
     /// Liveness source for the partition's session resolver.
     catalog: Arc<WorkerCatalog>,
-    affinity: OnceCell<AffinityResolver>,
+    /// Shared with embedding hosts, which keep it alongside their own state.
+    affinity: OnceCell<Arc<AffinityResolver>>,
     replica_config: Option<ReplicaSyncConfig>,
 }
 
@@ -173,7 +176,7 @@ impl SelectionEntry {
         &self,
         config: SessionAffinityConfig,
         liveness: Option<Arc<dyn TargetLiveness>>,
-    ) -> Result<&AffinityResolver, SelectionError> {
+    ) -> Result<&Arc<AffinityResolver>, SelectionError> {
         let resolver = self
             .affinity
             .get_or_try_init(|| -> Result<_, SelectionError> {
@@ -189,7 +192,7 @@ impl SelectionEntry {
                         key: self.key.clone(),
                     })
                 });
-                Ok(AffinityResolver::new(table, liveness))
+                Ok(Arc::new(AffinityResolver::new(table, liveness)))
             })?;
         let table = resolver.table();
         if table.ttl() != config.ttl || table.mode() != config.mode {
@@ -514,7 +517,7 @@ impl SelectionCore {
             );
             return;
         };
-        let Some(table) = entry.affinity.get().map(AffinityResolver::table) else {
+        let Some(table) = entry.affinity.get().map(|resolver| resolver.table()) else {
             tracing::trace!(
                 key = %event.partition,
                 "Dropping session affinity replica update: no affinity table"

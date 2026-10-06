@@ -232,7 +232,7 @@ async fn builtin_direct_without_worker_is_invalid_argument() {
     let inner = PushRouter::from_client(client, RouterMode::Direct)
         .await
         .unwrap();
-    let (host, _) = builtin_host_with_affinity(
+    let host = builtin_host_with_affinity(
         inner,
         load_context,
         crate::session_affinity::SessionAffinityMode::Hard,
@@ -276,7 +276,7 @@ async fn builtin_direct_uses_bound_soft_affinity_as_exact_target() {
     )
     .await
     .unwrap();
-    let (host, _) = builtin_host_with_affinity(
+    let host = builtin_host_with_affinity(
         inner,
         load_context,
         crate::session_affinity::SessionAffinityMode::Soft,
@@ -359,7 +359,7 @@ async fn builtin_hard_affinity_ignores_local_inhibition() {
     )
     .await
     .unwrap();
-    let (host, affinity) = builtin_host_with_affinity(
+    let host = builtin_host_with_affinity(
         inner,
         load_context,
         crate::session_affinity::SessionAffinityMode::Hard,
@@ -379,7 +379,7 @@ async fn builtin_hard_affinity_ignores_local_inhibition() {
     while stream.next().await.is_some() {}
     assert_eq!(dispatch.worker_ids.lock().unwrap().as_slice(), &[worker_id]);
     assert_eq!(
-        affinity.query_target(&session_id, None).unwrap(),
+        bound_target(&host, &session_id),
         Some(AffinityTarget::worker(worker_id))
     );
 
@@ -504,7 +504,7 @@ async fn builtin_affinity_uses_common_host_for_every_policy() {
         )
         .await
         .unwrap();
-        let (host, affinity) = builtin_host_with_affinity(
+        let host = builtin_host_with_affinity(
             inner,
             load_context,
             crate::session_affinity::SessionAffinityMode::Hard,
@@ -519,7 +519,7 @@ async fn builtin_affinity_uses_common_host_for_every_policy() {
             .unwrap();
         while first.next().await.is_some() {}
         assert_eq!(
-            affinity.query_target(&affinity_id, None).unwrap(),
+            bound_target(&host, &affinity_id),
             Some(AffinityTarget::worker(worker_id))
         );
 
@@ -608,7 +608,7 @@ async fn builtin_direct_distinguishes_unknown_requests_from_stale_affinity() {
     )
     .await
     .unwrap();
-    let (host, affinity) = builtin_host_with_affinity(
+    let host = builtin_host_with_affinity(
         inner,
         load_context,
         crate::session_affinity::SessionAffinityMode::Hard,
@@ -636,7 +636,7 @@ async fn builtin_direct_distinguishes_unknown_requests_from_stale_affinity() {
         &[]
     ));
     assert!(dispatch.worker_ids.lock().unwrap().is_empty());
-    assert_eq!(affinity.query_target(&session_id, None).unwrap(), None);
+    assert_eq!(bound_target(&host, &session_id), None);
 
     let mut valid = request();
     valid.routing_mut().backend_instance_id = Some(real_worker);
@@ -2457,10 +2457,9 @@ async fn route_preview_does_not_acquire_session_affinity() {
         .await
         .unwrap();
 
-    let affinity = router.affinity.as_ref().unwrap();
     let acquisition = tokio::time::timeout(
         Duration::from_millis(100),
-        affinity.acquire(&session_id, None),
+        affinity_table(&router).acquire(session_id.as_str(), None),
     )
     .await
     .expect("preview must not leave affinity initialization pending")
@@ -2521,10 +2520,9 @@ async fn aborted_route_plan_drops_pending_affinity_initialization() {
         .abort()
         .await;
 
-    let affinity = router.affinity.as_ref().unwrap();
     let acquisition = tokio::time::timeout(
         Duration::from_millis(100),
-        affinity.acquire(&session_id, None),
+        affinity_table(&router).acquire(session_id.as_str(), None),
     )
     .await
     .expect("abandoned plan must not leave affinity initialization pending")
@@ -2671,34 +2669,20 @@ async fn router_request_counters_follow_admission_and_completion_lifecycle() {
 #[tokio::test]
 async fn session_affinity_post_selection_failures_preserve_binding() {
     let (router, runtime) = router(Some(Duration::from_secs(10))).await;
-    let affinity = router.affinity.as_ref().unwrap();
     let session_id = SessionAffinityId::new("cancelled-after-selection");
     let original_target = AffinityTarget {
         worker_id: 7,
         dp_rank: Some(0),
     };
-    let Hold::Initialize(initializer) = affinity.acquire(&session_id, None).await.unwrap() else {
-        panic!("first request must initialize");
-    };
-    drop(
-        initializer
-            .commit(crate::session_affinity::to_table(original_target))
-            .unwrap(),
-    );
+    bind_affinity_target(&router, &session_id, original_target).await;
 
-    let operation = Some(affinity.acquire(&session_id, None).await.unwrap());
+    let operation = Some(acquire_session(&router, &session_id).await);
     drop(operation);
-    assert_eq!(
-        affinity.query_target(&session_id, None).unwrap(),
-        Some(original_target)
-    );
+    assert_eq!(bound_target(&router, &session_id), Some(original_target));
 
-    let operation = Some(affinity.acquire(&session_id, None).await.unwrap());
+    let operation = Some(acquire_session(&router, &session_id).await);
     drop(operation);
-    assert_eq!(
-        affinity.query_target(&session_id, None).unwrap(),
-        Some(original_target)
-    );
+    assert_eq!(bound_target(&router, &session_id), Some(original_target));
 
     drop(router);
     runtime.shutdown();
@@ -2712,14 +2696,7 @@ async fn session_affinity_existing_selection_cancellation_preserves_binding_with
         worker_id: 7,
         dp_rank: Some(0),
     };
-    let Hold::Initialize(initializer) = router
-        .affinity
-        .as_ref()
-        .unwrap()
-        .acquire(&session_id, None)
-        .await
-        .unwrap()
-    else {
+    let Hold::Initialize(initializer) = acquire_session(&router, &session_id).await else {
         panic!("first request must initialize");
     };
     drop(
@@ -2749,24 +2726,9 @@ async fn session_affinity_existing_selection_cancellation_preserves_binding_with
         &[ErrorType::Cancelled],
         &[]
     ));
-    assert_eq!(
-        router
-            .affinity
-            .as_ref()
-            .unwrap()
-            .query_target(&session_id, None)
-            .unwrap(),
-        Some(original_target)
-    );
+    assert_eq!(bound_target(&router, &session_id), Some(original_target));
 
-    let Hold::Bound { target, lease } = router
-        .affinity
-        .as_ref()
-        .unwrap()
-        .acquire(&session_id, None)
-        .await
-        .unwrap()
-    else {
+    let Hold::Bound { target, lease } = acquire_session(&router, &session_id).await else {
         panic!("cancellation must preserve the existing binding");
     };
     assert_eq!(target, crate::session_affinity::to_table(original_target));
@@ -2789,12 +2751,7 @@ async fn kv_session_commits_after_dispatch_and_releases_with_the_stream() {
     let session_id = SessionAffinityId::new("commit-after-dispatch");
     let mut request = Context::new(request());
     request.insert(SESSION_AFFINITY_CONTEXT_KEY, session_id.clone());
-    let table = router
-        .kv_router()
-        .affinity_resolver()
-        .expect("session affinity is configured")
-        .table()
-        .clone();
+    let table = affinity_table(&router).clone();
 
     let mut stream = router.generate(request).await.expect("dispatch succeeds");
     assert_eq!(dispatch.worker_ids.lock().unwrap().as_slice(), &[worker_id]);
@@ -2834,11 +2791,7 @@ async fn kv_failed_dispatch_does_not_bind_the_session() {
 
     // The harness overrides discovery without a live endpoint, so dispatch fails.
     assert!(router.generate(request).await.is_err());
-    let table = router
-        .kv_router()
-        .affinity_resolver()
-        .expect("session affinity is configured")
-        .table();
+    let table = affinity_table(&router);
     assert_eq!(table.query_target(session_id.as_str(), None).unwrap(), None);
     assert_eq!(
         table.entry_count(),
@@ -2876,12 +2829,7 @@ async fn kv_binding_to_a_departed_worker_rebinds_on_dispatch() {
         .expect("a departed binding is not a client fault");
     assert_eq!(dispatch.worker_ids.lock().unwrap().as_slice(), &[worker_id]);
     assert_eq!(
-        router
-            .affinity
-            .as_ref()
-            .unwrap()
-            .query_target(&session_id, None)
-            .unwrap(),
+        bound_target(&router, &session_id),
         Some(AffinityTarget::new(worker_id, Some(0)))
     );
     while stream.next().await.is_some() {}
@@ -2889,6 +2837,52 @@ async fn kv_binding_to_a_departed_worker_rebinds_on_dispatch() {
     drop(stream);
     drop(router);
     runtime.shutdown();
+}
+
+/// Prefill and decode hosts bind the same session independently: each KV host
+/// resolves through its own partition's table, since the two pools differ and
+/// a prefill worker is no target for decode.
+#[tokio::test]
+#[serial_test::serial]
+async fn prefill_and_decode_hosts_keep_separate_session_tables() {
+    let (decode, _, decode_worker, decode_runtime) = router_with_recorded_dispatch_and_affinity(
+        "kv-session-decode-table",
+        Some(Duration::from_secs(10)),
+    )
+    .await;
+    let (prefill, _, prefill_worker, prefill_runtime) = router_with_recorded_dispatch_and_affinity(
+        "kv-session-prefill-table",
+        Some(Duration::from_secs(10)),
+    )
+    .await;
+    let session_id = SessionAffinityId::new("per-pool-binding");
+
+    bind_affinity_target(
+        &decode,
+        &session_id,
+        AffinityTarget::new(decode_worker, Some(0)),
+    )
+    .await;
+    assert_eq!(bound_target(&prefill, &session_id), None);
+    bind_affinity_target(
+        &prefill,
+        &session_id,
+        AffinityTarget::new(prefill_worker, Some(0)),
+    )
+    .await;
+    assert_eq!(
+        bound_target(&decode, &session_id),
+        Some(AffinityTarget::new(decode_worker, Some(0)))
+    );
+    assert_eq!(
+        bound_target(&prefill, &session_id),
+        Some(AffinityTarget::new(prefill_worker, Some(0)))
+    );
+
+    drop(decode);
+    drop(prefill);
+    decode_runtime.shutdown();
+    prefill_runtime.shutdown();
 }
 
 /// An explicit request target must agree with the session's binding; an
@@ -2926,12 +2920,7 @@ async fn kv_explicit_target_must_agree_with_the_session_binding() {
         &[]
     ));
     assert_eq!(
-        router
-            .affinity
-            .as_ref()
-            .unwrap()
-            .query_target(&session_id, None)
-            .unwrap(),
+        bound_target(&router, &session_id),
         Some(bound),
         "rejection keeps the binding"
     );
@@ -2958,18 +2947,49 @@ async fn kv_explicit_target_must_agree_with_the_session_binding() {
     runtime.shutdown();
 }
 
-/// A builtin host over `inner` whose session-affinity coordinator has a 10s
-/// TTL and binds in `mode`.
+/// A builtin host over `inner` whose session affinity has a 10s TTL, binds
+/// in `mode`, and treats discovered workers as live.
 fn builtin_host_with_affinity(
     inner: PushRouter<PreprocessedRequest, Annotated<LLMEngineOutput>>,
     load_context: Arc<RoutingLoadContext>,
     mode: crate::session_affinity::SessionAffinityMode,
-) -> (RoutingHost, AffinityCoordinator) {
-    let affinity = AffinityCoordinator::new(Duration::from_secs(10), mode).unwrap();
-    let host =
-        RoutingHost::new_builtin_with_coordinator(inner, load_context, Some(affinity.clone()))
-            .unwrap();
-    (host, affinity)
+) -> RoutingHost {
+    let affinity = HostAffinity::standalone(
+        Duration::from_secs(10),
+        mode,
+        Arc::new(crate::session_affinity::DiscoveryLiveness::new(
+            inner.client.clone(),
+            None,
+        )),
+    )
+    .unwrap();
+    RoutingHost::new_builtin_with_affinity(inner, load_context, Some(affinity)).unwrap()
+}
+
+/// The host's session table, for tests that seed or inspect bindings directly.
+fn affinity_table(
+    router: &RoutingHost,
+) -> &dynamo_kv_router::services::selection::affinity::SessionAffinity {
+    router
+        .affinity
+        .as_ref()
+        .expect("session affinity configured")
+        .resolver()
+        .table()
+}
+
+async fn acquire_session(router: &RoutingHost, session_id: &SessionAffinityId) -> Hold {
+    affinity_table(router)
+        .acquire(session_id.as_str(), None)
+        .await
+        .unwrap()
+}
+
+fn bound_target(router: &RoutingHost, session_id: &SessionAffinityId) -> Option<AffinityTarget> {
+    affinity_table(router)
+        .query_target(session_id.as_str(), None)
+        .unwrap()
+        .map(from_table)
 }
 
 async fn bind_affinity_target(
@@ -2977,14 +2997,7 @@ async fn bind_affinity_target(
     session_id: &SessionAffinityId,
     target: AffinityTarget,
 ) {
-    let Hold::Initialize(initializer) = router
-        .affinity
-        .as_ref()
-        .unwrap()
-        .acquire(session_id, None)
-        .await
-        .unwrap()
-    else {
+    let Hold::Initialize(initializer) = acquire_session(router, session_id).await else {
         panic!("first request must initialize");
     };
     drop(
@@ -3020,15 +3033,7 @@ async fn request_constraints_preserve_worker_only_affinity() {
             .await
             .is_err()
     );
-    assert_eq!(
-        router
-            .affinity
-            .as_ref()
-            .unwrap()
-            .query_target(&allowlist_session, None)
-            .unwrap(),
-        Some(target)
-    );
+    assert_eq!(bound_target(&router, &allowlist_session), Some(target));
 
     let taint_session = SessionAffinityId::new("affinity-taint-conflict");
     bind_affinity_target(&router, &taint_session, target).await;
@@ -3050,15 +3055,7 @@ async fn request_constraints_preserve_worker_only_affinity() {
             .await
             .is_err()
     );
-    assert_eq!(
-        router
-            .affinity
-            .as_ref()
-            .unwrap()
-            .query_target(&taint_session, None)
-            .unwrap(),
-        Some(target)
-    );
+    assert_eq!(bound_target(&router, &taint_session), Some(target));
 
     drop(router);
     runtime.shutdown();
@@ -3104,7 +3101,6 @@ async fn config_watch_gap_preserves_hard_affinity() {
         .client
         .override_instance_avail(vec![7, target.worker_id]);
     bind_affinity_target(&router, &session_id, target).await;
-    assert!(router.affinity_target_is_valid(target));
 
     let mut request = Context::new(request());
     request.insert(SESSION_AFFINITY_CONTEXT_KEY, session_id.clone());
@@ -3119,15 +3115,7 @@ async fn config_watch_gap_preserves_hard_affinity() {
             .await
             .is_err()
     );
-    assert_eq!(
-        router
-            .affinity
-            .as_ref()
-            .unwrap()
-            .query_target(&session_id, None)
-            .unwrap(),
-        Some(target)
-    );
+    assert_eq!(bound_target(&router, &session_id), Some(target));
 
     drop(router);
     runtime.shutdown();
@@ -3149,14 +3137,7 @@ async fn migration_exclusion_preserves_hard_affinity_without_widening_or_escapin
         worker_id: 7,
         dp_rank: Some(0),
     };
-    let Hold::Initialize(initializer) = router
-        .affinity
-        .as_ref()
-        .unwrap()
-        .acquire(&session_id, None)
-        .await
-        .unwrap()
-    else {
+    let Hold::Initialize(initializer) = acquire_session(&router, &session_id).await else {
         panic!("first request must initialize");
     };
     drop(
@@ -3196,15 +3177,7 @@ async fn migration_exclusion_preserves_hard_affinity_without_widening_or_escapin
         panic!("migration exclusions must not rebind hard affinity");
     };
     assert!(error.to_string().contains("worker 7"));
-    assert_eq!(
-        router
-            .affinity
-            .as_ref()
-            .unwrap()
-            .query_target(&session_id, None)
-            .unwrap(),
-        Some(original_target)
-    );
+    assert_eq!(bound_target(&router, &session_id), Some(original_target));
 
     let mut exhausted_input = request();
     exhausted_input.routing_mut().allowed_worker_ids = Some(HashSet::from([7, 10]));
@@ -4236,8 +4209,8 @@ async fn kv_stopped_decode_request_survives_a_contended_session_affinity_wait() 
     // Another request is mid-initialization for the same session, so the decode
     // leg has to wait rather than take the slot immediately.
     let router = Arc::new(router);
-    let coordinator = router.affinity.as_ref().unwrap().clone();
-    let Hold::Initialize(holder) = coordinator.acquire(&session_id, None).await.unwrap() else {
+    let table = affinity_table(&router).clone();
+    let Hold::Initialize(holder) = table.acquire(session_id.as_str(), None).await.unwrap() else {
         panic!("the first acquisition must initialize the session");
     };
 
@@ -4259,7 +4232,7 @@ async fn kv_stopped_decode_request_survives_a_contended_session_affinity_wait() 
 
     // Only release the session once the decode leg is provably parked on the
     // wait; otherwise the test could pass without ever exercising it.
-    coordinator.wait_for_initializing_waiter().await;
+    table.wait_for_initializing_waiter().await;
     drop(holder);
 
     let mut stream = generate
@@ -4544,16 +4517,19 @@ async fn affinity_mode_host(namespace: &str) -> (Runtime, RoutingHost) {
     endpoint.register_endpoint_instance().await.unwrap();
     client.wait_for_instances().await.unwrap();
     let load_context = test_load_context(&client).await;
+    let affinity = HostAffinity::standalone(
+        Duration::from_secs(60),
+        crate::session_affinity::SessionAffinityMode::Hard,
+        Arc::new(crate::session_affinity::DiscoveryLiveness::new(
+            client.clone(),
+            None,
+        )),
+    )
+    .unwrap();
     let inner = PushRouter::from_client(client, RouterMode::RoundRobin)
         .await
         .unwrap();
-    let coordinator = AffinityCoordinator::new(
-        Duration::from_secs(60),
-        crate::session_affinity::SessionAffinityMode::Hard,
-    )
-    .unwrap();
-    let host =
-        RoutingHost::new_builtin_with_coordinator(inner, load_context, Some(coordinator)).unwrap();
+    let host = RoutingHost::new_builtin_with_affinity(inner, load_context, Some(affinity)).unwrap();
     (runtime, host)
 }
 
@@ -4597,16 +4573,21 @@ async fn parent_group_binding_offers_siblings_the_committed_worker() {
         router_with_worker_configs(Some(Duration::from_secs(60)), workers).await;
 
     let offered = async |request: &SingleIn<PreprocessedRequest>| {
-        router
-            .select_with_session_affinity(
+        let resolution = router
+            .resolve_hosted_session(
                 request,
                 RequestPhase::Aggregated,
                 false,
                 &CleanupBudget::default(),
-                |target| std::future::ready(Ok(target)),
             )
             .await
-            .unwrap()
+            .unwrap();
+        (
+            resolution
+                .affinity
+                .map(|requirement| from_table(requirement.target)),
+            resolution.hold,
+        )
     };
 
     let first = subagent_request("child-1", Some("parent-1"));
@@ -4649,49 +4630,32 @@ async fn hard_parent_group_recovers_when_the_bound_worker_leaves() {
         .collect();
     let (router, runtime) =
         router_with_worker_configs(Some(Duration::from_secs(60)), workers).await;
-    let affinity = router.affinity.as_ref().unwrap();
     let group = parent_group_id("parent-1");
-
-    let Hold::Initialize(initializer) = affinity.acquire(&group, None).await.unwrap() else {
-        panic!("the first subagent must initialize the group");
-    };
-    drop(
-        initializer
-            .commit(crate::session_affinity::to_table(AffinityTarget::new(
-                7,
-                Some(0),
-            )))
-            .unwrap(),
-    );
+    bind_affinity_target(&router, &group, AffinityTarget::new(7, Some(0))).await;
     assert_eq!(
-        affinity.query_target(&group, None).unwrap(),
+        bound_target(&router, &group),
         Some(AffinityTarget::new(7, Some(0)))
     );
 
-    // Worker 7 leaves the pool. Hard mode must invalidate the dead pin and retry unbound rather
-    // than fail every sibling until the TTL expires.
+    // Worker 7 leaves the pool. Hard mode must drop the dead binding and let
+    // the sibling select unbound rather than fail every sibling until the TTL
+    // expires.
     router.inner.client.override_discovered_instances(vec![9]);
     router.inner.client.override_instance_avail(vec![9]);
     let sibling = subagent_request("child-2", Some("parent-1"));
-    let (selected, operation) = router
-        .select_with_session_affinity(
+    let resolution = router
+        .resolve_hosted_session(
             &sibling,
             RequestPhase::Aggregated,
             false,
             &CleanupBudget::default(),
-            |target: Option<AffinityTarget>| {
-                // The dead pin is rejected at dispatch time; the unbound retry is accepted.
-                std::future::ready(match target {
-                    Some(target) if target.worker_id == 7 => Err(anyhow::anyhow!("worker gone")),
-                    other => Ok(other),
-                })
-            },
         )
         .await
         .unwrap();
-    assert_eq!(selected, None, "the retry runs unbound");
-    assert!(matches!(operation, Some(Hold::Initialize(_))));
-    assert_eq!(affinity.query_target(&group, None).unwrap(), None);
+    assert!(resolution.affinity.is_none(), "the sibling selects unbound");
+    assert!(matches!(resolution.hold, Some(Hold::Initialize(_))));
+    assert_eq!(resolution.dropped, Some(AffinityTarget::new(7, Some(0))));
+    assert_eq!(bound_target(&router, &group), None);
 
     runtime.shutdown();
 }

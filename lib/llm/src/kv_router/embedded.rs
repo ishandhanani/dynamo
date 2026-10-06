@@ -175,7 +175,7 @@ pub(crate) struct EmbeddedSelection {
     /// the router holds the partition.
     service: Arc<SelectionService>,
     partition: SelectionPartition,
-    affinity: OnceLock<crate::session_affinity::AffinityCoordinator>,
+    affinity: OnceLock<crate::session_affinity::HostAffinity>,
     worker_type: &'static str,
     /// Queue gauges and rejection counters per policy class, index-aligned with
     /// the scheduler's `class_queue_stats`.
@@ -376,29 +376,23 @@ impl EmbeddedSelection {
     }
 
     /// The partition's session resolver, created on first use with the
-    /// frontend's liveness source, wrapped for the coordinator-based hosts.
-    pub(crate) fn affinity_coordinator(
+    /// frontend's liveness source, as the routing host holds it. One per
+    /// partition, so replication is attached once.
+    pub(crate) fn host_affinity(
         &self,
         ttl: Duration,
         mode: crate::session_affinity::SessionAffinityMode,
         liveness: Arc<dyn dynamo_kv_router::services::selection::affinity::TargetLiveness>,
-    ) -> Result<crate::session_affinity::AffinityCoordinator> {
+    ) -> Result<crate::session_affinity::HostAffinity> {
         let resolver = self.partition.session_affinity_with_liveness(
             dynamo_kv_router::services::selection::affinity::SessionAffinityConfig::new(ttl)
                 .with_mode(mode),
             liveness,
         )?;
-        let table = resolver.table().clone();
         Ok(self
             .affinity
-            .get_or_init(|| crate::session_affinity::AffinityCoordinator::wrap(table))
+            .get_or_init(|| crate::session_affinity::HostAffinity::from_resolver(resolver))
             .clone())
-    }
-
-    pub(crate) fn affinity_resolver(
-        &self,
-    ) -> Option<&dynamo_kv_router::services::selection::affinity::AffinityResolver> {
-        self.partition.session_resolver()
     }
 
     pub(crate) fn partition_key(&self) -> &RoutingPartitionId {
