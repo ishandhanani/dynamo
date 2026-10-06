@@ -40,6 +40,15 @@ pub enum SessionAffinityMode {
     Soft,
 }
 
+impl From<SessionAffinityMode> for crate::scheduling::AffinityStrength {
+    fn from(mode: SessionAffinityMode) -> Self {
+        match mode {
+            SessionAffinityMode::Hard => Self::Hard,
+            SessionAffinityMode::Soft => Self::Soft,
+        }
+    }
+}
+
 impl std::str::FromStr for SessionAffinityMode {
     type Err = String;
 

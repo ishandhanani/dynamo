@@ -28,9 +28,10 @@ use super::queue_admission::WorkerPlacement;
 use super::request_classifier::{ClassificationOverrides, ClassifyRequest};
 use super::selector::{WorkerSelectionInput, WorkerSelector};
 use super::types::{
-    AdvisorySchedulingResponse, AdvisoryWorkerLoad, AttemptId, KvSchedulerError,
-    NonMaxOverlapSelection, NonMaxOverlapSelectionObserver, OverloadedWorkerProvider,
-    SchedulingContext, SchedulingRequest, SchedulingResponse, WorkerAvailabilityProvider,
+    AdvisorySchedulingResponse, AdvisoryWorkerLoad, AffinityRequirement, AttemptId,
+    KvSchedulerError, NonMaxOverlapSelection, NonMaxOverlapSelectionObserver,
+    OverloadedWorkerProvider, SchedulingContext, SchedulingRequest, SchedulingResponse,
+    WorkerAvailabilityProvider,
 };
 use crate::protocols::{
     LocalBlockHash, PrefillLoadHint, WorkerConfigLike, WorkerId, WorkerSelectionResult,
@@ -921,7 +922,7 @@ impl<
         if request.pinned_worker.is_none()
             && let Some(target) = worker_selection_target
         {
-            request.affinity_target = target;
+            request.affinity = target.map(AffinityRequirement::soft);
         }
 
         // Queue inputs are recomputed from the current workers, exactly as the
@@ -1629,7 +1630,7 @@ impl<
                 .eligibility_with_overloaded(overloaded_worker_ids.as_ref())
                 .with_available_workers(available_worker_ids.as_deref());
             if self.selector.uses_exclusive_affinity_target()
-                && let Some(target) = request.affinity_target
+                && let Some(target) = request.affinity.map(|affinity| affinity.target)
                 && eligibility.affinity_target_is_eligible(&workers, target)
             {
                 eligibility = eligibility.with_affinity_target(target);
@@ -2637,7 +2638,7 @@ mod tests {
             policy_class: None,
             session_context: None,
             expected_output_tokens: None,
-            affinity_target: None,
+            affinity: None,
             pinned_worker: None,
             allowed_worker_ids: None,
             routing_constraints: crate::protocols::RoutingConstraints::default(),
@@ -2734,14 +2735,17 @@ policy_classes:
         queue
             .validate_classification(&mut request, classified, now)
             .unwrap();
-        assert_eq!(request.affinity_target, Some(worker.into()));
+        assert_eq!(
+            request.affinity,
+            Some(AffinityRequirement::soft(worker.into()))
+        );
 
         let mut classified = queue.build_classify_request(&request, now);
         classified.clear_worker_selection_target();
         queue
             .validate_classification(&mut request, classified, now)
             .unwrap();
-        assert!(request.affinity_target.is_none());
+        assert!(request.affinity.is_none());
 
         request.pinned_worker = Some(pin);
         let mut classified = queue.build_classify_request(&request, now);
@@ -2750,7 +2754,7 @@ policy_classes:
             .validate_classification(&mut request, classified, now)
             .unwrap();
         assert_eq!(request.pinned_worker, Some(pin));
-        assert!(request.affinity_target.is_none());
+        assert!(request.affinity.is_none());
         request.pinned_worker = None;
         request.allowed_worker_ids = Some(HashSet::from([0]));
         let mut classified = queue.build_classify_request(&request, now);

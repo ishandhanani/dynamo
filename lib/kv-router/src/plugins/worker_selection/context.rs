@@ -60,7 +60,7 @@ impl WorkerSelectionContext<'_> {
     /// A selection core with `Hard` session affinity limits every policy's candidates to an
     /// eligible target.
     pub fn affinity_target(&self) -> Option<WorkerAffinityTarget> {
-        self.request.affinity_target
+        self.request.affinity.map(|affinity| affinity.target)
     }
 
     /// Return the expected output length, if the request supplies one.

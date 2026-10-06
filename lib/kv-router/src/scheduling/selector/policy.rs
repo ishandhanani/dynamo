@@ -390,7 +390,7 @@ mod tests {
     use super::super::DefaultWorkerSelector;
     use super::super::test_support::*;
     use super::*;
-    use crate::scheduling::WorkerSelectionInputTrigger;
+    use crate::scheduling::{AffinityRequirement, WorkerSelectionInputTrigger};
 
     fn uses_exclusive_affinity(selector: &impl WorkerSelector<TaintedWorkerConfig>) -> bool {
         selector.uses_exclusive_affinity_target()
@@ -822,7 +822,7 @@ mod tests {
             (1, TaintedWorkerConfig::default()),
         ]);
         let mut request = base_request(16);
-        request.affinity_target = Some(worker1.into());
+        request.affinity = Some(AffinityRequirement::soft(worker1.into()));
         let policy = WorkerSelectionPolicy::new(
             KvRouterConfig::default(),
             "test",

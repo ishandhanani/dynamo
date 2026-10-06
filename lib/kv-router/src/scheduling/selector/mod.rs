@@ -522,7 +522,7 @@ mod test_support {
             policy_class: None,
             session_context: None,
             expected_output_tokens: None,
-            affinity_target: None,
+            affinity: None,
             pinned_worker: None,
             allowed_worker_ids: None,
             routing_constraints: crate::protocols::RoutingConstraints::default(),

@@ -297,15 +297,21 @@ impl SelectionCore {
             (SessionBinding::Managed { session_id }, Some(table)) => Some((table, session_id)),
             _ => None,
         };
-        let affinity_target = match (&session, table) {
+        // A session binding carries the table's mode; an explicit target from
+        // the request is a preference the policy reads.
+        let affinity = match (&session, table) {
             (SessionBinding::Managed { session_id }, Some(table)) => {
                 affinity_hold = self.hold_session(table, session_id, &key).await?;
-                affinity_hold.as_ref().and_then(Hold::target)
+                affinity_hold
+                    .as_ref()
+                    .and_then(Hold::target)
+                    .map(|target| AffinityRequirement::new(target, table.mode().into()))
             }
             (SessionBinding::Query { session_id }, Some(table)) => table
                 .query_target(session_id, None)
-                .map_err(affinity_error)?,
-            _ => affinity_target,
+                .map_err(affinity_error)?
+                .map(|target| AffinityRequirement::new(target, table.mode().into())),
+            _ => affinity_target.map(AffinityRequirement::soft),
         };
         // Router hints are attached to bookings only, and only when a worker in
         // this partition can consume them and the indexer can retain the
@@ -424,7 +430,7 @@ impl SelectionCore {
             policy_class,
             session_context,
             expected_output_tokens,
-            affinity_target,
+            affinity,
             pinned_worker,
             allowed_worker_ids,
             routing_constraints,

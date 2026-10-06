@@ -615,7 +615,7 @@ mod tests {
     use super::*;
     use crate::config::RouterConfigOverride;
     use crate::protocols::SharedCacheHits;
-    use crate::scheduling::{OverlapSignals, ScheduleMode};
+    use crate::scheduling::{AffinityRequirement, OverlapSignals, ScheduleMode};
 
     fn worker_logit(
         selector: &DefaultWorkerSelector,
@@ -772,7 +772,7 @@ mod tests {
             policy_class: None,
             session_context: None,
             expected_output_tokens: None,
-            affinity_target: None,
+            affinity: None,
             pinned_worker: None,
             allowed_worker_ids: None,
             routing_constraints: crate::protocols::RoutingConstraints::default(),
@@ -1069,12 +1069,12 @@ mod tests {
             (1, SimpleWorkerConfig::default()),
         ]);
         let mut request = base_request(16);
-        request.affinity_target = Some(worker1.into());
+        request.affinity = Some(AffinityRequirement::soft(worker1.into()));
         request.worker_loads =
             worker_loads_with_active_decode(FxHashMap::from_iter([(worker0, 0), (worker1, 100)]));
         let eligibility = request
             .eligibility()
-            .with_affinity_target(request.affinity_target.unwrap());
+            .with_affinity_target(request.affinity.unwrap().target);
 
         let result = selector
             .select_worker(WorkerSelectionInput::configured(
@@ -1087,10 +1087,12 @@ mod tests {
 
         assert_eq!(result.worker, worker1);
 
-        request.affinity_target = Some(WorkerAffinityTarget::new(0, None));
+        request.affinity = Some(AffinityRequirement::soft(WorkerAffinityTarget::new(
+            0, None,
+        )));
         let eligibility = request
             .eligibility()
-            .with_affinity_target(request.affinity_target.unwrap());
+            .with_affinity_target(request.affinity.unwrap().target);
 
         let result = selector
             .select_worker(WorkerSelectionInput::configured(
@@ -1104,7 +1106,7 @@ mod tests {
         assert_eq!(result.worker.worker_id, 0);
         assert!(result.worker.dp_rank < 2);
 
-        request.affinity_target = Some(worker1.into());
+        request.affinity = Some(AffinityRequirement::soft(worker1.into()));
         let overloaded_worker_ids = HashSet::from([1]);
 
         let result = selector
@@ -1176,7 +1178,7 @@ mod tests {
             policy_class: None,
             session_context: None,
             expected_output_tokens: None,
-            affinity_target: None,
+            affinity: None,
             pinned_worker: None,
             allowed_worker_ids: None,
             routing_constraints: crate::protocols::RoutingConstraints {
@@ -1235,7 +1237,7 @@ mod tests {
             policy_class: None,
             session_context: None,
             expected_output_tokens: None,
-            affinity_target: None,
+            affinity: None,
             pinned_worker: None,
             allowed_worker_ids: None,
             routing_constraints: crate::protocols::RoutingConstraints {
@@ -1312,7 +1314,7 @@ mod tests {
                 policy_class: None,
                 session_context: None,
                 expected_output_tokens: None,
-                affinity_target: None,
+                affinity: None,
                 pinned_worker: None,
                 allowed_worker_ids: None,
                 routing_constraints: crate::protocols::RoutingConstraints {
@@ -1387,7 +1389,7 @@ mod tests {
             policy_class: None,
             session_context: None,
             expected_output_tokens: None,
-            affinity_target: None,
+            affinity: None,
             pinned_worker: None,
             allowed_worker_ids: None,
             routing_constraints: crate::protocols::RoutingConstraints {
@@ -1458,7 +1460,7 @@ mod tests {
             policy_class: None,
             session_context: None,
             expected_output_tokens: None,
-            affinity_target: None,
+            affinity: None,
             pinned_worker: None,
             allowed_worker_ids: None,
             routing_constraints: crate::protocols::RoutingConstraints {
@@ -1545,7 +1547,7 @@ mod tests {
             policy_class: None,
             session_context: None,
             expected_output_tokens: None,
-            affinity_target: None,
+            affinity: None,
             pinned_worker: None,
             allowed_worker_ids: None,
             routing_constraints: crate::protocols::RoutingConstraints::default(),
@@ -1623,7 +1625,7 @@ mod tests {
             policy_class: None,
             session_context: None,
             expected_output_tokens: None,
-            affinity_target: None,
+            affinity: None,
             pinned_worker: None,
             allowed_worker_ids: None,
             routing_constraints: crate::protocols::RoutingConstraints::default(),
@@ -1925,7 +1927,7 @@ mod tests {
             policy_class: None,
             session_context: None,
             expected_output_tokens: None,
-            affinity_target: None,
+            affinity: None,
             pinned_worker: None,
             allowed_worker_ids: None,
             routing_constraints: crate::protocols::RoutingConstraints::default(),
@@ -2029,7 +2031,7 @@ mod tests {
             policy_class: None,
             session_context: None,
             expected_output_tokens: None,
-            affinity_target: None,
+            affinity: None,
             pinned_worker: None,
             allowed_worker_ids: None,
             routing_constraints: crate::protocols::RoutingConstraints::default(),

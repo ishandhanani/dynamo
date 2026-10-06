@@ -379,7 +379,7 @@ Routing cache resources start only if a component requests `CACHE`. `serve_index
 | `block_size()` | Tokens in one KV block |
 | `tracks_prefill_tokens()` | Whether the request contributes to prefill-load tracking |
 | `session_context()` | Optional session metadata described below |
-| `affinity_target()` | Optional advisory worker and data-parallel rank from soft session affinity |
+| `affinity_target()` | Optional session-affinity worker and data-parallel rank. Under hard affinity the host already limits the candidate set to it while it is eligible; under soft affinity it is advisory |
 | `expected_output_tokens()` | Optional expected output length |
 | `priority_jump()` | Scheduler priority boost. Queue policies treat negative values as zero |
 | `strict_priority()` | Strict integer priority. The queue orders larger values first |
