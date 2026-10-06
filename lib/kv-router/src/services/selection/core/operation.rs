@@ -4,6 +4,7 @@
 //! The one selection operation every host runs. Wire handlers and embedding
 //! hosts build a [`SelectionOperation`] and consume a [`SelectionOutcome`].
 
+use std::borrow::Cow;
 use std::collections::HashSet;
 use std::time::Duration;
 
@@ -19,6 +20,7 @@ use crate::scheduling::config::RouterConfigOverride;
 use crate::scheduling::queue::BookingHandle;
 use crate::scheduling::{AdvisoryWorkerLoad, QueueRejection, SchedulingResponse, SessionContext};
 
+use super::super::affinity::Hold;
 use super::super::error::SelectionError;
 use super::super::input::PromptView;
 
@@ -34,7 +36,7 @@ pub struct SelectionOperation<'a> {
     pub strict_priority: u32,
     pub policy_class: Option<String>,
     pub session_context: Option<SessionContext>,
-    pub session: SessionBinding,
+    pub session: SessionBinding<'a>,
     pub affinity_target: Option<WorkerAffinityTarget>,
     pub pinned_worker: Option<WorkerWithDpRank>,
     pub allowed_worker_ids: Option<HashSet<WorkerId>>,
@@ -80,15 +82,22 @@ impl SelectionAdmission {
 }
 
 /// What the core does with the partition's session table for this request.
-pub enum SessionBinding {
+///
+/// `requested_target` is an explicit target the request carries; a bound
+/// session must agree with it, and a new session binds only to it.
+pub enum SessionBinding<'a> {
     None,
-    /// Hold the session, steer to its worker, and bind it to the worker booked.
+    /// Hold the session and steer to its worker. Under `Book` the core binds
+    /// the worker booked; under `Lease` it returns the hold in
+    /// [`Selected::affinity_hold`] for the host to commit after dispatch.
     Managed {
-        session_id: String,
+        session_id: Cow<'a, str>,
+        requested_target: Option<WorkerAffinityTarget>,
     },
     /// Steer to the session's worker without holding or binding it.
     Query {
-        session_id: String,
+        session_id: Cow<'a, str>,
+        requested_target: Option<WorkerAffinityTarget>,
     },
 }
 
@@ -144,4 +153,8 @@ pub struct Selected {
     /// The booking's handle; `Lease` admission only. Dropping it frees the
     /// booking, `commit` hands it to the caller's own cleanup.
     pub booking: Option<BookingHandle>,
+    /// The session held for this request; `Lease` admission with a managed
+    /// session only. The host commits it through the partition's resolver
+    /// once it knows where the request went; dropping it releases the hold.
+    pub affinity_hold: Option<Hold>,
 }

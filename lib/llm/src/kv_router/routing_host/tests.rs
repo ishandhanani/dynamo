@@ -2776,6 +2776,188 @@ async fn session_affinity_existing_selection_cancellation_preserves_binding_with
     runtime.shutdown();
 }
 
+/// The KV plane commits the session only once dispatch has returned a
+/// response stream, and the lease lives for as long as that stream does.
+#[tokio::test]
+#[serial_test::serial]
+async fn kv_session_commits_after_dispatch_and_releases_with_the_stream() {
+    let (router, dispatch, worker_id, runtime) = router_with_recorded_dispatch_and_affinity(
+        "kv-session-commit-after-dispatch",
+        Some(Duration::from_secs(10)),
+    )
+    .await;
+    let session_id = SessionAffinityId::new("commit-after-dispatch");
+    let mut request = Context::new(request());
+    request.insert(SESSION_AFFINITY_CONTEXT_KEY, session_id.clone());
+    let table = router
+        .kv_router()
+        .affinity_resolver()
+        .expect("session affinity is configured")
+        .table()
+        .clone();
+
+    let mut stream = router.generate(request).await.expect("dispatch succeeds");
+    assert_eq!(dispatch.worker_ids.lock().unwrap().as_slice(), &[worker_id]);
+    assert_eq!(
+        table.query_target(session_id.as_str(), None).unwrap(),
+        Some(crate::session_affinity::to_table(AffinityTarget::new(
+            worker_id,
+            Some(0)
+        ))),
+        "the binding exists once dispatch returned a stream"
+    );
+    assert_eq!(
+        table.lease_count(session_id.as_str()),
+        Some(1),
+        "the response stream owns the lease"
+    );
+    while stream.next().await.is_some() {}
+    assert_eq!(
+        table.lease_count(session_id.as_str()),
+        Some(0),
+        "the lease ends with the stream"
+    );
+
+    drop(stream);
+    drop(router);
+    runtime.shutdown();
+}
+
+/// A dispatch that fails binds nothing: the hold is released with the
+/// selection and the session's slot is free again.
+#[tokio::test]
+async fn kv_failed_dispatch_does_not_bind_the_session() {
+    let (router, runtime) = router(Some(Duration::from_secs(10))).await;
+    let session_id = SessionAffinityId::new("failed-dispatch");
+    let mut request = Context::new(request());
+    request.insert(SESSION_AFFINITY_CONTEXT_KEY, session_id.clone());
+
+    // The harness overrides discovery without a live endpoint, so dispatch fails.
+    assert!(router.generate(request).await.is_err());
+    let table = router
+        .kv_router()
+        .affinity_resolver()
+        .expect("session affinity is configured")
+        .table();
+    assert_eq!(table.query_target(session_id.as_str(), None).unwrap(), None);
+    assert_eq!(
+        table.entry_count(),
+        0,
+        "the uncommitted hold released its slot"
+    );
+
+    drop(router);
+    runtime.shutdown();
+}
+
+/// A session bound to a worker discovery no longer knows selects normally and
+/// is re-bound to the worker the request ran on.
+#[tokio::test]
+#[serial_test::serial]
+async fn kv_binding_to_a_departed_worker_rebinds_on_dispatch() {
+    let (router, dispatch, worker_id, runtime) = router_with_recorded_dispatch_and_affinity(
+        "kv-session-departed-rebind",
+        Some(Duration::from_secs(10)),
+    )
+    .await;
+    let session_id = SessionAffinityId::new("departed-binding");
+    bind_affinity_target(
+        &router,
+        &session_id,
+        AffinityTarget::new(worker_id + 1, Some(0)),
+    )
+    .await;
+    let mut request = Context::new(request());
+    request.insert(SESSION_AFFINITY_CONTEXT_KEY, session_id.clone());
+
+    let mut stream = router
+        .generate(request)
+        .await
+        .expect("a departed binding is not a client fault");
+    assert_eq!(dispatch.worker_ids.lock().unwrap().as_slice(), &[worker_id]);
+    assert_eq!(
+        router
+            .affinity
+            .as_ref()
+            .unwrap()
+            .query_target(&session_id, None)
+            .unwrap(),
+        Some(AffinityTarget::new(worker_id, Some(0)))
+    );
+    while stream.next().await.is_some() {}
+
+    drop(stream);
+    drop(router);
+    runtime.shutdown();
+}
+
+/// An explicit request target must agree with the session's binding; an
+/// agreeing target selects the bound worker through the binding.
+#[tokio::test]
+async fn kv_explicit_target_must_agree_with_the_session_binding() {
+    let workers = [7u64, 8]
+        .into_iter()
+        .map(|worker_id| (worker_id, ModelRuntimeConfig::default()))
+        .collect();
+    let (router, runtime) =
+        router_with_worker_configs(Some(Duration::from_secs(10)), workers).await;
+    let session_id = SessionAffinityId::new("explicit-agreement");
+    let bound = AffinityTarget::new(7, Some(0));
+    bind_affinity_target(&router, &session_id, bound).await;
+
+    let mut disagreeing = request();
+    disagreeing.routing_mut().backend_instance_id = Some(8);
+    let mut disagreeing = Context::new(disagreeing);
+    disagreeing.insert(SESSION_AFFINITY_CONTEXT_KEY, session_id.clone());
+    let Err(error) = router
+        .select_with_affinity(
+            &disagreeing,
+            RequestPhase::Aggregated,
+            false,
+            &CleanupBudget::default(),
+        )
+        .await
+    else {
+        panic!("a target that disagrees with the binding is rejected");
+    };
+    assert!(match_error_chain(
+        error.as_ref(),
+        &[ErrorType::InvalidArgument],
+        &[]
+    ));
+    assert_eq!(
+        router
+            .affinity
+            .as_ref()
+            .unwrap()
+            .query_target(&session_id, None)
+            .unwrap(),
+        Some(bound),
+        "rejection keeps the binding"
+    );
+
+    let mut agreeing = request();
+    agreeing.routing_mut().backend_instance_id = Some(7);
+    let mut agreeing = Context::new(agreeing);
+    agreeing.insert(SESSION_AFFINITY_CONTEXT_KEY, session_id.clone());
+    let (selection, hold) = router
+        .select_with_affinity(
+            &agreeing,
+            RequestPhase::Aggregated,
+            false,
+            &CleanupBudget::default(),
+        )
+        .await
+        .expect("an agreeing target selects the bound worker");
+    assert_eq!(selection.worker, WorkerWithDpRank::new(7, 0));
+    assert!(matches!(hold, Some(Hold::Bound { .. })));
+    drop(hold);
+    drop(selection);
+
+    drop(router);
+    runtime.shutdown();
+}
+
 /// A builtin host over `inner` whose session-affinity coordinator has a 10s
 /// TTL and binds in `mode`.
 fn builtin_host_with_affinity(

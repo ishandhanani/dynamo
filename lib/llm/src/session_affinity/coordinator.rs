@@ -280,7 +280,7 @@ impl AffinityCoordinator {
     }
 }
 
-pub(super) fn tracked_stream(
+pub(crate) fn tracked_stream(
     lease: AffinityLease,
     stream: ManyOut<LlmResponse>,
 ) -> ManyOut<LlmResponse> {
@@ -347,7 +347,7 @@ pub fn explicit_target(
     Ok(worker_id.map(|worker_id| AffinityTarget { worker_id, dp_rank }))
 }
 
-fn affinity_error(error: AffinityError) -> Error {
+pub(crate) fn affinity_error(error: AffinityError) -> Error {
     match error {
         AffinityError::InvalidArgument(message) => invalid_argument(message),
         AffinityError::ResourceExhausted(message) => DynamoError::builder()

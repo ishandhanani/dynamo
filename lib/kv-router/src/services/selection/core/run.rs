@@ -185,6 +185,7 @@ impl SelectionCore {
             routing_hashes: _,
             shared_cache_hits: _,
             booking: _,
+            affinity_hold: _,
         } = selected;
         let booked = sequence_hashes.is_some();
         let potential_decode_blocks = response.potential_decode_blocks as u64;
@@ -276,24 +277,36 @@ impl SelectionCore {
         // scheduler's pin rule; a new session is bound to the worker booked.
         // An explicit target from the request is a preference the policy reads.
         let resolver = entry.affinity.get();
-        if matches!(session, SessionBinding::Managed { .. }) && claim.is_none() {
+        if matches!(session, SessionBinding::Managed { .. }) && !book {
             return Err(SelectionError::Internal(
-                "a managed session binding requires Book admission".to_string(),
+                "a managed session binding requires a booking admission".to_string(),
             ));
         }
         let mut affinity_hold = None;
         let affinity = match (&session, resolver) {
-            (SessionBinding::Managed { session_id }, Some(resolver)) => {
+            (
+                SessionBinding::Managed {
+                    session_id,
+                    requested_target,
+                },
+                Some(resolver),
+            ) => {
                 let resolution = resolver
-                    .resolve(session_id, None, self.cancel_token.cancelled())
+                    .resolve(session_id, *requested_target, self.cancel_token.cancelled())
                     .await
                     .map_err(affinity_error)?;
                 affinity_hold = resolution.hold;
                 resolution.affinity
             }
-            (SessionBinding::Query { session_id }, Some(resolver)) => {
-                resolver.query(session_id, None).map_err(affinity_error)?
-            }
+            (
+                SessionBinding::Query {
+                    session_id,
+                    requested_target,
+                },
+                Some(resolver),
+            ) => resolver
+                .query(session_id, *requested_target)
+                .map_err(affinity_error)?,
             _ => affinity_target.map(AffinityRequirement::soft),
         };
         // Router hints are attached to bookings only, and only when a worker in
@@ -373,7 +386,7 @@ impl SelectionCore {
                 prompt.lora_name.map(str::to_string),
                 track_prefill_tokens,
                 match &session {
-                    SessionBinding::Query { session_id } => Some(session_id.clone()),
+                    SessionBinding::Query { session_id, .. } => Some(session_id.to_string()),
                     _ => None,
                 },
             )
@@ -505,7 +518,7 @@ impl SelectionCore {
         // The routing hashes go to exactly one of: the reservation recorded
         // now, or the replay cache a later reservation records from.
         let mut routing_hashes = routing_hashes;
-        let booking = if let Some(claim) = claim {
+        let (booking, affinity_hold) = if let Some(claim) = claim {
             let Some(booking) = booking else {
                 return Err(SelectionError::Internal(
                     "booked selection has no booking handle".to_string(),
@@ -524,9 +537,10 @@ impl SelectionCore {
                     .await;
             }
             claim.install(booking, affinity_lease)?;
-            None
+            (None, None)
         } else {
-            booking
+            // A `Lease` host commits the session itself, after dispatch.
+            (booking, affinity_hold)
         };
 
         if let Some((cache_id, sequence_hashes, lora_name, track_prefill_tokens, session_id)) =
@@ -564,6 +578,7 @@ impl SelectionCore {
             routing_hashes: returned_routing_hashes,
             shared_cache_hits: host_shared_cache_hits,
             booking,
+            affinity_hold,
         }))
     }
 
@@ -701,13 +716,15 @@ fn session_binding(
     context: Option<&SessionContext>,
     is_steerable: bool,
     is_booking: bool,
-) -> SessionBinding {
+) -> SessionBinding<'static> {
     match context.filter(|_| is_steerable) {
         Some(context) if is_booking => SessionBinding::Managed {
-            session_id: context.session_id().to_string(),
+            session_id: context.session_id().to_string().into(),
+            requested_target: None,
         },
         Some(context) => SessionBinding::Query {
-            session_id: context.session_id().to_string(),
+            session_id: context.session_id().to_string().into(),
+            requested_target: None,
         },
         None => SessionBinding::None,
     }
