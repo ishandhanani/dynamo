@@ -101,6 +101,11 @@ pub enum KvSchedulerError {
     #[error("all eligible workers were rejected by policy filters")]
     AllEligibleWorkersFiltered,
 
+    /// Selection was restricted to an eligible Hard binding, and the policy
+    /// rejected that target. Other filter failures must not erase the binding.
+    #[error("the hard session affinity target was rejected by policy filters")]
+    HardAffinityTargetFiltered,
+
     #[error("pinned worker {worker_id} is overloaded")]
     PinnedWorkerOverloaded { worker_id: WorkerId },
 

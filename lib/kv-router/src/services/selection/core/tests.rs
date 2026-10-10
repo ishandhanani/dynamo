@@ -2927,6 +2927,15 @@ async fn hard_mode_rebinds_when_a_filter_rejects_the_bound_worker() {
         .await
         .expect("first booking");
     core.free_reservation("r1").await.expect("free");
+    let other = if first.worker_id == 1 { 2 } else { 1 };
+    rejected.store(other, Ordering::Relaxed);
+    let mut excluded = session_reservation("excluded", "s");
+    excluded.allowed_worker_ids = Some(HashSet::from([other]));
+    assert!(matches!(
+        core.select_and_reserve(excluded).await,
+        Err(SelectionError::Scheduler(KvSchedulerError::AllEligibleWorkersFiltered))
+    ));
+    assert_eq!(bound_worker(&core, "s"), Some(first.worker_id));
     rejected.store(first.worker_id, Ordering::Relaxed);
 
     let err = core
@@ -2936,7 +2945,7 @@ async fn hard_mode_rebinds_when_a_filter_rejects_the_bound_worker() {
     assert!(
         matches!(
             err,
-            SelectionError::Scheduler(KvSchedulerError::AllEligibleWorkersFiltered)
+            SelectionError::Scheduler(KvSchedulerError::HardAffinityTargetFiltered)
         ),
         "{err:?}"
     );

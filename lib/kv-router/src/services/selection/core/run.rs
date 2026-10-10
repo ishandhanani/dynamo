@@ -460,10 +460,9 @@ impl SelectionCore {
                 return Ok(SelectionOutcome::QueueRejected { rejection });
             }
             Err(error) => {
-                // A policy filter that rejects every candidate under a hard
-                // binding rejected the bound worker itself; drop the binding
-                // so the session re-binds instead of failing on every retry.
-                if matches!(error, KvSchedulerError::AllEligibleWorkersFiltered)
+                // Invalidate only when the scheduler actually restricted the
+                // policy to the bound target, rather than unrelated candidates.
+                if matches!(error, KvSchedulerError::HardAffinityTargetFiltered)
                     && let (Some(hold), Some(table)) = (affinity_hold, table)
                 {
                     table.release_filtered(hold);

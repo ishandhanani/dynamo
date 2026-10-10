@@ -85,7 +85,7 @@ impl RoutingHost {
             Err(error) => {
                 if matches!(
                     error.downcast_ref::<KvSchedulerError>(),
-                    Some(KvSchedulerError::AllEligibleWorkersFiltered)
+                    Some(KvSchedulerError::HardAffinityTargetFiltered)
                 ) && let (Some(hold), Some(table)) = (hold, self.affinity.as_ref())
                 {
                     table.release_filtered(hold);

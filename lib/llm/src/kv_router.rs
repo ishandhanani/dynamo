@@ -544,7 +544,8 @@ fn map_scheduler_error(error: scheduling::KvSchedulerError) -> anyhow::Error {
             (ErrorType::ResourceExhausted, true)
         }
         scheduling::KvSchedulerError::DeadlineExceeded => (ErrorType::DeadlineExceeded, false),
-        scheduling::KvSchedulerError::AllEligibleWorkersFiltered => (ErrorType::Unavailable, false),
+        scheduling::KvSchedulerError::AllEligibleWorkersFiltered
+        | scheduling::KvSchedulerError::HardAffinityTargetFiltered => (ErrorType::Unavailable, false),
         _ => return error.into(),
     };
 
@@ -563,6 +564,7 @@ fn map_scheduler_error(error: scheduling::KvSchedulerError) -> anyhow::Error {
     if matches!(
         error,
         scheduling::KvSchedulerError::AllEligibleWorkersFiltered
+            | scheduling::KvSchedulerError::HardAffinityTargetFiltered
     ) {
         // Native causes are normalized by DynamoError::cause. Keep this local
         // scheduler outcome as anyhow context so the affinity owner can detect
@@ -3582,7 +3584,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn filtered_host_selection_invalidates_only_hard_affinity() {
+    async fn filtered_host_selection_invalidates_only_an_evaluated_hard_target() {
         use std::time::Duration;
 
         use crate::{
@@ -3593,7 +3595,12 @@ mod tests {
         use dynamo_kv_router::services::selection::affinity::AffinityTarget;
         use dynamo_runtime::pipeline::{Context, PushRouter, RouterMode};
 
-        for mode in [SessionAffinityMode::Hard, SessionAffinityMode::Soft] {
+        for (mode, exclude_bound_worker) in [
+            (SessionAffinityMode::Hard, false),
+            (SessionAffinityMode::Soft, false),
+            (SessionAffinityMode::Hard, true),
+        ] {
+            let invalidated = mode == SessionAffinityMode::Hard && !exclude_bound_worker;
             let policy =
                 SelectionPolicySource::Factory(Arc::new(|config: &KvRouterConfig, _, _| {
                     WorkerSelectionPolicy::new_with_filters(
@@ -3630,16 +3637,20 @@ mod tests {
                     .build()
                     .unwrap(),
             );
+            if exclude_bound_worker {
+                request.routing_mut().allowed_worker_ids = Some(HashSet::from([1]));
+            }
             request.insert(SESSION_AFFINITY_CONTEXT_KEY, session_id.clone());
             let request_id = request.context().id().to_string();
 
             let Err(error) = host.generate(request).await else {
                 panic!("the policy rejects every worker");
             };
-            assert!(matches!(
-                error.downcast_ref::<KvSchedulerError>(),
-                Some(KvSchedulerError::AllEligibleWorkersFiltered)
-            ));
+            assert!(match error.downcast_ref::<KvSchedulerError>() {
+                Some(KvSchedulerError::HardAffinityTargetFiltered) => invalidated,
+                Some(KvSchedulerError::AllEligibleWorkersFiltered) => !invalidated,
+                _ => false,
+            });
             assert!(dynamo_runtime::error::match_error_chain(
                 error.as_ref(),
                 &[ErrorType::Unavailable],
@@ -3647,12 +3658,12 @@ mod tests {
             ));
             assert_eq!(
                 table.query_target(session_id.as_str(), None).unwrap(),
-                (mode == SessionAffinityMode::Soft).then_some(target),
-                "only a hard pin is invalidated after all candidates are filtered"
+                (!invalidated).then_some(target),
+                "filtering other workers must preserve an excluded binding"
             );
             assert_eq!(
                 table.lease_count(session_id.as_str()),
-                (mode == SessionAffinityMode::Soft).then_some(0)
+                (!invalidated).then_some(0)
             );
             assert!(!router.selection.scheduler().has_request(&request_id));
             assert!(

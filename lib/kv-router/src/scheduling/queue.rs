@@ -1636,12 +1636,15 @@ impl<
             // The pin rule: a `Hard` session binding limits every policy to its
             // eligible target. An ineligible target selects normally. A `Soft`
             // binding reaches the policy as context only. Admission never narrows.
-            if let Some(affinity) = request.affinity
+            let hard_affinity_enforced = if let Some(affinity) = request.affinity
                 && affinity.is_hard()
                 && eligibility.affinity_target_is_eligible(&workers, affinity.target)
             {
                 eligibility = eligibility.with_affinity_target(affinity.target);
-            }
+                true
+            } else {
+                false
+            };
             self.selector
                 .select_worker(WorkerSelectionInput::configured(
                     &workers,
@@ -1649,6 +1652,12 @@ impl<
                     eligibility,
                     self.block_size,
                 ))
+                .map_err(|error| match error {
+                    KvSchedulerError::AllEligibleWorkersFiltered if hard_affinity_enforced => {
+                        KvSchedulerError::HardAffinityTargetFiltered
+                    }
+                    error => error,
+                })
                 .map(|selection| {
                     let non_max_overlap_selection = if request.mode.is_tracked()
                         && self.non_max_overlap_selection_observer.get().is_some()

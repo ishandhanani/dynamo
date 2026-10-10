@@ -72,6 +72,7 @@ fn scheduler_error_status(error: &KvSchedulerError) -> StatusCode {
     match error {
         KvSchedulerError::NoEndpoints
         | KvSchedulerError::AllEligibleWorkersFiltered
+        | KvSchedulerError::HardAffinityTargetFiltered
         | KvSchedulerError::SubscriberShutdown
         | KvSchedulerError::InitFailed(_) => StatusCode::SERVICE_UNAVAILABLE,
         KvSchedulerError::WorkerSelectionPolicy(_) => StatusCode::INTERNAL_SERVER_ERROR,
@@ -153,6 +154,10 @@ mod tests {
 
     #[test]
     fn filtered_workers_are_unavailable_not_overloaded() {
+        assert_eq!(
+            SelectionError::Scheduler(KvSchedulerError::HardAffinityTargetFiltered).status_code(),
+            StatusCode::SERVICE_UNAVAILABLE.as_u16()
+        );
         assert_eq!(
             SelectionError::Scheduler(KvSchedulerError::AllEligibleWorkersFiltered).status_code(),
             StatusCode::SERVICE_UNAVAILABLE.as_u16()
