@@ -363,6 +363,38 @@ impl From<AgentContextHeaderValues> for AgentContext {
     }
 }
 
+/// Convert ingress agent metadata into the selection service's transport-neutral input.
+pub fn to_selection_session_context(
+    context: &AgentContext,
+) -> dynamo_kv_router::services::selection::SelectionSessionContext {
+    use dynamo_kv_router::services::selection::{SelectionInputTrigger, SelectionSessionContext};
+    // Exhaustive: additive protocol fields must be considered by both routing hosts.
+    let AgentContext {
+        session_id,
+        parent_session_id,
+        session_final,
+        agent_headers,
+        input_trigger,
+    } = context;
+    SelectionSessionContext {
+        session_id: session_id.clone(),
+        parent_session_id: parent_session_id.clone(),
+        session_final: *session_final,
+        agent_headers: Some(agent_headers.clone()),
+        input_trigger: input_trigger.map(|trigger| match trigger {
+            InputTrigger::UserMessage => SelectionInputTrigger::UserMessage,
+            InputTrigger::ToolResult => SelectionInputTrigger::ToolResult,
+            InputTrigger::Other => SelectionInputTrigger::Other,
+        }),
+    }
+}
+
+pub fn to_worker_selection_session_context(
+    context: &AgentContext,
+) -> dynamo_kv_router::SessionContext {
+    to_selection_session_context(context).into()
+}
+
 pub const AGENT_CONTEXT_CONTEXT_KEY: &str = "dynamo.llm.agent_context";
 
 pub const SESSION_AFFINITY_CONTEXT_KEY: &str = "dynamo.llm.session_affinity";
@@ -581,17 +613,70 @@ pub trait NvExtProvider {
 /// are treated as absent so an empty canonical value can still fall back to a non-empty legacy
 /// value.
 pub fn request_cache_salt<R: NvExtProvider>(request: &R) -> Option<&str> {
-    request
-        .nvext()
-        .and_then(|nvext| nvext.cache_salt.as_deref())
+    resolve_cache_namespace(
+        None,
+        request
+            .nvext()
+            .and_then(|nvext| nvext.cache_salt.as_deref()),
+        request
+            .unsupported_fields()
+            .and_then(|fields| fields.get("cache_salt"))
+            .and_then(|value| value.as_str()),
+    )
+}
+
+/// Map already-resolved NvExt inputs into the routing hints consumed by both hosts.
+/// Header policy belongs at ingress; this function does not activate a runtime or
+/// copy prompt data. Keep the frontend's non-negative queue jump independent of
+/// the signed priority forwarded to the backend.
+pub fn request_routing_hints(
+    nvext: Option<&NvExt>,
+    lora_name: Option<String>,
+    cache_namespace: Option<String>,
+) -> Option<super::preprocessor::RoutingHints> {
+    use super::preprocessor::RoutingHints;
+
+    if nvext.is_none() && lora_name.is_none() && cache_namespace.is_none() {
+        return None;
+    }
+    let mut routing = RoutingHints {
+        lora_name,
+        cache_namespace,
+        ..Default::default()
+    };
+    if let Some(nvext) = nvext {
+        let resolved = resolve_request_priority(nvext.agent_hints.as_ref(), None, None);
+        routing.backend_instance_id = nvext.backend_instance_id;
+        routing.prefill_worker_id = nvext.prefill_worker_id;
+        routing.decode_worker_id = nvext.decode_worker_id;
+        routing.dp_rank = nvext.dp_rank;
+        routing.prefill_dp_rank = nvext.prefill_dp_rank;
+        routing.expected_output_tokens = nvext.agent_hints.as_ref().and_then(|h| h.osl);
+        routing.priority_jump = resolved
+            .priority
+            .map(|p| p.max(0) as f64)
+            .or(resolved.priority_jump);
+        routing.strict_priority = resolved.strict_priority;
+        routing.priority = resolved.priority;
+        routing.routing_constraints = nvext
+            .routing_constraints
+            .clone()
+            .map(routing_constraints_to_kv);
+    }
+    Some(routing)
+}
+
+/// Resolve cache identity without depending on an HTTP transport. The caller
+/// supplies the last non-empty, trimmed tenant header; body salts remain verbatim.
+pub fn resolve_cache_namespace<'a>(
+    tenant_header: Option<&'a str>,
+    nvext_cache_salt: Option<&'a str>,
+    top_level_cache_salt: Option<&'a str>,
+) -> Option<&'a str> {
+    tenant_header
         .filter(|salt| !salt.is_empty())
-        .or_else(|| {
-            request
-                .unsupported_fields()
-                .and_then(|fields| fields.get("cache_salt"))
-                .and_then(|value| value.as_str())
-                .filter(|salt| !salt.is_empty())
-        })
+        .or_else(|| nvext_cache_salt.filter(|salt| !salt.is_empty()))
+        .or_else(|| top_level_cache_salt.filter(|salt| !salt.is_empty()))
 }
 
 pub fn routing_constraints_to_kv(

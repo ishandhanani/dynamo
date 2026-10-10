@@ -370,33 +370,7 @@ fn start_approximate_lru_metrics(
     });
 }
 
-pub(crate) fn to_worker_selection_session_context(
-    context: &crate::protocols::common::extensions::AgentContext,
-) -> dynamo_kv_router::SessionContext {
-    use crate::protocols::common::extensions::{AgentContext, InputTrigger};
-    use dynamo_kv_router::{SessionContext, WorkerSelectionInputTrigger};
-
-    // Keep this exhaustive so a new wire-level field must be handled here.
-    let AgentContext {
-        session_id,
-        parent_session_id,
-        session_final,
-        agent_headers,
-        input_trigger,
-    } = context;
-    let input_trigger = input_trigger.map(|trigger| match trigger {
-        InputTrigger::UserMessage => WorkerSelectionInputTrigger::UserMessage,
-        InputTrigger::ToolResult => WorkerSelectionInputTrigger::ToolResult,
-        InputTrigger::Other => WorkerSelectionInputTrigger::Other,
-    });
-    SessionContext::new(
-        session_id.clone(),
-        parent_session_id.clone(),
-        *session_final,
-        input_trigger,
-    )
-    .with_agent_headers(agent_headers.clone())
-}
+pub(crate) use crate::protocols::common::extensions::to_worker_selection_session_context;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum KvEventSourceRequirement {
@@ -1696,6 +1670,17 @@ impl KvRouter {
         let configs = self.workers_with_configs.borrow();
         let config = configs.get(&worker_id)?;
         (config.data_parallel_size == 1).then_some(config.data_parallel_start_rank)
+    }
+
+    /// Whether discovery advertises this exact worker/rank, independent of health.
+    pub fn has_worker_rank(&self, worker: WorkerWithDpRank) -> bool {
+        self.workers_with_configs
+            .borrow()
+            .get(&worker.worker_id)
+            .is_some_and(|config| {
+                worker.dp_rank >= config.data_parallel_start_rank
+                    && worker.dp_rank - config.data_parallel_start_rank < config.data_parallel_size
+            })
     }
 
     pub(crate) async fn add_output_blocks_if_booking(

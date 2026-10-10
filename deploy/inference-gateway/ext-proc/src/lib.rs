@@ -22,6 +22,7 @@ pub mod picker;
 pub mod pod_discovery;
 pub mod proto;
 pub mod render_http;
+mod request;
 mod runner;
 pub mod selector;
 pub mod server;
@@ -39,7 +40,7 @@ pub use picker::{Endpoint, EndpointPicker, PickResult, RequestInfo, ResponseUsag
 pub use pod_discovery::{PodDiscovery, RawWorker};
 pub use render_http::RenderError;
 pub use runner::run;
-pub use selector::{OverlapSummary, SelectRequest, SelectResponse, Selector};
+pub use selector::{OverlapSummary, SelectResponse, Selector};
 pub use server::ExtProcServer;
 pub use sglang_renderer_client::SglangRendererClient;
 pub use topology_adapter::{RegistrationDefaults, TopologyAdapter};

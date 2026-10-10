@@ -40,7 +40,7 @@ pub struct HttpError {
 
 /// Frontend-owned HTTP disposition derived only from semantic error class.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum ClientErrorAction {
+pub enum ClientErrorAction {
     NoDelivery,
     Respond {
         status: StatusCode,
@@ -49,7 +49,7 @@ pub(crate) enum ClientErrorAction {
 }
 
 /// Total class-to-HTTP policy. Backends never select these status codes.
-pub(crate) fn http_action_for_class(class: dynamo_runtime::error::ErrorClass) -> ClientErrorAction {
+pub fn http_action_for_class(class: dynamo_runtime::error::ErrorClass) -> ClientErrorAction {
     use dynamo_runtime::error::ErrorClass;
 
     let response = |status, public_message| ClientErrorAction::Respond {

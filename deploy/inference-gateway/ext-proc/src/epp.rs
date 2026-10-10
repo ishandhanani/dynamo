@@ -16,13 +16,20 @@ use std::time::Duration;
 use anyhow::Result;
 use dashmap::DashMap;
 use dynamo_kv_router::config::{RouterConfigOverride, try_kv_router_config_from_dynamo_env};
-use dynamo_kv_router::protocols::{RoutingConstraints, WorkerWithDpRank};
+use dynamo_kv_router::protocols::WorkerWithDpRank;
 use dynamo_llm::discovery::{ModelManager, WORKER_TYPE_DECODE};
 use dynamo_llm::kv_router::prefill_router::PrefillReservation;
 use dynamo_llm::kv_router::{FindBestMatchOutcome, ManagedKvRouter, PrefillRouter};
 use dynamo_llm::model_card::ModelDeploymentCard;
-use dynamo_llm::preprocessor::OpenAIPreprocessor;
-use dynamo_llm::protocols::common::extensions::{NvExt, NvExtProvider, routing_constraints_to_kv};
+use dynamo_llm::preprocessor::{OpenAIPreprocessor, PreprocessedRequest};
+use dynamo_llm::protocols::common::extensions::{
+    agent_context_from_headers, apply_frontend_nvext_policy, to_worker_selection_session_context,
+};
+use dynamo_llm::protocols::common::input_trigger::{
+    classify_chat_request, classify_completion_request,
+};
+use dynamo_llm::protocols::common::preprocessor::RoutingHints;
+use dynamo_llm::protocols::common::timing::RequestPhase;
 use dynamo_llm::types::openai::completions::NvCreateCompletionRequest;
 use dynamo_protocols::types::Prompt;
 use dynamo_runtime::discovery::{
@@ -36,7 +43,7 @@ use uuid::Uuid;
 use crate::epp_router::{endpoint_in_subset, requested_policy_class};
 use crate::picker::{
     CacheSaltForwarding, Endpoint, EndpointPicker, PickError, PickResult, RequestInfo,
-    ResponseUsage, resolve_cache_namespace,
+    ResponseUsage, request_header_map,
 };
 
 const BOOKKEEPING_TIMEOUT: Duration = Duration::from_secs(5);
@@ -48,13 +55,9 @@ const DYN_KUBE_DISCOVERY_MODE: &str = "DYN_KUBE_DISCOVERY_MODE";
 /// for a `TextInput::Batch` of more than one prompt) — injecting them as
 /// `nvext.token_data` would apply prompt 1's tokens to every split of the
 /// batch. Chat and single/pre-tokenized completion requests are always safe.
-struct TokenizeResult {
-    tokens: Vec<u32>,
-    cache_namespace: Option<String>,
-    priority_jump: f64,
-    strict_priority: u32,
-    routing_constraints: RoutingConstraints,
-    tokens_safe_to_inject: bool,
+pub(crate) struct TokenizeResult {
+    pub(crate) request: PreprocessedRequest,
+    pub(crate) tokens_safe_to_inject: bool,
 }
 
 /// Validate `DYN_KUBE_DISCOVERY_MODE` and report whether *container* discovery
@@ -91,19 +94,6 @@ fn decode_router_config_override(is_disaggregated: bool) -> Option<RouterConfigO
     })
 }
 
-/// Resolve a typed request's body inputs together with the HTTP headers.
-fn cache_namespace_from_request<R: NvExtProvider>(
-    request: &R,
-    headers: &[(String, String)],
-) -> Option<String> {
-    let nvext_cache_salt = request.nvext().and_then(|n| n.cache_salt.as_deref());
-    let top_level_cache_salt = request
-        .unsupported_fields()
-        .and_then(|fields| fields.get("cache_salt"))
-        .and_then(|value| value.as_str());
-    resolve_cache_namespace(headers, nvext_cache_salt, top_level_cache_salt)
-}
-
 /// Name of the inference-serving HTTP port on a Dynamo worker pod.
 const DYNAMO_CONTAINER_PORT_NAME: &str = "http";
 
@@ -120,6 +110,7 @@ pub struct Router {
     worker_index: Arc<RwLock<WorkerEndpointIndex>>,
     pod_store_ready: Arc<AtomicBool>,
     served_model: String,
+    nvext_enabled: bool,
 }
 
 /// Remove and release a booking once. Both response lifecycle callbacks use
@@ -252,13 +243,13 @@ impl Router {
             worker_index,
             pod_store_ready,
             served_model: model_name,
+            nvext_enabled: !dynamo_runtime::config::env_is_truthy("DYN_DISABLE_FRONTEND_NVEXT"),
         })
     }
 
     /// The model this pool serves, from the discovered model card.
     ///
-    /// Authoritative, unlike the `model` field of a request body, which the
-    /// router accepts without checking.
+    /// Requests must name this model so preprocessing and worker identity agree.
     pub fn served_model(&self) -> &str {
         &self.served_model
     }
@@ -275,138 +266,14 @@ impl Router {
         &self,
         request_json: &str,
         headers: &[(String, String)],
-    ) -> Result<TokenizeResult> {
-        // Discriminating on a borrowed `Value` costs one scan plus the tree it
-        // allocates; `from_value` then consumes that tree rather than re-reading
-        // the body.
-        //
-        // A probe struct of `IgnoredAny` fields was tried here and reverted. It
-        // allocates nothing, but `IgnoredAny` does not skip -- serde_json still
-        // lexes every byte to find each value's end -- so the body ends up
-        // tokenized end to end twice, and on large bodies the scan dominates the
-        // allocation it saved. Measured, release build, 200 iterations, chat body
-        // with one large user message:
-        //
-        //     467 B    Value 1.9us   IgnoredAny 1.1us   (probe wins)
-        //      40 KB   Value 6.7us   IgnoredAny 8.5us
-        //     160 KB   Value 19.7us  IgnoredAny 28.4us  (probe ~44% worse)
-        //
-        // Inference bodies skew large, so the crossover lands on the wrong side.
-        // The real fix is not to read the body at all: this is
-        // `/v1/chat/completions` vs `/v1/completions`, and the `:path`
-        // pseudo-header would settle it in O(1) -- `req.headers` is already in
-        // scope at the call site. That needs confirmation that Envoy's ext_proc
-        // delivers pseudo-headers through to `ctx.request_headers` before being
-        // relied on, which is why it is not done here.
-        let value: serde_json::Value = serde_json::from_str(request_json)?;
-        let has_messages = value
-            .get("messages")
-            .and_then(|m| m.as_array())
-            .is_some_and(|messages| !messages.is_empty());
-        if !has_messages && value.get("prompt").is_some() {
-            let request: NvCreateCompletionRequest = serde_json::from_value(value)?;
-            return self.tokenize_completion(request, headers).await;
-        }
-        let request: dynamo_llm::types::openai::chat_completions::NvCreateChatCompletionRequest =
-            serde_json::from_value(value)?;
-        self.tokenize_chat(&request, headers)
-    }
-
-    /// Tokenize a `/v1/chat/completions` body via the chat template.
-    fn tokenize_chat(
-        &self,
-        request: &dynamo_llm::types::openai::chat_completions::NvCreateChatCompletionRequest,
-        headers: &[(String, String)],
-    ) -> Result<TokenizeResult> {
-        // TODO(epp-request-routing): Reuse shared preprocessing so expected output
-        // length, LoRA, pins, sessions, topology constraints, additional protocols,
-        // and multimodal routing hashes are preserved.
-        let priority_jump = extract_priority_jump(request.nvext.as_ref());
-        let strict_priority = extract_strict_priority(request.nvext.as_ref());
-        let routing_constraints = extract_routing_constraints(request.nvext.as_ref());
-        let cache_namespace = cache_namespace_from_request(request, headers);
-
-        let encoding = match self.preprocessor.apply_template(request)? {
-            Some(prompt) => self.preprocessor.tokenize_rendered_prompt(&prompt)?,
-            None => self.preprocessor.tokenize("")?,
-        };
-        Ok(TokenizeResult {
-            tokens: encoding.token_ids().to_vec(),
-            cache_namespace,
-            priority_jump,
-            strict_priority,
-            routing_constraints,
-            tokens_safe_to_inject: true,
-        })
-    }
-
-    /// Tokenize a `/v1/completions` body.
-    ///
-    /// Pre-tokenized (integer) prompts route directly on their token IDs, while text prompts
-    /// are tokenized as a raw completion prompt (no chat template) via the
-    /// same [`OpenAIPreprocessor::gather_tokens`] path the backend uses for a
-    /// live `/v1/completions` request, so the tokens computed here for
-    /// routing/injection are identical to what the backend would compute on
-    /// its own. Batched prompts route on the first entry, since KV prefix
-    /// locality is computed per prompt — but for a multi-prompt text batch
-    /// those tokens cover only prompt 1, so they are not safe to inject as
-    /// `nvext.token_data` (see [`TokenizeResult`]); this matches
-    /// `gather_tokens`'s own refusal to trust `token_data` for a
-    /// `TextInput::Batch` of more than one prompt.
-    async fn tokenize_completion(
-        &self,
-        request: NvCreateCompletionRequest,
-        headers: &[(String, String)],
-    ) -> Result<TokenizeResult> {
-        let priority_jump = extract_priority_jump(request.nvext.as_ref());
-        let strict_priority = extract_strict_priority(request.nvext.as_ref());
-        let routing_constraints = extract_routing_constraints(request.nvext.as_ref());
-        let cache_namespace = cache_namespace_from_request(&request, headers);
-
-        let pre_tokenized = completion_prompt_token_ids(&request.inner.prompt);
-        let (tokens, tokens_safe_to_inject) = match pre_tokenized {
-            Some(ids) => (ids, true),
-            None => {
-                // Read the injection verdict before the request is consumed.
-                let safe = completion_text_tokens_safe_to_inject(&request.inner.prompt);
-                (self.tokenize_completion_text(request).await?, safe)
-            }
-        };
-
-        Ok(TokenizeResult {
-            tokens,
-            cache_namespace,
-            priority_jump,
-            strict_priority,
-            routing_constraints,
-            tokens_safe_to_inject,
-        })
-    }
-
-    /// Tokenize `text` as a raw `/v1/completions` prompt — no chat template —
-    /// via [`OpenAIPreprocessor::gather_tokens`], the same tokenization path
-    /// the backend runs for a live completions request. Keeps the
-    /// `nvext.token_data` injected downstream identical to what the backend
-    /// would have tokenized itself, so preempting backend tokenization does
-    /// not change the generated output.
-    ///
-    /// Consumes `request` (already parsed from the client body) with `prompt`
-    /// replaced by the routing text, instead of serializing a synthetic body
-    /// and re-parsing it. Takes ownership so the prompt is moved through rather
-    /// than copied: cloning the request here duplicated every field including
-    /// the full prompt -- for a `StringArray` batch, every prompt in the batch
-    /// -- only for the next line to overwrite the one field that was expensive.
-    async fn tokenize_completion_text(
-        &self,
-        mut request: NvCreateCompletionRequest,
-    ) -> Result<Vec<u32>> {
-        let prompt = std::mem::replace(&mut request.inner.prompt, Prompt::String(String::new()));
-        request.inner.prompt = Prompt::String(completion_prompt_routing_text(prompt));
-        let (tokens, _annotations) = self
-            .preprocessor
-            .gather_tokens(&request, None, None)
-            .await?;
-        Ok(tokens)
+    ) -> Result<TokenizeResult, PickError> {
+        prepare_local_request(
+            &self.preprocessor,
+            request_json,
+            headers,
+            self.nvext_enabled,
+        )
+        .await
     }
 
     /// Resolve a worker_id to a pod endpoint address (ip:port).
@@ -468,91 +335,69 @@ impl Router {
             .collect()
     }
 
-    /// Atomically select and reserve a prefill worker.
-    ///
-    /// Queue priorities are forwarded to the prefill scheduler. `priority_jump`
-    /// adjusts the policy score, while `strict_priority` selects the primary
-    /// tier. `policy_class` names the scheduling policy class the reservation
-    /// queues under. `routing_constraints` carries the request's
-    /// required/preferred taints (lifted from `nvext.routing_constraints`); a
-    /// hard `required_taints` mismatch excludes a worker from selection.
-    #[expect(clippy::too_many_arguments)]
-    pub async fn route_prefill(
+    /// The existing prefill reservation host keeps ownership of its booking.
+    async fn route_prefill(
         &self,
         reservation_id: &str,
-        tokens: &[u32],
-        cache_namespace: Option<String>,
-        priority_jump: f64,
-        strict_priority: u32,
+        request: &PreprocessedRequest,
         policy_class: Option<String>,
         allowed_worker_ids: Option<HashSet<u64>>,
-        routing_constraints: RoutingConstraints,
     ) -> Result<PrefillReservation> {
+        let empty = RoutingHints::default();
+        let routing = request.routing.as_ref().unwrap_or(&empty);
+        let (tokens, block_mm_infos) = request.block_mm_routing_info();
         self.prefill_router
             .reserve_prefill_worker(
                 reservation_id,
                 tokens,
-                None,
-                None,
-                cache_namespace,
-                priority_jump,
-                strict_priority,
+                block_mm_infos,
+                routing.lora_name.clone(),
+                routing.cache_namespace.clone(),
+                routing.priority_jump.unwrap_or_default(),
+                routing.strict_priority.unwrap_or_default(),
                 policy_class,
                 allowed_worker_ids,
-                routing_constraints,
+                routing.routing_constraints.clone().unwrap_or_default(),
             )
             .await
-            .map_err(|e| anyhow::anyhow!("Prefill reservation failed: {e}"))
     }
 
-    /// Route a decode request. Returns (WorkerWithDpRank, overlap_blocks).
-    ///
-    /// Queue priorities are forwarded to the decode scheduler. `priority_jump`
-    /// adjusts the policy score, while `strict_priority` selects the primary
-    /// tier. `policy_class` names the scheduling policy class the request queues
-    /// under. `routing_constraints` carries the request's required/preferred
-    /// taints (lifted from `nvext.routing_constraints`); a hard `required_taints`
-    /// mismatch excludes a worker from selection.
-    ///
-    /// A per-class queue limit rejection surfaces as an error here, the same as
-    /// it does for the integrated frontend.
-    #[allow(clippy::too_many_arguments)]
-    pub async fn route_decode(
+    async fn route_decode(
         &self,
-        tokens: &[u32],
+        request: &PreprocessedRequest,
         is_disaggregated: bool,
-        cache_namespace: Option<String>,
-        priority_jump: f64,
-        strict_priority: u32,
         policy_class: Option<String>,
         allowed_worker_ids: Option<HashSet<u64>>,
-        routing_constraints: RoutingConstraints,
+        pinned_worker: Option<WorkerWithDpRank>,
     ) -> Result<(WorkerWithDpRank, u32)> {
         let config_override = decode_router_config_override(is_disaggregated);
-
+        let empty = RoutingHints::default();
+        let routing = request.routing.as_ref().unwrap_or(&empty);
+        let (tokens, block_mm_infos) = request.block_mm_routing_info();
         let outcome = self
             .decode_router
             .find_best_match_details_with_policy_class(
                 None,
                 tokens,
-                None,
+                block_mm_infos,
                 config_override.as_ref(),
                 false,
                 false,
-                None,
-                cache_namespace,
-                priority_jump,
-                strict_priority,
+                routing.lora_name.clone(),
+                routing.cache_namespace.clone(),
+                routing.priority_jump.unwrap_or_default(),
+                routing.strict_priority.unwrap_or_default(),
                 policy_class,
-                None,
-                None,
-                None,
+                request
+                    .agent_context
+                    .as_ref()
+                    .map(to_worker_selection_session_context),
+                routing.expected_output_tokens,
+                pinned_worker,
                 allowed_worker_ids,
-                routing_constraints,
+                routing.routing_constraints.clone().unwrap_or_default(),
             )
-            .await
-            .map_err(|e| anyhow::anyhow!("Decode query failed: {:?}", e))?;
-
+            .await?;
         match outcome {
             FindBestMatchOutcome::Routed {
                 worker,
@@ -565,45 +410,43 @@ impl Router {
         }
     }
 
-    /// Register a request with the decode router for bookkeeping.
-    pub async fn add_request(
+    /// Book the same prompt identity and output-length estimate that selection used.
+    async fn add_request(
         &self,
         request_id: &str,
-        tokens: &[u32],
-        worker_id: u64,
-        dp_rank: u32,
+        request: &PreprocessedRequest,
+        worker: WorkerWithDpRank,
         is_disaggregated: bool,
-        cache_namespace: Option<String>,
     ) -> Result<()> {
-        let decode_router = self.decode_router.clone();
-        let request_id = request_id.to_owned();
-        let tokens = tokens.to_vec();
-
+        let empty = RoutingHints::default();
+        let routing = request.routing.as_ref().unwrap_or(&empty);
+        let (tokens, block_mm_infos) = request.block_mm_routing_info();
         tokio::time::timeout(BOOKKEEPING_TIMEOUT, async {
-            let worker = WorkerWithDpRank::new(worker_id, dp_rank);
-            let router_config_override = decode_router_config_override(is_disaggregated);
-
-            let overlap_blocks = decode_router
-                .get_overlap_blocks(&tokens, None, worker, None, cache_namespace.as_deref())
-                .await
-                .map_err(|e| anyhow::anyhow!("get_overlap_blocks failed: {e:?}"))?;
-
-            let cached_tokens = overlap_blocks as usize * decode_router.block_size() as usize;
-
-            decode_router
-                .add_request(
-                    request_id,
-                    &tokens,
-                    None,
-                    cached_tokens,
-                    None,
+            let config_override = decode_router_config_override(is_disaggregated);
+            let overlap_blocks = self
+                .decode_router
+                .get_overlap_blocks(
+                    tokens,
+                    block_mm_infos,
                     worker,
-                    None,
-                    cache_namespace,
-                    router_config_override.as_ref(),
+                    routing.lora_name.as_deref(),
+                    routing.cache_namespace.as_deref(),
+                )
+                .await?;
+            let cached_tokens = overlap_blocks as usize * self.decode_router.block_size() as usize;
+            self.decode_router
+                .add_request(
+                    request_id.to_owned(),
+                    tokens,
+                    block_mm_infos,
+                    cached_tokens,
+                    routing.expected_output_tokens,
+                    worker,
+                    routing.lora_name.clone(),
+                    routing.cache_namespace.clone(),
+                    config_override.as_ref(),
                 )
                 .await;
-
             Ok(())
         })
         .await
@@ -657,67 +500,143 @@ impl Router {
     }
 }
 
-/// Extract the router queue `priority_jump` from a request's
-/// `nvext.agent_hints.priority`.
-///
-/// Negative priorities are clamped to `0.0` so a low-priority hint never
-/// pushes a request behind FCFS arrivals (matches the standalone preprocessor
-/// in `lib/llm/src/preprocessor.rs`). Falls back to the deprecated
-/// `latency_sensitivity` alias for callers still on the old field name.
-/// Returns `0.0` when `nvext` is absent. Shared by the chat and completion
-/// paths since both carry the same `nvext` block.
-fn extract_priority_jump(nvext: Option<&NvExt>) -> f64 {
-    nvext
-        .and_then(|n| n.agent_hints.as_ref())
-        .and_then(|h| {
-            h.priority
-                .map(|p| p.max(0) as f64)
-                .or(h.latency_sensitivity)
-        })
-        .unwrap_or(0.0)
-}
-
-fn extract_strict_priority(nvext: Option<&NvExt>) -> u32 {
-    nvext
-        .and_then(|n| n.agent_hints.as_ref())
-        .and_then(|h| h.strict_priority)
-        .unwrap_or(0)
-}
-
-/// Extract the router's `RoutingConstraints` from a request's
-/// `nvext.routing_constraints`.
-///
-/// A request carrying `required_taints` must reach the same hard
-/// placement check the replaced shared/FFI preprocessing applied
-/// (`lib/llm/src/preprocessor.rs`); dropping this here would let a request
-/// with a hard constraint land on a worker that does not satisfy it.
-/// Returns an empty (no-op) `RoutingConstraints` when absent. Shared by the
-/// chat and completion paths since both carry the same `nvext` block.
-fn extract_routing_constraints(nvext: Option<&NvExt>) -> RoutingConstraints {
-    nvext
-        .and_then(|n| n.routing_constraints.clone())
-        .map(routing_constraints_to_kv)
-        .unwrap_or_default()
-}
-
-/// Token IDs for a pre-tokenized completion prompt.
-///
-/// Integer prompts route directly on
-/// their token IDs. Batched token prompts route on the first non-empty entry,
-/// since KV prefix locality is computed per prompt. Returns `None` for text
-/// prompts, which must go through the tokenizer instead.
-fn completion_prompt_token_ids(prompt: &Prompt) -> Option<Vec<u32>> {
-    match prompt {
-        Prompt::IntegerArray(ids) => Some(ids.clone()),
-        Prompt::ArrayOfIntegerArray(batches) => Some(
-            batches
-                .iter()
-                .find(|ids| !ids.is_empty())
-                .cloned()
-                .unwrap_or_default(),
-        ),
-        Prompt::String(_) | Prompt::StringArray(_) => None,
+/// Local preparation remains the frontend's preprocessor, with only the EPP's
+/// forwarding/injection decision retained by this adapter.
+pub(crate) async fn prepare_local_request(
+    preprocessor: &OpenAIPreprocessor,
+    request_json: &str,
+    headers: &[(String, String)],
+    nvext_enabled: bool,
+) -> Result<TokenizeResult, PickError> {
+    let headers_map = request_header_map(headers)?;
+    let value: serde_json::Value = serde_json::from_str(request_json)
+        .map_err(|_| PickError::InvalidRequest("invalid request body".into()))?;
+    let completion = value.get("prompt").is_some();
+    if completion && value.get("messages").is_some() {
+        return Err(PickError::InvalidRequest(
+            "supply messages or prompt, not both".into(),
+        ));
     }
+    if let Some((_, path)) = headers.iter().find(|(name, _)| name == ":path") {
+        let expected = if completion {
+            "/v1/completions"
+        } else {
+            "/v1/chat/completions"
+        };
+        if path.split('?').next() != Some(expected) {
+            return Err(PickError::InvalidRequest(
+                "request body does not match a supported completion endpoint".into(),
+            ));
+        }
+    }
+    let (mut preprocessed, input_trigger, tokens_safe_to_inject) = if completion {
+        let mut request: NvCreateCompletionRequest = serde_json::from_value(value)
+            .map_err(|_| PickError::InvalidRequest("invalid completion request".into()))?;
+        if request.inner.prompt_embeds.is_some() {
+            return Err(PickError::InvalidRequest(
+                "EPP cannot route prompt embeddings without token metadata".into(),
+            ));
+        }
+        request.nvext =
+            apply_frontend_nvext_policy(request.nvext.take(), &headers_map, nvext_enabled);
+        let safe = completion_text_tokens_safe_to_inject(&request.inner.prompt)
+            && !matches!(&request.inner.prompt, Prompt::ArrayOfIntegerArray(prompts) if prompts.len() > 1);
+        if !safe
+            && request
+                .nvext
+                .as_ref()
+                .is_some_and(|ext| ext.token_data.is_some())
+        {
+            return Err(PickError::InvalidRequest(
+                "nvext.token_data is ambiguous for a multi-prompt completion".into(),
+            ));
+        }
+        // Retain runtime EPP's first-prompt routing policy for batches. Injection
+        // must remain disabled when those tokens do not cover the whole request.
+        if matches!(request.inner.prompt, Prompt::ArrayOfIntegerArray(_)) {
+            let Prompt::ArrayOfIntegerArray(prompts) =
+                std::mem::replace(&mut request.inner.prompt, Prompt::IntegerArray(Vec::new()))
+            else {
+                unreachable!()
+            };
+            request.inner.prompt = Prompt::IntegerArray(
+                prompts
+                    .into_iter()
+                    .find(|ids| !ids.is_empty())
+                    .unwrap_or_default(),
+            );
+        } else if matches!(request.inner.prompt, Prompt::StringArray(_)) {
+            let prompt =
+                std::mem::replace(&mut request.inner.prompt, Prompt::String(String::new()));
+            request.inner.prompt = Prompt::String(completion_prompt_routing_text(prompt));
+        }
+        let input_trigger = classify_completion_request(&request);
+        let (preprocessed, _) = preprocessor
+            .preprocess_completion_request(&request, None, None)
+            .await
+            .map_err(local_preprocessing_error)?;
+        (preprocessed, input_trigger, safe)
+    } else {
+        let mut request: dynamo_llm::types::openai::chat_completions::NvCreateChatCompletionRequest = serde_json::from_value(value).map_err(|_| PickError::InvalidRequest("invalid chat request".into()))?;
+        request.nvext =
+            apply_frontend_nvext_policy(request.nvext.take(), &headers_map, nvext_enabled);
+        let input_trigger = classify_chat_request(&request);
+        let (preprocessed, _, _) = preprocessor
+            .preprocess_request(&request, None)
+            .await
+            .map_err(local_preprocessing_error)?;
+        (preprocessed, input_trigger, true)
+    };
+    if let Some(mut context) = agent_context_from_headers(&headers_map) {
+        context.input_trigger = Some(input_trigger);
+        preprocessed.agent_context = Some(context);
+    }
+    let routing = preprocessed.routing.as_ref();
+    if routing.is_some_and(|routing| {
+        routing.prefill_worker_id.is_some() || routing.prefill_dp_rank.is_some()
+    }) {
+        return Err(PickError::InvalidRequest(
+            "runtime EPP does not support explicit prefill pins".into(),
+        ));
+    }
+    if routing.is_some_and(|routing| {
+        routing.dp_rank.is_some() && routing.worker_pin(RequestPhase::Aggregated).is_none()
+    }) {
+        return Err(PickError::InvalidRequest(
+            "dp_rank requires an explicit worker pin".into(),
+        ));
+    }
+    let has_media = preprocessed
+        .multi_modal_data
+        .as_ref()
+        .is_some_and(|data| !data.is_empty());
+    if has_media && preprocessed.mm_routing_info.is_none() {
+        return Err(PickError::InvalidRequest(
+            "local preprocessor did not provide multimodal routing hashes".into(),
+        ));
+    }
+    Ok(TokenizeResult {
+        request: preprocessed,
+        tokens_safe_to_inject: tokens_safe_to_inject && !has_media,
+    })
+}
+
+fn local_preprocessing_error(error: anyhow::Error) -> PickError {
+    use dynamo_llm::http::service::error::{ClientErrorAction, HttpError, http_action_for_class};
+    let semantic = dynamo_runtime::error::DynamoError::from(error.as_ref());
+    tracing::warn!(error_class = ?semantic.class(), "Local request preprocessing failed");
+    let (code, message) = match http_action_for_class(semantic.class()) {
+        ClientErrorAction::Respond {
+            status,
+            public_message,
+        } => (status.as_u16(), public_message),
+        // An ext-proc stream that has been cancelled is normally already dropped.
+        ClientErrorAction::NoDelivery => (500, "Request preprocessing cancelled"),
+    };
+    PickError::RequestPreparation(HttpError {
+        code,
+        message: message.to_owned(),
+    })
 }
 
 /// Routing text for a text completion prompt (the first prompt in a batch).
@@ -1450,17 +1369,40 @@ impl EndpointPicker for Router {
         let body_str = std::str::from_utf8(&req.body)
             .map_err(|e| PickError::InvalidRequest(format!("Invalid UTF-8: {e}")))?;
 
+        if req.model != self.served_model {
+            return Err(PickError::InvalidRequest(
+                "request model must match the discovered EPP model".into(),
+            ));
+        }
         let TokenizeResult {
-            tokens,
-            cache_namespace,
-            priority_jump,
-            strict_priority,
-            routing_constraints,
+            request,
             tokens_safe_to_inject,
-        } = self
-            .tokenize(body_str, &req.headers)
-            .await
-            .map_err(|e| PickError::InvalidRequest(e.to_string()))?;
+        } = self.tokenize(body_str, &req.headers).await?;
+        let cache_namespace = request
+            .routing
+            .as_ref()
+            .and_then(|routing| routing.cache_namespace.clone());
+        let pinned_worker = request
+            .routing
+            .as_ref()
+            .and_then(|routing| routing.worker_pin(RequestPhase::Aggregated))
+            .map(|(worker_id, rank)| {
+                let rank = rank
+                    .or_else(|| self.decode_router.unique_dp_rank_for_worker(worker_id))
+                    .ok_or_else(|| {
+                        PickError::InvalidRequest(
+                            "worker pin requires a known worker and an unambiguous dp_rank".into(),
+                        )
+                    })?;
+                let worker = WorkerWithDpRank::new(worker_id, rank);
+                if !self.decode_router.has_worker_rank(worker) {
+                    return Err(PickError::InvalidRequest(
+                        "worker pin does not identify a known worker/rank".into(),
+                    ));
+                }
+                Ok(worker)
+            })
+            .transpose()?;
         let policy_class = requested_policy_class(&req.headers)?;
         let reservation_id = Uuid::new_v4().to_string();
 
@@ -1471,13 +1413,9 @@ impl EndpointPicker for Router {
         let prefill_booking = self
             .route_prefill(
                 &format!("epp-prefill/{reservation_id}"),
-                &tokens,
-                cache_namespace.clone(),
-                priority_jump,
-                strict_priority,
+                &request,
                 policy_class.clone(),
                 allowed_worker_ids.clone(),
-                routing_constraints.clone(),
             )
             .await;
 
@@ -1494,14 +1432,11 @@ impl EndpointPicker for Router {
 
         let (decode_worker, _overlap) = self
             .route_decode(
-                &tokens,
+                &request,
                 is_disaggregated,
-                cache_namespace.clone(),
-                priority_jump,
-                strict_priority,
                 policy_class,
                 allowed_worker_ids,
-                routing_constraints,
+                pinned_worker,
             )
             .await
             .map_err(|e| PickError::RoutingFailed(e.to_string()))?;
@@ -1533,14 +1468,7 @@ impl EndpointPicker for Router {
 
         // Register the request with the router for bookkeeping (load tracking).
         if let Err(e) = self
-            .add_request(
-                &reservation_id,
-                &tokens,
-                decode_worker.worker_id,
-                decode_worker.dp_rank,
-                is_disaggregated,
-                cache_namespace.clone(),
-            )
+            .add_request(&reservation_id, &request, decode_worker, is_disaggregated)
             .await
         {
             tracing::warn!(
@@ -1600,8 +1528,8 @@ impl EndpointPicker for Router {
             dp_rank = decode_worker.dp_rank,
             is_disaggregated,
             endpoint = %endpoint,
-            token_count = tokens.len(),
-            priority_jump,
+            token_count = request.token_ids.len(),
+            priority_jump = request.routing.as_ref().and_then(|routing| routing.priority_jump).unwrap_or_default(),
             model = %req.model,
             header_count = headers.len(),
             "Picked endpoint"
@@ -1615,7 +1543,7 @@ impl EndpointPicker for Router {
         // backend applies nvext.token_data to every split (see
         // `TokenizeResult`), so omit it and let the backend tokenize each
         // prompt itself.
-        let token_ids = tokens_safe_to_inject.then_some(tokens);
+        let token_ids = tokens_safe_to_inject.then(|| request.token_ids.as_ref().clone());
 
         Ok(PickResult {
             endpoint,
@@ -1673,10 +1601,41 @@ impl EndpointPicker for Router {
 
 #[cfg(test)]
 mod tests {
+    fn test_routing_hints(
+        nvext: Option<&dynamo_llm::protocols::common::extensions::NvExt>,
+    ) -> dynamo_llm::protocols::common::preprocessor::RoutingHints {
+        dynamo_llm::protocols::common::extensions::request_routing_hints(nvext, None, None)
+            .unwrap_or_default()
+    }
+
     use std::sync::{Arc, atomic::Ordering};
 
     use super::*;
     use k8s_openapi::api::core::v1::Pod;
+
+    #[test]
+    fn preprocessing_errors_preserve_class_without_exposing_diagnostics() {
+        use dynamo_runtime::error::{DynamoError, ErrorClass};
+
+        for (class, status) in [
+            (ErrorClass::InvalidRequest, 400),
+            (ErrorClass::Internal, 500),
+            (ErrorClass::Unavailable, 503),
+            (ErrorClass::DeadlineExceeded, 504),
+        ] {
+            let error = DynamoError::builder()
+                .class(class)
+                .message("private backend diagnostic")
+                .build();
+            let PickError::RequestPreparation(error) =
+                local_preprocessing_error(anyhow::Error::new(error).context("private URL"))
+            else {
+                panic!("expected classified preprocessing error")
+            };
+            assert_eq!(error.code, status);
+            assert!(!error.message.contains("private"));
+        }
+    }
 
     #[test]
     fn global_namespace_discovery_does_not_restrict_worker_pod_labels() {
@@ -1795,7 +1754,12 @@ mod tests {
                 }"#,
             )
             .unwrap();
-        assert_eq!(extract_priority_jump(with_priority.nvext.as_ref()), 5.0);
+        assert_eq!(
+            test_routing_hints(with_priority.nvext.as_ref())
+                .priority_jump
+                .unwrap_or_default(),
+            5.0
+        );
 
         let without_nvext: dynamo_llm::types::openai::chat_completions::NvCreateChatCompletionRequest =
             serde_json::from_str(
@@ -1805,7 +1769,12 @@ mod tests {
                 }"#,
             )
             .unwrap();
-        assert_eq!(extract_priority_jump(without_nvext.nvext.as_ref()), 0.0);
+        assert_eq!(
+            test_routing_hints(without_nvext.nvext.as_ref())
+                .priority_jump
+                .unwrap_or_default(),
+            0.0
+        );
     }
 
     #[test]
@@ -1819,7 +1788,12 @@ mod tests {
                 }"#,
             )
             .unwrap();
-        assert_eq!(extract_strict_priority(with_priority.nvext.as_ref()), 9);
+        assert_eq!(
+            test_routing_hints(with_priority.nvext.as_ref())
+                .strict_priority
+                .unwrap_or_default(),
+            9
+        );
 
         let without_nvext: dynamo_llm::types::openai::chat_completions::NvCreateChatCompletionRequest =
             serde_json::from_str(
@@ -1829,7 +1803,12 @@ mod tests {
                 }"#,
             )
             .unwrap();
-        assert_eq!(extract_strict_priority(without_nvext.nvext.as_ref()), 0);
+        assert_eq!(
+            test_routing_hints(without_nvext.nvext.as_ref())
+                .strict_priority
+                .unwrap_or_default(),
+            0
+        );
     }
 
     /// A `/v1/completions` request carries the same `nvext` block as chat, so
@@ -1844,8 +1823,18 @@ mod tests {
             }"#,
         )
         .unwrap();
-        assert_eq!(extract_priority_jump(request.nvext.as_ref()), 4.0);
-        assert_eq!(extract_strict_priority(request.nvext.as_ref()), 7);
+        assert_eq!(
+            test_routing_hints(request.nvext.as_ref())
+                .priority_jump
+                .unwrap_or_default(),
+            4.0
+        );
+        assert_eq!(
+            test_routing_hints(request.nvext.as_ref())
+                .strict_priority
+                .unwrap_or_default(),
+            7
+        );
     }
 
     /// Proves the hard-constraint feature: `nvext.routing_constraints.
@@ -1864,7 +1853,9 @@ mod tests {
                 }"#,
             )
             .unwrap();
-        let constraints = extract_routing_constraints(with_constraints.nvext.as_ref());
+        let constraints = test_routing_hints(with_constraints.nvext.as_ref())
+            .routing_constraints
+            .unwrap_or_default();
         assert!(constraints.has_hard_constraints());
         assert!(constraints.required_taints.contains("gpu=h100"));
 
@@ -1876,7 +1867,12 @@ mod tests {
                 }"#,
             )
             .unwrap();
-        assert!(extract_routing_constraints(without_nvext.nvext.as_ref()).is_empty());
+        assert!(
+            test_routing_hints(without_nvext.nvext.as_ref())
+                .routing_constraints
+                .unwrap_or_default()
+                .is_empty()
+        );
     }
 
     /// A `/v1/completions` request carries the same `nvext` block as chat, so
@@ -1892,12 +1888,14 @@ mod tests {
             }"#,
         )
         .unwrap();
-        let constraints = extract_routing_constraints(request.nvext.as_ref());
+        let constraints = test_routing_hints(request.nvext.as_ref())
+            .routing_constraints
+            .unwrap_or_default();
         assert!(constraints.required_taints.contains("zone=us-east-1a"));
     }
 
     /// Regression test for a text `/v1/completions` prompt: the tokens
-    /// `Router::tokenize_completion_text` computes for routing/injection must
+    /// the local EPP adapter computes for routing/injection must
     /// be byte-identical to what `OpenAIPreprocessor::gather_tokens` produces
     /// for a real client-shaped completions request with the same prompt —
     /// i.e. ext-proc must reuse the backend's raw completion tokenization,
@@ -1920,16 +1918,12 @@ mod tests {
 
         let text = "The capital of France is";
 
-        // Mirrors what `Router::tokenize_completion_text` sends to
-        // `gather_tokens`: the client's own request with `prompt` overwritten.
-        let ext_proc_request: NvCreateCompletionRequest = serde_json::from_str(
-            &serde_json::json!({"model": "default", "prompt": text}).to_string(),
-        )
-        .unwrap();
-        let (ext_proc_tokens, _) = preprocessor
-            .gather_tokens(&ext_proc_request, None, None)
+        let request_body = serde_json::json!({"model": "default", "prompt": text}).to_string();
+        let prepared = prepare_local_request(&preprocessor, &request_body, &[], true)
             .await
-            .expect("gather_tokens on ext-proc's minimal completion request");
+            .unwrap();
+        let ext_proc_tokens = prepared.request.token_ids.as_ref().clone();
+        assert!(prepared.tokens_safe_to_inject);
 
         // A real client-shaped `/v1/completions` request for the same prompt,
         // tokenized via the same path the backend runs on a live request.
@@ -1989,10 +1983,8 @@ mod tests {
     /// tokens must never be injected as `nvext.token_data`: the backend
     /// applies injected `token_data` to every split of the batch, so
     /// injecting prompt 1's tokens would silently run prompt 2 (and beyond)
-    /// on prompt 1's tokens instead of its own. This exercises the same
-    /// `completion_prompt_routing_text` -> `gather_tokens` ->
-    /// `completion_text_tokens_safe_to_inject` -> `token_ids` gating chain
-    /// that `Router::tokenize_completion` and `Router::pick` run, end to end.
+    /// on prompt 1's tokens instead of its own. Exercise production local preparation
+    /// and the injection verdict consumed by `Router::pick`.
     #[tokio::test]
     async fn multi_prompt_text_batch_tokens_are_not_injected_as_token_data() {
         let mdc = ModelDeploymentCard::load_from_disk(
@@ -2008,34 +2000,12 @@ mod tests {
 
         let prompt1 = "The capital of France is";
         let prompt2 = "The capital of Japan is";
-        let batch_request: NvCreateCompletionRequest = serde_json::from_str(
-            &serde_json::json!({"model": "default", "prompt": [prompt1, prompt2]}).to_string(),
-        )
-        .unwrap();
-
-        // Mirrors `Router::tokenize_completion`: route on prompt 1's tokens.
-        let routing_text = completion_prompt_routing_text(batch_request.inner.prompt.clone());
-        assert_eq!(routing_text, prompt1);
-        let routing_request: NvCreateCompletionRequest = serde_json::from_str(
-            &serde_json::json!({"model": "default", "prompt": routing_text}).to_string(),
-        )
-        .unwrap();
-        let (routed_tokens, _) = preprocessor
-            .gather_tokens(&routing_request, None, None)
+        let body = serde_json::json!({"model":"default", "prompt":[prompt1,prompt2]}).to_string();
+        let prepared = prepare_local_request(&preprocessor, &body, &[], true)
             .await
-            .expect("gather_tokens on the routing prompt");
-
-        // The multi-entry batch is not safe to inject.
-        assert!(!completion_text_tokens_safe_to_inject(
-            &batch_request.inner.prompt
-        ));
-        let token_ids: Option<Vec<u32>> =
-            completion_text_tokens_safe_to_inject(&batch_request.inner.prompt)
-                .then_some(routed_tokens.clone());
-        assert_eq!(
-            token_ids, None,
-            "token_data must be omitted for a multi-prompt text batch, not prompt 1's tokens"
-        );
+            .unwrap();
+        let routed_tokens = prepared.request.token_ids.as_ref().clone();
+        assert!(!prepared.tokens_safe_to_inject);
 
         // Prove why: prompt 2 tokenizes to something different from what was
         // routed on, so injecting `routed_tokens` for the whole batch would
@@ -2053,35 +2023,83 @@ mod tests {
             "prompt 2 must tokenize differently from the routed prompt 1 tokens"
         );
 
-        // A single-entry batch has nothing to split against, so it remains
-        // safe to inject.
-        let single_entry_request: NvCreateCompletionRequest = serde_json::from_str(
-            &serde_json::json!({"model": "default", "prompt": [prompt1]}).to_string(),
-        )
-        .unwrap();
-        assert!(completion_text_tokens_safe_to_inject(
-            &single_entry_request.inner.prompt
-        ));
+        let body = serde_json::json!({"model":"default", "prompt":[prompt1]}).to_string();
+        assert!(
+            prepare_local_request(&preprocessor, &body, &[], true)
+                .await
+                .unwrap()
+                .tokens_safe_to_inject
+        );
+        let ambiguous = serde_json::json!({"model":"default", "prompt":[prompt1,prompt2], "nvext":{"token_data":[1,2]}}).to_string();
+        assert!(
+            prepare_local_request(&preprocessor, &ambiguous, &[], true)
+                .await
+                .is_err()
+        );
     }
 
-    /// Pre-tokenized `/v1/completions` prompts route directly on their token IDs.
-    #[test]
-    fn completion_token_prompt_uses_token_ids_directly() {
-        let single: NvCreateCompletionRequest =
-            serde_json::from_str(r#"{"model": "test", "prompt": [1, 2, 3, 4]}"#).unwrap();
-        assert_eq!(
-            completion_prompt_token_ids(&single.inner.prompt),
-            Some(vec![1, 2, 3, 4])
-        );
-
-        // Batched token prompts route on the first non-empty entry.
-        let batched: NvCreateCompletionRequest =
-            serde_json::from_str(r#"{"model": "test", "prompt": [[10, 20], [30, 40, 50]]}"#)
+    #[tokio::test]
+    async fn local_token_completions_preserve_ids_lora_and_batch_injection_policy() {
+        use dynamo_kv_router::protocols::{BlockHashOptions, compute_block_hash_for_seq};
+        let mut card = ModelDeploymentCard::load_from_disk(
+            concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../../../lib/llm/tests/data/sample-models/TinyLlama_v1.1"
+            ),
+            None,
+        )
+        .unwrap();
+        card.lora = Some(dynamo_llm::model_card::LoraInfo {
+            name: "adapter-a".into(),
+            max_gpu_lora_count: None,
+        });
+        let preprocessor = OpenAIPreprocessor::new(card).unwrap();
+        for (prompt, safe) in [
+            (serde_json::json!([1, 2, 3, 4]), true),
+            (serde_json::json!([[1, 2, 3, 4]]), true),
+            (serde_json::json!([[1, 2, 3, 4], [5, 6]]), false),
+        ] {
+            let body = serde_json::json!({"model":"default", "prompt":prompt, "nvext":{"cache_salt":"tenant-a"}}).to_string();
+            let result = prepare_local_request(&preprocessor, &body, &[], true)
+                .await
                 .unwrap();
-        assert_eq!(
-            completion_prompt_token_ids(&batched.inner.prompt),
-            Some(vec![10, 20])
+            assert_eq!(result.request.token_ids.as_slice(), &[1, 2, 3, 4]);
+            assert_eq!(result.tokens_safe_to_inject, safe);
+            let routing = result.request.routing.as_ref().unwrap();
+            assert_eq!(routing.lora_name.as_deref(), Some("adapter-a"));
+            let hash = compute_block_hash_for_seq(
+                &result.request.token_ids,
+                2,
+                BlockHashOptions {
+                    lora_name: routing.lora_name.as_deref(),
+                    cache_namespace: routing.cache_namespace.as_deref(),
+                    ..Default::default()
+                },
+            );
+            let base_hash = compute_block_hash_for_seq(
+                &result.request.token_ids,
+                2,
+                BlockHashOptions {
+                    cache_namespace: routing.cache_namespace.as_deref(),
+                    ..Default::default()
+                },
+            );
+            assert_ne!(
+                hash, base_hash,
+                "LoRA identity must reach hash construction"
+            );
+        }
+        let out_of_vocab = r#"{"model":"default","prompt":[4294967295]}"#;
+        assert!(
+            prepare_local_request(&preprocessor, out_of_vocab, &[], true)
+                .await
+                .is_err()
         );
+        let embeddings = r#"{"model":"default","prompt":[1,2],"prompt_embeds":"AAAA"}"#;
+        assert!(matches!(
+            prepare_local_request(&preprocessor, embeddings, &[], true).await,
+            Err(PickError::InvalidRequest(_))
+        ));
     }
 
     /// Text `/v1/completions` prompts are not pre-tokenized, so they fall
@@ -2090,7 +2108,6 @@ mod tests {
     fn completion_string_prompt_routes_on_text() {
         let single: NvCreateCompletionRequest =
             serde_json::from_str(r#"{"model": "test", "prompt": "hello world"}"#).unwrap();
-        assert_eq!(completion_prompt_token_ids(&single.inner.prompt), None);
         assert_eq!(
             completion_prompt_routing_text(single.inner.prompt.clone()),
             "hello world"
@@ -2098,7 +2115,6 @@ mod tests {
 
         let batched: NvCreateCompletionRequest =
             serde_json::from_str(r#"{"model": "test", "prompt": ["first", "second"]}"#).unwrap();
-        assert_eq!(completion_prompt_token_ids(&batched.inner.prompt), None);
         assert_eq!(
             completion_prompt_routing_text(batched.inner.prompt.clone()),
             "first"

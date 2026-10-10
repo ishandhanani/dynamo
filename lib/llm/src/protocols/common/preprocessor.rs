@@ -93,6 +93,22 @@ pub struct RoutingHints {
     pub routing_constraints: Option<RoutingConstraints>,
 }
 
+impl RoutingHints {
+    /// Phase-specific explicit worker takes precedence over the general backend pin.
+    pub fn worker_pin(&self, phase: RequestPhase) -> Option<(u64, Option<u32>)> {
+        match phase {
+            RequestPhase::Prefill => Some((
+                self.prefill_worker_id.or(self.backend_instance_id)?,
+                self.prefill_dp_rank.or(self.dp_rank),
+            )),
+            RequestPhase::Decode | RequestPhase::Aggregated => Some((
+                self.decode_worker_id.or(self.backend_instance_id)?,
+                self.dp_rank,
+            )),
+        }
+    }
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
 pub struct BootstrapInfo {
     /// The host address for bootstrap connection

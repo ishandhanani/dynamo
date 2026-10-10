@@ -29,6 +29,7 @@ const CHAT_RENDER_PATH: &str = "/v1/chat/completions/render";
 pub struct VllmRenderClient {
     client: Client,
     endpoint: Url,
+    completion_endpoint: Url,
     timeout: Duration,
     max_response_bytes: usize,
 }
@@ -69,6 +70,14 @@ impl VllmRenderClient {
         endpoint.set_query(None);
         endpoint.set_fragment(None);
 
+        let mut completion_endpoint = endpoint.clone();
+        completion_endpoint.set_path(&format!(
+            "{}/v1/completions/render",
+            endpoint
+                .path()
+                .strip_suffix(CHAT_RENDER_PATH)
+                .expect("chat render suffix was appended")
+        ));
         let client = Client::builder()
             .timeout(timeout)
             .build()
@@ -77,6 +86,7 @@ impl VllmRenderClient {
         Ok(Self {
             client,
             endpoint,
+            completion_endpoint,
             timeout,
             max_response_bytes,
         })
@@ -87,9 +97,22 @@ impl VllmRenderClient {
     /// The body is sent unchanged so vLLM remains responsible for validating
     /// engine-specific request fields and applying the chat template.
     pub async fn render_chat(&self, request_body: Bytes) -> Result<Vec<u32>, RenderError> {
+        self.render(request_body, false).await
+    }
+
+    /// Render a raw text or token-ID completion without applying a chat template.
+    pub async fn render_completion(&self, request_body: Bytes) -> Result<Vec<u32>, RenderError> {
+        self.render(request_body, true).await
+    }
+
+    async fn render(&self, request_body: Bytes, completion: bool) -> Result<Vec<u32>, RenderError> {
         let response = self
             .client
-            .post(self.endpoint.clone())
+            .post(if completion {
+                self.completion_endpoint.clone()
+            } else {
+                self.endpoint.clone()
+            })
             .header(CONTENT_TYPE, "application/json")
             .body(request_body)
             .send()
@@ -106,9 +129,15 @@ impl VllmRenderClient {
 
         check_content_length(&response, self.max_response_bytes)?;
         let body = read_success_body(response, self.max_response_bytes, self.timeout).await?;
-        serde_json::from_slice::<VllmRenderResponse>(&body)
-            .map(|r| r.token_ids)
-            .map_err(|source| RenderError::InvalidResponse { source })
+        if completion {
+            let [response]: [VllmRenderResponse; 1] = serde_json::from_slice(&body)
+                .map_err(|source| RenderError::InvalidResponse { source })?;
+            Ok(response.token_ids)
+        } else {
+            serde_json::from_slice::<VllmRenderResponse>(&body)
+                .map(|r| r.token_ids)
+                .map_err(|source| RenderError::InvalidResponse { source })
+        }
     }
 }
 
@@ -411,5 +440,43 @@ mod tests {
             .is_err()
         );
         assert!(VllmRenderClient::new("http://127.0.0.1:8000", TEST_TIMEOUT, 0).is_err());
+    }
+    #[tokio::test]
+    async fn completion_render_preserves_prefix_and_requires_one_result() {
+        const PATH: &str = "/prefix/chat/completions/render/v1/completions/render";
+        let router = Router::new().route(
+            PATH,
+            post(|body: Bytes| async move {
+                let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
+                assert_eq!(value["prompt"], serde_json::json!([1, 2]));
+                Json(serde_json::json!([{"token_ids":[1, 2]}]))
+            }),
+        );
+        let (url, server) = spawn_server(router).await;
+        let client = VllmRenderClient::new(
+            &format!("{url}/prefix/chat/completions/render"),
+            TEST_TIMEOUT,
+            TEST_MAX_RESPONSE_BYTES,
+        )
+        .unwrap();
+        assert_eq!(
+            client
+                .render_completion(Bytes::from_static(br#"{"model":"m","prompt":[1,2]}"#))
+                .await
+                .unwrap(),
+            vec![1, 2]
+        );
+        server.abort();
+        let router = Router::new().route(
+            "/v1/completions/render",
+            post(|| async { Json(serde_json::json!([{"token_ids":[1]}, {"token_ids":[2]}])) }),
+        );
+        let (url, server) = spawn_server(router).await;
+        let client = VllmRenderClient::new(&url, TEST_TIMEOUT, TEST_MAX_RESPONSE_BYTES).unwrap();
+        assert!(matches!(
+            client.render_completion(Bytes::from_static(b"{}")).await,
+            Err(RenderError::InvalidResponse { .. })
+        ));
+        server.abort();
     }
 }
