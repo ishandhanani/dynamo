@@ -56,6 +56,7 @@ pub(super) struct ComposedPolicyState {
 pub struct WorkerSelectionPolicy {
     worker_label: &'static str,
     state: WorkerSelectionPolicyState,
+    exclusive_affinity: bool,
 }
 
 impl WorkerSelectionPolicy {
@@ -105,6 +106,7 @@ impl WorkerSelectionPolicy {
             .fold(picker_inputs, |inputs, (required, _)| inputs | *required);
         Self {
             worker_label,
+            exclusive_affinity: false,
             state: WorkerSelectionPolicyState::Composed(RefCell::new(ComposedPolicyState {
                 filters,
                 scorers,
@@ -121,6 +123,16 @@ impl WorkerSelectionPolicy {
         }
     }
 
+    /// Restrict materialization to an eligible affinity target before scoring.
+    ///
+    /// The default policy opts in because it always prefers that target. Custom
+    /// policies remain advisory for Soft affinity unless they explicitly opt in.
+    /// This affects selection only, never queue admission.
+    pub fn with_exclusive_affinity(mut self, enabled: bool) -> Self {
+        self.exclusive_affinity = enabled;
+        self
+    }
+
     /// Construct the native reference implementation for parity tests and benchmarks.
     ///
     /// `worker_label` selects the built-in scoring and logging contract. Typed hosts use
@@ -130,6 +142,7 @@ impl WorkerSelectionPolicy {
         let picker = DefaultWorkerPicker::new();
         Self {
             worker_label,
+            exclusive_affinity: true,
             state: WorkerSelectionPolicyState::Reference(Box::new(kv_router_config), picker),
         }
     }
@@ -337,6 +350,15 @@ impl<C: WorkerConfigLike> WorkerSelector<C> for WorkerSelectionPolicy {
         input: WorkerSelectionInput<'_, C>,
     ) -> Result<WorkerSelectionResult, KvSchedulerError> {
         let (workers, request, eligibility, block_size) = input.into_configured()?;
+        let eligibility = if self.exclusive_affinity
+            && eligibility.pinned_worker().is_none()
+            && let Some(affinity) = request.affinity
+            && eligibility.affinity_target_is_eligible(workers, affinity.target)
+        {
+            eligibility.with_affinity_target(affinity.target)
+        } else {
+            eligibility
+        };
         let state = match &self.state {
             #[cfg(any(test, feature = "bench"))]
             WorkerSelectionPolicyState::Reference(config, picker) => {

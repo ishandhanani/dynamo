@@ -91,7 +91,7 @@ fn non_max_overlap_selection<C: WorkerConfigLike>(
     selected_worker: WorkerWithDpRank,
     selected_overlap_blocks: f64,
 ) -> Option<NonMaxOverlapSelection> {
-    if eligibility.pinned_worker().is_some() {
+    if eligibility.has_exact_target() {
         return None;
     }
 
@@ -3591,6 +3591,30 @@ policy_classes:
         );
 
         request.pinned_worker = None;
+        let affinity = crate::protocols::WorkerAffinityTarget::new(1, Some(0));
+        let exact = request.eligibility().with_affinity_target(affinity);
+        assert!(exact.has_exact_target());
+        assert!(non_max_overlap_selection(&workers, &request, exact, worker1, 2.0).is_none());
+
+        // A Soft or ineligible binding is only context: alternatives still count.
+        request.affinity = Some(AffinityRequirement::soft(affinity));
+        assert!(!request.eligibility().has_exact_target());
+        assert!(
+            non_max_overlap_selection(&workers, &request, request.eligibility(), worker1, 2.0)
+                .is_some()
+        );
+        request.affinity = Some(AffinityRequirement::hard(affinity));
+        assert!(!request.eligibility().has_exact_target());
+        assert!(
+            non_max_overlap_selection(&workers, &request, request.eligibility(), worker1, 2.0)
+                .is_some()
+        );
+        assert!(
+            !request
+                .eligibility()
+                .with_affinity_target(crate::protocols::WorkerAffinityTarget::new(1, None))
+                .has_exact_target()
+        );
         request.allowed_worker_ids = Some(HashSet::from([worker1.worker_id]));
         assert!(
             non_max_overlap_selection(&workers, &request, request.eligibility(), worker1, 2.0)

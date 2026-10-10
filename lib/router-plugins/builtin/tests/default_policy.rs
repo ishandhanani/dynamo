@@ -11,6 +11,82 @@ use dynamo_kv_router::{
 use support::*;
 
 #[test]
+fn soft_default_does_not_materialize_unrelated_workers() {
+    use dynamo_kv_router::{WorkerSelectionInput, protocols::WorkerConfigLike};
+    use std::{
+        cell::Cell,
+        collections::{HashMap, HashSet},
+    };
+
+    #[derive(Default)]
+    struct CountedWorker {
+        visits: Cell<usize>,
+        taints: HashSet<String>,
+    }
+    impl WorkerConfigLike for CountedWorker {
+        fn data_parallel_start_rank(&self) -> u32 {
+            0
+        }
+        fn data_parallel_size(&self) -> u32 {
+            2
+        }
+        fn max_num_batched_tokens(&self) -> Option<u64> {
+            None
+        }
+        fn total_kv_blocks(&self) -> Option<u64> {
+            Some(16384)
+        }
+        fn taints(&self) -> &HashSet<String> {
+            self.visits.set(self.visits.get() + 1);
+            &self.taints
+        }
+    }
+
+    let (_, mut request) = fixture(8, 127);
+    let workers: HashMap<_, _> = (0..8).map(|id| (id, CountedWorker::default())).collect();
+    request.affinity = Some(AffinityRequirement::soft(WorkerAffinityTarget::new(
+        3,
+        Some(1),
+    )));
+    let policy = default_policy(KvRouterConfig::default(), "test");
+    let result = policy
+        .select_worker(WorkerSelectionInput::configured(
+            &workers,
+            &request,
+            request.eligibility(),
+            16,
+        ))
+        .unwrap();
+    assert_eq!(result.worker, WorkerWithDpRank::new(3, 1));
+    assert!(workers[&3].visits.get() > 0);
+    for (&id, worker) in &workers {
+        if id != 3 {
+            assert_eq!(worker.visits.get(), 0, "materialized worker {id}");
+        }
+    }
+}
+
+#[test]
+fn explicit_pin_overrides_a_soft_affinity_preference() {
+    let (workers, mut request) = fixture(8, 127);
+    request.pinned_worker = Some(WorkerWithDpRank::new(2, 0));
+    let policy = default_policy(KvRouterConfig::default(), "test");
+    for target in [
+        WorkerAffinityTarget::new(3, Some(1)),
+        WorkerAffinityTarget::new(2, Some(1)),
+    ] {
+        request.affinity = Some(AffinityRequirement::soft(target));
+        assert_eq!(
+            policy
+                .select_worker(support::selection_input(&workers, &request, 16))
+                .unwrap()
+                .worker,
+            request.pinned_worker.unwrap()
+        );
+    }
+}
+
+#[test]
 fn seeded_selection_matches_reference_across_cache_and_load_shapes() {
     for temperature in [0.0, 0.7] {
         for prompt in [1, 17, 127, 2048] {

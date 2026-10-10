@@ -90,6 +90,15 @@ impl<'a> RoutingEligibility<'a> {
         self.pinned_worker
     }
 
+    /// Exact eligibility admits no alternative rank for locality comparison.
+    #[inline]
+    pub(crate) fn has_exact_target(&self) -> bool {
+        self.pinned_worker.is_some()
+            || self
+                .affinity_target
+                .is_some_and(|target| target.dp_rank.is_some())
+    }
+
     #[inline]
     pub fn caller_allows_worker_id(&self, worker_id: WorkerId) -> bool {
         self.allowed_worker_ids

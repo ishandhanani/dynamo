@@ -383,7 +383,8 @@ fn select_worker_with_policy<C: WorkerConfigLike>(
             // already narrowed by the scheduler.
             let eligibility = match request.affinity {
                 Some(affinity)
-                    if !affinity.is_hard()
+                    if eligibility.pinned_worker().is_none()
+                        && !affinity.is_hard()
                         && eligibility.affinity_target_is_eligible(workers, affinity.target) =>
                 {
                     eligibility.with_affinity_target(affinity.target)
