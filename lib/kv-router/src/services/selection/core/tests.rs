@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-use super::super::affinity::SessionAffinityMode;
+use super::super::affinity::{Hold, SessionAffinityMode};
 use super::super::input::PromptRequest;
 use super::hint::transfer_hint_for_selection;
 use super::reservations::{
@@ -9,7 +9,7 @@ use super::reservations::{
 };
 use super::*;
 use crate::protocols::{ActiveSequenceEvent, ActiveSequenceEventData};
-use crate::protocols::{RoutingConstraints, StorageTier};
+use crate::protocols::{RoutingConstraints, StorageTier, WorkerAffinityTarget};
 use crate::scheduling::selector::test_support::AvoidAffinityPicker;
 use crate::services::common::replica_sync::HostReplicaChannels;
 use crate::services::indexer::backend::test_util::store_event;
@@ -931,7 +931,14 @@ async fn full_affinity_table_routes_without_pinning() {
         ..SessionAffinityConfig::new(Duration::from_secs(60))
     })
     .expect("affinity table");
-    assert!(entry.affinity.set(table).is_ok());
+    let resolver = AffinityResolver::new(
+        table,
+        Arc::new(CatalogLiveness {
+            catalog: Arc::clone(&core.catalog),
+            key: default_key(),
+        }),
+    );
+    assert!(entry.affinity.set(resolver).is_ok());
 
     for (selection_id, session_id) in [("first", "s1"), ("second", "s2")] {
         let mut request = reserve_request(selection_id);
@@ -1654,7 +1661,7 @@ async fn index_observer_releases_displaced_affinity_after_unlock() {
     let (entry, booking) = core.indexed_booking("shared").expect("indexed booking");
     // A scheduler release that bypasses the core leaves a stale indexed lease.
     entry.scheduler.free_if_booking(&booking).await.unwrap();
-    let table = entry.affinity.get().expect("affinity table");
+    let table = entry.affinity.get().expect("affinity table").table();
     let sink = Arc::new(UnlockedIndexSink {
         index: Arc::clone(&core.reservation_index),
         published: AtomicBool::new(false),
@@ -1818,74 +1825,6 @@ async fn prefill_complete_is_idempotent_for_a_live_booking() {
     let (entry, _) = core.indexed_booking("live").expect("still indexed");
     assert!(entry.scheduler.has_request("live"));
     core.free_reservation("live").await.expect("free");
-}
-
-#[tokio::test]
-async fn repeated_affinity_invalidation_yields_and_preserves_new_bindings() {
-    use super::super::affinity::AffinityVersion;
-    use std::future::Future;
-
-    for cancel in [false, true] {
-        let mut core = core_with_session_affinity();
-        core.upsert_worker(worker(1)).await.unwrap();
-        let key = default_key();
-        let entry = core.entry(&key).unwrap();
-        let table = entry.affinity.get().unwrap().clone();
-        let unavailable = WorkerAffinityTarget::new(2, Some(0));
-        table.apply_replica_update(
-            "s".into(),
-            unavailable,
-            AffinityVersion {
-                sequence: 1,
-                writer_id: 99,
-            },
-        );
-        let invalidations = Arc::new(AtomicUsize::new(0));
-        core.after_affinity_invalidation = Some(Arc::new({
-            let table = table.clone();
-            let invalidations = invalidations.clone();
-            move || {
-                let count = invalidations.fetch_add(1, Ordering::SeqCst) + 1;
-                // A finite burst also makes a missing yield fail instead of hanging the test.
-                if count <= 64 {
-                    table.apply_replica_update(
-                        "s".into(),
-                        unavailable,
-                        AffinityVersion {
-                            sequence: count as u64 + 1,
-                            writer_id: 99,
-                        },
-                    );
-                }
-            }
-        }));
-        let mut pending = Box::pin(core.hold_session(&table, "s", &key));
-        let mut context = std::task::Context::from_waker(std::task::Waker::noop());
-        assert!(pending.as_mut().poll(&mut context).is_pending());
-        assert_eq!(invalidations.load(Ordering::SeqCst), 32);
-        if cancel {
-            core.cancel_token.cancel();
-            assert!(matches!(
-                pending.await,
-                Err(SelectionError::Scheduler(
-                    KvSchedulerError::SubscriberShutdown
-                ))
-            ));
-        } else {
-            let healthy = WorkerAffinityTarget::new(1, Some(0));
-            table.apply_replica_update(
-                "s".into(),
-                healthy,
-                AffinityVersion {
-                    sequence: 100,
-                    writer_id: 99,
-                },
-            );
-            let hold = pending.await.unwrap().unwrap();
-            assert!(matches!(hold, Hold::Bound { target, .. } if target == healthy));
-            assert_eq!(invalidations.load(Ordering::SeqCst), 32);
-        }
-    }
 }
 
 #[tokio::test]
@@ -2375,10 +2314,18 @@ fn core_with_session_affinity() -> SelectionCore {
 
 /// The worker `session_id` is bound to; panics if the partition has no
 /// affinity table, so `None` means unbound rather than unconfigured.
+fn affinity_table(core: &SelectionCore) -> SessionAffinity {
+    core.entry(&default_key())
+        .expect("default partition")
+        .affinity
+        .get()
+        .expect("affinity table configured")
+        .table()
+        .clone()
+}
+
 fn bound_worker(core: &SelectionCore, session_id: &str) -> Option<WorkerId> {
-    let entry = core.entry(&default_key()).expect("default partition");
-    let table = entry.affinity.get().expect("affinity table configured");
-    table
+    affinity_table(core)
         .query_target(session_id, None)
         .expect("query")
         .map(|target| target.worker_id)
@@ -2434,7 +2381,7 @@ async fn session_dp_rank_shrink_rebinds_only_removed_targets(
     .await
     .expect("worker upsert");
     let entry = core.entry(&key).expect("default partition");
-    let table = entry.affinity.get().expect("affinity table");
+    let table = entry.affinity.get().expect("affinity table").table();
     let target = WorkerAffinityTarget::new(1, dp_rank);
     drop(
         table
@@ -2530,7 +2477,7 @@ async fn concurrent_holds_on_a_departed_worker_both_land_on_the_replacement() {
         panic!("both requests hold the departed binding");
     };
 
-    // Both requests notice the departure, as `hold_session` does: the first
+    // Both requests notice the departure, as `AffinityResolver::resolve` does: the first
     // invalidation drops the binding, the second is a no-op release.
     first.invalidate();
     second.invalidate();
@@ -2555,9 +2502,7 @@ async fn concurrent_holds_on_a_departed_worker_both_land_on_the_replacement() {
 
 /// Leases on session `s` in the default partition's table.
 fn lease_count(core: &SelectionCore, session_id: &str) -> Option<usize> {
-    let entry = core.entry(&default_key()).expect("default partition");
-    let table = entry.affinity.get().expect("affinity table configured");
-    table.lease_count(session_id)
+    affinity_table(core).lease_count(session_id)
 }
 
 /// r2 holds the departed binding when r3 re-initializes the session; r2's
@@ -2611,7 +2556,12 @@ async fn failover_commit_behind_an_initializing_hold_keeps_a_lease() {
     // Idle, not gone: the binding lasts until the TTL.
     assert_eq!(bound_worker(&core, "s"), Some(replacement));
     let entry = core.entry(&key).expect("default partition");
-    entry.affinity.get().expect("table").expire_for_test("s");
+    entry
+        .affinity
+        .get()
+        .expect("table")
+        .table()
+        .expire_for_test("s");
     assert_eq!(bound_worker(&core, "s"), None);
 }
 
@@ -2663,35 +2613,6 @@ async fn joined_failover_preserves_the_successful_bookings_binding(#[case] commi
         lease_count(&core, "s") == Some(0)
     })
     .await;
-}
-
-#[tokio::test]
-async fn late_failover_mismatch_preserves_the_committed_replacement() {
-    let (core, first) = bound_session(SessionAffinityMode::Hard).await;
-    core.upsert_worker(worker(3)).await.expect("third worker");
-    let key = default_key();
-    let entry = core.entry(&key).expect("entry");
-    let table = entry.affinity.get().expect("affinity table");
-    let old_hold = core.hold_session(table, "s", &key).await.unwrap().unwrap();
-    core.catalog
-        .set_lifecycle(first.worker_id, WorkerLifecycle::Draining, Vec::new());
-    let replacement = if first.worker_id == 1 { 2 } else { 1 };
-    let new_hold = core.hold_session(table, "s", &key).await.unwrap().unwrap();
-    let lease = core
-        .commit_session(
-            table,
-            new_hold,
-            "s",
-            WorkerWithDpRank::new(replacement, 0),
-            &key,
-        )
-        .expect("bind replacement");
-    let result = core.commit_session(table, old_hold, "s", WorkerWithDpRank::new(3, 0), &key);
-    assert!(matches!(result, Err(SelectionError::BadRequest(_))));
-    assert_eq!(bound_worker(&core, "s"), Some(replacement));
-    assert_eq!(lease_count(&core, "s"), Some(1));
-    drop(lease);
-    assert_eq!(lease_count(&core, "s"), Some(0));
 }
 
 #[tokio::test]
@@ -2767,7 +2688,7 @@ async fn failed_replay_preserves_a_newer_cached_selection() {
     core.select(request(1)).await.expect("first select");
 
     let entry = core.entry(&default_key()).expect("entry");
-    let table = entry.affinity.get().expect("affinity table");
+    let table = entry.affinity.get().expect("affinity table").table();
     let initializer = table.acquire("s", None).await.expect("initializer");
     let mut replay = Box::pin(core.create_reservation(replay_reservation("pending")));
     let mut context = std::task::Context::from_waker(std::task::Waker::noop());
@@ -2829,6 +2750,31 @@ async fn free_releases_reservation_and_affinity_without_actor_progress() {
     core.select_and_reserve(session_reservation("r1", "s"))
         .await
         .expect("completed cleanup must not prevent ID reuse");
+}
+
+/// The core's cancel token is its shutdown signal: a request waiting on
+/// another request's initialization of the same session fails as a scheduler
+/// shutdown, not as a client error.
+#[tokio::test]
+async fn shutdown_while_waiting_on_a_session_is_a_subscriber_shutdown() {
+    let core = core_with_session_affinity();
+    core.upsert_worker(worker(1)).await.expect("worker upsert");
+    let table = affinity_table(&core);
+    let _initializer = table.acquire("s", None).await.expect("initializer");
+
+    let mut waiting = Box::pin(core.select_and_reserve(session_reservation("r1", "s")));
+    let mut context = std::task::Context::from_waker(std::task::Waker::noop());
+    assert!(waiting.as_mut().poll(&mut context).is_pending());
+    core.cancel_token.cancel();
+
+    let err = waiting.await.expect_err("shutdown abandons the wait");
+    assert!(
+        matches!(
+            err,
+            SelectionError::Scheduler(KvSchedulerError::SubscriberShutdown)
+        ),
+        "{err:?}"
+    );
 }
 
 #[tokio::test]

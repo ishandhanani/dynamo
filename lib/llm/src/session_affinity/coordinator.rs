@@ -355,6 +355,11 @@ fn affinity_error(error: AffinityError) -> Error {
             .message(message)
             .build()
             .into(),
+        cancelled @ AffinityError::Cancelled => DynamoError::builder()
+            .error_type(ErrorType::Cancelled)
+            .message(cancelled.to_string())
+            .build()
+            .into(),
         AffinityError::Dropped => anyhow::anyhow!("session affinity coordinator dropped"),
     }
 }
