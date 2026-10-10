@@ -101,8 +101,19 @@ pub enum KvSchedulerError {
     #[error("all eligible workers were rejected by policy filters")]
     AllEligibleWorkersFiltered,
 
+    /// Selection was restricted to an eligible Hard binding, and the policy
+    /// rejected that target. Other filter failures must not erase the binding.
+    #[error("the hard session affinity target was rejected by policy filters")]
+    HardAffinityTargetFiltered,
+
     #[error("pinned worker {worker_id} is overloaded")]
     PinnedWorkerOverloaded { worker_id: WorkerId },
+
+    #[error("hard session affinity worker {worker_id} is overloaded")]
+    HardAffinityTargetOverloaded { worker_id: WorkerId },
+
+    #[error("hard session affinity worker {worker_id} is unavailable")]
+    HardAffinityTargetUnavailable { worker_id: WorkerId },
 
     #[error("pinned worker {worker_id} is not in allowed worker set")]
     PinnedWorkerNotAllowed { worker_id: WorkerId },
@@ -142,7 +153,9 @@ impl KvSchedulerError {
     pub fn is_overload(&self) -> bool {
         matches!(
             self,
-            Self::AllEligibleWorkersOverloaded | Self::PinnedWorkerOverloaded { .. }
+            Self::AllEligibleWorkersOverloaded
+                | Self::PinnedWorkerOverloaded { .. }
+                | Self::HardAffinityTargetOverloaded { .. }
         )
     }
 }
@@ -392,6 +405,61 @@ impl SessionContext {
     }
 }
 
+/// How a bound session treats a dispatch that landed elsewhere.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum SessionAffinityMode {
+    /// The binding is exact: dispatching to another worker or rank is an error.
+    #[default]
+    Hard,
+    /// The binding follows the dispatch: the session rebinds to where it ran.
+    Soft,
+}
+
+impl std::str::FromStr for SessionAffinityMode {
+    type Err = String;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value {
+            "hard" => Ok(Self::Hard),
+            "soft" => Ok(Self::Soft),
+            _ => Err(format!(
+                "invalid session affinity mode {value:?}; expected 'hard' or 'soft'"
+            )),
+        }
+    }
+}
+
+/// A session-affinity target with the strength the request host resolved.
+///
+/// Explicit request pins are a separate, exact constraint
+/// ([`ScheduleRequest::pinned_worker`]) and never carry a strength.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AffinityRequirement {
+    pub target: WorkerAffinityTarget,
+    pub mode: SessionAffinityMode,
+}
+
+impl AffinityRequirement {
+    pub fn hard(target: WorkerAffinityTarget) -> Self {
+        Self {
+            target,
+            mode: SessionAffinityMode::Hard,
+        }
+    }
+
+    pub fn soft(target: WorkerAffinityTarget) -> Self {
+        Self {
+            target,
+            mode: SessionAffinityMode::Soft,
+        }
+    }
+
+    pub fn is_hard(&self) -> bool {
+        self.mode == SessionAffinityMode::Hard
+    }
+}
+
 /// Validated request accepted by [`LocalScheduler`](super::LocalScheduler).
 pub struct ScheduleRequest {
     pub mode: ScheduleMode,
@@ -400,11 +468,9 @@ pub struct ScheduleRequest {
     pub isl_tokens: usize,
     pub lora_name: Option<String>,
     pub expected_output_tokens: Option<u32>,
-    /// A session-affinity target resolved by the request host.
-    ///
-    /// The default selector treats an eligible target as exclusive. Custom policies receive the
-    /// target as advisory context and may select another eligible worker.
-    pub affinity_target: Option<WorkerAffinityTarget>,
+    /// A session-affinity target resolved by the request host, with the
+    /// strength the host requires; see [`AffinityRequirement`].
+    pub affinity: Option<AffinityRequirement>,
     pub pinned_worker: Option<WorkerWithDpRank>,
     pub allowed_worker_ids: Option<HashSet<WorkerId>>,
     pub routing_constraints: RoutingConstraints,
@@ -433,9 +499,9 @@ pub struct SchedulingRequest {
     pub expected_output_tokens: Option<u32>,
 
     // Routing constraints and request-level config.
-    /// Affinity target with the same default-versus-custom policy semantics as
-    /// [`ScheduleRequest::affinity_target`].
-    pub affinity_target: Option<WorkerAffinityTarget>,
+    /// Session-affinity requirement carried over from
+    /// [`ScheduleRequest::affinity`].
+    pub affinity: Option<AffinityRequirement>,
     pub pinned_worker: Option<WorkerWithDpRank>,
     pub allowed_worker_ids: Option<HashSet<WorkerId>>,
     pub routing_constraints: RoutingConstraints,
@@ -631,7 +697,7 @@ mod tests {
             isl_tokens,
             lora_name: None,
             expected_output_tokens: None,
-            affinity_target: None,
+            affinity: None,
             pinned_worker: None,
             allowed_worker_ids: None,
             routing_constraints: RoutingConstraints::default(),

@@ -25,65 +25,29 @@ use crate::services::common::zmq::{
     create_bound_pub_socket, create_sub_socket_topics, validate_endpoint,
 };
 #[cfg(feature = "standalone-selection")]
-use crate::services::selection::affinity::{AffinityReplicaSink, AffinityTarget, AffinityVersion};
+use crate::services::selection::affinity::{AffinityReplicaSink, replica_sink};
 
 pub(crate) const REPLICA_EVENT_CHANNEL_CAPACITY: usize = 100_000;
 const PEER_COMMAND_CHANNEL_CAPACITY: usize = 64;
 const REPLICA_TOPIC: &[u8] = b"dynamo.slot-tracker.v1";
-/// Session-affinity bindings ride the same mesh on their own topic, so peers
-/// that do not subscribe to it never see them.
+/// Session bindings use their own topic on the replica mesh.
 const AFFINITY_TOPIC: &[u8] = b"dynamo.session-affinity.v1";
 const AFFINITY_EVENT_CHANNEL_CAPACITY: usize = 4_096;
 
-/// One replicated session binding.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub(crate) struct AffinityBindingEvent {
+/// One replicated session binding. The schema is shared by both replica
+/// transports, including slot-tracker builds without a selection service.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AffinityBindingEvent {
     #[serde(flatten)]
     pub partition: RoutingPartitionId,
     pub session_id: String,
     pub worker_id: u64,
     pub dp_rank: Option<u32>,
     pub sequence: u64,
+    /// The publishing replica's writer id: its discovery instance id where
+    /// the host has one (frontends), otherwise a random non-zero process id
+    /// (the standalone service). The applier ignores its own writer id.
     pub writer_id: u64,
-}
-
-#[cfg(feature = "standalone-selection")]
-impl AffinityBindingEvent {
-    pub(crate) fn target(&self) -> AffinityTarget {
-        AffinityTarget::new(self.worker_id, self.dp_rank)
-    }
-
-    pub(crate) fn version(&self) -> AffinityVersion {
-        AffinityVersion {
-            sequence: self.sequence,
-            writer_id: self.writer_id,
-        }
-    }
-}
-
-#[cfg(feature = "standalone-selection")]
-/// Publishes bindings from a [`super::super::selection::affinity::SessionAffinity`]
-/// into the mesh. Best effort: a full channel drops the update.
-struct AffinityMeshSink {
-    partition: RoutingPartitionId,
-    tx: mpsc::Sender<AffinityBindingEvent>,
-}
-
-#[cfg(feature = "standalone-selection")]
-impl AffinityReplicaSink for AffinityMeshSink {
-    fn publish(&self, session_id: &str, target: AffinityTarget, version: AffinityVersion) {
-        let update = AffinityBindingEvent {
-            partition: self.partition.clone(),
-            session_id: session_id.to_string(),
-            worker_id: target.worker_id,
-            dp_rank: target.dp_rank,
-            sequence: version.sequence,
-            writer_id: version.writer_id,
-        };
-        if let Err(error) = self.tx.try_send(update) {
-            tracing::trace!(%error, "dropping best-effort session affinity replica update");
-        }
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -177,17 +141,14 @@ impl ReplicaSyncConfig {
 
     #[cfg(feature = "standalone-selection")]
     /// Sink that publishes session bindings into the mesh, when this runtime
-    /// carries them.
+    /// carries them. Best effort: a full channel drops the update.
     pub(crate) fn affinity_sink(
         &self,
         partition: &RoutingPartitionId,
     ) -> Option<Arc<dyn AffinityReplicaSink>> {
-        self.affinity_tx.clone().map(|tx| {
-            Arc::new(AffinityMeshSink {
-                tx,
-                partition: partition.clone(),
-            }) as Arc<dyn AffinityReplicaSink>
-        })
+        self.affinity_tx
+            .clone()
+            .map(|tx| replica_sink(partition.clone(), tx))
     }
 
     pub(crate) fn is_self_event(&self, event: &ActiveSequenceEvent) -> bool {
@@ -942,6 +903,30 @@ mod tests {
             decoded.partition_ref(),
             RoutingPartitionRef::new("model", "group")
         );
+    }
+
+    #[test]
+    fn affinity_replica_message_round_trips_once_on_its_own_topic() {
+        let binding = AffinityBindingEvent {
+            partition: RoutingPartitionId::new("model", "group"),
+            session_id: "session".to_string(),
+            worker_id: 1,
+            dp_rank: Some(0),
+            sequence: 2,
+            writer_id: 3,
+        };
+        let frames = OutboundReplicaMessage::Affinity(binding.clone())
+            .encode()
+            .unwrap();
+        assert_eq!(frames.len(), 2);
+        assert_eq!(frames[0], AFFINITY_TOPIC);
+        let received = std::cell::RefCell::new(Vec::new());
+        handle_replica_message(
+            &|_| panic!("affinity must not reach the active-sequence handler"),
+            Some(&|event| received.borrow_mut().push(event)),
+            frames,
+        );
+        assert_eq!(received.into_inner(), vec![binding]);
     }
 
     #[test]

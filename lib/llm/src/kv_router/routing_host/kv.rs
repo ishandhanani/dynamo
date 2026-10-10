@@ -14,7 +14,7 @@ impl RoutingHost {
         request: &SingleIn<PreprocessedRequest>,
         phase: RequestPhase,
         is_query_only: bool,
-        affinity_target: Option<AffinityTarget>,
+        affinity: Option<AffinityRequirement>,
         planned_worker: Option<WorkerWithDpRank>,
         admission: FindBestMatchAdmission,
         budget: &CleanupBudget,
@@ -36,14 +36,7 @@ impl RoutingHost {
                 phase,
                 is_query_only,
                 SelectionOptions {
-                    pinned_target: match self.session_affinity_mode {
-                        SessionAffinityMode::Hard => affinity_target,
-                        SessionAffinityMode::Soft => None,
-                    },
-                    affinity_target: match self.session_affinity_mode {
-                        SessionAffinityMode::Hard => None,
-                        SessionAffinityMode::Soft => affinity_target,
-                    },
+                    affinity,
                     planned_worker,
                     policy_class,
                     session_context,
@@ -63,25 +56,68 @@ impl RoutingHost {
         .await?
     }
 
+    /// Hold affinity across selection, without transferring it to the core.
     async fn select_request(
         &self,
         request: &SingleIn<PreprocessedRequest>,
         phase: RequestPhase,
         is_query_only: bool,
-        affinity_target: Option<AffinityTarget>,
+        planned_worker: Option<WorkerWithDpRank>,
         budget: &CleanupBudget,
-    ) -> Result<WorkerSelection, Error> {
-        self.select_request_outcome(
-            request,
-            phase,
-            is_query_only,
-            affinity_target,
-            None,
-            FindBestMatchAdmission::WithAdmission,
-            budget,
-        )
-        .await?
-        .into_result()
+    ) -> Result<(WorkerSelection, Option<Hold>), Error> {
+        loop {
+            let (hold, affinity) = self
+                .resolve_hosted_session(request, phase, is_query_only, budget)
+                .await?;
+            let selection = self
+                .select_request_outcome(
+                    request,
+                    phase,
+                    is_query_only,
+                    affinity,
+                    planned_worker,
+                    FindBestMatchAdmission::WithAdmission,
+                    budget,
+                )
+                .await
+                .and_then(SelectionOutcome::into_result);
+            let mut selection = match selection {
+                Ok(selection) => selection,
+                Err(error) => {
+                    if matches!(
+                        error.downcast_ref::<KvSchedulerError>(),
+                        Some(KvSchedulerError::HardAffinityTargetFiltered)
+                    ) && let (Some(hold), Some(table)) = (hold, self.affinity.as_ref())
+                    {
+                        table.release_filtered(hold);
+                    }
+                    return Err(error);
+                }
+            };
+            if let (Some(hold), Some(table)) = (hold.as_ref(), self.affinity.as_ref()) {
+                table
+                    .check_dispatch(hold, selection.worker.into(), |target| {
+                        self.affinity_target_is_live(target)
+                    })
+                    .map_err(affinity_error)?;
+            }
+            // A departed Hard target was replaced during selection. Release its
+            // booking before reacquiring: one initializer must choose the new
+            // binding before competing requests dispatch to different workers.
+            if let (Some(held), Some(table)) = (hold.as_ref(), self.affinity.as_ref())
+                && table.mode() == SessionAffinityMode::Hard
+                && held
+                    .target()
+                    .is_some_and(|target| !target.matches(selection.worker))
+            {
+                if let Some(booking) = selection.booking.take() {
+                    booking.release().await?;
+                }
+                hold.expect("checked held affinity").invalidate();
+                continue;
+            }
+            return Ok((selection, hold));
+        }
     }
 
     pub(super) async fn select_with_affinity(
@@ -92,11 +128,7 @@ impl RoutingHost {
         budget: &CleanupBudget,
     ) -> Result<(WorkerSelection, Option<Hold>), Error> {
         self.validate_explicit_worker(request.content(), phase)?;
-        let select = || {
-            self.select_with_session_affinity(request, phase, is_query_only, budget, |target| {
-                self.select_request(request, phase, is_query_only, target, budget)
-            })
-        };
+        let select = || self.select_request(request, phase, is_query_only, None, budget);
         if is_query_only {
             return select().await;
         }
@@ -212,18 +244,19 @@ impl RoutingHost {
 
         let phase_label = phase.to_string();
         let route_guard = StageGuard::new(STAGE_ROUTE, &phase_label);
-        let (outcome, _) = self
-            .select_with_session_affinity(request, phase, true, &budget, |target| {
-                self.select_request_outcome(
-                    request,
-                    phase,
-                    true,
-                    target,
-                    None,
-                    FindBestMatchAdmission::WithoutAdmission,
-                    &budget,
-                )
-            })
+        let (_, affinity) = self
+            .resolve_hosted_session(request, phase, true, &budget)
+            .await?;
+        let outcome = self
+            .select_request_outcome(
+                request,
+                phase,
+                true,
+                affinity,
+                None,
+                FindBestMatchAdmission::WithoutAdmission,
+                &budget,
+            )
             .await?;
         let selection = outcome.into_result()?;
         let signals = self.route_signals(&selection);
@@ -259,24 +292,7 @@ impl RoutingHost {
         let phase_label = phase.to_string();
         let route_guard = StageGuard::new(STAGE_ROUTE, &phase_label);
         let planned_worker = preview.signals.worker;
-        let select = || {
-            self.select_with_session_affinity(request, phase, false, &budget, |target| {
-                let budget = &budget;
-                async move {
-                    self.select_request_outcome(
-                        request,
-                        phase,
-                        false,
-                        target,
-                        Some(planned_worker),
-                        FindBestMatchAdmission::WithAdmission,
-                        budget,
-                    )
-                    .await?
-                    .into_result()
-                }
-            })
-        };
+        let select = || self.select_request(request, phase, false, Some(planned_worker), &budget);
         let (mut selection, affinity) = self
             .select_with_request_lifecycle(request, phase, select)
             .await?;
@@ -304,7 +320,7 @@ impl RoutingHost {
         let RoutePlan {
             mut selection,
             cleanup,
-            mut affinity,
+            affinity,
             budget,
             ..
         } = plan;
@@ -316,21 +332,10 @@ impl RoutingHost {
             Ok(guard) => guard,
             Err(error) => return Err(error),
         };
-        let stream = match self
+        // A failed dispatch binds nothing: the hold is released with it.
+        let stream = self
             .dispatch_selection(request, selection, guard, &budget)
-            .await
-        {
-            Ok(stream) => stream,
-            Err(error) => {
-                if self.session_affinity_mode == SessionAffinityMode::Hard
-                    && !self.affinity_target_is_valid(selected_target)
-                    && let Some(operation) = affinity.take()
-                {
-                    operation.invalidate();
-                }
-                return Err(error);
-            }
-        };
+            .await?;
         self.bind_affinity(affinity, selected_target, stream)
     }
 
@@ -347,18 +352,19 @@ impl RoutingHost {
             return Err(anyhow::anyhow!("prefill load probe requires KV routing"));
         }
 
-        let (outcome, _) = self
-            .select_with_session_affinity(request, RequestPhase::Prefill, true, &budget, |target| {
-                self.select_request_outcome(
-                    request,
-                    RequestPhase::Prefill,
-                    true,
-                    target,
-                    None,
-                    FindBestMatchAdmission::WithoutAdmission,
-                    &budget,
-                )
-            })
+        let (_, affinity) = self
+            .resolve_hosted_session(request, RequestPhase::Prefill, true, &budget)
+            .await?;
+        let outcome = self
+            .select_request_outcome(
+                request,
+                RequestPhase::Prefill,
+                true,
+                affinity,
+                None,
+                FindBestMatchAdmission::WithoutAdmission,
+                &budget,
+            )
             .await?;
         match outcome {
             SelectionOutcome::Routed(selection) => selection
@@ -661,7 +667,7 @@ impl RoutingHost {
         let phase_label = phase.to_string();
         let route_guard = StageGuard::new(STAGE_ROUTE, &phase_label);
         let is_query_only = request.get_annotation_value("query_instance_id").is_some();
-        let (mut selection, mut operation) = self
+        let (mut selection, operation) = self
             .select_with_affinity(&request, phase, is_query_only, &budget)
             .await?;
         let mut guard = match self
@@ -680,21 +686,10 @@ impl RoutingHost {
             }
         };
         drop(route_guard);
-        let stream = match self
+        // A failed dispatch binds nothing: the hold is released with it.
+        let stream = self
             .dispatch_selection(request, selection, guard, &budget)
-            .await
-        {
-            Ok(stream) => stream,
-            Err(error) => {
-                if self.session_affinity_mode == SessionAffinityMode::Hard
-                    && !self.affinity_target_is_valid(selected_target)
-                    && let Some(operation) = operation.take()
-                {
-                    operation.invalidate();
-                }
-                return Err(error);
-            }
-        };
+            .await?;
         Ok((
             metadata,
             self.bind_affinity(operation, selected_target, stream)?,

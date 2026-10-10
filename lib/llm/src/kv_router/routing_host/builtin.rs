@@ -309,7 +309,7 @@ impl RoutingHost {
                 ),
                 None => (None, None, None),
             };
-        let (selection, mut operation) = if let Some(target) = lora_target {
+        let (selection, operation, soft_affinity_target) = if let Some(target) = lora_target {
             (
                 HostedSelection {
                     initial_worker: target,
@@ -320,22 +320,33 @@ impl RoutingHost {
                     device_aware_telemetry: None,
                 },
                 None,
+                None,
             )
         } else {
             self.validate_explicit_worker(request.content(), phase)?;
-            self.select_with_session_affinity(&request, phase, is_query_only, &budget, |target| {
-                let pinned_target = explicit.or(match self.session_affinity_mode {
-                    SessionAffinityMode::Hard => target,
-                    SessionAffinityMode::Soft if is_direct => target,
-                    SessionAffinityMode::Soft => None,
-                });
-                let affinity_target = match (explicit, self.session_affinity_mode) {
-                    (None, SessionAffinityMode::Soft) => target,
-                    _ => None,
+            let (hold, affinity) = self
+                .resolve_hosted_session(&request, phase, is_query_only, &budget)
+                .await?;
+            let bound = affinity.map(|requirement| from_table(requirement.target));
+            // An explicit target is exact. A hard binding is exact too; a soft
+            // binding is a preference, except in Direct mode, which has no
+            // other way to pick a worker.
+            let (target_constraint, preferred) =
+                match (explicit, affinity.map(|requirement| requirement.mode)) {
+                    (Some(explicit), _) => (Some(explicit), None),
+                    (None, Some(SessionAffinityMode::Hard)) => (bound, None),
+                    (None, Some(SessionAffinityMode::Soft)) if is_direct => (bound, None),
+                    (None, Some(SessionAffinityMode::Soft)) => (None, bound),
+                    (None, None) => (None, None),
                 };
-                ready(self.select_hosted_worker(&request, pinned_target, affinity_target))
-            })
-            .await?
+            let soft_affinity_target = (self.session_affinity_mode == SessionAffinityMode::Soft)
+                .then_some(bound)
+                .flatten();
+            (
+                self.select_hosted_worker(&request, target_constraint, preferred)?,
+                hold,
+                soft_affinity_target,
+            )
         };
         let HostedSelection {
             initial_worker,
@@ -345,11 +356,6 @@ impl RoutingHost {
             selected_occupancy,
             device_aware_telemetry,
         } = selection;
-        let soft_affinity_target = if self.session_affinity_mode == SessionAffinityMode::Soft {
-            operation.as_ref().and_then(Hold::target).map(from_table)
-        } else {
-            None
-        };
         let target_for_worker = |worker_id| {
             AffinityTarget::new(
                 worker_id,
@@ -470,14 +476,7 @@ impl RoutingHost {
         let (metadata, target, final_occupancy, response_stream) = match dispatch_result {
             Ok(result) => result,
             Err(error) => {
-                let expected_target =
-                    target_constraint.unwrap_or_else(|| target_for_worker(initial_worker));
-                if self.session_affinity_mode == SessionAffinityMode::Hard
-                    && !self.affinity_target_is_valid(expected_target)
-                    && let Some(operation) = operation.take()
-                {
-                    operation.invalidate();
-                }
+                // A failed dispatch binds nothing: the hold is released with it.
                 let typed_error = error
                     .chain()
                     .find_map(|cause| cause.downcast_ref::<DynamoError>().cloned());

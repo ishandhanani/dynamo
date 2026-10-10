@@ -26,16 +26,16 @@ use crate::kv_hints::{
     KvHint, KvHintAction, KvSourceLocationsPayload, KvTransferCandidateSource, KvTransferCandidates,
 };
 use crate::protocols::{
-    LocalBlockHash, PrefillLoadHint, SharedCacheHits, WorkerAffinityTarget, WorkerConfigLike,
-    WorkerId, WorkerWithDpRank,
+    LocalBlockHash, PrefillLoadHint, SharedCacheHits, WorkerConfigLike, WorkerId, WorkerWithDpRank,
 };
 use crate::scheduling::queue::SchedulerBookingDescriptor;
 use crate::scheduling::selector::WorkerSelectionPolicy;
 use crate::scheduling::{
-    KvSchedulerError, LocalScheduler, LoraWorkerFilter, OverlapAnalysis, OverlapSignals,
-    OverloadedWorkerProvider, PotentialLoad, PrefillLoadEstimator, ScheduleMode, ScheduleRequest,
-    SessionContext, TieredOverlapRefresher, WorkerAvailabilityProvider, effective_prefill_tokens,
-    narrow_allowed_worker_ids_by_lora, prefill_load_hint_from_effective_tokens,
+    AffinityRequirement, KvSchedulerError, LocalScheduler, LoraWorkerFilter, OverlapAnalysis,
+    OverlapSignals, OverloadedWorkerProvider, PotentialLoad, PrefillLoadEstimator, ScheduleMode,
+    ScheduleRequest, SessionContext, TieredOverlapRefresher, WorkerAvailabilityProvider,
+    effective_prefill_tokens, narrow_allowed_worker_ids_by_lora,
+    prefill_load_hint_from_effective_tokens,
 };
 use crate::sequences::{
     ActiveSequencesMultiWorker, LifecycleMutationOutcome, ReplicaRequestLeaseObserver,
@@ -67,9 +67,7 @@ pub use operation::{
     SelectionRun, SessionBinding,
 };
 
-use super::affinity::{
-    AcquireStep, AffinityError, AffinityLease, Hold, SessionAffinity, SessionAffinityConfig,
-};
+use super::affinity::{AffinityError, AffinityLease, SessionAffinity, SessionAffinityConfig};
 use super::catalog::WorkerCatalog;
 use super::error::SelectionError;
 use super::ingress::{KvEventIngress, ZmqDirectIngress};
@@ -256,6 +254,8 @@ pub struct SelectionServiceConfig {
     pub selection_cache: SelectionCacheConfig,
     /// Session stickiness TTL; `None` disables session affinity.
     pub session_affinity_ttl: Option<Duration>,
+    /// How a bound session treats a dispatch that landed elsewhere.
+    pub session_affinity_mode: super::affinity::SessionAffinityMode,
 }
 
 type SelectionEntries = RwLock<HashMap<RoutingPartitionId, Arc<OnceCell<Arc<SelectionEntry>>>>>;
@@ -293,15 +293,16 @@ pub struct SelectionCore {
     /// Scheduler-config publishes that changed a partition's worker map.
     #[cfg(test)]
     pub(super) publish_count: std::sync::atomic::AtomicUsize,
-    #[cfg(test)]
-    pub(super) after_affinity_invalidation: Option<Arc<dyn Fn() + Send + Sync>>,
 }
 
+/// A cancelled wait only happens on shutdown here, since the core's cancel
+/// signal is its own token.
 fn affinity_error(error: AffinityError) -> SelectionError {
     match error {
         AffinityError::InvalidArgument(message) => SelectionError::BadRequest(message),
         AffinityError::ResourceExhausted(message) => SelectionError::NotReady(message),
-        AffinityError::Dropped => SelectionError::Internal(error.to_string()),
+        AffinityError::Cancelled => SelectionError::Scheduler(KvSchedulerError::SubscriberShutdown),
+        dropped @ AffinityError::Dropped => SelectionError::Internal(dropped.to_string()),
     }
 }
 
@@ -403,8 +404,6 @@ impl SelectionCore {
             fail_upsert_for: parking_lot::Mutex::default(),
             #[cfg(test)]
             publish_count: std::sync::atomic::AtomicUsize::new(0),
-            #[cfg(test)]
-            after_affinity_invalidation: None,
         }
     }
 
@@ -461,7 +460,7 @@ impl SelectionCore {
         }
     }
 
-    /// Apply a session binding a replica published.
+    /// Apply a session binding from another replica if its worker is live.
     pub(crate) fn dispatch_affinity_event(&self, event: AffinityBindingEvent) {
         let Some(entry) = self.entry(&event.partition) else {
             tracing::trace!(
@@ -477,33 +476,9 @@ impl SelectionCore {
             );
             return;
         };
-        if self
-            .replica_config
-            .as_ref()
-            .is_some_and(|config| config.process_id() == event.writer_id)
-        {
-            return;
-        }
-        table.observe_replica_sequence(event.sequence);
-        if self
-            .catalog
-            .get(event.worker_id)
-            .is_none_or(|record| record.key() != event.partition)
-        {
-            tracing::trace!(
-                key = %event.partition,
-                worker_id = event.worker_id,
-                "Dropping session affinity replica update: worker not in partition"
-            );
-            return;
-        }
-        let (target, version, worker_id) = (event.target(), event.version(), event.worker_id);
-        let outcome = table.apply_replica_update(event.session_id, target, version);
-        tracing::trace!(
-            worker_id,
-            ?outcome,
-            "Applied session affinity replica update"
-        );
+        table.apply_replica_event(&entry.key, event, |target| {
+            self.catalog.is_schedulable(target, &entry.key)
+        });
     }
 
     fn ready_entry(&self, key: &RoutingPartitionId) -> Result<Arc<SelectionEntry>, SelectionError> {

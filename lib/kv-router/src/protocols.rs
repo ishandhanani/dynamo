@@ -464,6 +464,11 @@ impl WorkerAffinityTarget {
     pub fn new(worker_id: WorkerId, dp_rank: Option<DpRank>) -> Self {
         Self { worker_id, dp_rank }
     }
+
+    /// Whether `worker` is this target: the worker, and the rank when bound.
+    pub fn matches(self, worker: WorkerWithDpRank) -> bool {
+        self.worker_id == worker.worker_id && self.dp_rank.is_none_or(|rank| rank == worker.dp_rank)
+    }
 }
 
 impl From<WorkerWithDpRank> for WorkerAffinityTarget {

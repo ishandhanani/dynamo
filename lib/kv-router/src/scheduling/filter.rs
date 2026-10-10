@@ -90,6 +90,15 @@ impl<'a> RoutingEligibility<'a> {
         self.pinned_worker
     }
 
+    /// Exact eligibility admits no alternative rank for locality comparison.
+    #[inline]
+    pub(crate) fn has_exact_target(&self) -> bool {
+        self.pinned_worker.is_some()
+            || self
+                .affinity_target
+                .is_some_and(|target| target.dp_rank.is_some())
+    }
+
     #[inline]
     pub fn caller_allows_worker_id(&self, worker_id: WorkerId) -> bool {
         self.allowed_worker_ids
@@ -186,11 +195,9 @@ impl<'a> RoutingEligibility<'a> {
                 worker_id: worker.worker_id,
             });
         }
-        if !self.matches_affinity_target(worker.worker_id)
-            || self
-                .affinity_target
-                .and_then(|target| target.dp_rank)
-                .is_some_and(|rank| rank != worker.dp_rank)
+        if !self
+            .affinity_target
+            .is_none_or(|target| target.matches(worker))
         {
             return Err(WorkerEligibilityError::WorkerNotAllowed {
                 worker_id: worker.worker_id,
@@ -282,17 +289,30 @@ impl<'a> RoutingEligibility<'a> {
         workers: &HashMap<WorkerId, C>,
         target: WorkerAffinityTarget,
     ) -> bool {
-        let Some(config) = workers.get(&target.worker_id) else {
-            return false;
-        };
-        if !self.allows_worker(target.worker_id, config) {
-            return false;
-        }
-        let ranks = config.data_parallel_start_rank()
-            ..config.data_parallel_start_rank() + config.data_parallel_size();
-        target
-            .dp_rank
-            .map_or(!ranks.is_empty(), |rank| ranks.contains(&rank))
+        self.validate_affinity_target(workers, target).is_ok()
+    }
+
+    pub(crate) fn validate_affinity_target<C: WorkerConfigLike>(
+        &self,
+        workers: &HashMap<WorkerId, C>,
+        target: WorkerAffinityTarget,
+    ) -> Result<(), WorkerEligibilityError> {
+        let config =
+            workers
+                .get(&target.worker_id)
+                .ok_or(WorkerEligibilityError::WorkerUnavailable {
+                    worker_id: target.worker_id,
+                })?;
+        self.validate_worker_rank(
+            workers,
+            WorkerWithDpRank::new(
+                target.worker_id,
+                target
+                    .dp_rank
+                    .unwrap_or_else(|| config.data_parallel_start_rank()),
+            ),
+        )
+        .map(|_| ())
     }
 
     pub fn for_each_eligible_worker_rank<C, F>(&self, workers: &HashMap<WorkerId, C>, mut visit: F)
@@ -667,6 +687,56 @@ mod tests {
         assert_eq!(
             ranks,
             vec![WorkerWithDpRank::new(8, 4), WorkerWithDpRank::new(8, 5)]
+        );
+    }
+
+    #[test]
+    fn routing_eligibility_ranked_affinity_target_yields_exact_rank() {
+        let workers = workers();
+        let constraints = RoutingConstraints::default();
+        let eligibility = RoutingEligibility::new(None, None, None, &constraints)
+            .with_affinity_target(WorkerAffinityTarget::new(7, Some(3)));
+        let mut ranks = Vec::new();
+
+        eligibility.for_each_eligible_worker_rank(&workers, |worker, _| ranks.push(worker));
+
+        assert_eq!(ranks, vec![WorkerWithDpRank::new(7, 3)]);
+    }
+
+    #[test]
+    fn affinity_target_is_eligible_requires_a_schedulable_target() {
+        let workers = workers();
+        let constraints = RoutingConstraints::default();
+        let open = RoutingEligibility::new(None, None, None, &constraints);
+        let target = WorkerAffinityTarget::new(7, None);
+
+        assert!(open.affinity_target_is_eligible(&workers, target));
+        assert!(open.affinity_target_is_eligible(&workers, WorkerAffinityTarget::new(7, Some(4))));
+        assert!(
+            !open.affinity_target_is_eligible(&workers, WorkerAffinityTarget::new(7, Some(5))),
+            "rank out of range"
+        );
+        assert!(
+            !open.affinity_target_is_eligible(&workers, WorkerAffinityTarget::new(8, None)),
+            "unknown worker"
+        );
+
+        let others = HashSet::from([8]);
+        let disallowed = RoutingEligibility::new(Some(&others), None, None, &constraints);
+        assert!(
+            !disallowed.affinity_target_is_eligible(&workers, target),
+            "outside the caller's set"
+        );
+        let overloaded = HashSet::from([7]);
+        let shed = RoutingEligibility::new(None, Some(&overloaded), None, &constraints);
+        assert!(
+            !shed.affinity_target_is_eligible(&workers, target),
+            "overloaded"
+        );
+        let unavailable = open.with_available_workers(Some(&others));
+        assert!(
+            !unavailable.affinity_target_is_eligible(&workers, target),
+            "unavailable"
         );
     }
 

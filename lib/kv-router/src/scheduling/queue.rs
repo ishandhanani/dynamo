@@ -16,7 +16,7 @@ use tokio::time::Instant;
 use self::capacity::CapacityUpdates;
 #[cfg(test)]
 use super::config::RouterQueuePolicy;
-use super::filter::{RoutingEligibility, worker_config_for_rank};
+use super::filter::{RoutingEligibility, WorkerEligibilityError, worker_config_for_rank};
 use super::overlap::SelectedWorkerTierSnapshot;
 use super::overlap_refresh::{
     NoopOverlapScoresRefresh, OverlapScoresRefresh, read_overlap_refresh_after, refresh_overlap,
@@ -28,9 +28,10 @@ use super::queue_admission::WorkerPlacement;
 use super::request_classifier::{ClassificationOverrides, ClassifyRequest};
 use super::selector::{WorkerSelectionInput, WorkerSelector};
 use super::types::{
-    AdvisorySchedulingResponse, AdvisoryWorkerLoad, AttemptId, KvSchedulerError,
-    NonMaxOverlapSelection, NonMaxOverlapSelectionObserver, OverloadedWorkerProvider,
-    SchedulingContext, SchedulingRequest, SchedulingResponse, WorkerAvailabilityProvider,
+    AdvisorySchedulingResponse, AdvisoryWorkerLoad, AffinityRequirement, AttemptId,
+    KvSchedulerError, NonMaxOverlapSelection, NonMaxOverlapSelectionObserver,
+    OverloadedWorkerProvider, SchedulingContext, SchedulingRequest, SchedulingResponse,
+    WorkerAvailabilityProvider,
 };
 use crate::protocols::{
     LocalBlockHash, PrefillLoadHint, WorkerConfigLike, WorkerId, WorkerSelectionResult,
@@ -90,7 +91,7 @@ fn non_max_overlap_selection<C: WorkerConfigLike>(
     selected_worker: WorkerWithDpRank,
     selected_overlap_blocks: f64,
 ) -> Option<NonMaxOverlapSelection> {
-    if eligibility.pinned_worker().is_some() {
+    if eligibility.has_exact_target() {
         return None;
     }
 
@@ -918,12 +919,14 @@ impl<
         // An already-expired `due_at` is not validated here: the actor is the
         // single deadline authority and rejects it at enqueue on its own clock.
 
-        // Hard pins must not acquire a conflicting soft target. Apply a permitted
-        // override before recomputing cache eligibility for the resulting target.
+        // Hard pins and `Hard` session bindings must not acquire a conflicting
+        // soft target. Apply a permitted override before recomputing cache
+        // eligibility for the resulting target.
         if request.pinned_worker.is_none()
+            && !request.affinity.is_some_and(|affinity| affinity.is_hard())
             && let Some(target) = worker_selection_target
         {
-            request.affinity_target = target;
+            request.affinity = target.map(AffinityRequirement::soft);
         }
 
         // Queue inputs are recomputed from the current workers, exactly as the
@@ -1630,12 +1633,28 @@ impl<
             let mut eligibility = request
                 .eligibility_with_overloaded(overloaded_worker_ids.as_ref())
                 .with_available_workers(available_worker_ids.as_deref());
-            if self.selector.uses_exclusive_affinity_target()
-                && let Some(target) = request.affinity_target
-                && eligibility.affinity_target_is_eligible(&workers, target)
+            // The pin rule: a `Hard` session binding limits every policy to its
+            // eligible target. An ineligible target selects normally. A `Soft`
+            // binding reaches the policy as context only. Admission never narrows.
+            let hard_affinity_enforced = if let Some(affinity) = request.affinity
+                && affinity.is_hard()
             {
-                eligibility = eligibility.with_affinity_target(target);
-            }
+                match eligibility.validate_affinity_target(&workers, affinity.target) {
+                    Ok(()) => {
+                        eligibility = eligibility.with_affinity_target(affinity.target);
+                        true
+                    }
+                    Err(WorkerEligibilityError::WorkerOverloaded { worker_id }) => {
+                        return Err(KvSchedulerError::HardAffinityTargetOverloaded { worker_id });
+                    }
+                    Err(WorkerEligibilityError::WorkerNotRoutable { worker_id }) => {
+                        return Err(KvSchedulerError::HardAffinityTargetUnavailable { worker_id });
+                    }
+                    Err(_) => false,
+                }
+            } else {
+                false
+            };
             self.selector
                 .select_worker(WorkerSelectionInput::configured(
                     &workers,
@@ -1643,6 +1662,12 @@ impl<
                     eligibility,
                     self.block_size,
                 ))
+                .map_err(|error| match error {
+                    KvSchedulerError::AllEligibleWorkersFiltered if hard_affinity_enforced => {
+                        KvSchedulerError::HardAffinityTargetFiltered
+                    }
+                    error => error,
+                })
                 .map(|selection| {
                     let non_max_overlap_selection = if request.mode.is_tracked()
                         && self.non_max_overlap_selection_observer.get().is_some()
@@ -1973,7 +1998,8 @@ mod tests {
     use super::*;
     use crate::kv_hints::KvTransferCandidates;
     use crate::protocols::{
-        ActiveSequenceEvent, ExternalSequenceBlockHash, WorkerSelectionResult, WorkerWithDpRank,
+        ActiveSequenceEvent, ExternalSequenceBlockHash, WorkerAffinityTarget,
+        WorkerSelectionResult, WorkerWithDpRank,
     };
     use crate::scheduling::OverlapSignals;
     use crate::scheduling::types::{KvSchedulerError, ScheduleMode};
@@ -2645,7 +2671,7 @@ mod tests {
             policy_class: None,
             session_context: None,
             expected_output_tokens: None,
-            affinity_target: None,
+            affinity: None,
             pinned_worker: None,
             allowed_worker_ids: None,
             routing_constraints: crate::protocols::RoutingConstraints::default(),
@@ -2861,14 +2887,17 @@ policy_classes:
         queue
             .validate_classification(&mut request, classified, now)
             .unwrap();
-        assert_eq!(request.affinity_target, Some(worker.into()));
+        assert_eq!(
+            request.affinity,
+            Some(AffinityRequirement::soft(worker.into()))
+        );
 
         let mut classified = queue.build_classify_request(&request, now);
         classified.clear_worker_selection_target();
         queue
             .validate_classification(&mut request, classified, now)
             .unwrap();
-        assert!(request.affinity_target.is_none());
+        assert!(request.affinity.is_none());
 
         request.pinned_worker = Some(pin);
         let mut classified = queue.build_classify_request(&request, now);
@@ -2878,7 +2907,7 @@ policy_classes:
             .validate_classification(&mut request, classified, now)
             .unwrap();
         assert_eq!(request.pinned_worker, Some(pin));
-        assert!(request.affinity_target.is_none());
+        assert!(request.affinity.is_none());
         request.pinned_worker = None;
         request.allowed_worker_ids = Some(HashSet::from([0]));
         let mut classified = queue.build_classify_request(&request, now);
@@ -3572,6 +3601,30 @@ policy_classes:
         );
 
         request.pinned_worker = None;
+        let affinity = crate::protocols::WorkerAffinityTarget::new(1, Some(0));
+        let exact = request.eligibility().with_affinity_target(affinity);
+        assert!(exact.has_exact_target());
+        assert!(non_max_overlap_selection(&workers, &request, exact, worker1, 2.0).is_none());
+
+        // A Soft or ineligible binding is only context: alternatives still count.
+        request.affinity = Some(AffinityRequirement::soft(affinity));
+        assert!(!request.eligibility().has_exact_target());
+        assert!(
+            non_max_overlap_selection(&workers, &request, request.eligibility(), worker1, 2.0)
+                .is_some()
+        );
+        request.affinity = Some(AffinityRequirement::hard(affinity));
+        assert!(!request.eligibility().has_exact_target());
+        assert!(
+            non_max_overlap_selection(&workers, &request, request.eligibility(), worker1, 2.0)
+                .is_some()
+        );
+        assert!(
+            !request
+                .eligibility()
+                .with_affinity_target(crate::protocols::WorkerAffinityTarget::new(1, None))
+                .has_exact_target()
+        );
         request.allowed_worker_ids = Some(HashSet::from([worker1.worker_id]));
         assert!(
             non_max_overlap_selection(&workers, &request, request.eligibility(), worker1, 2.0)
@@ -4848,6 +4901,158 @@ policy_classes:
             .expect("response channel should remain open");
         let second_resp = second_resp.expect("scheduling returned error");
         assert_eq!(second_resp.best_worker, WorkerWithDpRank::new(1, 0));
+        assert_eq!(queue.pending_count(), 0);
+    }
+
+    fn avoid_affinity_policy() -> crate::scheduling::selector::WorkerSelectionPolicy {
+        crate::scheduling::selector::WorkerSelectionPolicy::new(
+            crate::config::KvRouterConfig::default(),
+            "test",
+            Vec::new(),
+            Box::new(crate::scheduling::selector::test_support::AvoidAffinityPicker),
+        )
+    }
+
+    async fn occupy<Sel: WorkerSelector<SimpleWorkerConfig> + Send + 'static>(
+        queue: &SchedulerQueue<NoopSequencePublisher, SimpleWorkerConfig, Sel>,
+        request_id: &str,
+        worker: WorkerWithDpRank,
+        isl: usize,
+    ) {
+        let (mut request, rx) = make_request(request_id, isl);
+        request.pinned_worker = Some(worker);
+        queue.enqueue(request).await;
+        assert_eq!(rx.await.unwrap().unwrap().best_worker, worker);
+    }
+
+    /// A `Hard` binding limits selection to its eligible target for a custom
+    /// policy that would otherwise avoid it; a `Soft` binding is advisory only.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn hard_affinity_limits_a_custom_picker_to_the_eligible_target() {
+        let (queue, _slots) =
+            make_queue_with_custom_selector(2, 16, 256, None, avoid_affinity_policy());
+        let target = WorkerWithDpRank::new(1, 0);
+
+        let (mut soft, soft_rx) = make_request("soft", 64);
+        soft.affinity = Some(AffinityRequirement::soft(target.into()));
+        queue.enqueue(soft).await;
+        assert_eq!(
+            soft_rx.await.unwrap().unwrap().best_worker,
+            WorkerWithDpRank::new(0, 0),
+            "a soft binding does not narrow a custom picker's candidates"
+        );
+
+        let (mut hard, hard_rx) = make_request("hard", 64);
+        hard.affinity = Some(AffinityRequirement::hard(target.into()));
+        queue.enqueue(hard).await;
+        assert_eq!(hard_rx.await.unwrap().unwrap().best_worker, target);
+    }
+
+    /// A `Hard` binding overrides the default selector's load preference while
+    /// the target is eligible; an ineligible target selects normally.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn hard_affinity_limits_the_default_selector_to_an_eligible_target() {
+        let (queue, _slots) = make_queue(2, 16, 256, None);
+        let target = WorkerWithDpRank::new(1, 0);
+        occupy(&queue, "occupant", target, 256).await;
+
+        let (mut hard, hard_rx) = make_request("hard", 64);
+        hard.affinity = Some(AffinityRequirement::hard(target.into()));
+        queue.enqueue(hard).await;
+        assert_eq!(hard_rx.await.unwrap().unwrap().best_worker, target);
+
+        let (mut departed, departed_rx) = make_request("departed", 64);
+        departed.affinity = Some(AffinityRequirement::hard(WorkerAffinityTarget::new(
+            7, None,
+        )));
+        queue.enqueue(departed).await;
+        assert_eq!(
+            departed_rx.await.unwrap().unwrap().best_worker,
+            WorkerWithDpRank::new(0, 0),
+            "an unknown target selects normally"
+        );
+
+        let (mut disallowed, disallowed_rx) = make_request("disallowed", 64);
+        disallowed.affinity = Some(AffinityRequirement::hard(target.into()));
+        disallowed.allowed_worker_ids = Some(HashSet::from([0]));
+        queue.enqueue(disallowed).await;
+        assert_eq!(
+            disallowed_rx.await.unwrap().unwrap().best_worker,
+            WorkerWithDpRank::new(0, 0),
+            "a target outside the caller's set selects within the set"
+        );
+    }
+
+    #[tokio::test]
+    async fn hard_affinity_survives_a_classifier_target() {
+        let (queue, _slots) = make_queue(2, 16, 64, None);
+        let (mut request, _rx) = make_request("bound", 48);
+        let bound = AffinityRequirement::hard(WorkerWithDpRank::new(1, 0).into());
+        request.affinity = Some(bound);
+        let now = Instant::now();
+
+        let mut classified = queue.build_classify_request(&request, now);
+        classified.set_worker_selection_target(WorkerWithDpRank::new(0, 0));
+        queue
+            .validate_classification(&mut request, classified, now)
+            .unwrap();
+        assert_eq!(request.affinity, Some(bound));
+
+        let mut classified = queue.build_classify_request(&request, now);
+        classified.clear_worker_selection_target();
+        queue
+            .validate_classification(&mut request, classified, now)
+            .unwrap();
+        assert_eq!(request.affinity, Some(bound));
+    }
+
+    /// Admission is fleet-wide: a `Hard` request whose target is prefill-busy
+    /// is admitted while another worker is idle and booked on its target. It
+    /// waits only when every worker is busy, then follows its target without
+    /// holding back a later unbound request in its class.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn hard_affinity_admission_stays_fleet_wide() {
+        let (queue, slots) = make_queue(2, 16, 256, Some(0.0));
+        let target = WorkerWithDpRank::new(1, 0);
+        let other = WorkerWithDpRank::new(0, 0);
+        occupy(&queue, "occupant", target, 256).await;
+
+        let (mut hard, hard_rx) = make_request("hard", 64);
+        hard.affinity = Some(AffinityRequirement::hard(target.into()));
+        queue.enqueue(hard).await;
+        assert_eq!(hard_rx.await.unwrap().unwrap().best_worker, target);
+        assert_eq!(queue.pending_count(), 0);
+
+        occupy(&queue, "other-occupant", other, 256).await;
+        let (mut waiting, mut waiting_rx) = make_request("waiting", 64);
+        waiting.affinity = Some(AffinityRequirement::hard(target.into()));
+        queue.enqueue(waiting).await;
+        let (unbound, mut unbound_rx) = make_request("unbound", 64);
+        queue.enqueue(unbound).await;
+        assert_eq!(queue.pending_count(), 2);
+        assert!(waiting_rx.try_recv().is_err(), "every worker is busy");
+        assert!(unbound_rx.try_recv().is_err());
+
+        slots
+            .mark_prefill_completed(&"other-occupant".to_string(), decay_now())
+            .unwrap();
+        slots
+            .free(&"other-occupant".to_string(), decay_now())
+            .unwrap();
+        queue.capacity_changed(Some(other));
+
+        let waiting = tokio::time::timeout(Duration::from_secs(1), waiting_rx)
+            .await
+            .expect("freed capacity admits the waiting request")
+            .unwrap()
+            .unwrap();
+        assert_eq!(waiting.best_worker, target, "still booked on its target");
+        let unbound = tokio::time::timeout(Duration::from_secs(1), unbound_rx)
+            .await
+            .expect("the unbound request is admitted behind it")
+            .unwrap()
+            .unwrap();
+        assert_eq!(unbound.best_worker, other);
         assert_eq!(queue.pending_count(), 0);
     }
 

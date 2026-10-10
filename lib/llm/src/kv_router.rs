@@ -537,36 +537,52 @@ fn map_scheduler_error(error: scheduling::KvSchedulerError) -> anyhow::Error {
     // would just bounce the request around. A filter rejection is unavailable,
     // not overload, and becomes HTTP 503.
     let (error_type, overloaded) = match error {
-        scheduling::KvSchedulerError::PinnedWorkerOverloaded { .. } => {
+        scheduling::KvSchedulerError::PinnedWorkerOverloaded { .. }
+        | scheduling::KvSchedulerError::HardAffinityTargetOverloaded { .. } => {
             (ErrorType::WorkerOverloaded, true)
         }
         scheduling::KvSchedulerError::AllEligibleWorkersOverloaded => {
             (ErrorType::ResourceExhausted, true)
         }
         scheduling::KvSchedulerError::DeadlineExceeded => (ErrorType::DeadlineExceeded, false),
-        scheduling::KvSchedulerError::AllEligibleWorkersFiltered => (ErrorType::Unavailable, false),
+        scheduling::KvSchedulerError::AllEligibleWorkersFiltered
+        | scheduling::KvSchedulerError::HardAffinityTargetFiltered => {
+            (ErrorType::Unavailable, false)
+        }
+        scheduling::KvSchedulerError::HardAffinityTargetUnavailable { .. } => {
+            (ErrorType::WorkerUnavailable, false)
+        }
         _ => return error.into(),
     };
 
     let message = error.to_string();
-    let error = DynamoError::builder()
+    let builder = DynamoError::builder()
         .error_type(error_type)
         .message(message.clone());
-    let error = if error_type == ErrorType::DeadlineExceeded {
-        error.reason(
+    let builder = if error_type == ErrorType::DeadlineExceeded {
+        builder.reason(
             dynamo_runtime::error::ErrorReason::new("router.queue_deadline_exceeded")
                 .expect("registered queue deadline reason"),
         )
     } else {
-        error
+        builder
     };
-    if overloaded {
-        error
+    if matches!(
+        error,
+        scheduling::KvSchedulerError::AllEligibleWorkersFiltered
+            | scheduling::KvSchedulerError::HardAffinityTargetFiltered
+    ) {
+        // Native causes are normalized by DynamoError::cause. Keep this local
+        // scheduler outcome as anyhow context so the affinity owner can detect
+        // it, with the canonical DynamoError still visible in the source chain.
+        anyhow::Error::new(builder.build()).context(error)
+    } else if overloaded {
+        builder
             .cause(PipelineError::ServiceOverloaded(message))
             .build()
             .into()
     } else {
-        error.build().into()
+        builder.build().into()
     }
 }
 
@@ -1318,7 +1334,7 @@ impl KvRouter {
         policy_class: Option<String>,
         session_context: Option<dynamo_kv_router::SessionContext>,
         expected_output_tokens: Option<u32>,
-        affinity_target: Option<dynamo_kv_router::protocols::WorkerAffinityTarget>,
+        affinity: Option<scheduling::AffinityRequirement>,
         pinned_worker: Option<WorkerWithDpRank>,
         allowed_worker_ids: Option<HashSet<WorkerId>>,
         routing_constraints: RoutingConstraints,
@@ -1373,7 +1389,7 @@ impl KvRouter {
                 policy_class,
                 session_context,
                 session: SessionBinding::None,
-                affinity_target,
+                affinity,
                 pinned_worker,
                 allowed_worker_ids,
                 routing_constraints,
@@ -1402,6 +1418,10 @@ impl KvRouter {
             // The partition has no schedulable worker: the scheduler's own answer.
             Err(SelectionError::NotReady(_)) => {
                 return Err(map_scheduler_error(KvSchedulerError::NoEndpoints));
+            }
+            // A request that contradicts its session binding, or an invalid prompt.
+            Err(SelectionError::BadRequest(message)) => {
+                return Err(crate::session_affinity::invalid_argument(message));
             }
             Err(error) => return Err(error.into()),
         };
@@ -1615,12 +1635,27 @@ impl KvRouter {
         self.selection.scheduler().free(request_id).await
     }
 
-    pub(crate) fn affinity_coordinator(
+    /// Session affinity over this router's partition.
+    pub(crate) fn session_affinity(
         &self,
         ttl: std::time::Duration,
         mode: crate::session_affinity::SessionAffinityMode,
-    ) -> anyhow::Result<crate::session_affinity::AffinityCoordinator> {
-        self.selection.affinity_coordinator(ttl, mode)
+    ) -> anyhow::Result<crate::session_affinity::SessionAffinity> {
+        self.selection.session_affinity(ttl, mode)
+    }
+
+    pub(crate) async fn enable_affinity_replica_sync(
+        &self,
+        table: &crate::session_affinity::SessionAffinity,
+        client: Client,
+    ) -> anyhow::Result<()> {
+        crate::session_affinity::enable_replica_sync(
+            table,
+            self.selection.partition_key().clone(),
+            client,
+            Some(self.workers_with_configs.clone()),
+        )
+        .await
     }
 
     pub(crate) fn request_lease_manager(&self) -> &request_lease::RequestLeaseManager {
@@ -2017,6 +2052,39 @@ mod tests {
             .expect("filtered workers should produce a DynamoError");
 
         assert_eq!(dynamo_error.error_type(), ErrorType::Unavailable);
+        assert!(
+            matches!(
+                error.downcast_ref::<KvSchedulerError>(),
+                Some(KvSchedulerError::AllEligibleWorkersFiltered)
+            ),
+            "the affinity owner must distinguish policy filtering from other unavailable errors"
+        );
+        assert!(dynamo_runtime::error::match_error_chain(
+            error.as_ref(),
+            &[ErrorType::Unavailable],
+            &[],
+        ));
+        let canonical = crate::http::service::error::find_canonical_error_in_chain(error.as_ref())
+            .expect("HTTP conversion must still find the canonical error");
+        assert_eq!(canonical, dynamo_error);
+        assert_eq!(canonical.reason().as_str(), "backend.unavailable");
+        assert_eq!(
+            canonical.message(),
+            KvSchedulerError::AllEligibleWorkersFiltered.to_string()
+        );
+        assert_eq!(
+            crate::http::service::error::http_action_for_error(canonical),
+            crate::http::service::error::ClientErrorAction::Respond {
+                status: axum::http::StatusCode::SERVICE_UNAVAILABLE,
+                public_message: "Service temporarily unavailable",
+            }
+        );
+        let decoded: DynamoError =
+            serde_json::from_value(serde_json::to_value(canonical).unwrap()).unwrap();
+        assert_eq!(
+            decoded, *canonical,
+            "serialization keeps the external error contract"
+        );
 
         let error = map_scheduler_error(KvSchedulerError::AllEligibleWorkersOverloaded);
         let dynamo_error = error
@@ -3519,6 +3587,100 @@ mod tests {
             &[dynamo_runtime::error::ErrorType::Unavailable],
             &[]
         ));
+    }
+
+    #[tokio::test]
+    async fn filtered_host_selection_invalidates_only_an_evaluated_hard_target() {
+        use std::time::Duration;
+
+        use crate::{
+            preprocessor::PreprocessedRequest,
+            protocols::common::extensions::{SESSION_AFFINITY_CONTEXT_KEY, SessionAffinityId},
+            session_affinity::SessionAffinityMode,
+        };
+        use dynamo_kv_router::services::selection::affinity::AffinityTarget;
+        use dynamo_runtime::pipeline::{Context, PushRouter, RouterMode};
+
+        for (mode, exclude_bound_worker) in [
+            (SessionAffinityMode::Hard, false),
+            (SessionAffinityMode::Soft, false),
+            (SessionAffinityMode::Hard, true),
+        ] {
+            let invalidated = mode == SessionAffinityMode::Hard && !exclude_bound_worker;
+            let policy =
+                SelectionPolicySource::Factory(Arc::new(|config: &KvRouterConfig, _, _| {
+                    WorkerSelectionPolicy::new_with_filters(
+                        config.clone(),
+                        "decode",
+                        vec![Box::new(RejectAll)],
+                        Vec::new(),
+                        Box::new(LoadOnlyPicker),
+                    )
+                }));
+            let router = Arc::new(make_test_router(policy, None).await);
+            let affinity = router
+                .session_affinity(Duration::from_secs(10), mode)
+                .unwrap();
+            let table = affinity.clone();
+            let session_id = SessionAffinityId::new("filtered-session");
+            let target = AffinityTarget::new(0, Some(0));
+            let hold = table.acquire(session_id.as_str(), None).await.unwrap();
+            drop(table.commit(hold, target).unwrap());
+
+            let inner = PushRouter::from_client(router.client.clone(), RouterMode::KV)
+                .await
+                .unwrap();
+            let host = RoutingHost::new_with_affinity(inner, router.clone(), Some(affinity));
+            router.client.override_discovered_instances(vec![0, 1]);
+            router.client.override_instance_avail(vec![0, 1]);
+            let mut request = Context::new(
+                PreprocessedRequest::builder()
+                    .model("test".to_string())
+                    .token_ids(vec![11, 12])
+                    .stop_conditions(Default::default())
+                    .sampling_options(Default::default())
+                    .output_options(Default::default())
+                    .build()
+                    .unwrap(),
+            );
+            if exclude_bound_worker {
+                request.routing_mut().allowed_worker_ids = Some(HashSet::from([1]));
+            }
+            request.insert(SESSION_AFFINITY_CONTEXT_KEY, session_id.clone());
+            let request_id = request.context().id().to_string();
+
+            let Err(error) = host.generate(request).await else {
+                panic!("the policy rejects every worker");
+            };
+            assert!(match error.downcast_ref::<KvSchedulerError>() {
+                Some(KvSchedulerError::HardAffinityTargetFiltered) => invalidated,
+                Some(KvSchedulerError::AllEligibleWorkersFiltered) => !invalidated,
+                _ => false,
+            });
+            assert!(dynamo_runtime::error::match_error_chain(
+                error.as_ref(),
+                &[ErrorType::Unavailable],
+                &[]
+            ));
+            assert_eq!(
+                table.query_target(session_id.as_str(), None).unwrap(),
+                (!invalidated).then_some(target),
+                "filtering other workers must preserve an excluded binding"
+            );
+            assert_eq!(
+                table.lease_count(session_id.as_str()),
+                (!invalidated).then_some(0)
+            );
+            assert!(!router.selection.scheduler().has_request(&request_id));
+            assert!(
+                router
+                    .get_potential_loads(&[], None, None, None, None)
+                    .await
+                    .unwrap()
+                    .iter()
+                    .all(|load| load.active_requests == 0)
+            );
+        }
     }
 
     #[tokio::test]

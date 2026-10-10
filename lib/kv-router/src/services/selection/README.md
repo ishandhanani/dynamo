@@ -20,11 +20,7 @@ and active-sequence accounting. Keep these implementation invariants explicit:
 - Discovery-driven worker membership goes through `WorkerCatalogSource` and
   `CatalogReconciler` (`membership.rs`), not `upsert_worker`/`delete_worker`.
 - A partition's KV index comes from `HostCache.index: KvIndexSource::Owned`. Its `KvEventIngress` builds and feeds it: `ZmqDirectIngress` here, `RuntimeIngress` in the frontend. The frontend ingress also supports Dynamo-native remote indexing. The `Indexer` type itself is shared with the frontend (`services::indexer::backend`).
-- Each partition owns its `SessionAffinity` table, including versioned
-  bindings, idle TTL, and lease lifecycle. A reservation owns its affinity
-  lease, so every reservation removal releases both. Frontend routing hosts
-  share the partition table and one coordinator for stream leases and runtime
-  replication.
+- Each partition owns a `SessionAffinity` table with shared binding, resolution, and lease rules (see [Session Affinity](affinity/README.md)). Reservations own service leases; frontend streams own frontend leases. The KV frontend embeds `SelectionService` and shares its partition table. The table's replication sink retains the frontend transport runtime.
 - Valid worker metadata updates preserve live bookings on surviving ranks and
   KV state from unchanged event sources. Catalog commits and ingress changes
   are serialized; partition policy factories can initialize independently.

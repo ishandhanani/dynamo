@@ -18,9 +18,10 @@ pub struct WorkerSelectionContext<'a> {
 }
 
 impl WorkerSelectionContext<'_> {
-    /// The exact worker/rank imposed by the host for this selection, if any.
-    /// Includes explicit pins and eligible exclusive-affinity targets. This is
-    /// read-only routing metadata, not permission to change eligibility.
+    /// The exact worker/rank the request pinned explicitly, if any. This is
+    /// read-only routing metadata, not permission to change eligibility. A
+    /// `Hard` session binding is not reported here; the host limits the
+    /// candidate set to it instead.
     pub fn pinned_worker(&self) -> Option<WorkerWithDpRank> {
         self.pinned_worker
     }
@@ -55,10 +56,12 @@ impl WorkerSelectionContext<'_> {
 
     /// Return the session-affinity target resolved by the request host.
     ///
-    /// The default selector treats an eligible target as exclusive. Custom policies receive it as
-    /// advisory context; it may be absent from their candidate set when unavailable or filtered.
+    /// Under `Hard` session affinity the host limits every policy's candidates to this target
+    /// while it is eligible, so the candidate set already reflects it. Under `Soft` affinity it is
+    /// a preference: the policy receives the full eligible candidate set and may select another
+    /// worker. The target may be absent from the candidate set when it is unavailable or filtered.
     pub fn affinity_target(&self) -> Option<WorkerAffinityTarget> {
-        self.request.affinity_target
+        self.request.affinity.map(|affinity| affinity.target)
     }
 
     /// Return the expected output length, if the request supplies one.

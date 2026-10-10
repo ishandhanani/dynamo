@@ -228,5 +228,40 @@ fn shared_cache(c: &mut Criterion) {
     }
 }
 
-criterion_group!(benches, bench, stacked, shared_cache);
+fn affinity(c: &mut Criterion) {
+    use dynamo_kv_router::{AffinityRequirement, protocols::WorkerAffinityTarget};
+
+    let mut group = c.benchmark_group("default_affinity");
+    group
+        .warm_up_time(Duration::from_millis(200))
+        .measurement_time(Duration::from_secs(1))
+        .sample_size(30);
+    for count in [8, 64, 512] {
+        for soft in [false, true] {
+            let (workers, mut request) = support::fixture(count, 2048);
+            if soft {
+                request.affinity = Some(AffinityRequirement::soft(WorkerAffinityTarget::new(
+                    3,
+                    Some(1),
+                )));
+            }
+            let policy = default_policy(KvRouterConfig::default(), "test");
+            group.bench_function(
+                BenchmarkId::new(if soft { "soft" } else { "unbound" }, count),
+                |b| {
+                    b.iter(|| {
+                        black_box(
+                            policy
+                                .select_worker(support::selection_input(&workers, &request, 16))
+                                .unwrap(),
+                        )
+                    });
+                },
+            );
+        }
+    }
+    group.finish();
+}
+
+criterion_group!(benches, bench, stacked, shared_cache, affinity);
 criterion_main!(benches);

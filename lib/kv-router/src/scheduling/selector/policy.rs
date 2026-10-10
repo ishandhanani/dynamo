@@ -123,10 +123,13 @@ impl WorkerSelectionPolicy {
         }
     }
 
-    /// Ask the host to constrain selection to an eligible affinity target.
-    /// Explicit request pins remain mandatory regardless of this option.
-    pub fn with_exclusive_affinity(mut self, exclusive: bool) -> Self {
-        self.exclusive_affinity = exclusive;
+    /// Restrict materialization to an eligible affinity target before scoring.
+    ///
+    /// The default policy opts in because it always prefers that target. Custom
+    /// policies remain advisory for Soft affinity unless they explicitly opt in.
+    /// This affects selection only, never queue admission.
+    pub fn with_exclusive_affinity(mut self, enabled: bool) -> Self {
+        self.exclusive_affinity = enabled;
         self
     }
 
@@ -139,7 +142,7 @@ impl WorkerSelectionPolicy {
         let picker = DefaultWorkerPicker::new();
         Self {
             worker_label,
-            exclusive_affinity: false,
+            exclusive_affinity: true,
             state: WorkerSelectionPolicyState::Reference(Box::new(kv_router_config), picker),
         }
     }
@@ -330,14 +333,6 @@ pub(super) fn collect_policy_candidates<C: WorkerConfigLike>(
 }
 
 impl<C: WorkerConfigLike> WorkerSelector<C> for WorkerSelectionPolicy {
-    fn uses_exclusive_affinity_target(&self) -> bool {
-        #[cfg(any(test, feature = "bench"))]
-        if matches!(&self.state, WorkerSelectionPolicyState::Reference(..)) {
-            return true;
-        }
-        self.exclusive_affinity
-    }
-
     fn required_worker_inputs(&self) -> WorkerInputs {
         match &self.state {
             #[cfg(any(test, feature = "bench"))]
@@ -355,6 +350,15 @@ impl<C: WorkerConfigLike> WorkerSelector<C> for WorkerSelectionPolicy {
         input: WorkerSelectionInput<'_, C>,
     ) -> Result<WorkerSelectionResult, KvSchedulerError> {
         let (workers, request, eligibility, block_size) = input.into_configured()?;
+        let eligibility = if self.exclusive_affinity
+            && eligibility.pinned_worker().is_none()
+            && let Some(affinity) = request.affinity
+            && eligibility.affinity_target_is_eligible(workers, affinity.target)
+        {
+            eligibility.with_affinity_target(affinity.target)
+        } else {
+            eligibility
+        };
         let state = match &self.state {
             #[cfg(any(test, feature = "bench"))]
             WorkerSelectionPolicyState::Reference(config, picker) => {
@@ -390,11 +394,7 @@ mod tests {
     use super::super::DefaultWorkerSelector;
     use super::super::test_support::*;
     use super::*;
-    use crate::scheduling::WorkerSelectionInputTrigger;
-
-    fn uses_exclusive_affinity(selector: &impl WorkerSelector<TaintedWorkerConfig>) -> bool {
-        selector.uses_exclusive_affinity_target()
-    }
+    use crate::scheduling::{AffinityRequirement, WorkerSelectionInputTrigger};
 
     struct FirstPicker;
 
@@ -433,7 +433,6 @@ mod tests {
             ))
             .unwrap();
         let policy = WorkerSelectionPolicy::reference(config, "test");
-        assert!(uses_exclusive_affinity(&policy));
         let actual = policy
             .select_worker(WorkerSelectionInput::configured(
                 &workers,
@@ -822,14 +821,13 @@ mod tests {
             (1, TaintedWorkerConfig::default()),
         ]);
         let mut request = base_request(16);
-        request.affinity_target = Some(worker1.into());
+        request.affinity = Some(AffinityRequirement::soft(worker1.into()));
         let policy = WorkerSelectionPolicy::new(
             KvRouterConfig::default(),
             "test",
             Vec::new(),
             Box::new(AffinityPicker),
         );
-        assert!(!uses_exclusive_affinity(&policy));
 
         let selected = policy
             .select_worker(WorkerSelectionInput::configured(

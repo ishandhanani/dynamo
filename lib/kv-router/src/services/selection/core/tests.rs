@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-use super::super::affinity::SessionAffinityMode;
+use super::super::affinity::{Hold, SessionAffinityMode};
 use super::super::input::PromptRequest;
 use super::hint::transfer_hint_for_selection;
 use super::reservations::{
@@ -9,7 +9,8 @@ use super::reservations::{
 };
 use super::*;
 use crate::protocols::{ActiveSequenceEvent, ActiveSequenceEventData};
-use crate::protocols::{RoutingConstraints, StorageTier};
+use crate::protocols::{RoutingConstraints, StorageTier, WorkerAffinityTarget};
+use crate::scheduling::selector::test_support::AvoidAffinityPicker;
 use crate::services::common::replica_sync::HostReplicaChannels;
 use crate::services::indexer::backend::test_util::store_event;
 use std::collections::HashSet;
@@ -253,7 +254,7 @@ fn lease_operation<'a>(
         policy_class: None,
         session_context: None,
         session: SessionBinding::None,
-        affinity_target: None,
+        affinity: None,
         pinned_worker: None,
         allowed_worker_ids: None,
         routing_constraints: RoutingConstraints::default(),
@@ -1370,6 +1371,65 @@ async fn lease_admission_installs_no_index_row_and_records_nothing() {
     wait_until("booking release", || !entry.scheduler.has_request("leased")).await;
 }
 
+/// A lease host owns session resolution; the core owns only its booking.
+#[tokio::test]
+async fn lease_admission_keeps_session_ownership_with_the_host() {
+    let core = core_with_session_affinity();
+    core.upsert_worker(worker(1)).await.expect("worker");
+    let table = affinity_table(&core);
+    let request = reserve_request("leased");
+    let mut operation = lease_operation(request.prompt.view(), "invalid", true);
+    operation.session = SessionBinding::Managed {
+        session_id: "s".into(),
+    };
+    assert!(matches!(
+        core.run_selection(operation).await.result,
+        Err(SelectionError::Internal(_))
+    ));
+    assert_eq!(
+        table.entry_count(),
+        0,
+        "rejected before acquiring a session"
+    );
+    let entry = core.entry(&default_key()).unwrap();
+    assert!(!entry.scheduler.has_request("invalid"));
+
+    let target = WorkerAffinityTarget::new(1, Some(0));
+    drop(
+        table
+            .commit(table.acquire("s", None).await.unwrap(), target)
+            .unwrap(),
+    );
+    let hold = table
+        .resolve("s", None, |_| true, std::future::pending())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(table.lease_count("s"), Some(1));
+    let mut operation = lease_operation(request.prompt.view(), "leased", true);
+    operation.affinity = Some(table.requirement(hold.target().unwrap()));
+    let Ok(SelectionOutcome::Selected(selected)) = core.run_selection(operation).await.result
+    else {
+        panic!("host-resolved affinity must select");
+    };
+    assert_eq!(selected.response.best_worker.worker_id, 1);
+    assert!(core.reservation_index.read().is_empty());
+    assert_eq!(
+        table.lease_count("s"),
+        Some(1),
+        "selection did not acquire another hold"
+    );
+    drop(selected);
+    wait_until("booking release", || !entry.scheduler.has_request("leased")).await;
+    assert_eq!(
+        table.lease_count("s"),
+        Some(1),
+        "the host still owns the session"
+    );
+    drop(hold);
+    assert_eq!(table.lease_count("s"), Some(0));
+}
+
 #[tokio::test]
 async fn dropped_selection_future_frees_its_booking() {
     let core = local_core(test_config(false));
@@ -1817,74 +1877,6 @@ async fn prefill_complete_is_idempotent_for_a_live_booking() {
     let (entry, _) = core.indexed_booking("live").expect("still indexed");
     assert!(entry.scheduler.has_request("live"));
     core.free_reservation("live").await.expect("free");
-}
-
-#[tokio::test]
-async fn repeated_affinity_invalidation_yields_and_preserves_new_bindings() {
-    use super::super::affinity::AffinityVersion;
-    use std::future::Future;
-
-    for cancel in [false, true] {
-        let mut core = core_with_session_affinity();
-        core.upsert_worker(worker(1)).await.unwrap();
-        let key = default_key();
-        let entry = core.entry(&key).unwrap();
-        let table = entry.affinity.get().unwrap().clone();
-        let unavailable = WorkerAffinityTarget::new(2, Some(0));
-        table.apply_replica_update(
-            "s".into(),
-            unavailable,
-            AffinityVersion {
-                sequence: 1,
-                writer_id: 99,
-            },
-        );
-        let invalidations = Arc::new(AtomicUsize::new(0));
-        core.after_affinity_invalidation = Some(Arc::new({
-            let table = table.clone();
-            let invalidations = invalidations.clone();
-            move || {
-                let count = invalidations.fetch_add(1, Ordering::SeqCst) + 1;
-                // A finite burst also makes a missing yield fail instead of hanging the test.
-                if count <= 64 {
-                    table.apply_replica_update(
-                        "s".into(),
-                        unavailable,
-                        AffinityVersion {
-                            sequence: count as u64 + 1,
-                            writer_id: 99,
-                        },
-                    );
-                }
-            }
-        }));
-        let mut pending = Box::pin(core.hold_session(&table, "s", &key));
-        let mut context = std::task::Context::from_waker(std::task::Waker::noop());
-        assert!(pending.as_mut().poll(&mut context).is_pending());
-        assert_eq!(invalidations.load(Ordering::SeqCst), 32);
-        if cancel {
-            core.cancel_token.cancel();
-            assert!(matches!(
-                pending.await,
-                Err(SelectionError::Scheduler(
-                    KvSchedulerError::SubscriberShutdown
-                ))
-            ));
-        } else {
-            let healthy = WorkerAffinityTarget::new(1, Some(0));
-            table.apply_replica_update(
-                "s".into(),
-                healthy,
-                AffinityVersion {
-                    sequence: 100,
-                    writer_id: 99,
-                },
-            );
-            let hold = pending.await.unwrap().unwrap();
-            assert!(matches!(hold, Hold::Bound { target, .. } if target == healthy));
-            assert_eq!(invalidations.load(Ordering::SeqCst), 32);
-        }
-    }
 }
 
 #[tokio::test]
@@ -2374,10 +2366,17 @@ fn core_with_session_affinity() -> SelectionCore {
 
 /// The worker `session_id` is bound to; panics if the partition has no
 /// affinity table, so `None` means unbound rather than unconfigured.
+fn affinity_table(core: &SelectionCore) -> SessionAffinity {
+    core.entry(&default_key())
+        .expect("default partition")
+        .affinity
+        .get()
+        .expect("affinity table configured")
+        .clone()
+}
+
 fn bound_worker(core: &SelectionCore, session_id: &str) -> Option<WorkerId> {
-    let entry = core.entry(&default_key()).expect("default partition");
-    let table = entry.affinity.get().expect("affinity table configured");
-    table
+    affinity_table(core)
         .query_target(session_id, None)
         .expect("query")
         .map(|target| target.worker_id)
@@ -2529,7 +2528,7 @@ async fn concurrent_holds_on_a_departed_worker_both_land_on_the_replacement() {
         panic!("both requests hold the departed binding");
     };
 
-    // Both requests notice the departure, as `hold_session` does: the first
+    // Both requests notice the departure, as `SessionAffinity::resolve` does: the first
     // invalidation drops the binding, the second is a no-op release.
     first.invalidate();
     second.invalidate();
@@ -2554,9 +2553,7 @@ async fn concurrent_holds_on_a_departed_worker_both_land_on_the_replacement() {
 
 /// Leases on session `s` in the default partition's table.
 fn lease_count(core: &SelectionCore, session_id: &str) -> Option<usize> {
-    let entry = core.entry(&default_key()).expect("default partition");
-    let table = entry.affinity.get().expect("affinity table configured");
-    table.lease_count(session_id)
+    affinity_table(core).lease_count(session_id)
 }
 
 /// r2 holds the departed binding when r3 re-initializes the session; r2's
@@ -2662,35 +2659,6 @@ async fn joined_failover_preserves_the_successful_bookings_binding(#[case] commi
         lease_count(&core, "s") == Some(0)
     })
     .await;
-}
-
-#[tokio::test]
-async fn late_failover_mismatch_preserves_the_committed_replacement() {
-    let (core, first) = bound_session(SessionAffinityMode::Hard).await;
-    core.upsert_worker(worker(3)).await.expect("third worker");
-    let key = default_key();
-    let entry = core.entry(&key).expect("entry");
-    let table = entry.affinity.get().expect("affinity table");
-    let old_hold = core.hold_session(table, "s", &key).await.unwrap().unwrap();
-    core.catalog
-        .set_lifecycle(first.worker_id, WorkerLifecycle::Draining, Vec::new());
-    let replacement = if first.worker_id == 1 { 2 } else { 1 };
-    let new_hold = core.hold_session(table, "s", &key).await.unwrap().unwrap();
-    let lease = core
-        .commit_session(
-            table,
-            new_hold,
-            "s",
-            WorkerWithDpRank::new(replacement, 0),
-            &key,
-        )
-        .expect("bind replacement");
-    let result = core.commit_session(table, old_hold, "s", WorkerWithDpRank::new(3, 0), &key);
-    assert!(matches!(result, Err(SelectionError::BadRequest(_))));
-    assert_eq!(bound_worker(&core, "s"), Some(replacement));
-    assert_eq!(lease_count(&core, "s"), Some(1));
-    drop(lease);
-    assert_eq!(lease_count(&core, "s"), Some(0));
 }
 
 #[tokio::test]
@@ -2830,6 +2798,31 @@ async fn free_releases_reservation_and_affinity_without_actor_progress() {
         .expect("completed cleanup must not prevent ID reuse");
 }
 
+/// The core's cancel token is its shutdown signal: a request waiting on
+/// another request's initialization of the same session fails as a scheduler
+/// shutdown, not as a client error.
+#[tokio::test]
+async fn shutdown_while_waiting_on_a_session_is_a_subscriber_shutdown() {
+    let core = core_with_session_affinity();
+    core.upsert_worker(worker(1)).await.expect("worker upsert");
+    let table = affinity_table(&core);
+    let _initializer = table.acquire("s", None).await.expect("initializer");
+
+    let mut waiting = Box::pin(core.select_and_reserve(session_reservation("r1", "s")));
+    let mut context = std::task::Context::from_waker(std::task::Waker::noop());
+    assert!(waiting.as_mut().poll(&mut context).is_pending());
+    core.cancel_token.cancel();
+
+    let err = waiting.await.expect_err("shutdown abandons the wait");
+    assert!(
+        matches!(
+            err,
+            SelectionError::Scheduler(KvSchedulerError::SubscriberShutdown)
+        ),
+        "{err:?}"
+    );
+}
+
 #[tokio::test]
 async fn hard_mode_rejects_dispatch_away_from_a_live_binding() {
     let (core, first) = bound_session(SessionAffinityMode::Hard).await;
@@ -2857,6 +2850,115 @@ async fn hard_mode_rejects_dispatch_away_from_a_live_binding() {
     let third = core.select_and_reserve(request).await.expect("rebind");
     assert_eq!(third.worker_id, other);
     assert_eq!(bound_worker(&core, "s"), Some(other));
+}
+
+#[tokio::test]
+async fn hard_mode_keeps_custom_policies_on_the_binding() {
+    let factory: WorkerSelectionPolicyFactory = Arc::new(|config, worker_type, _partition| {
+        WorkerSelectionPolicy::new(
+            config.clone(),
+            worker_type.as_str(),
+            Vec::new(),
+            Box::new(AvoidAffinityPicker),
+        )
+    });
+    let core = core_with(
+        test_config(false),
+        SelectionHost::default(),
+        Some(factory),
+        WorkerType::Aggregated,
+        Some(SessionAffinityConfig::new(Duration::from_secs(10))),
+    );
+    core.upsert_worker(worker(1)).await.expect("worker upsert");
+    core.upsert_worker(worker(2)).await.expect("worker upsert");
+    let first = core
+        .select_and_reserve(session_reservation("r1", "s"))
+        .await
+        .expect("first booking");
+    core.free_reservation("r1").await.expect("free");
+
+    let second = core
+        .select_and_reserve(session_reservation("r2", "s"))
+        .await
+        .expect("the policy is limited to the bound worker");
+    assert_eq!(second.worker_id, first.worker_id);
+}
+
+struct RejectWorkerFilter {
+    rejected: Arc<std::sync::atomic::AtomicU64>,
+}
+
+impl crate::plugins::worker_selection::WorkerFilter for RejectWorkerFilter {
+    fn keep(
+        &mut self,
+        _context: &crate::scheduling::selector::WorkerSelectionContext<'_>,
+        candidate: crate::plugins::worker_selection::WorkerCandidate<'_>,
+    ) -> Result<bool, crate::scheduling::WorkerSelectionPolicyError> {
+        Ok(candidate.worker().worker_id != self.rejected.load(Ordering::Relaxed))
+    }
+}
+
+#[tokio::test]
+async fn hard_mode_rebinds_when_a_filter_rejects_the_bound_worker() {
+    let rejected = Arc::new(std::sync::atomic::AtomicU64::new(0));
+    let filter_rejected = Arc::clone(&rejected);
+    let factory: WorkerSelectionPolicyFactory = Arc::new(move |config, worker_type, _partition| {
+        WorkerSelectionPolicy::new_with_filters(
+            config.clone(),
+            worker_type.as_str(),
+            vec![Box::new(RejectWorkerFilter {
+                rejected: Arc::clone(&filter_rejected),
+            })],
+            Vec::new(),
+            Box::new(AvoidAffinityPicker),
+        )
+    });
+    let core = core_with(
+        test_config(false),
+        SelectionHost::default(),
+        Some(factory),
+        WorkerType::Aggregated,
+        Some(SessionAffinityConfig::new(Duration::from_secs(10))),
+    );
+    core.upsert_worker(worker(1)).await.expect("worker upsert");
+    core.upsert_worker(worker(2)).await.expect("worker upsert");
+    let first = core
+        .select_and_reserve(session_reservation("r1", "s"))
+        .await
+        .expect("first booking");
+    core.free_reservation("r1").await.expect("free");
+    let other = if first.worker_id == 1 { 2 } else { 1 };
+    rejected.store(other, Ordering::Relaxed);
+    let mut excluded = session_reservation("excluded", "s");
+    excluded.allowed_worker_ids = Some(HashSet::from([other]));
+    assert!(matches!(
+        core.select_and_reserve(excluded).await,
+        Err(SelectionError::Scheduler(
+            KvSchedulerError::AllEligibleWorkersFiltered
+        ))
+    ));
+    assert_eq!(bound_worker(&core, "s"), Some(first.worker_id));
+    rejected.store(first.worker_id, Ordering::Relaxed);
+
+    let err = core
+        .select_and_reserve(session_reservation("r2", "s"))
+        .await
+        .expect_err("the filter rejects the bound worker");
+    assert!(
+        matches!(
+            err,
+            SelectionError::Scheduler(KvSchedulerError::HardAffinityTargetFiltered)
+        ),
+        "{err:?}"
+    );
+    assert_eq!(bound_worker(&core, "s"), None, "the binding is dropped");
+
+    let third = core
+        .select_and_reserve(session_reservation("r3", "s"))
+        .await
+        .expect("the session re-binds");
+    assert_ne!(third.worker_id, first.worker_id);
+    assert_eq!(bound_worker(&core, "s"), Some(third.worker_id));
 }
 
 #[tokio::test]

@@ -69,6 +69,7 @@ APIs. Those bindings should wrap `SelectionService` rather than construct
 | `--replica-sync-port` | none | Local ZMQ PUB port for active-load lifecycle events. The selector binds `tcp://*:<port>` internally. |
 | `--replica-sync-peers` | none | Comma-separated ZMQ PUB endpoints for selector peers. Requires `--replica-sync-port`. |
 | `--session-affinity-ttl-secs` | none | Pin each request `session_id` to the worker that served it for this long after its last request (1 to 31,536,000 seconds). When `--replica-sync-port` is configured, bindings replicate to peers over the replica mesh (`dynamo.session-affinity.v1` topic). |
+| `--session-affinity-mode` | `hard` | How a bound session treats a dispatch that landed elsewhere. `hard` limits selection to the bound worker while it is eligible and rejects a booking elsewhere; `soft` offers the binding to the selection policy as a preference and rebinds to the worker booked. |
 | `--selection-cache-ttl-secs` | `120` | Seconds an unclaimed pending selection lives before eviction. |
 | `--selection-cache-max-entries` | `4096` | Maximum resident pending selections, evicting oldest first. |
 | `--selection-cache-max-bytes` | `268435456` | Approximate byte budget across resident pending selections. |
@@ -346,9 +347,9 @@ hash producer with the same algorithm, key, and key ID as the selector.
 
 ### `session_id`
 
-Both `POST /select` and `POST /select_and_reserve` accept an optional `session_id` string. With `--session-affinity-ttl-secs` enabled, each model and routing group has its own binding table. `/select_and_reserve` binds a new session to the selected worker and holds its lease until the reservation is released or expires. The idle TTL starts when the last lease is released. `/select` can use an existing binding but does not create one.
+Both `POST /select` and `POST /select_and_reserve` accept an optional `session_id` string. With `--session-affinity-ttl-secs` enabled, each model and routing group has its own binding table. `/select_and_reserve` binds a new session to the selected worker and holds its lease until the reservation is released or expires. The idle TTL starts when the last lease is released. `/select` can use an existing binding but does not create one. Under `--session-affinity-mode hard` (the default) selection is limited to the bound worker while it is eligible, for every policy; a bound worker that is no longer schedulable drops the binding and the session re-binds to the worker booked. Under `soft` the binding is a preference the policy may override.
 
-Bindings replicate over the configured replica mesh. An explicit `affinity_target` or `pinned_worker` takes precedence over the session binding. Without a configured TTL, `session_id` is only policy input: custom policies can read it through `WorkerSelectionContext::session_id()`, while the built-in selector ignores it. See [Write Custom Routing Strategies](custom-worker-selection.mdx).
+Bindings replicate over the configured replica mesh using the same partition-scoped event schema as frontend session affinity. Each selector applies bindings only for the matching model and routing group and a locally schedulable worker and rank. An explicit `affinity_target` or `pinned_worker` takes precedence over the session binding. Without a configured TTL, `session_id` is only policy input: custom policies can read it through `WorkerSelectionContext::session_id()`, while the built-in selector ignores it. See [Write Custom Routing Strategies](custom-worker-selection.mdx).
 
 The pending-selection cache keeps the session metadata, so a later `POST /reservations` for that selection binds the session to the booked worker, the same as `/select_and_reserve` does. The frontend uses the same table implementation for request-header affinity; see [Configuration and Tuning](configuration-and-tuning.md).
 
