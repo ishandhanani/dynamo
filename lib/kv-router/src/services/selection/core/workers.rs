@@ -378,7 +378,7 @@ impl SelectionCore {
             )));
         }
         if let Some(config) = self.session_affinity {
-            entry.session_affinity(config)?;
+            entry.session_affinity_with(config, None)?;
         }
         Ok(entry)
     }

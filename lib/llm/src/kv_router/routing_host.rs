@@ -40,8 +40,9 @@ use crate::{
         timing::{RequestPhase, RoutingData, WORKER_TYPE_DECODE, WORKER_TYPE_PREFILL},
     },
     session_affinity::{
-        AffinityCoordinator, AffinityTarget, Hold, SessionAffinityMode, affinity_id,
-        explicit_target, from_table, invalid_argument, subagent_group_affinity_id,
+        AffinityCoordinator, AffinityTarget, Hold, SessionAffinityMode, affinity_error,
+        affinity_id, explicit_target, from_table, invalid_argument, subagent_group_affinity_id,
+        to_table, tracked_stream,
     },
 };
 
@@ -605,15 +606,70 @@ impl RoutingHost {
         )))
     }
 
-    /// Commit a held session to the dispatched worker; a request without a
-    /// session passes its stream through.
+    /// The session binding the KV plane hands the selection core: the
+    /// request's session key (or its subagent group) and the explicit target
+    /// the binding must agree with. Query-only selections read the binding
+    /// without holding it.
+    fn kv_session_binding(
+        &self,
+        request: &SingleIn<PreprocessedRequest>,
+        phase: RequestPhase,
+        is_query_only: bool,
+    ) -> Result<dynamo_kv_router::services::selection::SessionBinding<'static>, Error> {
+        use dynamo_kv_router::services::selection::SessionBinding;
+
+        if self.affinity.is_none() {
+            return Ok(SessionBinding::None);
+        }
+        let Some(session_id) = affinity_id(request)? else {
+            return Ok(SessionBinding::None);
+        };
+        let explicit = explicit_target(request.content(), phase)?;
+        let session_id = self
+            .group_binding_id(request, explicit)
+            .unwrap_or(session_id)
+            .as_str()
+            .to_string()
+            .into();
+        let requested_target = explicit.map(to_table);
+        Ok(if is_query_only {
+            SessionBinding::Query {
+                session_id,
+                requested_target,
+            }
+        } else {
+            SessionBinding::Managed {
+                session_id,
+                requested_target,
+            }
+        })
+    }
+
+    /// Commit a held session to the dispatched worker and keep the lease for
+    /// as long as the response stream runs; a request without a session
+    /// passes its stream through. The KV plane commits through the
+    /// partition's resolver, which fails a departed binding over to the
+    /// dispatched worker; the builtin plane commits through its coordinator.
     fn bind_affinity(
         &self,
         hold: Option<Hold>,
         dispatched_target: AffinityTarget,
         stream: ManyOut<Annotated<LLMEngineOutput>>,
     ) -> Result<ManyOut<Annotated<LLMEngineOutput>>, Error> {
-        let (Some(hold), Some(affinity)) = (hold, self.affinity.as_ref()) else {
+        let Some(hold) = hold else {
+            return Ok(stream);
+        };
+        if let RoutingPolicy::Kv(kv_router) = &self.policy {
+            let Some(resolver) = kv_router.affinity_resolver() else {
+                return Ok(stream);
+            };
+            return match resolver.commit(hold, to_table(dispatched_target)) {
+                Ok(Some(lease)) => Ok(tracked_stream(lease, stream)),
+                Ok(None) => Ok(stream),
+                Err(error) => Err(affinity_error(error)),
+            };
+        }
+        let Some(affinity) = self.affinity.as_ref() else {
             return Ok(stream);
         };
         affinity.commit_to_stream(hold, dispatched_target, stream)
@@ -844,7 +900,7 @@ impl AsyncEngine<SingleIn<PreprocessedRequest>, ManyOut<Annotated<LLMEngineOutpu
         let phase = request.phase();
         let phase_label = phase.to_string();
         let route_guard = StageGuard::new(STAGE_ROUTE, &phase_label);
-        let (mut selection, mut operation) = self
+        let (mut selection, operation) = self
             .select_with_affinity(&request, phase, is_query_only, &budget)
             .await?;
         if is_query_only {
@@ -898,21 +954,10 @@ impl AsyncEngine<SingleIn<PreprocessedRequest>, ManyOut<Annotated<LLMEngineOutpu
         };
         drop(route_guard);
         let selected_target = route_target(selection.worker);
-        let stream = match self
+        // A failed dispatch binds nothing: the hold is released with it.
+        let stream = self
             .dispatch_selection(request, selection, guard, &budget)
-            .await
-        {
-            Ok(stream) => stream,
-            Err(error) => {
-                if self.session_affinity_mode == SessionAffinityMode::Hard
-                    && !self.affinity_target_is_valid(selected_target)
-                    && let Some(operation) = operation.take()
-                {
-                    operation.invalidate();
-                }
-                return Err(error);
-            }
-        };
+            .await?;
         self.bind_affinity(operation, selected_target, stream)
     }
 }

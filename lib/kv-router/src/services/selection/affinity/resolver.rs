@@ -224,6 +224,31 @@ impl AffinityResolver {
         Ok(None)
     }
 
+    /// Whether `commit` would reject `dispatched` for a live `Hard` binding.
+    ///
+    /// For a host that commits after dispatch, this is the check to run
+    /// before dispatching: a `Hard` binding whose worker is live but was not
+    /// selected (the request's own constraints excluded it) would be rejected
+    /// at commit, after the worker has already started the request. The hold
+    /// is left as it is; the host decides whether to release or invalidate it.
+    pub fn check_dispatch(
+        &self,
+        hold: &Hold,
+        dispatched: AffinityTarget,
+    ) -> Result<(), AffinityError> {
+        if self.table.mode() != SessionAffinityMode::Hard {
+            return Ok(());
+        }
+        let Some(target) = hold.target() else {
+            return Ok(());
+        };
+        if !self.liveness.is_schedulable(target) {
+            // `commit` fails this binding over to `dispatched` instead.
+            return Ok(());
+        }
+        validate_dispatch_target(hold.session_id(), target, dispatched)
+    }
+
     /// Give up a hold because the selection policy filtered out every
     /// candidate. In `Hard` mode that includes the bound worker, which the
     /// scheduler had limited selection to: drop the binding so the session
@@ -622,6 +647,36 @@ mod tests {
             resolver.query("s", Some(target(2, None))),
             Err(AffinityError::InvalidArgument(_))
         ));
+    }
+
+    #[tokio::test]
+    async fn check_dispatch_rejects_only_a_live_hard_mismatch() {
+        let (hard, liveness) = make_resolver(SessionAffinityMode::Hard, &[1, 2]);
+        bind(&hard, "s", target(1, Some(0))).await;
+        let held = hold(&hard, "s").await;
+        assert!(hard.check_dispatch(&held, target(1, Some(0))).is_ok());
+        assert!(matches!(
+            hard.check_dispatch(&held, target(2, Some(0))),
+            Err(AffinityError::InvalidArgument(_))
+        ));
+        assert_eq!(
+            bound(&hard, "s"),
+            Some(target(1, Some(0))),
+            "the check changes nothing"
+        );
+        liveness.set(&[2]);
+        assert!(
+            hard.check_dispatch(&held, target(2, Some(0))).is_ok(),
+            "a departed binding is left for commit to fail over"
+        );
+        drop(held);
+
+        let (soft, _) = make_resolver(SessionAffinityMode::Soft, &[1, 2]);
+        bind(&soft, "s", target(1, Some(0))).await;
+        let held = hold(&soft, "s").await;
+        assert!(soft.check_dispatch(&held, target(2, Some(0))).is_ok());
+        let fresh = hold(&hard, "fresh").await;
+        assert!(hard.check_dispatch(&fresh, target(2, Some(0))).is_ok());
     }
 
     #[tokio::test]
