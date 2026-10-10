@@ -2933,7 +2933,9 @@ async fn hard_mode_rebinds_when_a_filter_rejects_the_bound_worker() {
     excluded.allowed_worker_ids = Some(HashSet::from([other]));
     assert!(matches!(
         core.select_and_reserve(excluded).await,
-        Err(SelectionError::Scheduler(KvSchedulerError::AllEligibleWorkersFiltered))
+        Err(SelectionError::Scheduler(
+            KvSchedulerError::AllEligibleWorkersFiltered
+        ))
     ));
     assert_eq!(bound_worker(&core, "s"), Some(first.worker_id));
     rejected.store(first.worker_id, Ordering::Relaxed);

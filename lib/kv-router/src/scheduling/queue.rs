@@ -16,7 +16,7 @@ use tokio::time::Instant;
 use self::capacity::CapacityUpdates;
 #[cfg(test)]
 use super::config::RouterQueuePolicy;
-use super::filter::{RoutingEligibility, worker_config_for_rank};
+use super::filter::{RoutingEligibility, WorkerEligibilityError, worker_config_for_rank};
 use super::overlap::SelectedWorkerTierSnapshot;
 use super::overlap_refresh::{
     NoopOverlapScoresRefresh, OverlapScoresRefresh, read_overlap_refresh_after, refresh_overlap,
@@ -1638,10 +1638,20 @@ impl<
             // binding reaches the policy as context only. Admission never narrows.
             let hard_affinity_enforced = if let Some(affinity) = request.affinity
                 && affinity.is_hard()
-                && eligibility.affinity_target_is_eligible(&workers, affinity.target)
             {
-                eligibility = eligibility.with_affinity_target(affinity.target);
-                true
+                match eligibility.validate_affinity_target(&workers, affinity.target) {
+                    Ok(()) => {
+                        eligibility = eligibility.with_affinity_target(affinity.target);
+                        true
+                    }
+                    Err(WorkerEligibilityError::WorkerOverloaded { worker_id }) => {
+                        return Err(KvSchedulerError::HardAffinityTargetOverloaded { worker_id });
+                    }
+                    Err(WorkerEligibilityError::WorkerNotRoutable { worker_id }) => {
+                        return Err(KvSchedulerError::HardAffinityTargetUnavailable { worker_id });
+                    }
+                    Err(_) => false,
+                }
             } else {
                 false
             };

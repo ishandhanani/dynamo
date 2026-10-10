@@ -5,8 +5,8 @@
 //!
 //! `resolve` runs before worker selection and yields the [`Hold`] to commit.
 //! Its bound target supplies the [`AffinityRequirement`] the scheduler enforces. `commit_or_failover` runs
-//! once the host knows where the request went: after booking for a host that
-//! owns the booking, after dispatch for a host that owns the response stream.
+//! after booking for a host that owns the booking. A frontend serializes failover
+//! before dispatch and uses `commit` after obtaining the response stream.
 //! `query_target` serves selections that must not bind anything.
 
 use std::future::Future;
@@ -179,15 +179,16 @@ impl SessionAffinity {
             return Ok(());
         };
         if !is_live(target) {
-            // `commit` fails this binding over to `dispatched` instead.
+            // The frontend must release its booking and reacquire this session
+            // before dispatching elsewhere; service bookings use `commit_or_failover`.
             return Ok(());
         }
         validate_dispatch_target(hold.session_id(), target, dispatched)
     }
 
-    /// Give up a hold because the selection policy filtered out every
-    /// candidate. In `Hard` mode that includes the bound worker, which the
-    /// scheduler had limited selection to: drop the binding so the session
+    /// Give up a hold after the scheduler reports `HardAffinityTargetFiltered`:
+    /// selection was limited to the bound target and the policy rejected it.
+    /// Drop the binding so the session
     /// re-binds instead of failing on every retry. A `Soft` binding is kept.
     pub fn release_filtered(&self, hold: Hold) {
         if self.mode() == SessionAffinityMode::Hard {

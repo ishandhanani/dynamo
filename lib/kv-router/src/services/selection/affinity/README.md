@@ -24,7 +24,7 @@ flowchart LR
 
 ## Selection and ownership
 
-`AffinityRequirement { target, mode }` carries the existing `SessionAffinityMode` to the scheduler. Hard mode narrows selection to an eligible bound target, independently of the selection policy. Soft mode supplies a preference the policy may override. Explicit request pins remain separate exact constraints. Hard affinity does not narrow queue admission: it waits in the router only when all eligible workers are busy; otherwise it runs on its bound worker and queues there.
+`AffinityRequirement { target, mode }` carries the existing `SessionAffinityMode` to the scheduler. Hard mode narrows selection to an eligible bound target, independently of the selection policy. Soft mode supplies a preference the policy may override. The default policy limits materialization to an eligible Soft target before scoring; custom policies remain advisory unless they opt in. Explicit request pins remain separate exact constraints. Hard affinity does not narrow queue admission: it waits in the router only when all eligible workers are busy; otherwise it runs on its bound worker and queues there.
 
 | Host | Liveness | Commit point | Lease owner |
 |---|---|---|---|
@@ -34,7 +34,7 @@ flowchart LR
 
 The KV frontend embeds `SelectionService` and uses that service partition's table. It resolves and holds sessions outside `SelectionCore`, passing only the affinity requirement into selection. Builtin routing uses the same `SessionAffinity` directly. The table owns its replication sink and therefore the frontend transport runtime; no frontend coordinator is needed. Prefill and decode keep separate tables because they serve different worker pools and can have different TTLs.
 
-`check_dispatch` rejects a live Hard mismatch before frontend dispatch, preserving the binding because nothing ran. A policy filtering out all candidates releases the Hard binding so a retry can rebind. The service commits after booking; a rejected commit drops the binding and the armed booking handle frees capacity. `commit_or_failover` handles a worker departing after resolution without awaiting another initializer behind booked capacity. Revision and version checks keep stale holds from erasing a replacement binding.
+`check_dispatch` rejects a live Hard mismatch before frontend dispatch, preserving the binding because nothing ran. A policy filtering out the enforced Hard target releases that binding so a retry can rebind. Filtering other candidates when the target was already excluded keeps the binding. Transient overload and unavailability return retryable service errors and keep the binding. The service commits after booking; a rejected commit drops the binding and the armed booking handle frees capacity. For the frontend, a worker departing during selection releases the replacement booking and reacquires an initializing hold before reselecting; competing requests wait for that initialization before dispatch. The frontend then uses `commit` after successful dispatch. The service uses `commit_or_failover` after booking, without awaiting another initializer behind booked capacity. Revision and version checks keep stale holds from erasing a replacement binding.
 
 ## Replication
 

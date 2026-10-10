@@ -109,6 +109,12 @@ pub enum KvSchedulerError {
     #[error("pinned worker {worker_id} is overloaded")]
     PinnedWorkerOverloaded { worker_id: WorkerId },
 
+    #[error("hard session affinity worker {worker_id} is overloaded")]
+    HardAffinityTargetOverloaded { worker_id: WorkerId },
+
+    #[error("hard session affinity worker {worker_id} is unavailable")]
+    HardAffinityTargetUnavailable { worker_id: WorkerId },
+
     #[error("pinned worker {worker_id} is not in allowed worker set")]
     PinnedWorkerNotAllowed { worker_id: WorkerId },
 
@@ -147,7 +153,9 @@ impl KvSchedulerError {
     pub fn is_overload(&self) -> bool {
         matches!(
             self,
-            Self::AllEligibleWorkersOverloaded | Self::PinnedWorkerOverloaded { .. }
+            Self::AllEligibleWorkersOverloaded
+                | Self::PinnedWorkerOverloaded { .. }
+                | Self::HardAffinityTargetOverloaded { .. }
         )
     }
 }

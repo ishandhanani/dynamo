@@ -537,7 +537,8 @@ fn map_scheduler_error(error: scheduling::KvSchedulerError) -> anyhow::Error {
     // would just bounce the request around. A filter rejection is unavailable,
     // not overload, and becomes HTTP 503.
     let (error_type, overloaded) = match error {
-        scheduling::KvSchedulerError::PinnedWorkerOverloaded { .. } => {
+        scheduling::KvSchedulerError::PinnedWorkerOverloaded { .. }
+        | scheduling::KvSchedulerError::HardAffinityTargetOverloaded { .. } => {
             (ErrorType::WorkerOverloaded, true)
         }
         scheduling::KvSchedulerError::AllEligibleWorkersOverloaded => {
@@ -545,7 +546,12 @@ fn map_scheduler_error(error: scheduling::KvSchedulerError) -> anyhow::Error {
         }
         scheduling::KvSchedulerError::DeadlineExceeded => (ErrorType::DeadlineExceeded, false),
         scheduling::KvSchedulerError::AllEligibleWorkersFiltered
-        | scheduling::KvSchedulerError::HardAffinityTargetFiltered => (ErrorType::Unavailable, false),
+        | scheduling::KvSchedulerError::HardAffinityTargetFiltered => {
+            (ErrorType::Unavailable, false)
+        }
+        scheduling::KvSchedulerError::HardAffinityTargetUnavailable { .. } => {
+            (ErrorType::WorkerUnavailable, false)
+        }
         _ => return error.into(),
     };
 

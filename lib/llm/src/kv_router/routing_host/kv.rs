@@ -65,42 +65,59 @@ impl RoutingHost {
         planned_worker: Option<WorkerWithDpRank>,
         budget: &CleanupBudget,
     ) -> Result<(WorkerSelection, Option<Hold>), Error> {
-        let (hold, affinity) = self
-            .resolve_hosted_session(request, phase, is_query_only, budget)
-            .await?;
-        let selection = self
-            .select_request_outcome(
-                request,
-                phase,
-                is_query_only,
-                affinity,
-                planned_worker,
-                FindBestMatchAdmission::WithAdmission,
-                budget,
-            )
-            .await
-            .and_then(SelectionOutcome::into_result);
-        let selection = match selection {
-            Ok(selection) => selection,
-            Err(error) => {
-                if matches!(
-                    error.downcast_ref::<KvSchedulerError>(),
-                    Some(KvSchedulerError::HardAffinityTargetFiltered)
-                ) && let (Some(hold), Some(table)) = (hold, self.affinity.as_ref())
-                {
-                    table.release_filtered(hold);
+        loop {
+            let (hold, affinity) = self
+                .resolve_hosted_session(request, phase, is_query_only, budget)
+                .await?;
+            let selection = self
+                .select_request_outcome(
+                    request,
+                    phase,
+                    is_query_only,
+                    affinity,
+                    planned_worker,
+                    FindBestMatchAdmission::WithAdmission,
+                    budget,
+                )
+                .await
+                .and_then(SelectionOutcome::into_result);
+            let mut selection = match selection {
+                Ok(selection) => selection,
+                Err(error) => {
+                    if matches!(
+                        error.downcast_ref::<KvSchedulerError>(),
+                        Some(KvSchedulerError::HardAffinityTargetFiltered)
+                    ) && let (Some(hold), Some(table)) = (hold, self.affinity.as_ref())
+                    {
+                        table.release_filtered(hold);
+                    }
+                    return Err(error);
                 }
-                return Err(error);
+            };
+            if let (Some(hold), Some(table)) = (hold.as_ref(), self.affinity.as_ref()) {
+                table
+                    .check_dispatch(hold, selection.worker.into(), |target| {
+                        self.affinity_target_is_live(target)
+                    })
+                    .map_err(affinity_error)?;
             }
-        };
-        if let (Some(hold), Some(table)) = (hold.as_ref(), self.affinity.as_ref()) {
-            table
-                .check_dispatch(hold, selection.worker.into(), |target| {
-                    self.affinity_target_is_live(target)
-                })
-                .map_err(affinity_error)?;
+            // A departed Hard target was replaced during selection. Release its
+            // booking before reacquiring: one initializer must choose the new
+            // binding before competing requests dispatch to different workers.
+            if let (Some(held), Some(table)) = (hold.as_ref(), self.affinity.as_ref())
+                && table.mode() == SessionAffinityMode::Hard
+                && held
+                    .target()
+                    .is_some_and(|target| !target.matches(selection.worker))
+            {
+                if let Some(booking) = selection.booking.take() {
+                    booking.release().await?;
+                }
+                hold.expect("checked held affinity").invalidate();
+                continue;
+            }
+            return Ok((selection, hold));
         }
-        Ok((selection, hold))
     }
 
     pub(super) async fn select_with_affinity(

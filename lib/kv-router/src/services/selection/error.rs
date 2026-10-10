@@ -73,6 +73,7 @@ fn scheduler_error_status(error: &KvSchedulerError) -> StatusCode {
         KvSchedulerError::NoEndpoints
         | KvSchedulerError::AllEligibleWorkersFiltered
         | KvSchedulerError::HardAffinityTargetFiltered
+        | KvSchedulerError::HardAffinityTargetUnavailable { .. }
         | KvSchedulerError::SubscriberShutdown
         | KvSchedulerError::InitFailed(_) => StatusCode::SERVICE_UNAVAILABLE,
         KvSchedulerError::WorkerSelectionPolicy(_) => StatusCode::INTERNAL_SERVER_ERROR,
@@ -81,6 +82,7 @@ fn scheduler_error_status(error: &KvSchedulerError) -> StatusCode {
         // respond to like the overloaded family, not a gateway timeout.
         KvSchedulerError::AllEligibleWorkersOverloaded
         | KvSchedulerError::PinnedWorkerOverloaded { .. }
+        | KvSchedulerError::HardAffinityTargetOverloaded { .. }
         | KvSchedulerError::QueueRejected(_)
         | KvSchedulerError::DeadlineExceeded => StatusCode::TOO_MANY_REQUESTS,
         KvSchedulerError::PinnedWorkerNotAllowed { .. } => StatusCode::BAD_REQUEST,

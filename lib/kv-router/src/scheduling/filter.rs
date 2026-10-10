@@ -289,17 +289,30 @@ impl<'a> RoutingEligibility<'a> {
         workers: &HashMap<WorkerId, C>,
         target: WorkerAffinityTarget,
     ) -> bool {
-        let Some(config) = workers.get(&target.worker_id) else {
-            return false;
-        };
-        if !self.allows_worker(target.worker_id, config) {
-            return false;
-        }
-        let ranks = config.data_parallel_start_rank()
-            ..config.data_parallel_start_rank() + config.data_parallel_size();
-        target
-            .dp_rank
-            .map_or(!ranks.is_empty(), |rank| ranks.contains(&rank))
+        self.validate_affinity_target(workers, target).is_ok()
+    }
+
+    pub(crate) fn validate_affinity_target<C: WorkerConfigLike>(
+        &self,
+        workers: &HashMap<WorkerId, C>,
+        target: WorkerAffinityTarget,
+    ) -> Result<(), WorkerEligibilityError> {
+        let config =
+            workers
+                .get(&target.worker_id)
+                .ok_or(WorkerEligibilityError::WorkerUnavailable {
+                    worker_id: target.worker_id,
+                })?;
+        self.validate_worker_rank(
+            workers,
+            WorkerWithDpRank::new(
+                target.worker_id,
+                target
+                    .dp_rank
+                    .unwrap_or_else(|| config.data_parallel_start_rank()),
+            ),
+        )
+        .map(|_| ())
     }
 
     pub fn for_each_eligible_worker_rank<C, F>(&self, workers: &HashMap<WorkerId, C>, mut visit: F)

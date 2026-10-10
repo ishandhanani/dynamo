@@ -615,8 +615,7 @@ impl RoutingHost {
 
     /// Commit a held session to the dispatched worker and keep the lease for
     /// as long as the response stream runs; a request without a session
-    /// passes its stream through. The table fails a departed binding over
-    /// to the dispatched worker.
+    /// passes its stream through. Hard failover is serialized before dispatch.
     fn bind_affinity(
         &self,
         hold: Option<Hold>,
@@ -626,13 +625,10 @@ impl RoutingHost {
         let (Some(hold), Some(affinity)) = (hold, self.affinity.as_ref()) else {
             return Ok(stream);
         };
-        match affinity.commit_or_failover(hold, to_table(dispatched_target), |target| {
-            self.affinity_target_is_live(target)
-        }) {
-            Ok(Some(lease)) => Ok(tracked_stream(lease, stream)),
-            Ok(None) => Ok(stream),
-            Err(error) => Err(affinity_error(error)),
-        }
+        affinity
+            .commit(hold, to_table(dispatched_target))
+            .map(|lease| tracked_stream(lease, stream))
+            .map_err(affinity_error)
     }
 
     /// Check request-supplied targets only at initial selection, not after a route preview
