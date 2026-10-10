@@ -28,7 +28,7 @@ use crate::{
         llm_backend::{LLMEngineOutput, PreprocessedRequest},
         timing::WORKER_TYPE_PREFILL,
     },
-    session_affinity::{DiscoveryLiveness, HostAffinity, SessionAffinityMode},
+    session_affinity::{SessionAffinityMode, standalone_with_replica_sync},
 };
 
 /// How the prefill worker set wants to be routed to, resolved from its cards.
@@ -379,8 +379,11 @@ impl PrefillRouter {
             // worker and a decode worker independently, since the pools differ.
             let affinity = match prefill_session_affinity_ttl {
                 Some(ttl) => {
-                    let affinity = kv_chooser.host_affinity(ttl, context.session_affinity_mode)?;
-                    affinity.enable_replica_sync(client.clone()).await?;
+                    let affinity =
+                        kv_chooser.session_affinity(ttl, context.session_affinity_mode)?;
+                    kv_chooser
+                        .enable_affinity_replica_sync(&affinity, client.clone())
+                        .await?;
                     Some(affinity)
                 }
                 None => None,
@@ -403,10 +406,9 @@ impl PrefillRouter {
         } else {
             // A builtin prefill host has no partition: its own table, scoped
             // to the prefill pool like the KV host's above.
-            let affinity = HostAffinity::standalone_with_replica_sync(
+            let affinity = standalone_with_replica_sync(
                 prefill_session_affinity_ttl,
                 context.session_affinity_mode,
-                Arc::new(DiscoveryLiveness::new(client.clone(), None)),
                 client.clone(),
             )
             .await?;

@@ -392,20 +392,29 @@ impl SessionContext {
     }
 }
 
-/// How strongly a session-affinity target constrains worker selection.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum AffinityStrength {
-    /// The target is the only candidate while it is eligible. An ineligible
-    /// target (departed, out of the caller's set, unavailable, or overloaded)
-    /// falls back to normal selection; the host decides what the resulting
-    /// dispatch means for the binding. Policy filters run after narrowing, so a
-    /// filter that rejects the target fails selection with
-    /// `AllEligibleWorkersFiltered`.
+/// How a bound session treats a dispatch that landed elsewhere.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum SessionAffinityMode {
+    /// The binding is exact: dispatching to another worker or rank is an error.
+    #[default]
     Hard,
-    /// A preference the selection policy reads from
-    /// [`WorkerSelectionContext::affinity_target`](crate::plugins::worker_selection::WorkerSelectionContext::affinity_target).
-    /// The host does not narrow the candidate set.
+    /// The binding follows the dispatch: the session rebinds to where it ran.
     Soft,
+}
+
+impl std::str::FromStr for SessionAffinityMode {
+    type Err = String;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value {
+            "hard" => Ok(Self::Hard),
+            "soft" => Ok(Self::Soft),
+            _ => Err(format!(
+                "invalid session affinity mode {value:?}; expected 'hard' or 'soft'"
+            )),
+        }
+    }
 }
 
 /// A session-affinity target with the strength the request host resolved.
@@ -415,26 +424,26 @@ pub enum AffinityStrength {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct AffinityRequirement {
     pub target: WorkerAffinityTarget,
-    pub strength: AffinityStrength,
+    pub mode: SessionAffinityMode,
 }
 
 impl AffinityRequirement {
     pub fn hard(target: WorkerAffinityTarget) -> Self {
         Self {
             target,
-            strength: AffinityStrength::Hard,
+            mode: SessionAffinityMode::Hard,
         }
     }
 
     pub fn soft(target: WorkerAffinityTarget) -> Self {
         Self {
             target,
-            strength: AffinityStrength::Soft,
+            mode: SessionAffinityMode::Soft,
         }
     }
 
     pub fn is_hard(&self) -> bool {
-        self.strength == AffinityStrength::Hard
+        self.mode == SessionAffinityMode::Hard
     }
 }
 

@@ -907,6 +907,69 @@ worker_selection:
             .expect("synthetic profile must ignore any policy_class value");
     }
     #[tokio::test]
+    async fn session_affinity_mode_reaches_the_shared_selection_service() {
+        use dynamo_kv_router::services::selection::affinity::SessionAffinityMode;
+
+        for mode in [SessionAffinityMode::Hard, SessionAffinityMode::Soft] {
+            let mut cfg = test_config();
+            cfg.session_affinity_ttl_secs = Some(60.0);
+            cfg.session_affinity_mode = mode;
+            let selector = Selector::new(&cfg, WorkerSelectionPolicyRegistry::default())
+                .await
+                .expect("selector");
+            register(
+                &selector,
+                vec![schedulable_registration(1), schedulable_registration(2)],
+            )
+            .await;
+            let request_for = |id: &str, worker_id| {
+                let mut request = select_request(id);
+                request.session_id = Some("shared-session".into());
+                request.allowed_worker_ids = Some([worker_id].into());
+                request
+            };
+            assert_eq!(
+                selector
+                    .select_and_reserve(request_for("first", 1))
+                    .await
+                    .unwrap()
+                    .worker_id,
+                1
+            );
+            selector.free_reservation("first").await.unwrap();
+
+            let moved = selector.select_and_reserve(request_for("moved", 2)).await;
+            match mode {
+                SessionAffinityMode::Hard => {
+                    assert!(
+                        matches!(moved, Err(SelectionError::BadRequest(_))),
+                        "a live Hard binding must reject a different booked worker"
+                    );
+                }
+                SessionAffinityMode::Soft => {
+                    assert_eq!(
+                        moved.unwrap().worker_id,
+                        2,
+                        "Soft mode follows the booked worker"
+                    );
+                    selector.free_reservation("moved").await.unwrap();
+                }
+            }
+            // A rejected Hard booking releases its claim and invalidates the
+            // binding; a Soft booking already rebound it. Both can reserve again.
+            assert_eq!(
+                selector
+                    .select_and_reserve(request_for("moved", 2))
+                    .await
+                    .unwrap()
+                    .worker_id,
+                2
+            );
+            selector.free_reservation("moved").await.unwrap();
+        }
+    }
+
+    #[tokio::test]
     async fn invalid_affinity_ttl_returns_configuration_error() {
         for ttl in [-1.0, 0.0, 0.5, f64::NAN, f64::INFINITY] {
             let mut cfg = test_config();

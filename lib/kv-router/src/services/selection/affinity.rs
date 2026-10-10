@@ -11,18 +11,23 @@
 //! response stream ends. Bindings are versioned so replicas can exchange them
 //! through an [`AffinityReplicaSink`]; the transport is the host's.
 //!
-//! The selection core drives the table through [`super::AffinityResolver`],
-//! which adds the liveness check, cancellation, failover, and the full-table
-//! policy; the frontend's `AffinityCoordinator` still drives it directly.
+//! Every host uses the shared resolution and commit methods, supplying its
+//! own liveness check and retaining its own request lifetime.
 
+mod replication;
+mod resolver;
+
+pub use replication::{AffinityBindingEvent, replica_sink};
+
+use std::future::Future;
 use std::pin::Pin;
+#[cfg(any(test, feature = "testing"))]
+use std::sync::OnceLock;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
-use std::sync::{Arc, OnceLock, Weak};
+use std::sync::{Arc, Weak};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use crate::scheduling::AffinityStrength;
 use dashmap::{DashMap, mapref::entry::Entry};
-use serde::{Deserialize, Serialize};
 use tokio::sync::Notify;
 use tokio::sync::futures::OwnedNotified;
 use tokio::time::Instant;
@@ -35,39 +40,7 @@ pub const MAX_SESSION_AFFINITY_TTL_SECS: u64 = 31_536_000;
 pub const MAX_SESSION_AFFINITY_ENTRIES: usize = 65_536;
 pub const MAX_SESSION_AFFINITY_ID_BYTES: usize = 256;
 
-/// How a bound session treats a dispatch that landed elsewhere.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum SessionAffinityMode {
-    /// The binding is exact: dispatching to another worker or rank is an error.
-    #[default]
-    Hard,
-    /// The binding follows the dispatch: the session rebinds to where it ran.
-    Soft,
-}
-
-impl From<SessionAffinityMode> for AffinityStrength {
-    fn from(mode: SessionAffinityMode) -> Self {
-        match mode {
-            SessionAffinityMode::Hard => Self::Hard,
-            SessionAffinityMode::Soft => Self::Soft,
-        }
-    }
-}
-
-impl std::str::FromStr for SessionAffinityMode {
-    type Err = String;
-
-    fn from_str(value: &str) -> Result<Self, Self::Err> {
-        match value {
-            "hard" => Ok(Self::Hard),
-            "soft" => Ok(Self::Soft),
-            _ => Err(format!(
-                "invalid session affinity mode {value:?}; expected 'hard' or 'soft'"
-            )),
-        }
-    }
-}
+pub use crate::scheduling::SessionAffinityMode;
 
 #[derive(Debug, thiserror::Error)]
 pub enum AffinityError {
@@ -77,8 +50,7 @@ pub enum AffinityError {
     ResourceExhausted(String),
     #[error("session affinity table dropped")]
     Dropped,
-    /// The host's cancel signal fired while `AffinityResolver::resolve`
-    /// waited; the table itself never produces it.
+    /// The host cancelled a wait for another request to initialize the session.
     #[error("session affinity wait was cancelled")]
     Cancelled,
 }
@@ -93,6 +65,15 @@ pub struct AffinityVersion {
 /// Receives every binding this table publishes for its replicas.
 pub trait AffinityReplicaSink: Send + Sync {
     fn publish(&self, session_id: &str, target: AffinityTarget, version: AffinityVersion);
+}
+
+impl<F> AffinityReplicaSink for F
+where
+    F: Fn(&str, AffinityTarget, AffinityVersion) + Send + Sync,
+{
+    fn publish(&self, session_id: &str, target: AffinityTarget, version: AffinityVersion) {
+        self(session_id, target, version);
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -199,9 +180,10 @@ struct Inner {
     entry_count: AtomicUsize,
     next_revision: AtomicU64,
     next_sequence: AtomicU64,
-    writer_id: AtomicU64,
     cancel: CancellationToken,
-    replica: OnceLock<Arc<dyn AffinityReplicaSink>>,
+    replica: tokio::sync::OnceCell<(u64, Arc<dyn AffinityReplicaSink>)>,
+    #[cfg(any(test, feature = "testing"))]
+    after_invalidation: OnceLock<Box<dyn Fn() + Send + Sync>>,
     #[cfg(any(test, feature = "testing"))]
     reaper_started: Arc<Notify>,
     #[cfg(any(test, feature = "testing"))]
@@ -300,9 +282,10 @@ impl SessionAffinity {
                     .unwrap_or_default()
                     .as_nanos() as u64,
             ),
-            writer_id: AtomicU64::new(0),
             cancel: CancellationToken::new(),
-            replica: OnceLock::new(),
+            replica: tokio::sync::OnceCell::new(),
+            #[cfg(any(test, feature = "testing"))]
+            after_invalidation: OnceLock::new(),
             #[cfg(any(test, feature = "testing"))]
             reaper_started: Arc::new(Notify::new()),
             #[cfg(any(test, feature = "testing"))]
@@ -360,15 +343,22 @@ impl SessionAffinity {
         }
     }
 
-    /// Install the replica sink and this replica's writer id. Returns `false`
-    /// when a sink is already installed.
+    /// Install the replica sink and its writer id atomically. Returns `false`
+    /// when a sink is installed or another task is initializing one.
     pub fn enable_replication(&self, writer_id: u64, sink: Arc<dyn AffinityReplicaSink>) -> bool {
-        // Record the id only for the sink that actually got installed.
-        let installed = self.inner.replica.set(sink).is_ok();
-        if installed {
-            self.inner.writer_id.store(writer_id, Ordering::Relaxed);
-        }
-        installed
+        self.inner.replica.set((writer_id, sink)).is_ok()
+    }
+
+    /// Start this table's transport once, retaining its sink for the table's
+    /// lifetime. Concurrent callers share the successful initialization;
+    /// failure or cancellation leaves it available for another attempt.
+    /// `start` is only polled when no transport has been installed.
+    pub async fn enable_replication_with<E>(
+        &self,
+        start: impl Future<Output = Result<(u64, Arc<dyn AffinityReplicaSink>), E>>,
+    ) -> Result<(), E> {
+        self.inner.replica.get_or_try_init(|| start).await?;
+        Ok(())
     }
 
     pub fn ttl(&self) -> Duration {
@@ -382,7 +372,10 @@ impl SessionAffinity {
     /// This replica's writer id, installed with its replication sink; zero
     /// until then.
     pub fn writer_id(&self) -> u64 {
-        self.inner.writer_id.load(Ordering::Relaxed)
+        self.inner
+            .replica
+            .get()
+            .map_or(0, |(writer_id, _)| *writer_id)
     }
 
     /// Acquire `session_id` for a request. `requested_target` is an explicit
@@ -694,7 +687,7 @@ impl Inner {
         target: AffinityTarget,
         version: AffinityVersion,
     ) {
-        if let Some(replica) = self.replica.get() {
+        if let Some((_, replica)) = self.replica.get() {
             replica.publish(session_id, target, version);
         }
     }
@@ -702,7 +695,7 @@ impl Inner {
     fn next_version(&self) -> AffinityVersion {
         AffinityVersion {
             sequence: self.next_sequence.fetch_add(1, Ordering::Relaxed),
-            writer_id: self.writer_id.load(Ordering::Relaxed),
+            writer_id: self.replica.get().map_or(0, |(writer_id, _)| *writer_id),
         }
     }
 
@@ -1102,208 +1095,4 @@ pub fn validate_dispatch_target(
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    const TTL: Duration = Duration::from_secs(10);
-
-    fn table() -> SessionAffinity {
-        SessionAffinity::with_config(SessionAffinityConfig::new(TTL)).expect("affinity table")
-    }
-
-    fn initialize(table: &SessionAffinity) -> AffinityInitialization {
-        match table.try_acquire("s", None).expect("acquire") {
-            AcquireStep::Held(Hold::Initialize(init)) => init,
-            AcquireStep::Held(Hold::Bound { .. }) => panic!("session is already bound"),
-            AcquireStep::Wait(_) => panic!("session is being initialized"),
-        }
-    }
-
-    #[tokio::test(start_paused = true)]
-    async fn joined_lease_released_before_the_commit_is_not_counted() {
-        let table = table();
-        let target = AffinityTarget::new(2, Some(0));
-        let init = initialize(&table);
-        let joined = table
-            .join_initializing("s", target)
-            .expect("join an initializing session");
-        assert_eq!(table.lease_count("s"), Some(2));
-
-        // The joiner finishes while the initializer is still queued.
-        drop(joined);
-        assert_eq!(
-            table.lease_count("s"),
-            Some(1),
-            "early release leaves the initializer's use"
-        );
-
-        tokio::time::advance(TTL + Duration::from_secs(1)).await;
-        assert_eq!(table.query_target("s", None).expect("query"), Some(target));
-
-        let lease = init.commit(target).expect("commit");
-        assert_eq!(
-            table.lease_count("s"),
-            Some(1),
-            "commit counts only the initializer"
-        );
-        drop(lease);
-        assert_eq!(table.lease_count("s"), Some(0));
-        tokio::time::advance(TTL + Duration::from_secs(1)).await;
-        assert_eq!(
-            table.query_target("s", None).expect("query"),
-            None,
-            "a binding with no live leases idles out"
-        );
-    }
-
-    #[tokio::test(start_paused = true)]
-    async fn joined_lease_counts_once_the_competing_initialization_commits() {
-        let table = table();
-        let target = AffinityTarget::new(2, Some(0));
-        let init = initialize(&table);
-        let AcquireStep::Wait(waiter) = table.try_acquire("s", None).expect("waiter") else {
-            panic!("initialization must have a waiter");
-        };
-        let joined = table
-            .join_initializing("s", target)
-            .expect("join an initializing session");
-        tokio::time::timeout(Duration::from_millis(1), waiter)
-            .await
-            .expect("joining must wake existing waiters");
-        assert_eq!(table.lease_count("s"), Some(2));
-        assert!(
-            table.join_initializing("x", target).is_none(),
-            "no join without an initializer"
-        );
-
-        let lease = init.commit(target).expect("commit");
-        assert_eq!(table.lease_count("s"), Some(2));
-        assert_eq!(table.query_target("s", None).expect("query"), Some(target));
-
-        drop(lease);
-        assert_eq!(table.lease_count("s"), Some(1));
-        // The joiner's release is a use of the binding: it refreshes the idle
-        // deadline, so the binding outlives the initializer's own TTL.
-        tokio::time::advance(TTL - Duration::from_secs(1)).await;
-        drop(joined);
-        assert_eq!(table.lease_count("s"), Some(0));
-        tokio::time::advance(Duration::from_secs(2)).await;
-        assert_eq!(
-            table.query_target("s", None).expect("query"),
-            Some(target),
-            "joined lease release must refresh the idle deadline"
-        );
-        tokio::time::advance(TTL).await;
-        assert_eq!(table.query_target("s", None).expect("query"), None);
-        assert!(
-            matches!(
-                table.try_acquire("s", None).expect("acquire"),
-                AcquireStep::Held(Hold::Initialize(_))
-            ),
-            "an idled binding re-initializes"
-        );
-    }
-
-    #[tokio::test(start_paused = true)]
-    async fn joined_binding_survives_the_initializer_dropping() {
-        let table = table();
-        let init = initialize(&table);
-        let target = AffinityTarget::new(2, Some(0));
-        let joined = table
-            .join_initializing("s", target)
-            .expect("join an initializing session");
-        assert_eq!(table.entry_count(), 1);
-
-        drop(init);
-        assert_eq!(table.entry_count(), 1);
-        assert_eq!(table.query_target("s", None).expect("query"), Some(target));
-        assert_eq!(table.lease_count("s"), Some(1));
-        drop(joined);
-        assert_eq!(table.lease_count("s"), Some(0));
-        tokio::time::advance(TTL + Duration::from_secs(1)).await;
-        assert_eq!(table.query_target("s", None).expect("query"), None);
-
-        // Once the completed booking's TTL expires, another target can bind.
-        let init = initialize(&table);
-        let lease = init
-            .commit(AffinityTarget::new(3, Some(0)))
-            .expect("commit");
-        assert_eq!(table.lease_count("s"), Some(1));
-        drop(lease);
-        assert_eq!(table.lease_count("s"), Some(0));
-    }
-
-    #[test]
-    fn config_validates_the_ttl_range_once_for_every_host() {
-        for secs in [-1.0, 0.0, 0.5, f64::NAN, f64::INFINITY, 31_536_001.0, 1e300] {
-            let error = SessionAffinityConfig::ttl_from_secs_f64(secs)
-                .expect_err("out-of-range or non-finite TTLs are rejected");
-            assert!(matches!(error, AffinityError::InvalidArgument(_)));
-            assert!(
-                error.to_string().contains("session affinity TTL"),
-                "{error}"
-            );
-        }
-        for secs in [1.0, 1.5, 31_536_000.0] {
-            let ttl = SessionAffinityConfig::ttl_from_secs_f64(secs).expect("in range");
-            SessionAffinityConfig::new(ttl).validate().expect("valid");
-        }
-        assert!(
-            SessionAffinityConfig::new(Duration::ZERO)
-                .validate()
-                .is_err()
-        );
-        assert!(
-            SessionAffinityConfig {
-                max_entries: 0,
-                ..SessionAffinityConfig::new(TTL)
-            }
-            .validate()
-            .is_err()
-        );
-        assert!(
-            SessionAffinityConfig {
-                max_session_id_bytes: 0,
-                ..SessionAffinityConfig::new(TTL)
-            }
-            .validate()
-            .is_err()
-        );
-    }
-
-    #[tokio::test]
-    async fn initializer_cannot_change_the_joined_rank_in_hard_mode() {
-        let table = table();
-        let init = initialize(&table);
-        let target = AffinityTarget::new(2, Some(0));
-        let joined = table.join_initializing("s", target).expect("join");
-        assert!(init.commit(AffinityTarget::new(2, Some(1))).is_err());
-        assert_eq!(table.query_target("s", None).expect("query"), Some(target));
-        assert_eq!(table.lease_count("s"), Some(1));
-        drop(joined);
-        assert_eq!(table.lease_count("s"), Some(0));
-    }
-
-    #[tokio::test]
-    async fn soft_initializer_follows_dispatch_and_keeps_worker_only_affinity() {
-        let table = SessionAffinity::with_config(
-            SessionAffinityConfig::new(TTL).with_mode(SessionAffinityMode::Soft),
-        )
-        .expect("table");
-        let init = initialize(&table);
-        let joined = table
-            .join_initializing("s", AffinityTarget::new(2, None))
-            .expect("join");
-        let lease = init
-            .commit(AffinityTarget::new(3, Some(0)))
-            .expect("commit");
-        assert_eq!(
-            table.query_target("s", None).expect("query"),
-            Some(AffinityTarget::new(3, None))
-        );
-        assert_eq!(table.lease_count("s"), Some(2));
-        drop(lease);
-        drop(joined);
-        assert_eq!(table.lease_count("s"), Some(0));
-    }
-}
+mod tests;

@@ -67,10 +67,7 @@ pub use operation::{
     SelectionRun, SessionBinding,
 };
 
-use super::affinity::{
-    AffinityError, AffinityLease, AffinityResolver, AffinityTarget, SessionAffinity,
-    SessionAffinityConfig, TargetLiveness,
-};
+use super::affinity::{AffinityError, AffinityLease, SessionAffinity, SessionAffinityConfig};
 use super::catalog::WorkerCatalog;
 use super::error::SelectionError;
 use super::ingress::{KvEventIngress, ZmqDirectIngress};
@@ -111,33 +108,12 @@ impl SelectionPartition {
         &self.0.indexer
     }
 
-    /// Return this partition's affinity table, initialized with `config` and
-    /// the catalog as its liveness source.
+    /// Return this partition's affinity table, initialized with `config`.
     pub fn session_affinity(
         &self,
         config: SessionAffinityConfig,
     ) -> Result<SessionAffinity, SelectionError> {
-        self.0
-            .session_affinity_with(config, None)
-            .map(|resolver| resolver.table().clone())
-    }
-
-    /// Return this partition's session resolver, initialized with `config`
-    /// and the host's own liveness source. A resolver already installed with
-    /// the same configuration is returned as is, whatever its liveness.
-    pub fn session_affinity_with_liveness(
-        &self,
-        config: SessionAffinityConfig,
-        liveness: Arc<dyn TargetLiveness>,
-    ) -> Result<Arc<AffinityResolver>, SelectionError> {
-        self.0
-            .session_affinity_with(config, Some(liveness))
-            .map(Arc::clone)
-    }
-
-    /// This partition's session resolver, if session affinity is configured.
-    pub fn session_resolver(&self) -> Option<&AffinityResolver> {
-        self.0.affinity.get().map(Arc::as_ref)
+        self.0.session_affinity(config).cloned()
     }
 }
 
@@ -149,35 +125,16 @@ struct SelectionEntry {
     workers_tx: watch::Sender<HashMap<WorkerId, SelectionWorkerConfig>>,
     scheduler: SelectionScheduler,
     replica_inbox: Option<ReplicaInbox>,
-    /// Liveness source for the partition's session resolver.
-    catalog: Arc<WorkerCatalog>,
-    /// Shared with embedding hosts, which keep it alongside their own state.
-    affinity: OnceCell<Arc<AffinityResolver>>,
+    affinity: OnceCell<SessionAffinity>,
     replica_config: Option<ReplicaSyncConfig>,
 }
 
-/// A session binding is live while the catalog can schedule its worker (and
-/// rank) in this partition.
-struct CatalogLiveness {
-    catalog: Arc<WorkerCatalog>,
-    key: RoutingPartitionId,
-}
-
-impl TargetLiveness for CatalogLiveness {
-    fn is_schedulable(&self, target: AffinityTarget) -> bool {
-        self.catalog.is_schedulable(target, &self.key)
-    }
-}
-
 impl SelectionEntry {
-    /// The partition's resolver, created on first use with `liveness` or,
-    /// when the host supplies none, the catalog.
-    fn session_affinity_with(
+    fn session_affinity(
         &self,
         config: SessionAffinityConfig,
-        liveness: Option<Arc<dyn TargetLiveness>>,
-    ) -> Result<&Arc<AffinityResolver>, SelectionError> {
-        let resolver = self
+    ) -> Result<&SessionAffinity, SelectionError> {
+        let table = self
             .affinity
             .get_or_try_init(|| -> Result<_, SelectionError> {
                 let table = SessionAffinity::with_config(config).map_err(affinity_error)?;
@@ -186,15 +143,8 @@ impl SelectionEntry {
                 {
                     table.enable_replication(config.process_id(), sink);
                 }
-                let liveness = liveness.unwrap_or_else(|| {
-                    Arc::new(CatalogLiveness {
-                        catalog: Arc::clone(&self.catalog),
-                        key: self.key.clone(),
-                    })
-                });
-                Ok(Arc::new(AffinityResolver::new(table, liveness)))
+                Ok(table)
             })?;
-        let table = resolver.table();
         if table.ttl() != config.ttl || table.mode() != config.mode {
             return Err(SelectionError::Conflict(format!(
                 "session affinity config mismatch for {}: existing=({:?}, {:?}) requested=({:?}, {:?})",
@@ -205,7 +155,7 @@ impl SelectionEntry {
                 config.mode
             )));
         }
-        Ok(resolver)
+        Ok(table)
     }
 }
 
@@ -311,7 +261,7 @@ pub struct SelectionServiceConfig {
 type SelectionEntries = RwLock<HashMap<RoutingPartitionId, Arc<OnceCell<Arc<SelectionEntry>>>>>;
 
 pub struct SelectionCore {
-    catalog: Arc<WorkerCatalog>,
+    catalog: WorkerCatalog,
     /// Serializes catalog commits and the corresponding ingress changes. Never held by selection.
     catalog_updates: tokio::sync::Mutex<()>,
     entries: Arc<SelectionEntries>,
@@ -434,7 +384,7 @@ impl SelectionCore {
             indexer_registry.signal_ready();
         }
         Self {
-            catalog: Arc::default(),
+            catalog: WorkerCatalog::default(),
             catalog_updates: tokio::sync::Mutex::new(()),
             entries: Arc::new(RwLock::new(HashMap::new())),
             reservation_index: Arc::new(RwLock::new(HashMap::new())),
@@ -510,9 +460,7 @@ impl SelectionCore {
         }
     }
 
-    /// Apply a session binding a replica published, through the partition's
-    /// resolver (which drops the publisher's own events and bindings to
-    /// workers this partition cannot schedule).
+    /// Apply a session binding from another replica if its worker is live.
     pub(crate) fn dispatch_affinity_event(&self, event: AffinityBindingEvent) {
         let Some(entry) = self.entry(&event.partition) else {
             tracing::trace!(
@@ -521,14 +469,16 @@ impl SelectionCore {
             );
             return;
         };
-        let Some(resolver) = entry.affinity.get() else {
+        let Some(table) = entry.affinity.get() else {
             tracing::trace!(
                 key = %event.partition,
                 "Dropping session affinity replica update: no affinity table"
             );
             return;
         };
-        resolver.apply_replica_event(&entry.key, event);
+        table.apply_replica_event(&entry.key, event, |target| {
+            self.catalog.is_schedulable(target, &entry.key)
+        });
     }
 
     fn ready_entry(&self, key: &RoutingPartitionId) -> Result<Arc<SelectionEntry>, SelectionError> {

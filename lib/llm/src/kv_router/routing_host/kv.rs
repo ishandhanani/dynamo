@@ -1,8 +1,6 @@
 // SPDX-FileCopyrightText: Copyright (c) 2024-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-use dynamo_kv_router::services::selection::SessionBinding;
-
 use super::*;
 use crate::kv_router::{
     FindBestMatchAdmission,
@@ -16,7 +14,7 @@ impl RoutingHost {
         request: &SingleIn<PreprocessedRequest>,
         phase: RequestPhase,
         is_query_only: bool,
-        session: SessionBinding<'_>,
+        affinity: Option<AffinityRequirement>,
         planned_worker: Option<WorkerWithDpRank>,
         admission: FindBestMatchAdmission,
         budget: &CleanupBudget,
@@ -38,7 +36,7 @@ impl RoutingHost {
                 phase,
                 is_query_only,
                 SelectionOptions {
-                    session,
+                    affinity,
                     planned_worker,
                     policy_class,
                     session_context,
@@ -58,29 +56,50 @@ impl RoutingHost {
         .await?
     }
 
-    /// Select for an admitted or query-only request, taking the session hold
-    /// the core returned out of the selection.
+    /// Hold affinity across selection, without transferring it to the core.
     async fn select_request(
         &self,
         request: &SingleIn<PreprocessedRequest>,
         phase: RequestPhase,
         is_query_only: bool,
-        session: SessionBinding<'_>,
+        planned_worker: Option<WorkerWithDpRank>,
         budget: &CleanupBudget,
     ) -> Result<(WorkerSelection, Option<Hold>), Error> {
-        let mut selection = self
+        let (hold, affinity) = self
+            .resolve_hosted_session(request, phase, is_query_only, budget)
+            .await?;
+        let selection = self
             .select_request_outcome(
                 request,
                 phase,
                 is_query_only,
-                session,
-                None,
+                affinity,
+                planned_worker,
                 FindBestMatchAdmission::WithAdmission,
                 budget,
             )
-            .await?
-            .into_result()?;
-        let hold = selection.affinity_hold.take();
+            .await
+            .and_then(SelectionOutcome::into_result);
+        let selection = match selection {
+            Ok(selection) => selection,
+            Err(error) => {
+                if matches!(
+                    error.downcast_ref::<KvSchedulerError>(),
+                    Some(KvSchedulerError::AllEligibleWorkersFiltered)
+                ) && let (Some(hold), Some(table)) = (hold, self.affinity.as_ref())
+                {
+                    table.release_filtered(hold);
+                }
+                return Err(error);
+            }
+        };
+        if let (Some(hold), Some(table)) = (hold.as_ref(), self.affinity.as_ref()) {
+            table
+                .check_dispatch(hold, selection.worker.into(), |target| {
+                    self.affinity_target_is_live(target)
+                })
+                .map_err(affinity_error)?;
+        }
         Ok((selection, hold))
     }
 
@@ -92,8 +111,7 @@ impl RoutingHost {
         budget: &CleanupBudget,
     ) -> Result<(WorkerSelection, Option<Hold>), Error> {
         self.validate_explicit_worker(request.content(), phase)?;
-        let session = self.kv_session_binding(request, phase, is_query_only)?;
-        let select = || self.select_request(request, phase, is_query_only, session, budget);
+        let select = || self.select_request(request, phase, is_query_only, None, budget);
         if is_query_only {
             return select().await;
         }
@@ -209,13 +227,15 @@ impl RoutingHost {
 
         let phase_label = phase.to_string();
         let route_guard = StageGuard::new(STAGE_ROUTE, &phase_label);
-        let session = self.kv_session_binding(request, phase, true)?;
+        let (_, affinity) = self
+            .resolve_hosted_session(request, phase, true, &budget)
+            .await?;
         let outcome = self
             .select_request_outcome(
                 request,
                 phase,
                 true,
-                session,
+                affinity,
                 None,
                 FindBestMatchAdmission::WithoutAdmission,
                 &budget,
@@ -255,26 +275,7 @@ impl RoutingHost {
         let phase_label = phase.to_string();
         let route_guard = StageGuard::new(STAGE_ROUTE, &phase_label);
         let planned_worker = preview.signals.worker;
-        let session = self.kv_session_binding(request, phase, false)?;
-        let select = || {
-            let budget = &budget;
-            async move {
-                let mut selection = self
-                    .select_request_outcome(
-                        request,
-                        phase,
-                        false,
-                        session,
-                        Some(planned_worker),
-                        FindBestMatchAdmission::WithAdmission,
-                        budget,
-                    )
-                    .await?
-                    .into_result()?;
-                let hold = selection.affinity_hold.take();
-                Ok((selection, hold))
-            }
-        };
+        let select = || self.select_request(request, phase, false, Some(planned_worker), &budget);
         let (mut selection, affinity) = self
             .select_with_request_lifecycle(request, phase, select)
             .await?;
@@ -334,13 +335,15 @@ impl RoutingHost {
             return Err(anyhow::anyhow!("prefill load probe requires KV routing"));
         }
 
-        let session = self.kv_session_binding(request, RequestPhase::Prefill, true)?;
+        let (_, affinity) = self
+            .resolve_hosted_session(request, RequestPhase::Prefill, true, &budget)
+            .await?;
         let outcome = self
             .select_request_outcome(
                 request,
                 RequestPhase::Prefill,
                 true,
-                session,
+                affinity,
                 None,
                 FindBestMatchAdmission::WithoutAdmission,
                 &budget,

@@ -5,14 +5,16 @@
 //! applies, and the one applier. Transports are the hosts' (the selection
 //! service's ZMQ peer mesh, the frontend's runtime event plane); each carries
 //! [`AffinityBindingEvent`] and feeds received events to
-//! [`AffinityResolver::apply_replica_event`].
+//! [`SessionAffinity::apply_replica_event`].
 
 use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
+use tokio::sync::mpsc;
 
-use super::resolver::AffinityResolver;
-use super::table::{AffinityReplicaSink, AffinityTarget, AffinityVersion, ReplicaApplyOutcome};
+use super::{
+    AffinityReplicaSink, AffinityTarget, AffinityVersion, ReplicaApplyOutcome, SessionAffinity,
+};
 use crate::identity::RoutingPartitionId;
 
 /// One replicated session binding. The partition scopes the session id: a
@@ -48,6 +50,13 @@ impl AffinityBindingEvent {
         }
     }
 
+    /// Queue a best-effort update, dropping it if the transport is full or closed.
+    pub fn enqueue(self, tx: &mpsc::Sender<Self>) {
+        if let Err(error) = tx.try_send(self) {
+            tracing::trace!(%error, "dropping best-effort session affinity update");
+        }
+    }
+
     pub fn target(&self) -> AffinityTarget {
         AffinityTarget::new(self.worker_id, self.dp_rank)
     }
@@ -60,134 +69,77 @@ impl AffinityBindingEvent {
     }
 }
 
-/// A table sink that turns each published binding into an
-/// [`AffinityBindingEvent`] for `partition` and hands it to the transport.
-/// Best effort: the transport drops what it cannot queue.
-pub struct AffinityEventSink {
+/// Queue this partition's bindings for its transport, dropping updates when
+/// the queue is full or closed. Replication is best effort.
+pub fn replica_sink(
     partition: RoutingPartitionId,
-    publish: Arc<dyn Fn(AffinityBindingEvent) + Send + Sync>,
+    tx: mpsc::Sender<AffinityBindingEvent>,
+) -> Arc<dyn AffinityReplicaSink> {
+    Arc::new(move |session_id: &str, target, version| {
+        AffinityBindingEvent::new(&partition, session_id, target, version).enqueue(&tx);
+    })
 }
 
-impl AffinityEventSink {
-    pub fn new(
-        partition: RoutingPartitionId,
-        publish: impl Fn(AffinityBindingEvent) + Send + Sync + 'static,
-    ) -> Self {
-        Self {
-            partition,
-            publish: Arc::new(publish),
-        }
-    }
-}
-
-impl AffinityReplicaSink for AffinityEventSink {
-    fn publish(&self, session_id: &str, target: AffinityTarget, version: AffinityVersion) {
-        (self.publish)(AffinityBindingEvent::new(
-            &self.partition,
-            session_id,
-            target,
-            version,
-        ));
-    }
-}
-
-/// What the applier did with a received binding.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ReplicaEventDisposition {
-    Applied(ReplicaApplyOutcome),
-    /// Published by this replica.
-    OwnWriter,
-    /// For another partition than the receiving resolver's.
-    OtherPartition,
-    /// The host cannot schedule the bound worker; the version was still
-    /// observed so this replica's own versions stay ahead.
-    UnknownWorker,
-}
-
-impl AffinityResolver {
-    /// Apply a binding another replica published, for the resolver serving
+impl SessionAffinity {
+    /// Apply a binding another replica published, for the table serving
     /// `partition`. Every host's transport ends here.
     pub fn apply_replica_event(
         &self,
         partition: &RoutingPartitionId,
         event: AffinityBindingEvent,
-    ) -> ReplicaEventDisposition {
-        if event.writer_id == self.table().writer_id() {
-            return ReplicaEventDisposition::OwnWriter;
+        is_live: impl Fn(AffinityTarget) -> bool,
+    ) -> Option<ReplicaApplyOutcome> {
+        if event.writer_id == self.writer_id() {
+            return None;
         }
         if event.partition != *partition {
-            return ReplicaEventDisposition::OtherPartition;
+            return None;
         }
-        self.table().observe_replica_sequence(event.sequence);
+        self.observe_replica_sequence(event.sequence);
         let (target, version) = (event.target(), event.version());
-        if !self.is_schedulable(target) {
+        if !is_live(target) {
             tracing::trace!(
                 key = %event.partition,
                 worker_id = event.worker_id,
                 "Dropping session affinity replica update: worker not schedulable here"
             );
-            return ReplicaEventDisposition::UnknownWorker;
+            return None;
         }
-        let outcome = self
-            .table()
-            .apply_replica_update(event.session_id, target, version);
+        let outcome = self.apply_replica_update(event.session_id, target, version);
         tracing::trace!(
             worker_id = event.worker_id,
             ?outcome,
             "Applied session affinity replica update"
         );
-        ReplicaEventDisposition::Applied(outcome)
+        Some(outcome)
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashSet;
-    use std::sync::Mutex;
     use std::time::Duration;
 
-    use super::super::resolver::TargetLiveness;
-    use super::super::table::{SessionAffinity, SessionAffinityConfig};
+    use super::super::{AcquireStep, Hold, SessionAffinityConfig};
     use super::*;
-    use crate::protocols::WorkerId;
-
-    struct Live(HashSet<WorkerId>);
-
-    impl TargetLiveness for Live {
-        fn is_schedulable(&self, target: AffinityTarget) -> bool {
-            self.0.contains(&target.worker_id)
-        }
-    }
 
     fn partition_id(name: &str) -> RoutingPartitionId {
         RoutingPartitionId::new(name, "default")
     }
 
-    fn resolver(live: &[WorkerId]) -> Arc<AffinityResolver> {
-        let table =
-            SessionAffinity::with_config(SessionAffinityConfig::new(Duration::from_secs(60)))
-                .expect("table");
-        Arc::new(AffinityResolver::new(
-            table,
-            Arc::new(Live(live.iter().copied().collect())),
-        ))
+    fn table() -> SessionAffinity {
+        SessionAffinity::with_config(SessionAffinityConfig::new(Duration::from_secs(60)))
+            .expect("table")
     }
 
     /// Install a sink that records every event the table publishes.
     fn record_events(
-        resolver: &AffinityResolver,
+        table: &SessionAffinity,
         writer_id: u64,
         partition: &RoutingPartitionId,
-    ) -> Arc<Mutex<Vec<AffinityBindingEvent>>> {
-        let events = Arc::new(Mutex::new(Vec::new()));
-        let recorded = Arc::clone(&events);
-        assert!(resolver.table().enable_replication(
-            writer_id,
-            Arc::new(AffinityEventSink::new(partition.clone(), move |event| {
-                recorded.lock().unwrap().push(event);
-            })),
-        ));
-        events
+    ) -> mpsc::Receiver<AffinityBindingEvent> {
+        let (tx, rx) = mpsc::channel(16);
+        assert!(table.enable_replication(writer_id, replica_sink(partition.clone(), tx)));
+        rx
     }
 
     fn event(
@@ -223,105 +175,120 @@ mod tests {
     #[tokio::test]
     async fn applier_scopes_by_partition_writer_and_liveness() {
         let partition = partition_id("model");
-        let resolver = resolver(&[1]);
-        let _events = record_events(&resolver, 7, &partition);
+        let table = table();
+        let _events = record_events(&table, 7, &partition);
 
         assert_eq!(
-            resolver.apply_replica_event(&partition, event(&partition, 7, 1)),
-            ReplicaEventDisposition::OwnWriter
+            table.apply_replica_event(&partition, event(&partition, 7, 1), |_| {
+                panic!("own events must be rejected before liveness checking")
+            }),
+            None
         );
         assert_eq!(
-            resolver.apply_replica_event(&partition, event(&partition_id("other"), 9, 2)),
-            ReplicaEventDisposition::OtherPartition
+            table.apply_replica_event(&partition, event(&partition_id("other"), 9, 2), |_| {
+                panic!("other partitions must be rejected before liveness checking")
+            }),
+            None
         );
-        let mut unknown = event(&partition, 9, 3);
+        let sequence = table.next_version().sequence + 10;
+        let mut unknown = event(&partition, 9, sequence);
         unknown.worker_id = 5;
         assert_eq!(
-            resolver.apply_replica_event(&partition, unknown),
-            ReplicaEventDisposition::UnknownWorker
+            table.apply_replica_event(&partition, unknown, |target| target.worker_id == 1),
+            None
         );
-        assert!(
-            resolver.table().next_version().sequence > 3,
+        assert_eq!(
+            table.next_version().sequence,
+            sequence + 1,
             "an unapplied event still advances the replica clock"
         );
+        assert_eq!(table.query_target("s", None).expect("query"), None);
+        let binding = event(&partition, 9, sequence + 2);
         assert_eq!(
-            resolver.apply_replica_event(&partition, event(&partition, 9, 4)),
-            ReplicaEventDisposition::Applied(ReplicaApplyOutcome::Inserted)
+            table.apply_replica_event(&partition, binding.clone(), |target| target.worker_id == 1),
+            Some(ReplicaApplyOutcome::Inserted)
         );
         assert_eq!(
-            resolver.table().query_target("s", None).expect("query"),
+            table.apply_replica_event(&partition, binding, |_| true),
+            Some(ReplicaApplyOutcome::Refreshed)
+        );
+        assert_eq!(
+            table.query_target("s", None).expect("query"),
             Some(AffinityTarget::new(1, Some(0)))
         );
     }
 
-    /// Two replicas with different liveness sources (a frontend and a
-    /// selection service, in effect) converge on one binding through the
-    /// shared schema, in both directions.
+    /// Publishing and applying a binding uses the same schema in both directions.
     #[tokio::test]
     async fn replicas_converge_through_the_shared_schema() {
         let partition = partition_id("model");
-        let frontend = resolver(&[1, 2]);
-        let service = resolver(&[1, 2]);
-        let frontend_events = record_events(&frontend, 100, &partition);
-        let service_events = record_events(&service, 200, &partition);
+        let frontend = table();
+        let service = table();
+        let mut frontend_events = record_events(&frontend, 100, &partition);
+        let mut service_events = record_events(&service, 200, &partition);
 
         // The frontend binds; the service applies what it published.
-        let hold = frontend
-            .resolve("s", None, std::future::pending())
-            .await
-            .expect("resolve")
-            .hold
-            .expect("hold");
-        drop(
-            frontend
-                .commit(hold, AffinityTarget::new(1, Some(0)))
-                .expect("commit"),
-        );
-        let published: Vec<_> = frontend_events.lock().unwrap().drain(..).collect();
-        assert!(!published.is_empty());
-        for event in published {
+        bind(&frontend, AffinityTarget::new(1, Some(0)));
+        assert!(!frontend_events.is_empty());
+        while let Ok(event) = frontend_events.try_recv() {
             assert_eq!(event.partition, partition);
             assert_eq!(event.writer_id, 100);
-            assert!(matches!(
-                service.apply_replica_event(&partition, event),
-                ReplicaEventDisposition::Applied(_)
-            ));
+            assert!(
+                service
+                    .apply_replica_event(&partition, event, |_| true)
+                    .is_some()
+            );
         }
         assert_eq!(
-            service.table().query_target("s", None).expect("query"),
+            service.query_target("s", None).expect("query"),
             Some(AffinityTarget::new(1, Some(0)))
         );
 
         // The service re-binds after the worker departs; the frontend follows.
-        let hold = service
-            .resolve("s", None, std::future::pending())
-            .await
-            .expect("resolve")
-            .hold
-            .expect("hold");
-        let Err(_) = service.commit(hold, AffinityTarget::new(2, Some(0))) else {
-            panic!("hard mismatch while the worker is live is rejected");
+        let AcquireStep::Held(hold) = service.try_acquire("s", None).expect("hold binding") else {
+            panic!("expected a bound session");
         };
-        let hold = service
-            .resolve("s", None, std::future::pending())
-            .await
-            .expect("resolve")
-            .hold
-            .expect("hold");
-        drop(
-            service
-                .commit(hold, AffinityTarget::new(2, Some(0)))
-                .expect("rebind"),
-        );
-        let published: Vec<_> = service_events.lock().unwrap().drain(..).collect();
-        for event in published {
+        hold.invalidate();
+        bind(&service, AffinityTarget::new(2, Some(0)));
+        assert!(!service_events.is_empty());
+        while let Ok(event) = service_events.try_recv() {
             assert_eq!(event.writer_id, 200);
-            frontend.apply_replica_event(&partition, event);
+            frontend.apply_replica_event(&partition, event, |_| true);
         }
         assert_eq!(
-            frontend.table().query_target("s", None).expect("query"),
+            frontend.query_target("s", None).expect("query"),
             Some(AffinityTarget::new(2, Some(0))),
             "the frontend converges on the service's newer binding"
         );
+    }
+
+    fn bind(table: &SessionAffinity, target: AffinityTarget) {
+        let AcquireStep::Held(Hold::Initialize(initialization)) =
+            table.try_acquire("s", None).expect("acquire")
+        else {
+            panic!("expected a new session");
+        };
+        drop(initialization.commit(target).expect("commit"));
+    }
+
+    #[test]
+    fn replica_sink_drops_updates_when_full_or_closed() {
+        let partition = partition_id("model");
+        let (tx, mut rx) = mpsc::channel(1);
+        let sink = replica_sink(partition.clone(), tx);
+        let target = AffinityTarget::new(1, Some(0));
+        let version = AffinityVersion {
+            sequence: 1,
+            writer_id: 7,
+        };
+        sink.publish("first", target, version);
+        sink.publish("second", target, version);
+        assert_eq!(
+            rx.try_recv().expect("first update"),
+            AffinityBindingEvent::new(&partition, "first", target, version)
+        );
+        assert!(rx.try_recv().is_err());
+        drop(rx);
+        sink.publish("closed", target, version);
     }
 }

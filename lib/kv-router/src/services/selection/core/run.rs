@@ -22,7 +22,7 @@
 //! - The session hold is taken before the booking is made and the binding is
 //!   committed while the booking is held
 //!   (`session_worker_departing_after_the_hold_reinitializes_the_session`). The
-//!   commit never waits: `AffinityResolver::commit` (`affinity/resolver.rs`) is
+//!   commit never waits: `SessionAffinity::commit_or_failover` (`affinity/resolver.rs`) is
 //!   synchronous and owns departed-worker failover and the full-table case
 //!   (`failover_commit_behind_an_initializing_hold_keeps_a_lease`,
 //!   `joined_lease_released_before_the_commit_is_not_counted`). A rejected
@@ -84,7 +84,7 @@ impl SelectionCore {
                 policy_class,
                 session_context,
                 session,
-                affinity_target: req.affinity_target,
+                affinity: req.affinity_target.map(AffinityRequirement::soft),
                 pinned_worker: req.pinned_worker,
                 allowed_worker_ids: req.allowed_worker_ids,
                 routing_constraints: req.routing_constraints,
@@ -126,7 +126,7 @@ impl SelectionCore {
                 policy_class,
                 session_context,
                 session,
-                affinity_target: req.affinity_target,
+                affinity: req.affinity_target.map(AffinityRequirement::soft),
                 pinned_worker: req.pinned_worker,
                 allowed_worker_ids: req.allowed_worker_ids,
                 routing_constraints: req.routing_constraints,
@@ -185,7 +185,6 @@ impl SelectionCore {
             routing_hashes: _,
             shared_cache_hits: _,
             booking: _,
-            affinity_hold: _,
         } = selected;
         let booked = sequence_hashes.is_some();
         let potential_decode_blocks = response.potential_decode_blocks as u64;
@@ -253,7 +252,7 @@ impl SelectionCore {
             policy_class,
             session_context,
             session,
-            affinity_target,
+            affinity,
             pinned_worker,
             allowed_worker_ids,
             routing_constraints,
@@ -276,38 +275,34 @@ impl SelectionCore {
         // Session stickiness: a bound session steers selection through the
         // scheduler's pin rule; a new session is bound to the worker booked.
         // An explicit target from the request is a preference the policy reads.
-        let resolver = entry.affinity.get();
-        if matches!(session, SessionBinding::Managed { .. }) && !book {
+        let table = entry.affinity.get();
+        if matches!(session, SessionBinding::Managed { .. }) && claim.is_none() {
             return Err(SelectionError::Internal(
-                "a managed session binding requires a booking admission".to_string(),
+                "a managed session binding requires Book admission".to_string(),
             ));
         }
         let mut affinity_hold = None;
-        let affinity = match (&session, resolver) {
-            (
-                SessionBinding::Managed {
-                    session_id,
-                    requested_target,
-                },
-                Some(resolver),
-            ) => {
-                let resolution = resolver
-                    .resolve(session_id, *requested_target, self.cancel_token.cancelled())
+        let affinity = match (&session, table) {
+            (SessionBinding::Managed { session_id }, Some(table)) => {
+                affinity_hold = table
+                    .resolve(
+                        session_id,
+                        None,
+                        |target| self.catalog.is_schedulable(target, &key),
+                        self.cancel_token.cancelled(),
+                    )
                     .await
                     .map_err(affinity_error)?;
-                affinity_hold = resolution.hold;
-                resolution.affinity
+                affinity_hold
+                    .as_ref()
+                    .and_then(|hold| hold.target())
+                    .map(|target| table.requirement(target))
             }
-            (
-                SessionBinding::Query {
-                    session_id,
-                    requested_target,
-                },
-                Some(resolver),
-            ) => resolver
-                .query(session_id, *requested_target)
-                .map_err(affinity_error)?,
-            _ => affinity_target.map(AffinityRequirement::soft),
+            (SessionBinding::Query { session_id }, Some(table)) => table
+                .query_target(session_id, None)
+                .map_err(affinity_error)?
+                .map(|target| table.requirement(target)),
+            _ => affinity,
         };
         // Router hints are attached to bookings only, and only when a worker in
         // this partition can consume them and the indexer can retain the
@@ -386,7 +381,7 @@ impl SelectionCore {
                 prompt.lora_name.map(str::to_string),
                 track_prefill_tokens,
                 match &session {
-                    SessionBinding::Query { session_id, .. } => Some(session_id.to_string()),
+                    SessionBinding::Query { session_id } => Some(session_id.clone()),
                     _ => None,
                 },
             )
@@ -469,9 +464,9 @@ impl SelectionCore {
                 // binding rejected the bound worker itself; drop the binding
                 // so the session re-binds instead of failing on every retry.
                 if matches!(error, KvSchedulerError::AllEligibleWorkersFiltered)
-                    && let (Some(hold), Some(resolver)) = (affinity_hold, resolver)
+                    && let (Some(hold), Some(table)) = (affinity_hold, table)
                 {
-                    resolver.release_filtered(hold);
+                    table.release_filtered(hold);
                 }
                 return Err(error.into());
             }
@@ -518,7 +513,7 @@ impl SelectionCore {
         // The routing hashes go to exactly one of: the reservation recorded
         // now, or the replay cache a later reservation records from.
         let mut routing_hashes = routing_hashes;
-        let (booking, affinity_hold) = if let Some(claim) = claim {
+        let booking = if let Some(claim) = claim {
             let Some(booking) = booking else {
                 return Err(SelectionError::Internal(
                     "booked selection has no booking handle".to_string(),
@@ -526,9 +521,11 @@ impl SelectionCore {
             };
             // A rejected affinity commit returns while the handle is still armed,
             // so the booking is freed and nothing below is recorded.
-            let affinity_lease = match (affinity_hold, resolver) {
-                (Some(hold), Some(resolver)) => resolver
-                    .commit(hold, response.best_worker.into())
+            let affinity_lease = match (affinity_hold, table) {
+                (Some(hold), Some(table)) => table
+                    .commit_or_failover(hold, response.best_worker.into(), |target| {
+                        self.catalog.is_schedulable(target, &key)
+                    })
                     .map_err(affinity_error)?,
                 _ => None,
             };
@@ -537,10 +534,9 @@ impl SelectionCore {
                     .await;
             }
             claim.install(booking, affinity_lease)?;
-            (None, None)
+            None
         } else {
-            // A `Lease` host commits the session itself, after dispatch.
-            (booking, affinity_hold)
+            booking
         };
 
         if let Some((cache_id, sequence_hashes, lora_name, track_prefill_tokens, session_id)) =
@@ -578,7 +574,6 @@ impl SelectionCore {
             routing_hashes: returned_routing_hashes,
             shared_cache_hits: host_shared_cache_hits,
             booking,
-            affinity_hold,
         }))
     }
 
@@ -716,15 +711,13 @@ fn session_binding(
     context: Option<&SessionContext>,
     is_steerable: bool,
     is_booking: bool,
-) -> SessionBinding<'static> {
+) -> SessionBinding {
     match context.filter(|_| is_steerable) {
         Some(context) if is_booking => SessionBinding::Managed {
-            session_id: context.session_id().to_string().into(),
-            requested_target: None,
+            session_id: context.session_id().to_string(),
         },
         Some(context) => SessionBinding::Query {
-            session_id: context.session_id().to_string().into(),
-            requested_target: None,
+            session_id: context.session_id().to_string(),
         },
         None => SessionBinding::None,
     }

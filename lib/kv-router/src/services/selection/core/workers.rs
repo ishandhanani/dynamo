@@ -359,7 +359,6 @@ impl SelectionCore {
                     workers_tx,
                     scheduler,
                     replica_inbox,
-                    catalog: Arc::clone(&self.catalog),
                     affinity: OnceCell::new(),
                     replica_config: self.replica_config.clone(),
                 }))
@@ -378,7 +377,7 @@ impl SelectionCore {
             )));
         }
         if let Some(config) = self.session_affinity {
-            entry.session_affinity_with(config, None)?;
+            entry.session_affinity(config)?;
         }
         Ok(entry)
     }

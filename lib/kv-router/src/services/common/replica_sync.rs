@@ -27,20 +27,13 @@ use crate::services::common::zmq::{
 #[cfg(feature = "standalone-selection")]
 pub(crate) use crate::services::selection::affinity::AffinityBindingEvent;
 #[cfg(feature = "standalone-selection")]
-use crate::services::selection::affinity::{AffinityEventSink, AffinityReplicaSink};
+use crate::services::selection::affinity::{AffinityReplicaSink, replica_sink};
 
 pub(crate) const REPLICA_EVENT_CHANNEL_CAPACITY: usize = 100_000;
 const PEER_COMMAND_CHANNEL_CAPACITY: usize = 64;
 const REPLICA_TOPIC: &[u8] = b"dynamo.slot-tracker.v1";
-/// Session-affinity bindings ride the same mesh on their own topics, so peers
-/// that do not subscribe to them never see them. The payload is the shared
-/// [`AffinityBindingEvent`] on both topics; v2 is the topic every host's
-/// transport uses, v1 is published and applied alongside it for one release
-/// so a mixed-version mesh stays converged.
-// Compatibility with v1.6 selection replicas during v1.7 rolling upgrades.
-// TODO(v1.8): Publish and subscribe on `AFFINITY_TOPIC_V2` only.
-const AFFINITY_TOPIC_V1: &[u8] = b"dynamo.session-affinity.v1";
-const AFFINITY_TOPIC_V2: &[u8] = b"dynamo.session-affinity.v2";
+/// Session bindings use their own topic on the replica mesh.
+const AFFINITY_TOPIC: &[u8] = b"dynamo.session-affinity.v1";
 const AFFINITY_EVENT_CHANNEL_CAPACITY: usize = 4_096;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -139,13 +132,9 @@ impl ReplicaSyncConfig {
         &self,
         partition: &RoutingPartitionId,
     ) -> Option<Arc<dyn AffinityReplicaSink>> {
-        self.affinity_tx.clone().map(|tx| {
-            Arc::new(AffinityEventSink::new(partition.clone(), move |event| {
-                if let Err(error) = tx.try_send(event) {
-                    tracing::trace!(%error, "dropping best-effort session affinity replica update");
-                }
-            })) as Arc<dyn AffinityReplicaSink>
-        })
+        self.affinity_tx
+            .clone()
+            .map(|tx| replica_sink(partition.clone(), tx))
     }
 
     pub(crate) fn is_self_event(&self, event: &ActiveSequenceEvent) -> bool {
@@ -502,10 +491,8 @@ pub(crate) fn start_replica_publisher(
                     continue;
                 }
             };
-            for frames in frames {
-                if let Err(error) = socket.send_multipart(frames).await {
-                    tracing::error!(event = %message, error = %error, "Failed to publish replica message");
-                }
+            if let Err(error) = socket.send_multipart(frames).await {
+                tracing::error!(event = %message, error = %error, "Failed to publish replica message");
             }
         }
     });
@@ -519,24 +506,12 @@ enum OutboundReplicaMessage {
 }
 
 impl OutboundReplicaMessage {
-    /// One multipart message per topic the event goes out on; a binding goes
-    /// out on both affinity topics for the compatibility window.
-    fn encode(&self) -> Result<Vec<Vec<Vec<u8>>>, rmp_serde::encode::Error> {
-        Ok(match self {
-            Self::Sequence(event) => {
-                vec![vec![
-                    REPLICA_TOPIC.to_vec(),
-                    rmp_serde::to_vec_named(event)?,
-                ]]
-            }
-            Self::Affinity(binding) => {
-                let payload = rmp_serde::to_vec_named(binding)?;
-                vec![
-                    vec![AFFINITY_TOPIC_V2.to_vec(), payload.clone()],
-                    vec![AFFINITY_TOPIC_V1.to_vec(), payload],
-                ]
-            }
-        })
+    fn encode(&self) -> Result<Vec<Vec<u8>>, rmp_serde::encode::Error> {
+        let (topic, payload) = match self {
+            Self::Sequence(event) => (REPLICA_TOPIC, rmp_serde::to_vec_named(event)?),
+            Self::Affinity(binding) => (AFFINITY_TOPIC, rmp_serde::to_vec_named(binding)?),
+        };
+        Ok(vec![topic.to_vec(), payload])
     }
 }
 
@@ -673,7 +648,7 @@ impl PeerManager {
         A: Fn(AffinityBindingEvent) + Send + Sync + 'static,
     {
         let topics: &[&[u8]] = if handle_affinity.is_some() {
-            &[REPLICA_TOPIC, AFFINITY_TOPIC_V1, AFFINITY_TOPIC_V2]
+            &[REPLICA_TOPIC, AFFINITY_TOPIC]
         } else {
             &[REPLICA_TOPIC]
         };
@@ -837,9 +812,7 @@ fn handle_replica_message<F, A>(
                 tracing::debug!("Dropping malformed active-sequence replica payload: {error}");
             }
         },
-        // Both topics carry the same payload; applying a binding twice is
-        // idempotent (the second apply refreshes the same version).
-        AFFINITY_TOPIC_V1 | AFFINITY_TOPIC_V2 => match (
+        AFFINITY_TOPIC => match (
             handle_affinity,
             rmp_serde::from_slice::<AffinityBindingEvent>(payload),
         ) {
@@ -916,6 +889,30 @@ mod tests {
             decoded.partition_ref(),
             RoutingPartitionRef::new("model", "group")
         );
+    }
+
+    #[test]
+    fn affinity_replica_message_round_trips_once_on_its_own_topic() {
+        let binding = AffinityBindingEvent {
+            partition: RoutingPartitionId::new("model", "group"),
+            session_id: "session".to_string(),
+            worker_id: 1,
+            dp_rank: Some(0),
+            sequence: 2,
+            writer_id: 3,
+        };
+        let frames = OutboundReplicaMessage::Affinity(binding.clone())
+            .encode()
+            .unwrap();
+        assert_eq!(frames.len(), 2);
+        assert_eq!(frames[0], AFFINITY_TOPIC);
+        let received = std::cell::RefCell::new(Vec::new());
+        handle_replica_message(
+            &|_| panic!("affinity must not reach the active-sequence handler"),
+            Some(&|event| received.borrow_mut().push(event)),
+            frames,
+        );
+        assert_eq!(received.into_inner(), vec![binding]);
     }
 
     #[test]

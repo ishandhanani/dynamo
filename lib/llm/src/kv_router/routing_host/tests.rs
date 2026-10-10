@@ -2535,7 +2535,7 @@ async fn aborted_route_plan_drops_pending_affinity_initialization() {
 }
 
 #[tokio::test]
-async fn session_affinity_disabled_does_not_create_coordinator() {
+async fn session_affinity_disabled_does_not_create_table() {
     let (router, runtime) = router(None).await;
     assert!(router.affinity.is_none());
 
@@ -2954,13 +2954,9 @@ fn builtin_host_with_affinity(
     load_context: Arc<RoutingLoadContext>,
     mode: crate::session_affinity::SessionAffinityMode,
 ) -> RoutingHost {
-    let affinity = HostAffinity::standalone(
-        Duration::from_secs(10),
-        mode,
-        Arc::new(crate::session_affinity::DiscoveryLiveness::new(
-            inner.client.clone(),
-            None,
-        )),
+    let affinity = SessionAffinity::with_config(
+        crate::session_affinity::SessionAffinityConfig::new(Duration::from_secs(10))
+            .with_mode(mode),
     )
     .unwrap();
     RoutingHost::new_builtin_with_affinity(inner, load_context, Some(affinity)).unwrap()
@@ -2974,8 +2970,6 @@ fn affinity_table(
         .affinity
         .as_ref()
         .expect("session affinity configured")
-        .resolver()
-        .table()
 }
 
 async fn acquire_session(router: &RoutingHost, session_id: &SessionAffinityId) -> Hold {
@@ -4192,6 +4186,74 @@ async fn conditional_route_stages_share_one_cleanup_budget() {
     runtime.shutdown();
 }
 
+#[tokio::test]
+#[serial_test::serial]
+async fn kv_cancelled_request_abandons_a_contended_session_without_booking() {
+    let (router, dispatch, _, runtime) = router_with_recorded_dispatch_and_affinity(
+        "kv-cancelled-affinity-contention",
+        Some(Duration::from_secs(10)),
+    )
+    .await;
+    let router = Arc::new(router);
+    let table = affinity_table(&router).clone();
+    let session_id = SessionAffinityId::new("cancelled-contended-session");
+    let holder = table.acquire(session_id.as_str(), None).await.unwrap();
+    assert!(matches!(holder, Hold::Initialize(_)));
+
+    let mut input = Context::with_id_and_metadata(
+        request(),
+        "cancelled-affinity-waiter".to_string(),
+        Default::default(),
+    );
+    input.insert(SESSION_AFFINITY_CONTEXT_KEY, session_id.clone());
+    let context = input.context();
+    let generate_router = Arc::clone(&router);
+    let generate = tokio::spawn(async move { generate_router.generate(input).await });
+
+    tokio::time::timeout(Duration::from_secs(5), table.wait_for_initializing_waiter())
+        .await
+        .expect("request must reach the contended affinity wait");
+    assert!(!generate.is_finished());
+    assert!(
+        potential_loads(&router)
+            .await
+            .iter()
+            .all(|load| load.active_requests == 0)
+    );
+    context.stop();
+
+    let Err(error) = tokio::time::timeout(Duration::from_secs(5), generate)
+        .await
+        .expect("cancellation must interrupt the affinity wait")
+        .unwrap()
+    else {
+        panic!("a cancelled affinity waiter must not dispatch");
+    };
+    assert!(match_error_chain(
+        error.as_ref(),
+        &[ErrorType::Cancelled],
+        &[]
+    ));
+    assert!(dispatch.worker_ids.lock().unwrap().is_empty());
+    assert_eq!(table.query_target(session_id.as_str(), None).unwrap(), None);
+    assert_eq!(
+        table.entry_count(),
+        1,
+        "the other request keeps its initializer"
+    );
+    assert!(
+        potential_loads(&router)
+            .await
+            .iter()
+            .all(|load| load.active_requests == 0)
+    );
+
+    drop(holder);
+    assert_eq!(table.entry_count(), 0, "the cancelled waiter left no hold");
+    drop(router);
+    runtime.shutdown();
+}
+
 /// The session-affinity wait runs upstream of every stage the cleanup policy
 /// wraps, and it cancels on a stopped context of its own accord. A decode leg
 /// with staged KV therefore used to die there — before the carve-out could
@@ -4517,13 +4579,8 @@ async fn affinity_mode_host(namespace: &str) -> (Runtime, RoutingHost) {
     endpoint.register_endpoint_instance().await.unwrap();
     client.wait_for_instances().await.unwrap();
     let load_context = test_load_context(&client).await;
-    let affinity = HostAffinity::standalone(
-        Duration::from_secs(60),
-        crate::session_affinity::SessionAffinityMode::Hard,
-        Arc::new(crate::session_affinity::DiscoveryLiveness::new(
-            client.clone(),
-            None,
-        )),
+    let affinity = SessionAffinity::with_config(
+        crate::session_affinity::SessionAffinityConfig::new(Duration::from_secs(60)),
     )
     .unwrap();
     let inner = PushRouter::from_client(client, RouterMode::RoundRobin)
@@ -4573,7 +4630,7 @@ async fn parent_group_binding_offers_siblings_the_committed_worker() {
         router_with_worker_configs(Some(Duration::from_secs(60)), workers).await;
 
     let offered = async |request: &SingleIn<PreprocessedRequest>| {
-        let resolution = router
+        let (hold, affinity) = router
             .resolve_hosted_session(
                 request,
                 RequestPhase::Aggregated,
@@ -4583,10 +4640,8 @@ async fn parent_group_binding_offers_siblings_the_committed_worker() {
             .await
             .unwrap();
         (
-            resolution
-                .affinity
-                .map(|requirement| from_table(requirement.target)),
-            resolution.hold,
+            affinity.map(|requirement| from_table(requirement.target)),
+            hold,
         )
     };
 
@@ -4643,7 +4698,7 @@ async fn hard_parent_group_recovers_when_the_bound_worker_leaves() {
     router.inner.client.override_discovered_instances(vec![9]);
     router.inner.client.override_instance_avail(vec![9]);
     let sibling = subagent_request("child-2", Some("parent-1"));
-    let resolution = router
+    let (hold, affinity) = router
         .resolve_hosted_session(
             &sibling,
             RequestPhase::Aggregated,
@@ -4652,9 +4707,8 @@ async fn hard_parent_group_recovers_when_the_bound_worker_leaves() {
         )
         .await
         .unwrap();
-    assert!(resolution.affinity.is_none(), "the sibling selects unbound");
-    assert!(matches!(resolution.hold, Some(Hold::Initialize(_))));
-    assert_eq!(resolution.dropped, Some(AffinityTarget::new(7, Some(0))));
+    assert!(affinity.is_none(), "the sibling selects unbound");
+    assert!(matches!(hold, Some(Hold::Initialize(_))));
     assert_eq!(bound_target(&router, &group), None);
 
     runtime.shutdown();

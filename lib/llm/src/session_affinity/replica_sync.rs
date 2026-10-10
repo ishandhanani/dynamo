@@ -3,11 +3,12 @@
 
 //! Replication of session bindings between frontends over the runtime event
 //! plane. The schema and the applier are the shared ones
-//! (`AffinityBindingEvent`, `AffinityResolver::apply_replica_event`); this
+//! (`AffinityBindingEvent`,
+//! [`SessionAffinity::apply_replica_event`](dynamo_kv_router::services::selection::affinity::SessionAffinity::apply_replica_event)); this
 //! module is the transport: publishers, subscribers, and the direct-ZMQ
 //! fan-in when the deployment uses it.
 
-use std::sync::{Arc, Weak};
+use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use dynamo_runtime::{
@@ -18,7 +19,6 @@ use dynamo_runtime::{
         Codec, EventPublisher, EventSubscriber, ValidatedEnvelope, uses_direct_zmq,
     },
 };
-use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use tokio::{sync::mpsc, task::JoinHandle};
 use tokio_util::sync::CancellationToken;
 
@@ -27,135 +27,63 @@ use crate::direct_zmq_fan_in::{
 };
 use dynamo_kv_router::RoutingPartitionId;
 use dynamo_kv_router::services::selection::affinity::{
-    AffinityBindingEvent, AffinityEventSink, AffinityReplicaSink, AffinityResolver,
+    AffinityBindingEvent, AffinityReplicaSink, AffinityTarget, AffinityVersion, SessionAffinity,
+    WeakSessionAffinity,
 };
 
-/// The v1 subject carries [`SessionAffinityUpdate`], which names no partition;
-/// the v2 subject carries the shared [`AffinityBindingEvent`]. Both are
-/// published and applied for one release so mixed-version frontends stay
-/// converged.
-// Compatibility with v1.6 frontends during v1.7 rolling upgrades.
-// TODO(v1.8): Publish and subscribe on `SESSION_AFFINITY_SUBJECT_V2` only.
+/// Partition-scoped bindings use the same payload on every transport.
 pub(super) const SESSION_AFFINITY_SUBJECT: &str = "session_affinity_events";
-pub(super) const SESSION_AFFINITY_SUBJECT_V2: &str = "session_affinity_events_v2";
 const OUTBOUND_CHANNEL_CAPACITY: usize = 4_096;
 const DIRECT_ZMQ_RCVHWM: i32 = 1_024;
 
-/// The v1 wire payload: one binding without its partition. A receiver
-/// assumes its own partition, which is what every v1.6 frontend did.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub(super) struct SessionAffinityUpdate {
-    pub session_id: String,
-    pub worker_id: u64,
-    pub dp_rank: Option<u32>,
-    pub sequence: u64,
-    pub writer_id: u64,
-}
-
-impl SessionAffinityUpdate {
-    fn from_event(event: &AffinityBindingEvent) -> Self {
-        Self {
-            session_id: event.session_id.clone(),
-            worker_id: event.worker_id,
-            dp_rank: event.dp_rank,
-            sequence: event.sequence,
-            writer_id: event.writer_id,
-        }
-    }
-
-    fn into_event(self, partition: &RoutingPartitionId) -> AffinityBindingEvent {
-        AffinityBindingEvent {
-            partition: partition.clone(),
-            session_id: self.session_id,
-            worker_id: self.worker_id,
-            dp_rank: self.dp_rank,
-            sequence: self.sequence,
-            writer_id: self.writer_id,
-        }
-    }
-}
-
-/// Feeds received bindings to the resolver without keeping it alive.
-#[derive(Clone)]
-struct ReplicaUpdateApplier {
-    partition: RoutingPartitionId,
-    resolver: Weak<AffinityResolver>,
-}
-
-impl ReplicaUpdateApplier {
-    /// `false` once the resolver is gone: the subscriber stops.
-    fn apply(&self, event: AffinityBindingEvent) -> bool {
-        let Some(resolver) = self.resolver.upgrade() else {
-            return false;
-        };
-        let (worker_id, dp_rank) = (event.worker_id, event.dp_rank);
-        let disposition = resolver.apply_replica_event(&self.partition, event);
-        tracing::trace!(
-            worker_id,
-            ?dp_rank,
-            ?disposition,
-            "processed best-effort session affinity update"
-        );
-        true
-    }
+/// Returns `false` when the table is gone, so the subscriber can stop.
+fn apply_update(
+    table: &WeakSessionAffinity,
+    partition: &RoutingPartitionId,
+    event: AffinityBindingEvent,
+    is_live: impl Fn(AffinityTarget) -> bool,
+) -> bool {
+    let Some(table) = table.upgrade() else {
+        return false;
+    };
+    table.apply_replica_event(partition, event, is_live);
+    true
 }
 
 pub(super) struct ReplicaSyncRuntime {
-    sink: Arc<dyn AffinityReplicaSink>,
+    partition: RoutingPartitionId,
+    tx: mpsc::Sender<AffinityBindingEvent>,
     cancel: CancellationToken,
     publisher_task: Option<JoinHandle<()>>,
-    subscriber_tasks: Vec<JoinHandle<()>>,
+    subscriber_task: Option<JoinHandle<()>>,
 }
 
 impl ReplicaSyncRuntime {
     /// Returns the runtime and this replica's writer id (its discovery instance id).
     pub(super) async fn start(
         client: Client,
-        resolver: Weak<AffinityResolver>,
+        table: WeakSessionAffinity,
         partition: RoutingPartitionId,
+        is_live: impl Fn(AffinityTarget) -> bool + Clone + Send + Sync + 'static,
     ) -> Result<(Self, u64)> {
         let endpoint = &client.endpoint;
         let router_id = endpoint.drt().discovery().instance_id();
         let transport_kind = endpoint.drt().default_event_transport_kind();
-        let publisher_v1 = EventPublisher::for_endpoint_with_transport(
+        let publisher = EventPublisher::for_endpoint_with_transport(
             endpoint,
             SESSION_AFFINITY_SUBJECT,
             transport_kind,
         )
         .await
         .context("create session affinity event publisher")?;
-        let publisher_v2 = EventPublisher::for_endpoint_with_transport(
-            endpoint,
-            SESSION_AFFINITY_SUBJECT_V2,
-            transport_kind,
-        )
-        .await
-        .context("create session affinity v2 event publisher")?;
-        let applier = ReplicaUpdateApplier {
-            partition: partition.clone(),
-            resolver,
-        };
-
         let cancel = CancellationToken::new();
-        let v2_applier = applier.clone();
-        let v2_task = start_subscriber::<AffinityBindingEvent>(
+        let receive_partition = partition.clone();
+        let subscriber_task = start_subscriber(
             &client,
-            SESSION_AFFINITY_SUBJECT_V2,
             transport_kind,
-            publisher_v2.publisher_id(),
+            publisher.publisher_id(),
             cancel.clone(),
-            move |event| v2_applier.apply(event),
-        )
-        .await?;
-        let v1_applier = applier;
-        let v1_partition = partition.clone();
-        let v1_task = start_subscriber::<SessionAffinityUpdate>(
-            &client,
-            SESSION_AFFINITY_SUBJECT,
-            transport_kind,
-            publisher_v1.publisher_id(),
-            cancel.clone(),
-            move |update| v1_applier.apply(update.into_event(&v1_partition)),
+            move |event| apply_update(&table, &receive_partition, event, &is_live),
         )
         .await?;
 
@@ -170,8 +98,7 @@ impl ReplicaSyncRuntime {
                 let Some(event) = event else {
                     return;
                 };
-                let update = SessionAffinityUpdate::from_event(&event);
-                if let Err(error) = publisher_v2.publish(&event).await {
+                if let Err(error) = publisher.publish(&event).await {
                     tracing::trace!(
                         worker_id = event.worker_id,
                         dp_rank = ?event.dp_rank,
@@ -179,31 +106,19 @@ impl ReplicaSyncRuntime {
                         "failed to publish best-effort session affinity update"
                     );
                 }
-                if let Err(error) = publisher_v1.publish(&update).await {
-                    tracing::trace!(
-                        worker_id = update.worker_id,
-                        dp_rank = ?update.dp_rank,
-                        %error,
-                        "failed to publish best-effort session affinity v1 update"
-                    );
-                }
             }
         });
 
         Ok((
             Self {
-                sink: event_sink(partition, tx),
+                partition,
+                tx,
                 cancel,
                 publisher_task: Some(publisher_task),
-                subscriber_tasks: vec![v2_task, v1_task],
+                subscriber_task: Some(subscriber_task),
             },
             router_id,
         ))
-    }
-
-    /// The sink the table publishes into.
-    pub(super) fn sink(&self) -> Arc<dyn AffinityReplicaSink> {
-        Arc::clone(&self.sink)
     }
 
     pub(super) fn shutdown_now(&mut self) {
@@ -211,58 +126,76 @@ impl ReplicaSyncRuntime {
         if let Some(task) = self.publisher_task.take() {
             task.abort();
         }
-        self.subscriber_tasks.clear();
+        if let Some(task) = self.subscriber_task.take() {
+            task.abort();
+        }
     }
 
     #[cfg(test)]
-    pub(super) fn for_test(capacity: usize) -> (Self, mpsc::Receiver<AffinityBindingEvent>) {
+    pub(super) fn for_test(capacity: usize) -> (Arc<Self>, mpsc::Receiver<AffinityBindingEvent>) {
         let (tx, rx) = mpsc::channel(capacity);
         (
-            Self {
-                sink: event_sink(crate::kv_router::embedded::embedded_partition_key(None), tx),
+            Arc::new(Self {
+                partition: crate::kv_router::embedded::embedded_partition_key(None),
+                tx,
                 cancel: CancellationToken::new(),
                 publisher_task: None,
-                subscriber_tasks: Vec::new(),
-            },
+                subscriber_task: None,
+            }),
             rx,
         )
     }
 }
 
-/// A sink that queues each binding for the publisher task; a full queue
-/// drops the update (replication is best effort).
-fn event_sink(
-    partition: RoutingPartitionId,
-    tx: mpsc::Sender<AffinityBindingEvent>,
-) -> Arc<dyn AffinityReplicaSink> {
-    Arc::new(AffinityEventSink::new(partition, move |event| {
-        if let Err(error) = tx.try_send(event) {
-            tracing::trace!(%error, "dropping best-effort session affinity update");
-        }
-    }))
+impl AffinityReplicaSink for ReplicaSyncRuntime {
+    fn publish(&self, session_id: &str, target: AffinityTarget, version: AffinityVersion) {
+        AffinityBindingEvent::new(&self.partition, session_id, target, version).enqueue(&self.tx);
+    }
 }
 
-/// Subscribe to `subject` on the deployment's event transport and feed each
+/// The table owns the transport through its sink. Subscribers keep only a weak
+/// table handle, so dropping the last table also stops both transport tasks.
+pub(crate) async fn enable_replica_sync(
+    table: &SessionAffinity,
+    partition: RoutingPartitionId,
+    client: Client,
+    workers: Option<crate::discovery::RuntimeConfigWatch>,
+) -> Result<()> {
+    let weak = table.downgrade();
+    table
+        .enable_replication_with(async move {
+            let live_client = client.clone();
+            let (runtime, writer_id) =
+                ReplicaSyncRuntime::start(client, weak, partition, move |target| {
+                    super::target_is_live(&live_client, workers.as_ref(), target)
+                })
+                .await?;
+            Ok::<_, anyhow::Error>((writer_id, Arc::new(runtime) as Arc<dyn AffinityReplicaSink>))
+        })
+        .await
+}
+
+/// Subscribe on the deployment's event transport and feed each
 /// decoded payload to `apply`, which returns `false` to stop.
-async fn start_subscriber<T>(
+async fn start_subscriber(
     client: &Client,
-    subject: &'static str,
     transport_kind: EventTransportKind,
     publisher_id: u64,
     cancel: CancellationToken,
-    apply: impl Fn(T) -> bool + Clone + Send + Sync + 'static,
-) -> Result<JoinHandle<()>>
-where
-    T: DeserializeOwned + Send + 'static,
-{
+    apply: impl Fn(AffinityBindingEvent) -> bool + Clone + Send + Sync + 'static,
+) -> Result<JoinHandle<()>> {
+    let subject = SESSION_AFFINITY_SUBJECT;
     let endpoint = &client.endpoint;
     if should_use_direct_sync(transport_kind, uses_direct_zmq(transport_kind)) {
         let codec = Codec::default();
+        let handler_cancel = cancel.clone();
         let handler = move |envelope: ValidatedEnvelope| {
             let payload = codec
-                .decode_payload::<T>(&envelope.payload)
+                .decode_payload::<AffinityBindingEvent>(&envelope.payload)
                 .context("decode session affinity update")?;
-            apply(payload);
+            if !apply(payload) {
+                handler_cancel.cancel();
+            }
             Ok(())
         };
         let observer = move |observation: FanInObservation| match observation.event {
@@ -298,7 +231,7 @@ where
         EventSubscriber::for_endpoint_with_transport(endpoint, subject, transport_kind)
             .await
             .context("create session affinity event subscriber")?
-            .typed::<T>();
+            .typed::<AffinityBindingEvent>();
     Ok(tokio::spawn(async move {
         loop {
             let event = tokio::select! {
@@ -338,11 +271,7 @@ fn should_use_direct_sync(transport_kind: EventTransportKind, direct_zmq_topolog
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::session_affinity::{AlwaysLive, HostAffinity, LiveWorkers};
-    use dynamo_kv_router::services::selection::affinity::{
-        AffinityTarget, AffinityVersion, ReplicaApplyOutcome, ReplicaEventDisposition,
-        SessionAffinity, SessionAffinityConfig,
-    };
+    use dynamo_kv_router::services::selection::affinity::{SessionAffinity, SessionAffinityConfig};
     use dynamo_runtime::{
         DistributedRuntime, Runtime,
         discovery::{DiscoveryQuery, EventChannelQuery},
@@ -358,172 +287,31 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn replica_update_backpressure_is_nonfatal() {
-        let (runtime, mut rx) = ReplicaSyncRuntime::for_test(1);
-        let sink = runtime.sink();
-        sink.publish(
-            "first",
-            AffinityTarget {
-                worker_id: 10,
-                dp_rank: Some(0),
-            },
-            AffinityVersion {
-                sequence: 1,
-                writer_id: 7,
-            },
-        );
-        sink.publish(
-            "second",
-            AffinityTarget {
-                worker_id: 11,
-                dp_rank: Some(0),
-            },
-            AffinityVersion {
-                sequence: 2,
-                writer_id: 7,
-            },
-        );
-
-        let update = rx.recv().await.unwrap();
-        assert_eq!(update.session_id, "first");
-        assert_eq!(update.writer_id, 7);
-        assert_eq!(
-            update.partition,
-            crate::kv_router::embedded::embedded_partition_key(None)
-        );
-        assert!(rx.try_recv().is_err());
-    }
-
-    /// A v1 update (no partition) and a v2 event both apply to the receiving
-    /// partition; a v2 event for another partition does not.
-    #[tokio::test]
-    async fn v1_and_v2_updates_both_apply_to_the_partition() {
+    async fn replica_subscriber_does_not_keep_table_alive() {
         let partition = crate::kv_router::embedded::embedded_partition_key(Some("model"));
         let table =
             SessionAffinity::with_config(SessionAffinityConfig::new(Duration::from_secs(10)))
                 .unwrap();
-        let resolver = Arc::new(AffinityResolver::new(
-            table,
-            Arc::new(LiveWorkers([10, 11].into_iter().collect())),
-        ));
-        let applier = ReplicaUpdateApplier {
+        let weak = table.downgrade();
+        let event = AffinityBindingEvent {
             partition: partition.clone(),
-            resolver: Arc::downgrade(&resolver),
-        };
-
-        let v1 = SessionAffinityUpdate {
-            session_id: "legacy".to_string(),
+            session_id: "session".to_string(),
             worker_id: 10,
             dp_rank: Some(0),
             sequence: 5,
             writer_id: 9,
         };
-        assert!(applier.apply(v1.into_event(&partition)));
+        assert!(apply_update(&weak, &partition, event.clone(), |_| true));
         assert_eq!(
-            resolver.table().query_target("legacy", None).unwrap(),
+            table.query_target("session", None).unwrap(),
             Some(AffinityTarget::new(10, Some(0)))
         );
-
-        let v2 = AffinityBindingEvent {
-            partition: partition.clone(),
-            session_id: "current".to_string(),
-            worker_id: 11,
-            dp_rank: None,
-            sequence: 6,
-            writer_id: 9,
-        };
-        assert!(applier.apply(v2));
-        assert_eq!(
-            resolver.table().query_target("current", None).unwrap(),
-            Some(AffinityTarget::new(11, None))
-        );
-
-        let elsewhere = AffinityBindingEvent {
-            partition: crate::kv_router::embedded::embedded_partition_key(Some("other")),
-            session_id: "elsewhere".to_string(),
-            worker_id: 10,
-            dp_rank: None,
-            sequence: 7,
-            writer_id: 9,
-        };
-        assert_eq!(
-            resolver.apply_replica_event(&partition, elsewhere),
-            ReplicaEventDisposition::OtherPartition
-        );
-        assert_eq!(
-            resolver.table().query_target("elsewhere", None).unwrap(),
-            None
-        );
-
-        // The same binding on both subjects is idempotent.
-        let again = SessionAffinityUpdate {
-            session_id: "current".to_string(),
-            worker_id: 11,
-            dp_rank: None,
-            sequence: 6,
-            writer_id: 9,
-        };
-        assert_eq!(
-            resolver.apply_replica_event(&partition, again.into_event(&partition)),
-            ReplicaEventDisposition::Applied(ReplicaApplyOutcome::Refreshed)
-        );
-
-        drop(resolver);
-        assert!(
-            !applier.apply(
-                SessionAffinityUpdate {
-                    session_id: "late".to_string(),
-                    worker_id: 10,
-                    dp_rank: None,
-                    sequence: 8,
-                    writer_id: 9,
-                }
-                .into_event(&partition)
-            )
-        );
+        drop(table);
+        assert!(!apply_update(&weak, &partition, event, |_| true));
     }
 
-    fn host_affinity() -> HostAffinity {
-        HostAffinity::standalone(
-            Duration::from_secs(10),
-            crate::session_affinity::SessionAffinityMode::Hard,
-            Arc::new(AlwaysLive),
-        )
-        .unwrap()
-    }
-
-    #[tokio::test]
-    async fn rejected_worker_update_still_advances_replica_clock() {
-        let partition = crate::kv_router::embedded::embedded_partition_key(None);
-        let table =
-            SessionAffinity::with_config(SessionAffinityConfig::new(Duration::from_secs(10)))
-                .unwrap();
-        let resolver = Arc::new(AffinityResolver::new(
-            table,
-            Arc::new(LiveWorkers(Default::default())),
-        ));
-        let table = resolver.table();
-        let baseline = table.next_version();
-        let sequence = baseline.sequence.saturating_add(10);
-        let applier = ReplicaUpdateApplier {
-            partition: partition.clone(),
-            resolver: Arc::downgrade(&resolver),
-        };
-
-        assert!(
-            applier.apply(
-                SessionAffinityUpdate {
-                    session_id: "unknown-worker".to_string(),
-                    worker_id: 10,
-                    dp_rank: Some(0),
-                    sequence,
-                    writer_id: 9,
-                }
-                .into_event(&partition)
-            )
-        );
-
-        assert_eq!(table.next_version().sequence, sequence.saturating_add(1));
+    fn table() -> SessionAffinity {
+        SessionAffinity::with_config(SessionAffinityConfig::new(Duration::from_secs(10))).unwrap()
     }
 
     #[tokio::test]
@@ -546,24 +334,29 @@ mod tests {
         ));
         let client = endpoint.client().await.unwrap();
 
-        let original = host_affinity();
+        let partition = crate::kv_router::embedded::embedded_partition_key(None);
+        let original = table();
         let shared = original.clone();
         let (first, second) = tokio::join!(
-            original.enable_replica_sync(client.clone()),
-            shared.enable_replica_sync(client.clone()),
+            enable_replica_sync(&original, partition.clone(), client.clone(), None),
+            enable_replica_sync(&shared, partition.clone(), client.clone(), None),
         );
         first.unwrap();
         second.unwrap();
         wait_for_registration_count(&drt, &query, 1).await;
 
         drop(original);
-        shared.enable_replica_sync(client.clone()).await.unwrap();
+        enable_replica_sync(&shared, partition.clone(), client.clone(), None)
+            .await
+            .unwrap();
         wait_for_registration_count(&drt, &query, 1).await;
         drop(shared);
         wait_for_registration_count(&drt, &query, 0).await;
 
-        let replacement = host_affinity();
-        replacement.enable_replica_sync(client).await.unwrap();
+        let replacement = table();
+        enable_replica_sync(&replacement, partition, client, None)
+            .await
+            .unwrap();
         wait_for_registration_count(&drt, &query, 1).await;
 
         drop(replacement);

@@ -24,7 +24,7 @@ use crate::{
     preprocessor::{OpenAIPreprocessor, prompt::prompt_formatter_from_mdc},
     protocols::common::llm_backend::{BackendOutput, LLMEngineOutput, PreprocessedRequest},
     request_template::RequestTemplate,
-    session_affinity::{DiscoveryLiveness, HostAffinity, SessionAffinityMode},
+    session_affinity::{SessionAffinity, SessionAffinityMode, standalone_with_replica_sync},
     types::{
         Annotated,
         openai::chat_completions::{
@@ -156,7 +156,7 @@ fn preprocessed_backend_engine(
     chooser: Option<Arc<KvRouter>>,
     model_manager: &Arc<crate::discovery::ModelManager>,
     endpoint_id: &dynamo_runtime::protocols::EndpointId,
-    affinity: Option<HostAffinity>,
+    affinity: Option<SessionAffinity>,
     load_context: Arc<RoutingLoadContext>,
 ) -> anyhow::Result<Arc<RoutingHost>> {
     // Reject LoRA + unsupported-mode combinations up front (single source of truth, shared with
@@ -253,20 +253,16 @@ pub(crate) async fn build_preprocessed_routing_with_session_affinity_mode(
     let ttl = session_affinity_ttl_secs.map(Duration::from_secs);
     let affinity = match (ttl, chooser.as_ref()) {
         (Some(ttl), Some(chooser)) => {
-            let affinity = chooser.host_affinity(ttl, session_affinity_mode)?;
-            affinity.enable_replica_sync(router_client.clone()).await?;
+            let affinity = chooser.session_affinity(ttl, session_affinity_mode)?;
+            chooser
+                .enable_affinity_replica_sync(&affinity, router_client.clone())
+                .await?;
             Some(affinity)
         }
         // Builtin modes have no selection partition: their own table, with
         // discovery as the liveness source.
         _ => {
-            HostAffinity::standalone_with_replica_sync(
-                ttl,
-                session_affinity_mode,
-                Arc::new(DiscoveryLiveness::new(router_client.clone(), None)),
-                router_client.clone(),
-            )
-            .await?
+            standalone_with_replica_sync(ttl, session_affinity_mode, router_client.clone()).await?
         }
     };
 

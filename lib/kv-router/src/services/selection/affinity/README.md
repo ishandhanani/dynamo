@@ -3,54 +3,49 @@ SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All 
 SPDX-License-Identifier: Apache-2.0
 -->
 
-# Session affinity
+# Shared session affinity
 
-Session affinity binds a session to the worker (and optionally the data-parallel rank) that served it, so later requests in the session reuse that worker's prefix cache. This directory holds the two shared layers; the routing hosts keep only what differs between them.
+`SessionAffinity` owns the bindings and request lifecycle. Routing hosts supply a liveness callback and retain their own leases. The table lives in `../affinity.rs`; `resolver.rs` implements resolve, dispatch validation, and failover; `replication.rs` defines the shared binding event and applier.
 
-## Layers
+```mermaid
+flowchart LR
+    F[Frontend request] --> R[SessionAffinity.resolve]
+    S[Selection service request] --> R
+    R --> A[Hold + AffinityRequirement]
+    A --> W[Worker selection]
+    W --> D[Frontend dispatch]
+    W --> B[Service booking]
+    D --> C[SessionAffinity.commit_or_failover]
+    B --> C
+    C --> L[Lease owned by stream or reservation]
+```
 
-| Layer | File | Owns |
-|---|---|---|
-| `SessionAffinity` | `table.rs` | Bindings, idle TTL, entry and session-id limits, `Hard`/`Soft` commit rules, `Hold` and `AffinityLease`, versioned `apply_replica_update`, the `AffinityReplicaSink` hook |
-| `AffinityResolver` | `resolver.rs` | How one request drives the table: `resolve` (hold, liveness check, cancellation, full-table fallback), `query` (no hold), `commit` (bind, `Hard` rejection, departed-worker failover), and `release_filtered` |
-| Pin rule | `scheduling/queue.rs` | How a binding constrains worker selection, for every policy |
+`resolve` acquires a hold before selection, checks liveness, and reinitializes bindings to departed workers. It can be cancelled while waiting on another initializer or yielding during repeated invalidations. A full table routes without a session binding. `query_target` reads a binding without acquiring a lease.
 
-The resolver takes a `TargetLiveness` from its host: whether a bound target can currently be scheduled. A binding whose target is not live is dropped before selection and the session re-initializes; a `Hard` commit rejected because the target departed after the hold re-binds the session to the dispatched worker, joining another request's initialization when one is in flight.
+## Selection and ownership
 
-## The pin rule
+`AffinityRequirement { target, mode }` carries the existing `SessionAffinityMode` to the scheduler. Hard mode narrows selection to an eligible bound target, independently of the selection policy. Soft mode supplies a preference the policy may override. Explicit request pins remain separate exact constraints. Hard affinity does not narrow queue admission: it waits in the router only when all eligible workers are busy; otherwise it runs on its bound worker and queues there.
 
-`resolve` and `query` return an `AffinityRequirement { target, strength }` whose strength is the table's mode. The scheduler queue applies it when it selects a worker:
+| Host | Liveness | Commit point | Lease owner |
+|---|---|---|---|
+| Selection service and standalone EPP | partition catalog membership and rank | after booking, before installing the reservation | reservation row |
+| Frontend KV | discovery membership and DP-rank range | after dispatch returns a response stream | response stream |
+| Frontend builtin modes | discovery membership | after dispatch returns a response stream | response stream |
 
-- `Hard`: selection is limited to the target while the target is eligible (known to the partition, inside the caller's allowed set, available, not overloaded). An ineligible target selects normally; `commit` then re-binds if the worker departed, or rejects if it is live but another worker was dispatched. Queue admission does not narrow: a hard-bound request waits in the router only when every eligible worker is busy, as any request does, and otherwise goes to its bound worker and queues there.
-- `Soft`: the target reaches the selection policy as `WorkerSelectionContext::affinity_target()`. The builtin default policy stays on the bound worker while it is a candidate; a custom policy may select another worker, and `commit` rebinds the session to wherever the request ran.
-- Explicit request pins (`pinned_worker`) are a separate, exact constraint with their own queue lane; they are not affinity.
+The KV frontend embeds `SelectionService` and uses that service partition's table. It resolves and holds sessions outside `SelectionCore`, passing only the affinity requirement into selection. Builtin routing uses the same `SessionAffinity` directly. The table owns its replication sink and therefore the frontend transport runtime; no frontend coordinator is needed. Prefill and decode keep separate tables because they serve different worker pools and can have different TTLs.
 
-## Hosts
-
-| Host | Session key | Liveness | Admission | Commit point | Lease owner | Cancels a wait |
-|---|---|---|---|---|---|---|
-| Selection service (`core/run.rs`, `core/reservations.rs`) | `session_context.session_id` or legacy `session_id` on the wire request | partition catalog (`CatalogLiveness`) | `Book`: resolve, book, commit | after the booking lands, before the reservation is installed | the reservation row | core shutdown token |
-| Standalone EPP (`deploy/inference-gateway/ext-proc/src/selector.rs`) | request session header | same as the selection service it embeds | `Book` | same | same | same |
-| Frontend KV (`lib/llm/src/kv_router/routing_host`) | `x-dynamo-session-affinity-id` header, subagent group key | discovery plus DP-rank range (`DiscoveryLiveness`, installed on the partition resolver) | `Lease`: core resolves and returns the hold in `Selected`; host runs `check_dispatch` before dispatching and commits after | after dispatch returns a response stream | the response stream | client disconnect drops the selection future (or the request's cleanup budget for a decode leg with staged KV) |
-| Frontend builtin modes and builtin prefill (`routing_host/builtin.rs`, `prefill_router`) | same as frontend KV | discovery (`DiscoveryLiveness` without configs) | host resolves directly (`resolve_hosted_session`) over its own table (`HostAffinity::standalone`); `Hard` and explicit targets are exact, `Soft` is a preference except in Direct mode | after dispatch | the response stream | client disconnect (or the cleanup budget for a decode leg with staged KV) |
-| Runtime EPP (`ext-proc/src/epp.rs`) | none | n/a | n/a | n/a | n/a | no decode session affinity |
-
-Every host resolves through `AffinityResolver`. The frontend keeps `HostAffinity` (`lib/llm/src/session_affinity/host.rs`), which only holds the resolver and the event-plane replication attached to its table; the former `AffinityCoordinator` is gone. Prefill and decode hosts use separate tables on purpose: they bind to different worker pools and may carry different TTLs, so a session binds to a prefill worker and a decode worker independently.
-
-Where the hosts differ on a live `Hard` mismatch (the bound worker is live but the request's own constraints steered selection elsewhere): the core rejects at commit and the table drops the binding, so the session re-binds on its next request; the frontend rejects before dispatch with `check_dispatch` and releases its hold without touching the binding, since nothing ran and the request, not the session, caused the mismatch.
+`check_dispatch` rejects a live Hard mismatch before frontend dispatch, preserving the binding because nothing ran. A policy filtering out all candidates releases the Hard binding so a retry can rebind. The service commits after booking; a rejected commit drops the binding and the armed booking handle frees capacity. `commit_or_failover` handles a worker departing after resolution without awaiting another initializer behind booked capacity. Revision and version checks keep stale holds from erasing a replacement binding.
 
 ## Replication
 
-One wire schema, `AffinityBindingEvent` (`replication.rs`): the partition (flattened as `model_name` and `routing_group`), the session id, the target, and the version (`sequence`, `writer_id`). Every table publishes through `AffinityEventSink`, which builds the event for its partition and hands it to the host's transport; every transport feeds received events to `AffinityResolver::apply_replica_event`, the one applier. It ignores the replica's own writer id, ignores other partitions, advances the replica clock, and applies the binding only if the host can schedule its worker (`TargetLiveness`).
+`AffinityBindingEvent` contains the routing partition, session id, worker and optional rank, and `(sequence, writer_id)` version. `replica_sink` queues this event for the host transport. `SessionAffinity::apply_replica_event` checks partition and writer identity, advances the clock, checks host liveness, and applies the versioned binding.
 
-One writer-id rule: the id installed with the table's replication sink. Frontends use their discovery instance id (stable across restarts of the same instance); the standalone service uses a random non-zero process id, since it has no discovery.
+The selection service uses its existing ZMQ peer mesh and `dynamo.session-affinity.v1` topic. The frontend uses its runtime event plane and `session_affinity_events` subject. Both carry the same payload; neither has a legacy schema or dual-publish path. These are internal protocols and replicas must run compatible versions. Frontends use their discovery instance id as writer id; the service uses a random nonzero process id.
 
-Two transports stay: the selection service's ZMQ peer mesh (`services/common/replica_sync.rs`, topics `dynamo.session-affinity.v1` and `.v2`) and the frontend's runtime event plane (`lib/llm/src/session_affinity/replica_sync.rs`, subjects `session_affinity_events` for the old partition-less payload and `session_affinity_events_v2` for the shared schema). For one release both transports publish and apply both versions, so mixed-version replicas converge; applying the same binding twice is idempotent (the second apply refreshes the same version). The v1 forms carry a removal TODO.
+Replica startup installs the writer id and sink together, once per table. Failed or cancelled startup can be retried. Frontend subscribers hold weak table references, so dropping the last table owner shuts down the transport without a reference cycle.
 
-## Configuration
+## Configuration and errors
 
-`SessionAffinityConfig` (TTL, mode, entry limit, session-id limit) is the one configuration, and `SessionAffinityConfig::validate` the one validator; `ttl_from_secs_f64` is the one range check for a TTL given in seconds. The selection service builder, the frontend hosts, the Python bindings (`SelectionService`, `KvRouter`, and the `validate_session_affinity_ttl_secs` function the frontend's argument parser calls), and the EPP all go through it. The mode (`hard` or `soft`, `hard` by default) is settable on every host: `--router-session-affinity-mode` on the frontend, `--session-affinity-mode` and `SelectionService(session_affinity_mode=...)` on the standalone service, `DYN_EPP_SESSION_AFFINITY_MODE` on the EPP.
+`SessionAffinityConfig` validates TTL, mode, entry limit, and session-id limit. Its `ttl_from_secs_f64` checks TTL inputs from Python and CLI configuration. Frontend, standalone service, and EPP all expose Hard/Soft mode with Hard as the default.
 
-## Errors
-
-Hosts map `AffinityError` onto their own error types. The core maps `InvalidArgument` (the request contradicts the binding or exceeds the session-id limit) to `BadRequest`, `ResourceExhausted` to `NotReady`, `Cancelled` to scheduler shutdown, and `Dropped` to `Internal`. A full table never fails `resolve`: the request routes without affinity and `full_table_fallbacks` counts it (a plain counter on the resolver; not exported as a metric).
+Hosts map `AffinityError` into their existing error types. Invalid request targets or session ids are client errors. Cancellation maps to core shutdown or frontend request cancellation. The full-table fallback is handled by `resolve`, without introducing another error type or counter.

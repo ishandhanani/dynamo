@@ -254,7 +254,7 @@ fn lease_operation<'a>(
         policy_class: None,
         session_context: None,
         session: SessionBinding::None,
-        affinity_target: None,
+        affinity: None,
         pinned_worker: None,
         allowed_worker_ids: None,
         routing_constraints: RoutingConstraints::default(),
@@ -931,14 +931,7 @@ async fn full_affinity_table_routes_without_pinning() {
         ..SessionAffinityConfig::new(Duration::from_secs(60))
     })
     .expect("affinity table");
-    let resolver = AffinityResolver::new(
-        table,
-        Arc::new(CatalogLiveness {
-            catalog: Arc::clone(&core.catalog),
-            key: default_key(),
-        }),
-    );
-    assert!(entry.affinity.set(Arc::new(resolver)).is_ok());
+    assert!(entry.affinity.set(table).is_ok());
 
     for (selection_id, session_id) in [("first", "s1"), ("second", "s2")] {
         let mut request = reserve_request(selection_id);
@@ -1378,81 +1371,63 @@ async fn lease_admission_installs_no_index_row_and_records_nothing() {
     wait_until("booking release", || !entry.scheduler.has_request("leased")).await;
 }
 
-/// A `Lease` admission with a managed session returns the hold uncommitted:
-/// the host binds the session once it has dispatched. A query binding reads
-/// the binding without a hold.
+/// A lease host owns session resolution; the core owns only its booking.
 #[tokio::test]
-async fn lease_admission_returns_the_session_hold_for_the_host_to_commit() {
+async fn lease_admission_keeps_session_ownership_with_the_host() {
     let core = core_with_session_affinity();
-    core.upsert_worker(worker(1)).await.expect("worker upsert");
-    let key = default_key();
-    let entry = core.entry(&key).expect("entry");
-    let resolver = entry.affinity.get().expect("affinity resolver");
-
-    let first = reserve_request("leased");
-    let mut operation = lease_operation(first.prompt.view(), "leased", true);
+    core.upsert_worker(worker(1)).await.expect("worker");
+    let table = affinity_table(&core);
+    let request = reserve_request("leased");
+    let mut operation = lease_operation(request.prompt.view(), "invalid", true);
     operation.session = SessionBinding::Managed {
         session_id: "s".into(),
-        requested_target: None,
-    };
-    let Ok(SelectionOutcome::Selected(mut selected)) = core.run_selection(operation).await.result
-    else {
-        panic!("lease selection failed");
-    };
-    let hold = selected
-        .affinity_hold
-        .take()
-        .expect("the hold travels with the selection");
-    assert!(matches!(hold, Hold::Initialize(_)));
-    assert_eq!(
-        bound_worker(&core, "s"),
-        None,
-        "nothing is bound before the host commits"
-    );
-    assert!(core.reservation_index.read().is_empty());
-    let lease = resolver
-        .commit(hold, selected.response.best_worker.into())
-        .expect("commit")
-        .expect("lease");
-    assert_eq!(bound_worker(&core, "s"), Some(1));
-    drop(lease);
-
-    let second = reserve_request("leased-2");
-    let mut operation = lease_operation(second.prompt.view(), "leased-2", true);
-    operation.session = SessionBinding::Managed {
-        session_id: "s".into(),
-        requested_target: None,
-    };
-    let Ok(SelectionOutcome::Selected(mut bound)) = core.run_selection(operation).await.result
-    else {
-        panic!("lease selection failed");
     };
     assert!(matches!(
-        bound.affinity_hold.take(),
-        Some(Hold::Bound { .. })
+        core.run_selection(operation).await.result,
+        Err(SelectionError::Internal(_))
     ));
+    assert_eq!(
+        table.entry_count(),
+        0,
+        "rejected before acquiring a session"
+    );
+    let entry = core.entry(&default_key()).unwrap();
+    assert!(!entry.scheduler.has_request("invalid"));
 
-    let mut operation = lease_operation(second.prompt.view(), "q", true);
-    operation.admission = SelectionAdmission::Query {
-        request_id: Some("q".to_string()),
+    let target = WorkerAffinityTarget::new(1, Some(0));
+    drop(
+        table
+            .commit(table.acquire("s", None).await.unwrap(), target)
+            .unwrap(),
+    );
+    let hold = table
+        .resolve("s", None, |_| true, std::future::pending())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(table.lease_count("s"), Some(1));
+    let mut operation = lease_operation(request.prompt.view(), "leased", true);
+    operation.affinity = Some(table.requirement(hold.target().unwrap()));
+    let Ok(SelectionOutcome::Selected(selected)) = core.run_selection(operation).await.result
+    else {
+        panic!("host-resolved affinity must select");
     };
-    operation.session = SessionBinding::Query {
-        session_id: "s".into(),
-        requested_target: None,
-    };
-    let Ok(SelectionOutcome::Selected(queried)) = core.run_selection(operation).await.result else {
-        panic!("query selection failed");
-    };
-    assert!(queried.affinity_hold.is_none());
-    assert_eq!(queried.response.best_worker.worker_id, 1);
-    assert_eq!(lease_count(&core, "s"), Some(0));
-
+    assert_eq!(selected.response.best_worker.worker_id, 1);
+    assert!(core.reservation_index.read().is_empty());
+    assert_eq!(
+        table.lease_count("s"),
+        Some(1),
+        "selection did not acquire another hold"
+    );
     drop(selected);
-    drop(bound);
-    wait_until("booking release", || {
-        !entry.scheduler.has_request("leased") && !entry.scheduler.has_request("leased-2")
-    })
-    .await;
+    wait_until("booking release", || !entry.scheduler.has_request("leased")).await;
+    assert_eq!(
+        table.lease_count("s"),
+        Some(1),
+        "the host still owns the session"
+    );
+    drop(hold);
+    assert_eq!(table.lease_count("s"), Some(0));
 }
 
 #[tokio::test]
@@ -1738,7 +1713,7 @@ async fn index_observer_releases_displaced_affinity_after_unlock() {
     let (entry, booking) = core.indexed_booking("shared").expect("indexed booking");
     // A scheduler release that bypasses the core leaves a stale indexed lease.
     entry.scheduler.free_if_booking(&booking).await.unwrap();
-    let table = entry.affinity.get().expect("affinity table").table();
+    let table = entry.affinity.get().expect("affinity table");
     let sink = Arc::new(UnlockedIndexSink {
         index: Arc::clone(&core.reservation_index),
         published: AtomicBool::new(false),
@@ -2397,7 +2372,6 @@ fn affinity_table(core: &SelectionCore) -> SessionAffinity {
         .affinity
         .get()
         .expect("affinity table configured")
-        .table()
         .clone()
 }
 
@@ -2458,7 +2432,7 @@ async fn session_dp_rank_shrink_rebinds_only_removed_targets(
     .await
     .expect("worker upsert");
     let entry = core.entry(&key).expect("default partition");
-    let table = entry.affinity.get().expect("affinity table").table();
+    let table = entry.affinity.get().expect("affinity table");
     let target = WorkerAffinityTarget::new(1, dp_rank);
     drop(
         table
@@ -2554,7 +2528,7 @@ async fn concurrent_holds_on_a_departed_worker_both_land_on_the_replacement() {
         panic!("both requests hold the departed binding");
     };
 
-    // Both requests notice the departure, as `AffinityResolver::resolve` does: the first
+    // Both requests notice the departure, as `SessionAffinity::resolve` does: the first
     // invalidation drops the binding, the second is a no-op release.
     first.invalidate();
     second.invalidate();
@@ -2633,12 +2607,7 @@ async fn failover_commit_behind_an_initializing_hold_keeps_a_lease() {
     // Idle, not gone: the binding lasts until the TTL.
     assert_eq!(bound_worker(&core, "s"), Some(replacement));
     let entry = core.entry(&key).expect("default partition");
-    entry
-        .affinity
-        .get()
-        .expect("table")
-        .table()
-        .expire_for_test("s");
+    entry.affinity.get().expect("table").expire_for_test("s");
     assert_eq!(bound_worker(&core, "s"), None);
 }
 
@@ -2765,7 +2734,7 @@ async fn failed_replay_preserves_a_newer_cached_selection() {
     core.select(request(1)).await.expect("first select");
 
     let entry = core.entry(&default_key()).expect("entry");
-    let table = entry.affinity.get().expect("affinity table").table();
+    let table = entry.affinity.get().expect("affinity table");
     let initializer = table.acquire("s", None).await.expect("initializer");
     let mut replay = Box::pin(core.create_reservation(replay_reservation("pending")));
     let mut context = std::task::Context::from_waker(std::task::Waker::noop());

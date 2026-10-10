@@ -9,12 +9,14 @@ use dynamo_kv_router::{
     kv_hints::KvHint,
     protocols::{BlockExtraInfo, RoutingConstraints, WorkerId, WorkerWithDpRank},
     scheduling::{
-        AdvisoryWorkerLoad, QueueRejection, RequestLifecycle, RoutingEligibility,
-        queue::BookingHandle,
+        AdvisoryWorkerLoad, AffinityRequirement, QueueRejection, RequestLifecycle,
+        RoutingEligibility, queue::BookingHandle,
     },
-    services::selection::SessionBinding,
 };
-use dynamo_runtime::{dynamo_nvtx_range, pipeline::Error};
+use dynamo_runtime::{
+    dynamo_nvtx_range,
+    pipeline::{Error, SingleIn},
+};
 
 use crate::{
     kv_router::{FindBestMatchAdmission, FindBestMatchOutcome, routing_host::RoutingHost},
@@ -23,7 +25,7 @@ use crate::{
         TokenIdType,
         common::{preprocessor::RoutingHints, timing::RequestPhase},
     },
-    session_affinity::{Hold, HostAffinity, invalid_argument},
+    session_affinity::affinity_id,
 };
 
 pub(super) struct WorkerSelection {
@@ -41,8 +43,6 @@ pub(super) struct WorkerSelection {
     pub(super) routing_hashes: Option<RoutingDecisionHashes>,
     pub(super) kv_hint: Option<KvHint>,
     pub(super) request_lifecycle: Option<Box<RequestLifecycle>>,
-    /// The session the core held for this request; committed after dispatch.
-    pub(super) affinity_hold: Option<Hold>,
 }
 
 // Transient return value; `Routed` is moved into `WorkerSelection` right away.
@@ -77,10 +77,8 @@ impl<'a> RoutingRequestParts<'a> {
     }
 }
 
-pub(super) struct SelectionOptions<'a> {
-    /// What the core does with the request's session: hold it (admitted
-    /// routing), read it (query-only), or nothing.
-    pub(super) session: SessionBinding<'a>,
+pub(super) struct SelectionOptions {
+    pub(super) affinity: Option<AffinityRequirement>,
     pub(super) planned_worker: Option<WorkerWithDpRank>,
     pub(super) policy_class: Option<String>,
     pub(super) session_context: Option<dynamo_kv_router::SessionContext>,
@@ -100,7 +98,7 @@ struct BestMatchArgs<'a> {
     policy_class: Option<String>,
     session_context: Option<dynamo_kv_router::SessionContext>,
     expected_output_tokens: Option<u32>,
-    session: SessionBinding<'a>,
+    affinity: Option<AffinityRequirement>,
     pinned_worker: Option<WorkerWithDpRank>,
     allowed_worker_ids: Option<HashSet<WorkerId>>,
     routing_constraints: RoutingConstraints,
@@ -125,7 +123,7 @@ impl RoutingHost {
                 args.policy_class,
                 args.session_context,
                 args.expected_output_tokens,
-                args.session,
+                args.affinity,
                 args.pinned_worker,
                 args.allowed_worker_ids,
                 args.routing_constraints,
@@ -143,35 +141,20 @@ impl RoutingHost {
                 potential_decode_blocks,
                 routing_hashes,
                 kv_hint,
-            } => {
-                // The host commits the session after dispatch, so a live hard
-                // binding the request's own constraints steered away from is
-                // rejected here, before a worker starts on it. The hold is
-                // released with the selection and the binding is kept.
-                if let (Some(hold), Some(resolver)) = (
-                    admitted.affinity_hold.as_ref(),
-                    self.affinity.as_ref().map(HostAffinity::resolver),
-                ) {
-                    resolver
-                        .check_dispatch(hold, worker.into())
-                        .map_err(|error| invalid_argument(error.to_string()))?;
-                }
-                Ok(SelectionOutcome::Routed(WorkerSelection {
-                    worker,
-                    booking: admitted.booking,
-                    overlap_amount: overlap_blocks,
-                    effective_overlap_blocks,
-                    cached_tokens,
-                    selected_raw_cached_tokens,
-                    max_raw_cached_tokens,
-                    potential_decode_blocks,
-                    selected_worker_load: admitted.advisory_load,
-                    routing_hashes,
-                    kv_hint,
-                    request_lifecycle: None,
-                    affinity_hold: admitted.affinity_hold,
-                }))
-            }
+            } => Ok(SelectionOutcome::Routed(WorkerSelection {
+                worker,
+                booking: admitted.booking,
+                overlap_amount: overlap_blocks,
+                effective_overlap_blocks,
+                cached_tokens,
+                selected_raw_cached_tokens,
+                max_raw_cached_tokens,
+                potential_decode_blocks,
+                selected_worker_load: admitted.advisory_load,
+                routing_hashes,
+                kv_hint,
+                request_lifecycle: None,
+            })),
             FindBestMatchOutcome::QueueRejected { rejection } => {
                 Ok(SelectionOutcome::QueueRejected(rejection))
             }
@@ -182,11 +165,11 @@ impl RoutingHost {
     pub(super) async fn select_worker_outcome(
         &self,
         context_id: &str,
-        request: &PreprocessedRequest,
+        request: &SingleIn<PreprocessedRequest>,
         routing_parts: RoutingRequestParts<'_>,
         phase: RequestPhase,
         is_query_only: bool,
-        options: SelectionOptions<'_>,
+        options: SelectionOptions,
     ) -> Result<SelectionOutcome, Error> {
         let _nvtx_select = dynamo_nvtx_range!("route.select_worker");
         let routing = request.routing.as_ref();
@@ -230,7 +213,7 @@ impl RoutingHost {
         let return_routing_hashes =
             !is_query_only && self.kv_router().indexer().records_routing_decisions();
         let SelectionOptions {
-            session,
+            affinity,
             planned_worker,
             policy_class,
             session_context,
@@ -256,7 +239,8 @@ impl RoutingHost {
                 let unique_dp_rank = self.kv_router().unique_dp_rank_for_worker(worker_id);
                 if dp_rank.is_none()
                     && unique_dp_rank.is_none()
-                    && !matches!(session, SessionBinding::None)
+                    && self.affinity.is_some()
+                    && affinity_id(request)?.is_some()
                 {
                     // A worker-only target on a multi-rank worker: the session's
                     // binding, or selection within the worker, chooses the rank.
@@ -293,7 +277,7 @@ impl RoutingHost {
                     policy_class,
                     session_context,
                     expected_output_tokens,
-                    session,
+                    affinity,
                     pinned_worker: None,
                     allowed_worker_ids,
                     routing_constraints: routing_constraints.clone(),
@@ -360,7 +344,7 @@ impl RoutingHost {
             policy_class,
             session_context,
             expected_output_tokens,
-            session,
+            affinity,
             pinned_worker: Some(pinned_worker),
             allowed_worker_ids,
             routing_constraints,

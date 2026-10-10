@@ -3,7 +3,7 @@
 
 use dynamo_kv_router::{
     protocols::{WorkerSelectionResult, WorkerWithDpRank},
-    scheduling::{AffinityStrength, KvSchedulerError},
+    scheduling::KvSchedulerError,
     selector::{HostedSelectionInputs, WorkerInputs, WorkerSelectionInput, WorkerSelector},
 };
 use dynamo_runtime::pipeline::{BuiltinRoutePicker, RouterMode};
@@ -324,41 +324,27 @@ impl RoutingHost {
             )
         } else {
             self.validate_explicit_worker(request.content(), phase)?;
-            let resolution = self
+            let (hold, affinity) = self
                 .resolve_hosted_session(&request, phase, is_query_only, &budget)
                 .await?;
-            let bound = resolution
-                .affinity
-                .map(|requirement| from_table(requirement.target));
+            let bound = affinity.map(|requirement| from_table(requirement.target));
             // An explicit target is exact. A hard binding is exact too; a soft
             // binding is a preference, except in Direct mode, which has no
             // other way to pick a worker.
-            let (target_constraint, preferred) = match (
-                explicit,
-                resolution.affinity.map(|requirement| requirement.strength),
-            ) {
-                (Some(explicit), _) => (Some(explicit), None),
-                (None, Some(AffinityStrength::Hard)) => (bound, None),
-                (None, Some(AffinityStrength::Soft)) if is_direct => (bound, None),
-                (None, Some(AffinityStrength::Soft)) => (None, bound),
-                (None, None) => (None, None),
-            };
-            if is_direct && target_constraint.is_none() && resolution.dropped.is_some() {
-                // Not a client fault: the session had a worker and lost it.
-                return Err(DynamoError::builder()
-                    .error_type(ErrorType::WorkerUnavailable)
-                    .message(format!(
-                        "the worker bound to this session is no longer available for {phase} Direct routing"
-                    ))
-                    .build()
-                    .into());
-            }
+            let (target_constraint, preferred) =
+                match (explicit, affinity.map(|requirement| requirement.mode)) {
+                    (Some(explicit), _) => (Some(explicit), None),
+                    (None, Some(SessionAffinityMode::Hard)) => (bound, None),
+                    (None, Some(SessionAffinityMode::Soft)) if is_direct => (bound, None),
+                    (None, Some(SessionAffinityMode::Soft)) => (None, bound),
+                    (None, None) => (None, None),
+                };
             let soft_affinity_target = (self.session_affinity_mode == SessionAffinityMode::Soft)
                 .then_some(bound)
                 .flatten();
             (
                 self.select_hosted_worker(&request, target_constraint, preferred)?,
-                resolution.hold,
+                hold,
                 soft_affinity_target,
             )
         };

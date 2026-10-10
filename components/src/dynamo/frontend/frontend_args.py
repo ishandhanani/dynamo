@@ -6,6 +6,7 @@ import os
 import pathlib
 from typing import Any, Dict, Optional
 
+from dynamo._core import validate_session_affinity_ttl_secs
 from dynamo.common.config_dump import register_encoder
 from dynamo.common.configuration.arg_group import ArgGroup
 from dynamo.common.configuration.groups.ais_perf_args import (
@@ -21,7 +22,6 @@ from dynamo.common.configuration.groups.router_args import (
     RouterArgGroup,
     RouterConfigBase,
 )
-from dynamo._core import validate_session_affinity_ttl_secs
 from dynamo.common.configuration.utils import (
     add_argument,
     add_negatable_bool_argument,
