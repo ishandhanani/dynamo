@@ -18,9 +18,9 @@ pub use host::{AffinityTarget, HostAffinity, explicit_target};
 pub(crate) use host::{
     affinity_error, affinity_id, from_table, invalid_argument, to_table, tracked_stream,
 };
-#[cfg(test)]
-pub(crate) use liveness::AlwaysLive;
 pub(crate) use liveness::DiscoveryLiveness;
+#[cfg(test)]
+pub(crate) use liveness::{AlwaysLive, LiveWorkers};
 
 pub type LlmResponse =
     crate::types::Annotated<crate::protocols::common::llm_backend::LLMEngineOutput>;

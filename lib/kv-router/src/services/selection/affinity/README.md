@@ -39,6 +39,14 @@ Every host resolves through `AffinityResolver`. The frontend keeps `HostAffinity
 
 Where the hosts differ on a live `Hard` mismatch (the bound worker is live but the request's own constraints steered selection elsewhere): the core rejects at commit and the table drops the binding, so the session re-binds on its next request; the frontend rejects before dispatch with `check_dispatch` and releases its hold without touching the binding, since nothing ran and the request, not the session, caused the mismatch.
 
+## Replication
+
+One wire schema, `AffinityBindingEvent` (`replication.rs`): the partition (flattened as `model_name` and `routing_group`), the session id, the target, and the version (`sequence`, `writer_id`). Every table publishes through `AffinityEventSink`, which builds the event for its partition and hands it to the host's transport; every transport feeds received events to `AffinityResolver::apply_replica_event`, the one applier. It ignores the replica's own writer id, ignores other partitions, advances the replica clock, and applies the binding only if the host can schedule its worker (`TargetLiveness`).
+
+One writer-id rule: the id installed with the table's replication sink. Frontends use their discovery instance id (stable across restarts of the same instance); the standalone service uses a random non-zero process id, since it has no discovery.
+
+Two transports stay: the selection service's ZMQ peer mesh (`services/common/replica_sync.rs`, topics `dynamo.session-affinity.v1` and `.v2`) and the frontend's runtime event plane (`lib/llm/src/session_affinity/replica_sync.rs`, subjects `session_affinity_events` for the old partition-less payload and `session_affinity_events_v2` for the shared schema). For one release both transports publish and apply both versions, so mixed-version replicas converge; applying the same binding twice is idempotent (the second apply refreshes the same version). The v1 forms carry a removal TODO.
+
 ## Errors
 
 Hosts map `AffinityError` onto their own error types. The core maps `InvalidArgument` (the request contradicts the binding or exceeds the session-id limit) to `BadRequest`, `ResourceExhausted` to `NotReady`, `Cancelled` to scheduler shutdown, and `Dropped` to `Internal`. A full table never fails `resolve`: the request routes without affinity and `full_table_fallbacks` counts it (a plain counter on the resolver; not exported as a metric).
