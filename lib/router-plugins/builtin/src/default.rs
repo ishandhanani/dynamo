@@ -36,7 +36,6 @@ fn policy_with_rng(
     let scorer = scorer::build(&parameters, worker_label, is_plain_decode);
     let picker = picker::DefaultPicker::new(parameters.router_temperature, rng);
     WorkerSelectionPolicy::new(config, worker_label, vec![scorer], Box::new(picker))
-        .with_exclusive_affinity(true)
 }
 
 /// Factory installed by routing hosts, including hosts without a custom catalog.

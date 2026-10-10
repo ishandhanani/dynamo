@@ -14,6 +14,7 @@ use anyhow::{Context, Result, anyhow};
 
 use dynamo_kv_router::config::{KvRouterConfig, try_kv_router_config_from_dynamo_env};
 use dynamo_kv_router::protocols::RoutingConstraints;
+use dynamo_kv_router::services::selection::affinity::SessionAffinityConfig;
 use dynamo_kv_router::services::selection::{
     PromptRequest, SelectAndReserveRequest as CoreSelectAndReserveRequest, SelectionError,
     SelectionService, SelectionServiceBuilder, WorkerSelectionPolicyRegistry,
@@ -120,10 +121,12 @@ impl Selector {
             builder = builder.replica_sync(peer_replication.sync_port, Vec::new());
         }
         if let Some(ttl) = cfg.session_affinity_ttl_secs {
-            builder = builder.session_affinity(
-                std::time::Duration::try_from_secs_f64(ttl)
-                    .context("invalid session affinity TTL")?,
-            );
+            builder = builder
+                .session_affinity(
+                    SessionAffinityConfig::ttl_from_secs_f64(ttl)
+                        .context("invalid session affinity TTL")?,
+                )
+                .session_affinity_mode(cfg.session_affinity_mode);
         }
         let service = Arc::new(
             builder
@@ -363,6 +366,7 @@ models:
             max_num_batched_tokens: Some(8192),
             max_inflight_requests: 1024,
             session_affinity_ttl_secs: None,
+            session_affinity_mode: Default::default(),
         }
     }
 

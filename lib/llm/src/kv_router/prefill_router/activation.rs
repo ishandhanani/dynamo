@@ -28,7 +28,7 @@ use crate::{
         llm_backend::{LLMEngineOutput, PreprocessedRequest},
         timing::WORKER_TYPE_PREFILL,
     },
-    session_affinity::{SessionAffinityMode, create_affinity_coordinator},
+    session_affinity::{DiscoveryLiveness, HostAffinity, SessionAffinityMode},
 };
 
 /// How the prefill worker set wants to be routed to, resolved from its cards.
@@ -375,12 +375,16 @@ impl PrefillRouter {
                 )
                 .await?;
 
-            let affinity = create_affinity_coordinator(
-                prefill_session_affinity_ttl,
-                context.session_affinity_mode,
-                client.clone(),
-            )
-            .await?;
+            // The prefill partition's own table: a session binds to a prefill
+            // worker and a decode worker independently, since the pools differ.
+            let affinity = match prefill_session_affinity_ttl {
+                Some(ttl) => {
+                    let affinity = kv_chooser.host_affinity(ttl, context.session_affinity_mode)?;
+                    affinity.enable_replica_sync(client.clone()).await?;
+                    Some(affinity)
+                }
+                None => None,
+            };
 
             // Build the PushRouter for prefill with KV mode using the shared client
             let push_router = PushRouter::<PreprocessedRequest, Annotated<LLMEngineOutput>>::from_client_with_monitor(
@@ -390,16 +394,19 @@ impl PrefillRouter {
             )
             .await?;
 
-            Arc::new(RoutingHost::new_with_load_context_and_coordinator(
+            Arc::new(RoutingHost::new_with_load_context_and_affinity(
                 push_router,
                 kv_chooser,
                 load_context.clone(),
                 affinity,
             ))
         } else {
-            let affinity = create_affinity_coordinator(
+            // A builtin prefill host has no partition: its own table, scoped
+            // to the prefill pool like the KV host's above.
+            let affinity = HostAffinity::standalone_with_replica_sync(
                 prefill_session_affinity_ttl,
                 context.session_affinity_mode,
+                Arc::new(DiscoveryLiveness::new(client.clone(), None)),
                 client.clone(),
             )
             .await?;
@@ -414,7 +421,7 @@ impl PrefillRouter {
             )
             .await?;
 
-            Arc::new(RoutingHost::new_builtin_with_coordinator(
+            Arc::new(RoutingHost::new_builtin_with_affinity(
                 push_router,
                 load_context.clone(),
                 affinity,

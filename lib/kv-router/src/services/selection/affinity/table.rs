@@ -10,12 +10,17 @@
 //! target and an [`AffinityLease`] that keeps the binding alive until the
 //! response stream ends. Bindings are versioned so replicas can exchange them
 //! through an [`AffinityReplicaSink`]; the transport is the host's.
+//!
+//! The selection core drives the table through [`super::AffinityResolver`],
+//! which adds the liveness check, cancellation, failover, and the full-table
+//! policy; the frontend's `AffinityCoordinator` still drives it directly.
 
 use std::pin::Pin;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, OnceLock, Weak};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use crate::scheduling::AffinityStrength;
 use dashmap::{DashMap, mapref::entry::Entry};
 use serde::{Deserialize, Serialize};
 use tokio::sync::Notify;
@@ -25,6 +30,7 @@ use tokio_util::sync::CancellationToken;
 
 pub use crate::protocols::WorkerAffinityTarget as AffinityTarget;
 
+pub const MIN_SESSION_AFFINITY_TTL_SECS: u64 = 1;
 pub const MAX_SESSION_AFFINITY_TTL_SECS: u64 = 31_536_000;
 pub const MAX_SESSION_AFFINITY_ENTRIES: usize = 65_536;
 pub const MAX_SESSION_AFFINITY_ID_BYTES: usize = 256;
@@ -38,6 +44,15 @@ pub enum SessionAffinityMode {
     Hard,
     /// The binding follows the dispatch: the session rebinds to where it ran.
     Soft,
+}
+
+impl From<SessionAffinityMode> for AffinityStrength {
+    fn from(mode: SessionAffinityMode) -> Self {
+        match mode {
+            SessionAffinityMode::Hard => Self::Hard,
+            SessionAffinityMode::Soft => Self::Soft,
+        }
+    }
 }
 
 impl std::str::FromStr for SessionAffinityMode {
@@ -62,6 +77,10 @@ pub enum AffinityError {
     ResourceExhausted(String),
     #[error("session affinity table dropped")]
     Dropped,
+    /// The host's cancel signal fired while `AffinityResolver::resolve`
+    /// waited; the table itself never produces it.
+    #[error("session affinity wait was cancelled")]
+    Cancelled,
 }
 
 /// Ordering for replicated bindings: higher wins, ties broken by writer.
@@ -103,7 +122,10 @@ enum AffinityEntry {
 }
 
 /// How a table binds sessions; see [`SessionAffinityMode`] for the
-/// dispatch-time semantics of `mode`.
+/// dispatch-time semantics of `mode`. This is the one session-affinity
+/// configuration every host builds, and [`Self::validate`] is its one
+/// validator: the standalone service, the frontend, the Python bindings, and
+/// the EPP all check a TTL through it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SessionAffinityConfig {
     pub ttl: Duration,
@@ -126,6 +148,46 @@ impl SessionAffinityConfig {
         self.mode = mode;
         self
     }
+
+    /// Parse an idle TTL given in seconds, fractional seconds allowed, within
+    /// the supported range. Non-finite values are rejected.
+    pub fn ttl_from_secs_f64(secs: f64) -> Result<Duration, AffinityError> {
+        if !secs.is_finite()
+            || secs < MIN_SESSION_AFFINITY_TTL_SECS as f64
+            || secs > MAX_SESSION_AFFINITY_TTL_SECS as f64
+        {
+            return Err(invalid_ttl());
+        }
+        Ok(Duration::from_secs_f64(secs))
+    }
+
+    /// Check the TTL range and the limits; `with_config` runs this before
+    /// starting a table.
+    pub fn validate(&self) -> Result<(), AffinityError> {
+        if !(Duration::from_secs(MIN_SESSION_AFFINITY_TTL_SECS)
+            ..=Duration::from_secs(MAX_SESSION_AFFINITY_TTL_SECS))
+            .contains(&self.ttl)
+        {
+            return Err(invalid_ttl());
+        }
+        if self.max_entries == 0 {
+            return Err(AffinityError::InvalidArgument(
+                "session affinity entry limit must be greater than zero".to_string(),
+            ));
+        }
+        if self.max_session_id_bytes == 0 {
+            return Err(AffinityError::InvalidArgument(
+                "session affinity ID limit must be greater than zero".to_string(),
+            ));
+        }
+        Ok(())
+    }
+}
+
+fn invalid_ttl() -> AffinityError {
+    AffinityError::InvalidArgument(format!(
+        "session affinity TTL must be between {MIN_SESSION_AFFINITY_TTL_SECS} and {MAX_SESSION_AFFINITY_TTL_SECS} seconds"
+    ))
 }
 
 struct Inner {
@@ -191,6 +253,22 @@ impl Hold {
         }
     }
 
+    pub fn session_id(&self) -> &str {
+        match self {
+            Self::Initialize(initialization) => &initialization.session_id,
+            Self::Bound { lease, .. } => lease.session_id(),
+        }
+    }
+
+    /// The session id, shared with the hold so a caller that consumes the
+    /// hold can still name the session without copying it.
+    pub(crate) fn shared_session_id(&self) -> Arc<str> {
+        match self {
+            Self::Initialize(initialization) => Arc::clone(&initialization.session_id),
+            Self::Bound { lease, .. } => Arc::clone(&lease.session_id),
+        }
+    }
+
     pub fn invalidate(self) {
         if let Self::Bound { mut lease, .. } = self {
             lease.invalidate();
@@ -206,19 +284,8 @@ pub enum AcquireStep {
 }
 
 impl SessionAffinity {
-    pub(crate) fn validate_ttl(ttl: Duration) -> Result<(), AffinityError> {
-        if !(Duration::from_secs(1)..=Duration::from_secs(MAX_SESSION_AFFINITY_TTL_SECS))
-            .contains(&ttl)
-        {
-            return Err(AffinityError::InvalidArgument(format!(
-                "session affinity TTL must be between 1 and {MAX_SESSION_AFFINITY_TTL_SECS} seconds"
-            )));
-        }
-        Ok(())
-    }
-
     pub fn with_config(config: SessionAffinityConfig) -> Result<Self, AffinityError> {
-        Self::validate_ttl(config.ttl)?;
+        config.validate()?;
         let inner = Arc::new(Inner {
             entries: DashMap::new(),
             ttl: config.ttl,
@@ -312,6 +379,12 @@ impl SessionAffinity {
         self.inner.mode
     }
 
+    /// This replica's writer id, installed with its replication sink; zero
+    /// until then.
+    pub fn writer_id(&self) -> u64 {
+        self.inner.writer_id.load(Ordering::Relaxed)
+    }
+
     /// Acquire `session_id` for a request. `requested_target` is an explicit
     /// pin the request carries; a bound session must agree with it.
     pub fn try_acquire(
@@ -337,7 +410,7 @@ impl SessionAffinity {
                 Ok(AcquireStep::Held(Hold::Initialize(
                     AffinityInitialization {
                         coordinator: Arc::downgrade(&self.inner),
-                        session_id: session_id.to_string(),
+                        session_id: Arc::from(session_id),
                         revision,
                         notify,
                         requested_target,
@@ -373,7 +446,7 @@ impl SessionAffinity {
                     Ok(AcquireStep::Held(Hold::Initialize(
                         AffinityInitialization {
                             coordinator: Arc::downgrade(&self.inner),
-                            session_id: session_id.to_string(),
+                            session_id: Arc::from(session_id),
                             revision,
                             notify,
                             requested_target,
@@ -401,7 +474,7 @@ impl SessionAffinity {
                         target: *target,
                         lease: AffinityLease {
                             coordinator: Arc::downgrade(&self.inner),
-                            session_id: session_id.to_string(),
+                            session_id: Arc::from(session_id),
                             revision: *revision,
                             version: *version,
                             active: true,
@@ -455,7 +528,7 @@ impl SessionAffinity {
         notify.notify_waiters();
         let lease = AffinityLease {
             coordinator: Arc::downgrade(&self.inner),
-            session_id: session_id.to_string(),
+            session_id: Arc::from(session_id),
             revision,
             version,
             active: true,
@@ -713,7 +786,7 @@ impl Inner {
 /// releases the slot and wakes waiters, unless another request already bound it.
 pub struct AffinityInitialization {
     coordinator: Weak<Inner>,
-    session_id: String,
+    session_id: Arc<str>,
     revision: u64,
     notify: Arc<Notify>,
     requested_target: Option<AffinityTarget>,
@@ -727,7 +800,7 @@ impl AffinityInitialization {
         let Some(inner) = self.coordinator.upgrade() else {
             return Err(AffinityError::Dropped);
         };
-        let Some(mut entry) = inner.entries.get_mut(&self.session_id) else {
+        let Some(mut entry) = inner.entries.get_mut(&*self.session_id) else {
             return Err(AffinityError::InvalidArgument(
                 "session affinity initialization was cancelled".to_string(),
             ));
@@ -800,7 +873,7 @@ impl Drop for AffinityInitialization {
         let Some(inner) = self.coordinator.upgrade() else {
             return;
         };
-        let removed = inner.entries.remove_if_mut(&self.session_id, |_, entry| {
+        let removed = inner.entries.remove_if_mut(&*self.session_id, |_, entry| {
             match entry {
                 AffinityEntry::Initializing { revision, .. } => *revision == self.revision,
                 AffinityEntry::Bound {
@@ -828,7 +901,7 @@ impl Drop for AffinityInitialization {
 /// the idle deadline.
 pub struct AffinityLease {
     coordinator: Weak<Inner>,
-    session_id: String,
+    session_id: Arc<str>,
     revision: u64,
     version: AffinityVersion,
     active: bool,
@@ -851,7 +924,7 @@ impl AffinityLease {
         let Some(inner) = self.coordinator.upgrade() else {
             return false;
         };
-        let Some(mut entry) = inner.entries.get_mut(&self.session_id) else {
+        let Some(mut entry) = inner.entries.get_mut(&*self.session_id) else {
             return false;
         };
         let AffinityEntry::Bound {
@@ -894,7 +967,7 @@ impl AffinityLease {
             return;
         };
         let (target, version) = {
-            let Some(mut entry) = inner.entries.get_mut(&self.session_id) else {
+            let Some(mut entry) = inner.entries.get_mut(&*self.session_id) else {
                 return;
             };
             let AffinityEntry::Bound {
@@ -930,7 +1003,7 @@ impl AffinityLease {
             self.active = false;
             return;
         };
-        let removed = inner.entries.remove_if(&self.session_id, |_, entry| {
+        let removed = inner.entries.remove_if(&*self.session_id, |_, entry| {
             matches!(
                 entry,
                 AffinityEntry::Bound { revision, version, .. }
@@ -1158,6 +1231,44 @@ mod tests {
         assert_eq!(table.lease_count("s"), Some(1));
         drop(lease);
         assert_eq!(table.lease_count("s"), Some(0));
+    }
+
+    #[test]
+    fn config_validates_the_ttl_range_once_for_every_host() {
+        for secs in [-1.0, 0.0, 0.5, f64::NAN, f64::INFINITY, 31_536_001.0, 1e300] {
+            let error = SessionAffinityConfig::ttl_from_secs_f64(secs)
+                .expect_err("out-of-range or non-finite TTLs are rejected");
+            assert!(matches!(error, AffinityError::InvalidArgument(_)));
+            assert!(
+                error.to_string().contains("session affinity TTL"),
+                "{error}"
+            );
+        }
+        for secs in [1.0, 1.5, 31_536_000.0] {
+            let ttl = SessionAffinityConfig::ttl_from_secs_f64(secs).expect("in range");
+            SessionAffinityConfig::new(ttl).validate().expect("valid");
+        }
+        assert!(
+            SessionAffinityConfig::new(Duration::ZERO)
+                .validate()
+                .is_err()
+        );
+        assert!(
+            SessionAffinityConfig {
+                max_entries: 0,
+                ..SessionAffinityConfig::new(TTL)
+            }
+            .validate()
+            .is_err()
+        );
+        assert!(
+            SessionAffinityConfig {
+                max_session_id_bytes: 0,
+                ..SessionAffinityConfig::new(TTL)
+            }
+            .validate()
+            .is_err()
+        );
     }
 
     #[tokio::test]

@@ -488,6 +488,9 @@ pub struct AdmittedFindBestMatchOutcome {
     /// The selected worker's scheduler-load snapshot; set only by advisory
     /// probes (`FindBestMatchAdmission::WithoutAdmission`), which never book.
     pub(super) advisory_load: Option<scheduling::AdvisoryWorkerLoad>,
+    /// The session the core held for a managed binding; the host commits it
+    /// after dispatch.
+    pub(super) affinity_hold: Option<crate::session_affinity::Hold>,
 }
 
 impl AdmittedFindBestMatchOutcome {
@@ -1293,7 +1296,7 @@ impl KvRouter {
             policy_class,
             session_context,
             expected_output_tokens,
-            None,
+            SessionBinding::None,
             pinned_worker,
             allowed_worker_ids,
             routing_constraints,
@@ -1318,7 +1321,7 @@ impl KvRouter {
         policy_class: Option<String>,
         session_context: Option<dynamo_kv_router::SessionContext>,
         expected_output_tokens: Option<u32>,
-        affinity_target: Option<dynamo_kv_router::protocols::WorkerAffinityTarget>,
+        session: SessionBinding<'_>,
         pinned_worker: Option<WorkerWithDpRank>,
         allowed_worker_ids: Option<HashSet<WorkerId>>,
         routing_constraints: RoutingConstraints,
@@ -1372,8 +1375,8 @@ impl KvRouter {
                 strict_priority,
                 policy_class,
                 session_context,
-                session: SessionBinding::None,
-                affinity_target,
+                session,
+                affinity_target: None,
                 pinned_worker,
                 allowed_worker_ids,
                 routing_constraints,
@@ -1395,6 +1398,7 @@ impl KvRouter {
                     outcome: FindBestMatchOutcome::QueueRejected { rejection },
                     booking: None,
                     advisory_load: None,
+                    affinity_hold: None,
                 });
             }
             Err(SelectionError::Scheduler(error)) => return Err(map_scheduler_error(error)),
@@ -1402,6 +1406,10 @@ impl KvRouter {
             // The partition has no schedulable worker: the scheduler's own answer.
             Err(SelectionError::NotReady(_)) => {
                 return Err(map_scheduler_error(KvSchedulerError::NoEndpoints));
+            }
+            // A request that contradicts its session binding, or an invalid prompt.
+            Err(SelectionError::BadRequest(message)) => {
+                return Err(crate::session_affinity::invalid_argument(message));
             }
             Err(error) => return Err(error.into()),
         };
@@ -1413,6 +1421,7 @@ impl KvRouter {
             routing_hashes,
             shared_cache_hits,
             booking,
+            affinity_hold,
             ..
         } = selected;
         if update_states && is_admitted_routing && booking.is_none() {
@@ -1527,6 +1536,7 @@ impl KvRouter {
             },
             booking,
             advisory_load,
+            affinity_hold,
         })
     }
 
@@ -1615,12 +1625,18 @@ impl KvRouter {
         self.selection.scheduler().free(request_id).await
     }
 
-    pub(crate) fn affinity_coordinator(
+    /// Session affinity over this router's partition, with the frontend's
+    /// liveness source (discovery plus the DP-rank range).
+    pub(crate) fn host_affinity(
         &self,
         ttl: std::time::Duration,
         mode: crate::session_affinity::SessionAffinityMode,
-    ) -> anyhow::Result<crate::session_affinity::AffinityCoordinator> {
-        self.selection.affinity_coordinator(ttl, mode)
+    ) -> anyhow::Result<crate::session_affinity::HostAffinity> {
+        let liveness = Arc::new(crate::session_affinity::DiscoveryLiveness::new(
+            self.client().clone(),
+            Some(self.workers_with_configs.clone()),
+        ));
+        self.selection.host_affinity(ttl, mode, liveness)
     }
 
     pub(crate) fn request_lease_manager(&self) -> &request_lease::RequestLeaseManager {
@@ -2742,7 +2758,7 @@ mod tests {
                         None,
                     )),
                     None,
-                    None,
+                    SessionBinding::None,
                     None,
                     None,
                     RoutingConstraints::default(),
@@ -2927,7 +2943,7 @@ mod tests {
                     None,
                     None,
                     None,
-                    None,
+                    SessionBinding::None,
                     None,
                     None,
                     RoutingConstraints::default(),
@@ -3075,7 +3091,7 @@ mod tests {
                 None,
                 None,
                 None,
-                None,
+                SessionBinding::None,
                 None,
                 None,
                 RoutingConstraints::default(),
