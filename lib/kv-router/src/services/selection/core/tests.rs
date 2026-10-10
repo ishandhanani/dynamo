@@ -10,6 +10,7 @@ use super::reservations::{
 use super::*;
 use crate::protocols::{ActiveSequenceEvent, ActiveSequenceEventData};
 use crate::protocols::{RoutingConstraints, StorageTier};
+use crate::scheduling::selector::test_support::AvoidAffinityPicker;
 use crate::services::common::replica_sync::HostReplicaChannels;
 use crate::services::indexer::backend::test_util::store_event;
 use std::collections::HashSet;
@@ -2857,6 +2858,104 @@ async fn hard_mode_rejects_dispatch_away_from_a_live_binding() {
     let third = core.select_and_reserve(request).await.expect("rebind");
     assert_eq!(third.worker_id, other);
     assert_eq!(bound_worker(&core, "s"), Some(other));
+}
+
+#[tokio::test]
+async fn hard_mode_keeps_custom_policies_on_the_binding() {
+    let factory: WorkerSelectionPolicyFactory = Arc::new(|config, worker_type, _partition| {
+        WorkerSelectionPolicy::new(
+            config.clone(),
+            worker_type.as_str(),
+            Vec::new(),
+            Box::new(AvoidAffinityPicker),
+        )
+    });
+    let core = core_with(
+        test_config(false),
+        SelectionHost::default(),
+        Some(factory),
+        WorkerType::Aggregated,
+        Some(SessionAffinityConfig::new(Duration::from_secs(10))),
+    );
+    core.upsert_worker(worker(1)).await.expect("worker upsert");
+    core.upsert_worker(worker(2)).await.expect("worker upsert");
+    let first = core
+        .select_and_reserve(session_reservation("r1", "s"))
+        .await
+        .expect("first booking");
+    core.free_reservation("r1").await.expect("free");
+
+    let second = core
+        .select_and_reserve(session_reservation("r2", "s"))
+        .await
+        .expect("the policy is limited to the bound worker");
+    assert_eq!(second.worker_id, first.worker_id);
+}
+
+struct RejectWorkerFilter {
+    rejected: Arc<std::sync::atomic::AtomicU64>,
+}
+
+impl crate::plugins::worker_selection::WorkerFilter for RejectWorkerFilter {
+    fn keep(
+        &mut self,
+        _context: &crate::scheduling::selector::WorkerSelectionContext<'_>,
+        candidate: crate::plugins::worker_selection::WorkerCandidate<'_>,
+    ) -> Result<bool, crate::scheduling::WorkerSelectionPolicyError> {
+        Ok(candidate.worker().worker_id != self.rejected.load(Ordering::Relaxed))
+    }
+}
+
+#[tokio::test]
+async fn hard_mode_rebinds_when_a_filter_rejects_the_bound_worker() {
+    let rejected = Arc::new(std::sync::atomic::AtomicU64::new(0));
+    let filter_rejected = Arc::clone(&rejected);
+    let factory: WorkerSelectionPolicyFactory = Arc::new(move |config, worker_type, _partition| {
+        WorkerSelectionPolicy::new_with_filters(
+            config.clone(),
+            worker_type.as_str(),
+            vec![Box::new(RejectWorkerFilter {
+                rejected: Arc::clone(&filter_rejected),
+            })],
+            Vec::new(),
+            Box::new(AvoidAffinityPicker),
+        )
+    });
+    let core = core_with(
+        test_config(false),
+        SelectionHost::default(),
+        Some(factory),
+        WorkerType::Aggregated,
+        Some(SessionAffinityConfig::new(Duration::from_secs(10))),
+    );
+    core.upsert_worker(worker(1)).await.expect("worker upsert");
+    core.upsert_worker(worker(2)).await.expect("worker upsert");
+    let first = core
+        .select_and_reserve(session_reservation("r1", "s"))
+        .await
+        .expect("first booking");
+    core.free_reservation("r1").await.expect("free");
+    rejected.store(first.worker_id, Ordering::Relaxed);
+
+    let err = core
+        .select_and_reserve(session_reservation("r2", "s"))
+        .await
+        .expect_err("the filter rejects the bound worker");
+    assert!(
+        matches!(
+            err,
+            SelectionError::Scheduler(KvSchedulerError::AllEligibleWorkersFiltered)
+        ),
+        "{err:?}"
+    );
+    assert_eq!(bound_worker(&core, "s"), None, "the binding is dropped");
+
+    let third = core
+        .select_and_reserve(session_reservation("r3", "s"))
+        .await
+        .expect("the session re-binds");
+    assert_ne!(third.worker_id, first.worker_id);
+    assert_eq!(bound_worker(&core, "s"), Some(third.worker_id));
 }
 
 #[tokio::test]

@@ -2,11 +2,11 @@
 // SPDX-License-Identifier: Apache-2.0
 mod support;
 use dynamo_custom_policy_builtin::{DefaultWorkerSelector, default_policy, default_registry};
-use dynamo_kv_router::protocols::WorkerWithDpRank;
+use dynamo_kv_router::protocols::{WorkerAffinityTarget, WorkerWithDpRank};
 use dynamo_kv_router::{
-    KvRouterConfig, RoutingPartitionRef, WorkerInputView, WorkerInputs, WorkerPicker,
-    WorkerSelectionContext, WorkerSelectionPolicy, WorkerSelectionPolicyError, WorkerSelector,
-    WorkerType,
+    AffinityRequirement, KvRouterConfig, RoutingPartitionRef, WorkerInputView, WorkerInputs,
+    WorkerPicker, WorkerSelectionContext, WorkerSelectionPolicy, WorkerSelectionPolicyError,
+    WorkerSelector, WorkerType,
 };
 use support::*;
 
@@ -244,7 +244,7 @@ fn exact_prompt_and_accounting_inputs_are_available_to_external_pickers() {
 }
 
 #[test]
-fn configured_default_resolves_for_every_role_and_uses_exclusive_affinity() {
+fn configured_default_resolves_for_every_role() {
     let registry = default_registry();
     for conditional_disagg_enabled in [false, true] {
         for role in [
@@ -270,12 +270,72 @@ fn configured_default_resolves_for_every_role_and_uses_exclusive_affinity() {
                 inputs.contains(WorkerInputs::CACHE),
                 role != WorkerType::Decode || conditional_disagg_enabled
             );
-            assert!(
-                <WorkerSelectionPolicy as WorkerSelector<TestWorker>>::uses_exclusive_affinity_target(
-                    &policy
-                )
-            );
         }
+    }
+}
+
+/// A `Soft` session binding keeps the default policy on the bound worker while it is a candidate,
+/// at the bound rank when the binding names one, and falls back to normal selection otherwise.
+/// Seeded selectors make the unconstrained choice, which breaks cost ties at random, repeatable.
+#[test]
+fn soft_affinity_keeps_the_bound_worker_while_it_is_a_candidate() {
+    let config = KvRouterConfig {
+        router_temperature: 0.0,
+        ..Default::default()
+    };
+    let (workers, mut request) = fixture(4, 17);
+    let unconstrained = DefaultWorkerSelector::new_seeded(Some(config.clone()), "test", 42)
+        .select_worker(support::selection_input(&workers, &request, 16))
+        .unwrap()
+        .worker;
+    let bound = WorkerWithDpRank::new((unconstrained.worker_id + 1) % 4, 1);
+
+    request.affinity = Some(AffinityRequirement::soft(bound.into()));
+    let selected = default_policy(config.clone(), "test")
+        .select_worker(support::selection_input(&workers, &request, 16))
+        .unwrap();
+    assert_eq!(selected.worker, bound, "a ranked binding selects that rank");
+
+    request.affinity = Some(AffinityRequirement::soft(WorkerAffinityTarget::new(
+        bound.worker_id,
+        None,
+    )));
+    let selected = default_policy(config.clone(), "test")
+        .select_worker(support::selection_input(&workers, &request, 16))
+        .unwrap();
+    assert_eq!(
+        selected.worker.worker_id, bound.worker_id,
+        "a worker-only binding selects among that worker's ranks"
+    );
+
+    request.affinity = Some(AffinityRequirement::soft(WorkerAffinityTarget::new(
+        99, None,
+    )));
+    let selected = DefaultWorkerSelector::new_seeded(Some(config), "test", 42)
+        .select_worker(support::selection_input(&workers, &request, 16))
+        .unwrap();
+    assert_eq!(
+        selected.worker, unconstrained,
+        "a binding to a worker that is not a candidate falls back to normal selection"
+    );
+}
+
+/// With sampling enabled the preference still limits the draw to the bound worker's candidates.
+#[test]
+fn soft_affinity_limits_sampling_to_the_bound_worker() {
+    let config = KvRouterConfig {
+        router_temperature: 0.7,
+        ..Default::default()
+    };
+    let (workers, mut request) = fixture(4, 17);
+    let bound = WorkerAffinityTarget::new(2, None);
+    request.affinity = Some(AffinityRequirement::soft(bound));
+    let policy = default_policy(config, "test");
+    for _ in 0..64 {
+        let selected = policy
+            .select_worker(support::selection_input(&workers, &request, 16))
+            .unwrap();
+        assert_eq!(selected.worker.worker_id, bound.worker_id);
     }
 }
 
