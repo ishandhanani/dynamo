@@ -7,6 +7,7 @@
 use std::{sync::Arc, time::Duration};
 
 use dynamo_runtime::{
+    engine::AsyncEngineContext,
     error::ErrorType,
     pipeline::{Context, ResponseStream, context::Controller},
     protocols::maybe_error::MaybeError,
