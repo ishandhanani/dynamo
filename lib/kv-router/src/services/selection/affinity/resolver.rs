@@ -44,6 +44,11 @@ pub struct Resolution {
     /// The bound target with the table's mode as its strength; `None` for a
     /// new session or a full table.
     pub affinity: Option<AffinityRequirement>,
+    /// The binding this request found and dropped because the host could no
+    /// longer schedule its target (the last one, if replicas kept re-binding).
+    /// `Some` with an initializing `hold` means the session is re-binding, not
+    /// new.
+    pub dropped: Option<AffinityTarget>,
 }
 
 /// Session resolution for one partition: the table plus the host's liveness
@@ -103,6 +108,7 @@ impl AffinityResolver {
     ) -> Result<Resolution, AffinityError> {
         tokio::pin!(cancel);
         let mut invalidations = 0;
+        let mut dropped = None;
         loop {
             let hold = match self.table.try_acquire(session_id, requested) {
                 Ok(AcquireStep::Held(hold)) => hold,
@@ -122,6 +128,7 @@ impl AffinityResolver {
                     return Ok(Resolution {
                         hold: None,
                         affinity: None,
+                        dropped,
                     });
                 }
                 Err(error) => return Err(error),
@@ -136,6 +143,7 @@ impl AffinityResolver {
                     );
                     lease.invalidate();
                     drop(lease);
+                    dropped = Some(target);
                     #[cfg(any(test, feature = "testing"))]
                     if let Some(hook) = self.after_invalidation.get() {
                         hook();
@@ -155,6 +163,7 @@ impl AffinityResolver {
                     return Ok(Resolution {
                         hold: Some(hold),
                         affinity,
+                        dropped,
                     });
                 }
             }
@@ -357,14 +366,11 @@ mod tests {
         let resolution = resolver.resolve("s", None, never()).await.expect("resolve");
         assert!(matches!(resolution.hold, Some(Hold::Initialize(_))));
         assert!(resolution.affinity.is_none());
-        assert_eq!(
-            resolution
-                .hold
-                .as_ref()
-                .map(Hold::shared_session_id)
-                .as_deref(),
-            Some("s")
+        assert!(
+            resolution.dropped.is_none(),
+            "a new session dropped nothing"
         );
+        assert_eq!(resolution.hold.as_ref().map(Hold::session_id), Some("s"));
     }
 
     #[tokio::test]
@@ -396,6 +402,7 @@ mod tests {
         let resolution = resolver.resolve("s", None, never()).await.expect("resolve");
         assert!(matches!(resolution.hold, Some(Hold::Initialize(_))));
         assert!(resolution.affinity.is_none());
+        assert_eq!(resolution.dropped, Some(target(1, Some(0))));
         assert_eq!(bound(&resolver, "s"), None, "the stale binding is dropped");
         let lease = resolver
             .commit(resolution.hold.unwrap(), target(2, Some(0)))
