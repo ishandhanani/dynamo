@@ -7,42 +7,20 @@
 //! membership is fed by [`crate::topology_adapter`]. Optionally synchronizes
 //! active load across EPP replicas through [`crate::peer_discovery`].
 
-use std::collections::HashSet;
 use std::sync::Arc;
 
 use anyhow::{Context, Result, anyhow};
 
+use dynamo_kv_router::WorkerType;
 use dynamo_kv_router::config::{KvRouterConfig, try_kv_router_config_from_dynamo_env};
-use dynamo_kv_router::protocols::RoutingConstraints;
 use dynamo_kv_router::services::selection::{
-    PromptRequest, SelectAndReserveRequest as CoreSelectAndReserveRequest, SelectionError,
-    SelectionService, SelectionServiceBuilder, WorkerSelectionPolicyRegistry,
-    warn_for_unserved_worker_selection_policies,
+    SelectAndReserveRequest, SelectionError, SelectionService, SelectionServiceBuilder,
+    WorkerSelectionPolicyRegistry, warn_for_unserved_worker_selection_policies,
 };
-use dynamo_kv_router::{DEFAULT_ROUTING_GROUP, WorkerType};
 use kube::Client;
 use tokio_util::sync::CancellationToken;
 
 use crate::epp_standalone_config::EppStandaloneConfig;
-
-/// A worker-selection request.
-#[derive(Debug, Clone)]
-pub struct SelectRequest {
-    pub model_name: String,
-    /// EPP-minted booking key (a fresh UUID per pick). Keyed by an id the EPP
-    /// already knows so the booking is releasable even if this response is lost.
-    pub reservation_id: String,
-    pub token_ids: Vec<u32>,
-    pub allowed_worker_ids: Option<HashSet<u64>>,
-    pub priority_jump: Option<f64>,
-    pub strict_priority: Option<u32>,
-    pub expected_output_tokens: Option<u32>,
-    pub policy_class: Option<String>,
-    /// Session to pin (`x-dynamo-session-id`); the selector binds it to the
-    /// chosen worker when session affinity is enabled.
-    pub session_id: Option<String>,
-    pub cache_namespace: Option<String>,
-}
 
 /// Observability overlap summary (matched token counts).
 #[derive(Debug, Clone)]
@@ -83,7 +61,7 @@ impl Selector {
         Self::new_with_kv_router_config(cfg, kv_router_config, policy_registry).await
     }
 
-    async fn new_with_kv_router_config(
+    pub(crate) async fn new_with_kv_router_config(
         cfg: &EppStandaloneConfig,
         kv_router_config: KvRouterConfig,
         policy_registry: WorkerSelectionPolicyRegistry,
@@ -170,40 +148,57 @@ impl Selector {
         Ok(())
     }
 
+    pub(crate) fn resolve_pinned_worker(
+        &self,
+        worker_id: u64,
+        dp_rank: Option<u32>,
+    ) -> std::result::Result<dynamo_kv_router::protocols::WorkerWithDpRank, SelectionError> {
+        let worker = self.service.core().worker(worker_id).ok_or_else(|| {
+            SelectionError::BadRequest(
+                "explicit worker pin does not identify a known worker".into(),
+            )
+        })?;
+        let rank = dp_rank
+            .or_else(|| {
+                (worker.data_parallel_size == Some(1))
+                    .then(|| worker.data_parallel_start_rank.unwrap_or(0))
+            })
+            .ok_or_else(|| {
+                SelectionError::BadRequest(
+                    "worker pin requires dp_rank for a worker with multiple or unknown ranks"
+                        .into(),
+                )
+            })?;
+        let start = worker.data_parallel_start_rank.unwrap_or(0);
+        let size = worker.data_parallel_size.unwrap_or(1);
+        if rank < start || rank - start >= size {
+            return Err(SelectionError::BadRequest(
+                "explicit dp_rank is outside the worker's rank range".into(),
+            ));
+        }
+        Ok(dynamo_kv_router::protocols::WorkerWithDpRank::new(
+            worker_id, rank,
+        ))
+    }
+
     /// Select a worker for a prompt and book its load in one operation. Takes the
     /// request by value so per-request fields are moved into the core request
     /// rather than cloned on the hot path.
     pub async fn select_and_reserve(
         &self,
-        req: SelectRequest,
+        req: SelectAndReserveRequest,
+        policy_class: Option<String>,
     ) -> std::result::Result<SelectResponse, SelectionError> {
-        let reservation_id = req.reservation_id;
-        let core_req = CoreSelectAndReserveRequest {
-            model_name: req.model_name,
-            routing_group: DEFAULT_ROUTING_GROUP.to_string(),
-            // The core keys both its selection cache and the scheduler booking off
-            // this id; feed it the EPP-minted reservation id so the booking stays
-            // EPP-known (releasable even if this response is lost).
-            selection_id: Some(reservation_id.clone()),
-            prompt: PromptRequest {
-                token_ids: Some(req.token_ids),
-                cache_namespace: req.cache_namespace,
-                ..Default::default()
-            },
-            router_config_override: None,
-            expected_output_tokens: req.expected_output_tokens,
-            session_id: req.session_id,
-            session_context: None,
-            priority_jump: req.priority_jump,
-            strict_priority: req.strict_priority,
-            affinity_target: None,
-            pinned_worker: None,
-            allowed_worker_ids: req.allowed_worker_ids,
-            routing_constraints: RoutingConstraints::default(),
-        };
+        let reservation_id = req
+            .selection_id
+            .clone()
+            .filter(|id| !id.is_empty())
+            .ok_or_else(|| {
+                SelectionError::BadRequest("EPP selection requires a reservation id".into())
+            })?;
         let resp = self
             .service
-            .select_and_reserve_with_policy_class(core_req, req.policy_class)
+            .select_and_reserve_with_policy_class(req, policy_class)
             .await?;
         Ok(SelectResponse {
             reservation_id,
@@ -257,7 +252,10 @@ impl Drop for Selector {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
+    use dynamo_kv_router::DEFAULT_ROUTING_GROUP;
+    use dynamo_kv_router::protocols::RoutingConstraints;
+    use dynamo_kv_router::services::selection::PromptRequest;
     use dynamo_kv_router::services::selection::affinity::MAX_SESSION_AFFINITY_ID_BYTES;
     use std::collections::HashMap;
     use std::sync::Mutex;
@@ -343,7 +341,7 @@ models:
     /// Minimal single-replica config (no peer service, so no cluster access).
     /// `max_num_batched_tokens` is set so `Selector::new` never fails its
     /// fast-fail check regardless of the ambient router policy.
-    fn test_config() -> EppStandaloneConfig {
+    pub(crate) fn test_config() -> EppStandaloneConfig {
         EppStandaloneConfig {
             selector_threads: 1,
             peer_replication: None,
@@ -384,7 +382,7 @@ models:
     /// `WorkerRegistry` register tests in `lib/kv-router`), so no network infra is
     /// required. Queueing is disabled under the default router policy, so
     /// `max_num_batched_tokens` is not required here.
-    fn schedulable_registration(worker_id: u64) -> WorkerRequest {
+    pub(crate) fn schedulable_registration(worker_id: u64) -> WorkerRequest {
         WorkerRequest {
             worker_id,
             model_name: "test-model".to_string(),
@@ -408,18 +406,25 @@ models:
     }
     /// A selection request keyed by `reservation_id` for the schedulable worker's
     /// model. The prompt is long enough to book non-trivial prefill load.
-    fn select_request(reservation_id: &str) -> SelectRequest {
-        SelectRequest {
+    fn select_request(reservation_id: &str) -> SelectAndReserveRequest {
+        SelectAndReserveRequest {
             model_name: "test-model".to_string(),
-            reservation_id: reservation_id.to_string(),
-            token_ids: (1..=16).collect(),
+            selection_id: Some(reservation_id.to_string()),
+            routing_group: DEFAULT_ROUTING_GROUP.to_string(),
+            prompt: PromptRequest {
+                token_ids: Some((1..=16).collect()),
+                ..Default::default()
+            },
+            router_config_override: None,
+            session_context: None,
+            affinity_target: None,
+            pinned_worker: None,
+            routing_constraints: RoutingConstraints::default(),
             allowed_worker_ids: None,
             priority_jump: None,
             strict_priority: None,
             expected_output_tokens: None,
-            policy_class: None,
             session_id: None,
-            cache_namespace: None,
         }
     }
 
@@ -448,7 +453,7 @@ models:
         let mut request = select_request("res-long-session");
         request.session_id = Some("s".repeat(MAX_SESSION_AFFINITY_ID_BYTES + 1));
         assert!(matches!(
-            selector.select_and_reserve(request).await,
+            selector.select_and_reserve(request, None).await,
             Err(SelectionError::BadRequest(_))
         ));
     }
@@ -522,7 +527,7 @@ worker_selection:
         assert_eq!(factory_calls.load(Ordering::Relaxed), 1);
 
         let response = selector
-            .select_and_reserve(select_request("custom-policy"))
+            .select_and_reserve(select_request("custom-policy"), None)
             .await
             .expect("custom policy should select and reserve");
         assert_eq!(response.worker_id, 1);
@@ -540,7 +545,7 @@ worker_selection:
         let selector = selector_with_schedulable_worker().await;
 
         let resp = selector
-            .select_and_reserve(select_request("res-1"))
+            .select_and_reserve(select_request("res-1"), None)
             .await
             .expect("reserve should succeed against a schedulable worker");
         assert_eq!(
@@ -571,7 +576,7 @@ worker_selection:
         let selector = selector_with_schedulable_worker().await;
 
         selector
-            .select_and_reserve(select_request("res-p"))
+            .select_and_reserve(select_request("res-p"), None)
             .await
             .expect("reserve should succeed");
 
@@ -605,18 +610,18 @@ worker_selection:
         let selector = selector_with_schedulable_worker().await;
 
         selector
-            .select_and_reserve(select_request("res-a"))
+            .select_and_reserve(select_request("res-a"), None)
             .await
             .expect("reserve res-a");
         selector
-            .select_and_reserve(select_request("res-b"))
+            .select_and_reserve(select_request("res-b"), None)
             .await
             .expect("reserve res-b");
 
         // A live booking id conflicts on re-reserve, proving the id is tracked.
         assert!(
             selector
-                .select_and_reserve(select_request("res-b"))
+                .select_and_reserve(select_request("res-b"), None)
                 .await
                 .is_err(),
             "re-reserving a live booking id must conflict"
@@ -636,13 +641,13 @@ worker_selection:
             .expect("free res-a");
         assert!(
             selector
-                .select_and_reserve(select_request("res-b"))
+                .select_and_reserve(select_request("res-b"), None)
                 .await
                 .is_err(),
             "freeing res-a must leave res-b booked"
         );
         selector
-            .select_and_reserve(select_request("res-a"))
+            .select_and_reserve(select_request("res-a"), None)
             .await
             .expect("res-a is reusable once freed");
     }
@@ -664,7 +669,7 @@ worker_selection:
 
         assert!(
             selector
-                .select_and_reserve(select_request("res-x"))
+                .select_and_reserve(select_request("res-x"), None)
                 .await
                 .is_err(),
             "reserving with no schedulable worker must fail"
@@ -815,7 +820,7 @@ worker_selection:
         let mut req = select_request("res-eot");
         req.expected_output_tokens = Some(128);
         selector
-            .select_and_reserve(req)
+            .select_and_reserve(req, None)
             .await
             .expect("reserve should succeed");
 
@@ -852,18 +857,16 @@ worker_selection:
         // A policy-family name resolves to that family's bucketed class.
         let mut family_req = select_request("res-family");
         family_req.model_name = "threshold-free-model".to_string();
-        family_req.policy_class = Some("standard".to_string());
         selector
-            .select_and_reserve(family_req)
+            .select_and_reserve(family_req, Some("standard".to_string()))
             .await
             .expect("policy_family 'standard' should schedule");
 
         // An explicit class name is honored.
         let mut explicit_req = select_request("res-explicit");
         explicit_req.model_name = "threshold-free-model".to_string();
-        explicit_req.policy_class = Some("express".to_string());
         selector
-            .select_and_reserve(explicit_req)
+            .select_and_reserve(explicit_req, Some("express".to_string()))
             .await
             .expect("explicit class 'express' should schedule");
 
@@ -873,9 +876,8 @@ worker_selection:
         // must not 400 it either.
         let mut physical_req = select_request("res-physical");
         physical_req.model_name = "threshold-free-model".to_string();
-        physical_req.policy_class = Some("direct".to_string());
         selector
-            .select_and_reserve(physical_req)
+            .select_and_reserve(physical_req, Some("direct".to_string()))
             .await
             .expect("physical class name 'direct' should fall back and schedule");
 
@@ -883,9 +885,8 @@ worker_selection:
         // change) falls back the same way instead of erroring.
         let mut unknown_req = select_request("res-unknown");
         unknown_req.model_name = "threshold-free-model".to_string();
-        unknown_req.policy_class = Some("unknown".to_string());
         selector
-            .select_and_reserve(unknown_req)
+            .select_and_reserve(unknown_req, Some("unknown".to_string()))
             .await
             .expect("unknown policy_class should fall back and schedule");
 
@@ -895,10 +896,9 @@ worker_selection:
             .await
             .expect("selector should build");
         register(&selector, vec![schedulable_registration(1)]).await;
-        let mut synthetic_req = select_request("res-synthetic");
-        synthetic_req.policy_class = Some("anything".to_string());
+        let synthetic_req = select_request("res-synthetic");
         selector
-            .select_and_reserve(synthetic_req)
+            .select_and_reserve(synthetic_req, Some("anything".to_string()))
             .await
             .expect("synthetic profile must ignore any policy_class value");
     }

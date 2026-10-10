@@ -70,7 +70,7 @@ use crate::model_card::{ModelDeploymentCard, ModelInfo, PromptFormatterArtifact}
 use crate::preprocessor::media::MediaFetcher;
 use crate::preprocessor::media::{MediaDecoder, MediaLoader, max_data_url_bytes};
 use crate::protocols::common::preprocessor::{
-    MultimodalData, MultimodalDataMap, MultimodalUuidMap, PreprocessedRequestBuilder, RoutingHints,
+    MultimodalData, MultimodalDataMap, MultimodalUuidMap, PreprocessedRequestBuilder,
 };
 use crate::protocols::common::timing::RequestTracker;
 use crate::tokenizers::Encoding;
@@ -89,10 +89,7 @@ use crate::protocols::{
     TokenIdType,
     common::{
         OutputOptionsProvider, SamplingOptionsProvider, StopConditionsProvider,
-        extensions::{
-            AgentHints, NvExtProvider, merge_response_nvext, request_cache_salt,
-            routing_constraints_to_kv,
-        },
+        extensions::{NvExtProvider, merge_response_nvext, request_cache_salt},
     },
     openai::{
         DeltaGeneratorExt, ParsingOptions,
@@ -119,17 +116,6 @@ pub use crate::protocols::common::metrics::{
 pub use crate::protocols::common::preprocessor::PreprocessedEmbeddingRequest;
 
 use crate::protocols::common::llm_backend::EmbeddingsEngineOutput;
-
-fn routing_priorities(hints: Option<&AgentHints>) -> (Option<f64>, Option<u32>, Option<i32>) {
-    let priority_jump = hints.and_then(|h| {
-        h.priority
-            .map(|priority| priority.max(0) as f64)
-            .or(h.latency_sensitivity)
-    });
-    let strict_priority = hints.and_then(|h| h.strict_priority);
-    let priority = hints.and_then(|h| h.priority);
-    (priority_jump, strict_priority, priority)
-}
 
 /// Build a private validation diagnostic. Callers may attach structured `PublicDetails` only when every value is safe for clients.
 pub(crate) fn invalid_argument_error(message: impl Into<String>) -> anyhow::Error {
@@ -3103,6 +3089,35 @@ impl OpenAIPreprocessor {
         ))
     }
 
+    /// Prepare a legacy completion without applying a chat template. Kept shared
+    /// with routing adapters so tokens, model routing hints and validation match
+    /// the frontend's completion operator.
+    pub async fn preprocess_completion_request(
+        &self,
+        request: &NvCreateCompletionRequest,
+        tracker: Option<&RequestTracker>,
+        lora_name: Option<String>,
+    ) -> Result<(PreprocessedRequest, HashMap<String, String>)> {
+        let mut builder = self.builder_with_lora(request, lora_name)?;
+        let annotations = if let Some(ref prompt_embeds) = request.inner.prompt_embeds {
+            builder.token_ids(vec![]);
+            builder.prompt_embeds(Some(prompt_embeds.clone()));
+            HashMap::new()
+        } else {
+            let (token_ids, annotations) = self.gather_tokens(request, None, tracker).await?;
+            builder.token_ids(token_ids);
+            annotations
+        };
+        // Preserve the completion operator's media handling. Unlike chat,
+        // embedding prompts do not supply a token view for MM routing.
+        let _ = self
+            .gather_multi_modal_data(request, &mut builder, None, &[])
+            .await?;
+        let preprocessed = builder.build()?;
+        Self::validate_preprocessed_token_budget(&preprocessed, self.token_budget.as_ref())?;
+        Ok((preprocessed, annotations))
+    }
+
     pub fn builder<
         R: OAIChatLikeRequest
             + MediaRequestExt
@@ -3226,40 +3241,14 @@ impl OpenAIPreprocessor {
         let lora_name = self.lora_name.clone().or(lora_name_override);
         let cache_namespace = request_cache_salt(request).map(str::to_owned);
 
-        // Extract routing hints from nvext if present
         if let Some(nvext) = request.nvext() {
-            // Build routing hints from nvext fields
-            let hints = nvext.agent_hints.as_ref();
-            let (priority_jump, strict_priority, priority) = routing_priorities(hints);
             builder.request_timestamp_ms(nvext.request_timestamp_ms);
-            let routing = RoutingHints {
-                backend_instance_id: nvext.backend_instance_id,
-                prefill_worker_id: nvext.prefill_worker_id,
-                decode_worker_id: nvext.decode_worker_id,
-                dp_rank: nvext.dp_rank,
-                prefill_dp_rank: nvext.prefill_dp_rank,
-                expected_output_tokens: hints.and_then(|h| h.osl),
-                priority_jump,
-                strict_priority,
-                priority,
-                lora_name,
-                cache_namespace: cache_namespace.clone(),
-                allowed_worker_ids: None,
-                routing_constraints: nvext
-                    .routing_constraints
-                    .clone()
-                    .map(routing_constraints_to_kv),
-            };
-            builder.routing(Some(routing));
-        } else if lora_name.is_some() || cache_namespace.is_some() {
-            // Ensure routing hints exist when we have LoRA or a legacy
-            // top-level cache_salt, even when nvext is absent.
-            builder.routing(Some(RoutingHints {
-                lora_name,
-                cache_namespace,
-                ..Default::default()
-            }));
         }
+        builder.routing(crate::protocols::common::extensions::request_routing_hints(
+            request.nvext(),
+            lora_name,
+            cache_namespace,
+        ));
 
         if let Some(extra_args) = Self::backend_extra_args(
             request,
@@ -7847,42 +7836,17 @@ impl
         let response_generator = request.response_generator(request_id.clone());
         let mut response_generator = Box::new(response_generator);
         let tracker = Some(response_generator.tracker());
-        // convert the chat completion request to a common completion request
-        let mut builder = self.builder_with_lora(
-            &request,
-            context
-                .get_optional::<String>(LORA_NAME_CONTEXT_KEY)
-                .ok()
-                .flatten()
-                .map(|name| name.as_ref().clone()),
-        )?;
-
-        // Check if embeddings are provided - skip tokenization path
-        let annotations = if let Some(ref prompt_embeds) = request.inner.prompt_embeds {
-            // Skip tokenization for embeddings
-            builder.token_ids(vec![]); // Empty token IDs
-            builder.prompt_embeds(Some(prompt_embeds.clone()));
-            // No token annotations
-            HashMap::new()
-        } else {
-            // Normal path: tokenize the prompt; embeddings don't need MM routing,
-            // so install tokens on the builder right away.
-            let (token_ids, ann) = self
-                .gather_tokens(&request, None, tracker.as_deref())
-                .await?;
-            builder.token_ids(token_ids);
-            ann
-        };
-
-        // Gather multimodal data (works with both embeddings and text prompts)
-        // Returned MM entries are unused on the embeddings path; routing info is
-        // not built here.
-        let _ = self
-            .gather_multi_modal_data(&request, &mut builder, None, &[])
+        let (mut common_request, annotations) = self
+            .preprocess_completion_request(
+                &request,
+                tracker.as_deref(),
+                context
+                    .get_optional::<String>(LORA_NAME_CONTEXT_KEY)
+                    .ok()
+                    .flatten()
+                    .map(|name| name.as_ref().clone()),
+            )
             .await?;
-
-        let mut common_request = builder.build()?;
-        Self::validate_preprocessed_token_budget(&common_request, self.token_budget.as_ref())?;
         attach_request_context_metadata(&mut common_request, &context);
 
         let trace_state = crate::request_trace::build_request_end_trace_state(
@@ -12056,10 +12020,27 @@ mod tests {
         };
 
         assert_eq!(
-            routing_priorities(Some(&hints)),
+            {
+                let routing = crate::protocols::common::extensions::request_routing_hints(
+                    Some(&crate::protocols::common::extensions::NvExt {
+                        agent_hints: Some(hints),
+                        ..Default::default()
+                    }),
+                    None,
+                    None,
+                )
+                .unwrap();
+                (
+                    routing.priority_jump,
+                    routing.strict_priority,
+                    routing.priority,
+                )
+            },
             (Some(0.0), Some(7), Some(-3))
         );
-        assert_eq!(routing_priorities(None), (None, None, None));
+        assert!(
+            crate::protocols::common::extensions::request_routing_hints(None, None, None).is_none()
+        );
     }
 
     fn test_llm_metrics_annotation() -> LLMMetricAnnotation {

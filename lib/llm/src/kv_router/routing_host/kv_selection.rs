@@ -400,22 +400,7 @@ fn pinned_worker_hint(
     phase: RequestPhase,
     routing: Option<&RoutingHints>,
 ) -> Option<(u64, Option<u32>)> {
-    let routing = routing?;
-    match phase {
-        RequestPhase::Prefill => {
-            let worker_id = routing.prefill_worker_id.or(routing.backend_instance_id)?;
-            let dp_rank = routing.prefill_dp_rank.or(routing.dp_rank);
-            Some((worker_id, dp_rank))
-        }
-        RequestPhase::Decode => {
-            let worker_id = routing.decode_worker_id.or(routing.backend_instance_id)?;
-            Some((worker_id, routing.dp_rank))
-        }
-        RequestPhase::Aggregated => {
-            let worker_id = routing.decode_worker_id.or(routing.backend_instance_id)?;
-            Some((worker_id, routing.dp_rank))
-        }
-    }
+    routing?.worker_pin(phase)
 }
 
 #[cfg(test)]

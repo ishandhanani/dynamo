@@ -330,16 +330,23 @@ impl<P: EndpointPicker> ExtProcServer<P> {
 
         // Inject routing extensions into the request body JSON.
         // `nvext.token_data` lets the backend skip redundant tokenization.
-        // `cache_salt` is written only under the `NativeVllm` forwarding
-        // policy (see `CacheSaltForwarding`); `Preserve` leaves the body
+        // `cache_salt` uses the native backend's wire encoding;
+        // `Preserve` leaves the body
         // untouched. Only the injection path allocates a new body — otherwise
         // the unchanged body is a cheap `Bytes` clone (no copy).
         let cache_salt = match result.cache_salt_forwarding {
-            CacheSaltForwarding::NativeVllm => result.cache_namespace.as_deref(),
+            CacheSaltForwarding::NativeVllm | CacheSaltForwarding::NativeSglang => {
+                result.cache_namespace.as_deref()
+            }
             CacheSaltForwarding::Preserve => None,
         };
         let forwarded_body: Bytes = if result.token_ids.is_some() || cache_salt.is_some() {
-            match inject_body_extensions(&raw_body, result.token_ids.as_deref(), cache_salt) {
+            match inject_body_extensions(
+                &raw_body,
+                result.token_ids.as_deref(),
+                cache_salt,
+                result.cache_salt_forwarding,
+            ) {
                 Ok(modified) => {
                     tracing::trace!(
                         request_id = %ctx.request_id,
@@ -851,14 +858,13 @@ fn validate_protocol_config(
 
 /// Inject routing helpers into the request body JSON:
 /// - `nvext.token_data`: lets the backend skip re-tokenization.
-/// - top-level `cache_salt` = `dynamo-cache-salt:` + namespace, only under
-///   [`CacheSaltForwarding::NativeVllm`]. Native vLLM reads the top-level
-///   field; `Preserve` backends (Dynamo runtime) skip this rewrite because
-///   their handler applies the tag itself.
+/// - top-level `cache_salt`: tagged for native vLLM, verbatim for native SGLang.
+///   Dynamo runtime backends preserve their body salt and own encoding themselves.
 fn inject_body_extensions(
     body: &[u8],
     token_ids: Option<&[u32]>,
     cache_salt: Option<&str>,
+    forwarding: CacheSaltForwarding,
 ) -> anyhow::Result<Vec<u8>> {
     let mut parsed: serde_json::Value = serde_json::from_slice(body)?;
 
@@ -887,12 +893,16 @@ fn inject_body_extensions(
     }
 
     if let Some(cache_salt) = cache_salt {
-        // Top-level `cache_salt` is the canonical field native vLLM reads; the
-        // Dynamo tag keeps the namespace unambiguous in KV event extra_keys.
-        obj.insert(
-            "cache_salt".to_string(),
-            serde_json::Value::String(format!("{}{}", DYNAMO_CACHE_SALT_PREFIX, cache_salt)),
-        );
+        let salt = match forwarding {
+            CacheSaltForwarding::NativeVllm => {
+                Some(format!("{DYNAMO_CACHE_SALT_PREFIX}{cache_salt}"))
+            }
+            CacheSaltForwarding::NativeSglang => Some(cache_salt.to_owned()),
+            CacheSaltForwarding::Preserve => None,
+        };
+        if let Some(salt) = salt {
+            obj.insert("cache_salt".into(), salt.into());
+        }
     }
 
     Ok(serde_json::to_vec(&parsed)?)
@@ -968,6 +978,11 @@ impl ExtProcError {
             PickError::RoutingFailed(msg) => Self {
                 status_code: StatusCode::ServiceUnavailable,
                 message: msg,
+            },
+            PickError::RequestPreparation(error) => Self {
+                status_code: StatusCode::try_from(i32::from(error.code))
+                    .unwrap_or(StatusCode::InternalServerError),
+                message: error.message,
             },
             PickError::InvalidRequest(msg) => Self {
                 status_code: StatusCode::BadRequest,
@@ -1635,7 +1650,9 @@ mod tests {
     #[test]
     fn inject_body_extensions_adds_cache_salt() {
         let body = br#"{"model":"m","messages":[{"role":"user","content":"hi"}]}"#;
-        let modified = inject_body_extensions(body, None, Some("salt-a")).unwrap();
+        let modified =
+            inject_body_extensions(body, None, Some("salt-a"), CacheSaltForwarding::NativeVllm)
+                .unwrap();
         let parsed: serde_json::Value = serde_json::from_slice(&modified).unwrap();
         assert_eq!(
             parsed.get("cache_salt").and_then(|v| v.as_str()),
@@ -1647,7 +1664,13 @@ mod tests {
     #[test]
     fn inject_body_extensions_preserves_existing_fields() {
         let body = br#"{"model":"m","nvext":{"extra_fields":["engine_data"]}}"#;
-        let modified = inject_body_extensions(body, Some(&[10, 20, 30]), Some("salt-b")).unwrap();
+        let modified = inject_body_extensions(
+            body,
+            Some(&[10, 20, 30]),
+            Some("salt-b"),
+            CacheSaltForwarding::NativeVllm,
+        )
+        .unwrap();
         let parsed: serde_json::Value = serde_json::from_slice(&modified).unwrap();
 
         assert_eq!(
@@ -1677,8 +1700,10 @@ mod tests {
     #[test]
     fn inject_body_extensions_isolates_salts() {
         let body = br#"{}"#;
-        let a = inject_body_extensions(body, None, Some("salt-a")).unwrap();
-        let b = inject_body_extensions(body, None, Some("salt-b")).unwrap();
+        let a = inject_body_extensions(body, None, Some("salt-a"), CacheSaltForwarding::NativeVllm)
+            .unwrap();
+        let b = inject_body_extensions(body, None, Some("salt-b"), CacheSaltForwarding::NativeVllm)
+            .unwrap();
         let parsed_a: serde_json::Value = serde_json::from_slice(&a).unwrap();
         let parsed_b: serde_json::Value = serde_json::from_slice(&b).unwrap();
         assert_eq!(parsed_a["cache_salt"], "dynamo-cache-salt:salt-a");
@@ -1692,8 +1717,13 @@ mod tests {
     #[test]
     fn inject_body_extensions_leaves_nvext_cache_salt_untouched() {
         let body = br#"{"nvext":{"cache_salt":"body-salt","extra_fields":["engine_data"]}}"#;
-        let modified =
-            inject_body_extensions(body, Some(&[10, 20, 30]), Some("header-salt")).unwrap();
+        let modified = inject_body_extensions(
+            body,
+            Some(&[10, 20, 30]),
+            Some("header-salt"),
+            CacheSaltForwarding::NativeVllm,
+        )
+        .unwrap();
         let parsed: serde_json::Value = serde_json::from_slice(&modified).unwrap();
 
         assert_eq!(parsed["cache_salt"], "dynamo-cache-salt:header-salt");
@@ -1712,13 +1742,79 @@ mod tests {
     #[test]
     fn inject_body_extensions_rejects_non_object_body() {
         let body = br#"["not", "an", "object"]"#;
-        assert!(inject_body_extensions(body, Some(&[1]), Some("salt")).is_err());
+        assert!(
+            inject_body_extensions(
+                body,
+                Some(&[1]),
+                Some("salt"),
+                CacheSaltForwarding::NativeVllm
+            )
+            .is_err()
+        );
     }
 
     /// A body with a non-object `nvext` cannot accept token_data.
     #[test]
     fn inject_body_extensions_rejects_non_object_nvext() {
         let body = br#"{"nvext": "bad"}"#;
-        assert!(inject_body_extensions(body, Some(&[1]), None).is_err());
+        assert!(
+            inject_body_extensions(body, Some(&[1]), None, CacheSaltForwarding::NativeVllm)
+                .is_err()
+        );
+    }
+    #[test]
+    fn native_backend_salt_roundtrips_to_selection_hashes() {
+        use dynamo_kv_router::protocols::{BlockHashOptions, compute_block_hash_for_seq};
+        use dynamo_kv_router::zmq_wire::RawKvEvent;
+        let headers = vec![("x-tenant-id".into(), " header-salt ".into())];
+        let namespace =
+            crate::picker::resolve_cache_namespace(&headers, Some("nvext-salt"), Some("body-salt"))
+                .unwrap();
+        let body = br#"{"model":"m","prompt":[1,2,3,4],"cache_salt":"body-salt","nvext":{"cache_salt":"nvext-salt"}}"#;
+        let selection_hashes = compute_block_hash_for_seq(
+            &[1, 2, 3, 4],
+            2,
+            BlockHashOptions {
+                cache_namespace: Some(&namespace),
+                ..Default::default()
+            },
+        );
+        for mode in [
+            CacheSaltForwarding::NativeVllm,
+            CacheSaltForwarding::NativeSglang,
+        ] {
+            let forwarded = inject_body_extensions(body, None, Some(&namespace), mode).unwrap();
+            let forwarded: serde_json::Value = serde_json::from_slice(&forwarded).unwrap();
+            assert_eq!(forwarded["nvext"]["cache_salt"], "nvext-salt");
+            let mut wire = serde_json::json!({"type":"BlockStored","block_hashes":[101,102],"token_ids":[1,2,3,4],"block_size":2});
+            match mode {
+                CacheSaltForwarding::NativeVllm => {
+                    wire["extra_keys"] =
+                        serde_json::json!([[forwarded["cache_salt"]], [forwarded["cache_salt"]]])
+                }
+                CacheSaltForwarding::NativeSglang => {
+                    wire["cache_salt"] = forwarded["cache_salt"].clone()
+                }
+                _ => unreachable!(),
+            }
+            let RawKvEvent::BlockStored {
+                token_ids,
+                cache_namespace,
+                ..
+            } = serde_json::from_value(wire).unwrap()
+            else {
+                panic!("stored event expected")
+            };
+            assert_eq!(cache_namespace.as_deref(), Some(namespace.as_str()));
+            let event_hashes = compute_block_hash_for_seq(
+                &token_ids,
+                2,
+                BlockHashOptions {
+                    cache_namespace: cache_namespace.as_deref(),
+                    ..Default::default()
+                },
+            );
+            assert_eq!(event_hashes, selection_hashes);
+        }
     }
 }
