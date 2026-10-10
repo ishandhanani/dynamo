@@ -53,7 +53,8 @@ use llm_rs::kv_router::publisher::{KvEventSourceConfig, create_stored_blocks};
 use llm_rs::protocols::common::timing::RequestTracker;
 use llm_rs::protocols::common::{OutputOptions, SamplingOptions, StopConditions};
 use llm_rs::session_affinity::{
-    MAX_SESSION_AFFINITY_TTL_SECS, SessionAffinityMode as RsSessionAffinityMode,
+    MAX_SESSION_AFFINITY_TTL_SECS, MIN_SESSION_AFFINITY_TTL_SECS,
+    SessionAffinityConfig as RsSessionAffinityConfig, SessionAffinityMode as RsSessionAffinityMode,
 };
 
 use super::ais_callback::create_ais_prefill_load_estimator;
@@ -371,6 +372,12 @@ struct SelectServiceCli {
     #[arg(long)]
     session_affinity_ttl_secs: Option<f64>,
 
+    /// How a bound session treats a dispatch that landed elsewhere: `hard`
+    /// keeps every request on the bound worker while it is eligible, `soft`
+    /// offers the binding to the selection policy as a preference
+    #[arg(long, default_value = "hard")]
+    session_affinity_mode: RsSessionAffinityMode,
+
     /// Seconds an unclaimed pending selection lives before eviction
     #[arg(long)]
     selection_cache_ttl_secs: Option<f64>,
@@ -558,6 +565,7 @@ where
             .map(session_affinity_ttl_from_secs)
             .transpose()
             .map_err(anyhow::Error::msg)?,
+        session_affinity_mode: cli.session_affinity_mode,
         kv_router_config,
         selection_cache: selection_cache_config_from_overrides(
             cli.selection_cache_ttl_secs,
@@ -634,13 +642,17 @@ impl SelectionCacheConfig {
     }
 }
 
+/// The one TTL range check (`SessionAffinityConfig::ttl_from_secs_f64`), with
+/// the Python-facing parameter named in the error.
+fn session_affinity_ttl_range_error(name: &str) -> String {
+    format!(
+        "{name} must be between {MIN_SESSION_AFFINITY_TTL_SECS} and {MAX_SESSION_AFFINITY_TTL_SECS}"
+    )
+}
+
 fn session_affinity_ttl_from_secs(ttl: f64) -> Result<Duration, String> {
-    if !(1.0..=MAX_SESSION_AFFINITY_TTL_SECS as f64).contains(&ttl) {
-        return Err(format!(
-            "session_affinity_ttl_secs must be between 1 and {MAX_SESSION_AFFINITY_TTL_SECS}"
-        ));
-    }
-    Ok(Duration::from_secs_f64(ttl))
+    RsSessionAffinityConfig::ttl_from_secs_f64(ttl)
+        .map_err(|_| session_affinity_ttl_range_error("session_affinity_ttl_secs"))
 }
 
 /// Range check for a whole-second TTL; `None` passes.
@@ -648,6 +660,16 @@ pub(crate) fn check_session_affinity_ttl_secs(ttl: Option<u64>) -> PyResult<()> 
     ttl.map(|ttl| session_affinity_ttl_from_secs(ttl as f64).map_err(PyValueError::new_err))
         .transpose()?;
     Ok(())
+}
+
+/// Check a session-affinity idle TTL in seconds against the supported range,
+/// naming `name` in the error so an argument parser reports its own flag.
+#[pyfunction]
+#[pyo3(name = "validate_session_affinity_ttl_secs", signature = (ttl_secs, name = "session_affinity_ttl_secs"))]
+pub fn validate_session_affinity_ttl_secs_py(ttl_secs: f64, name: &str) -> PyResult<()> {
+    RsSessionAffinityConfig::ttl_from_secs_f64(ttl_secs)
+        .map(|_| ())
+        .map_err(|_| PyValueError::new_err(session_affinity_ttl_range_error(name)))
 }
 
 /// In-process handle to a managed Dynamo `SelectionService`.
@@ -662,7 +684,7 @@ pub(crate) struct SelectionService {
 impl SelectionService {
     /// Create a selection service. `indexer_threads` sizes the KV indexer pool.
     #[new]
-    #[pyo3(signature = (*, indexer_threads = 4, indexer_peers = None, replica_sync_port = None, replica_sync_peers = None, selection_cache = None, session_affinity_ttl_secs = None))]
+    #[pyo3(signature = (*, indexer_threads = 4, indexer_peers = None, replica_sync_port = None, replica_sync_peers = None, selection_cache = None, session_affinity_ttl_secs = None, session_affinity_mode = "hard"))]
     #[allow(clippy::too_many_arguments)]
     fn new(
         py: Python<'_>,
@@ -672,7 +694,11 @@ impl SelectionService {
         replica_sync_peers: Option<Vec<String>>,
         selection_cache: Option<SelectionCacheConfig>,
         session_affinity_ttl_secs: Option<f64>,
+        session_affinity_mode: &str,
     ) -> PyResult<Self> {
+        let session_affinity_mode = session_affinity_mode
+            .parse::<RsSessionAffinityMode>()
+            .map_err(PyValueError::new_err)?;
         let replica_sync_peers = replica_sync_peers.unwrap_or_default();
         if replica_sync_port.is_none() && !replica_sync_peers.is_empty() {
             return Err(PyValueError::new_err(
@@ -695,9 +721,11 @@ impl SelectionService {
             builder = builder.replica_sync(port, replica_sync_peers);
         }
         if let Some(ttl) = session_affinity_ttl_secs {
-            builder = builder.session_affinity(
-                session_affinity_ttl_from_secs(ttl).map_err(PyValueError::new_err)?,
-            );
+            builder = builder
+                .session_affinity(
+                    session_affinity_ttl_from_secs(ttl).map_err(PyValueError::new_err)?,
+                )
+                .session_affinity_mode(session_affinity_mode);
         }
         let inner = py
             .allow_threads(|| crate::bridge_runtime().block_on(builder.build()))

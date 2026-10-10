@@ -127,6 +127,14 @@ router. See [Router Guide](../../developer-guide/knowledge-base/modular-componen
   Environment variable: `DYN_ROUTER_SESSION_AFFINITY_TTL_SECS`
 </ParamField>
 
+<ParamField path="--router-session-affinity-mode" type="string" default="hard">
+  How an existing session binding takes part in worker selection. `hard` limits selection to the
+  bound worker while it is eligible; `soft` offers the binding to the selection policy as a
+  preference. See [Session affinity](../../developer-guide/knowledge-base/modular-components/router/configuration-and-tuning.md#session-affinity).
+
+  Environment variable: `DYN_ROUTER_SESSION_AFFINITY_MODE`
+</ParamField>
+
 <ParamField path="--decode-fallback / --no-decode-fallback" type="boolean" default="false">
   Fall back to aggregated mode when prefill workers are unavailable.
 

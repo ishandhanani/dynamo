@@ -10,6 +10,7 @@
 //! [`EppStandaloneConfig::from_env`] reads envs, applies defaults, and calls
 //! [`EppStandaloneConfig::validate_config`] for field and cross-field checks.
 
+use dynamo_kv_router::services::selection::affinity::SessionAffinityMode;
 use validator::Validate;
 use validator::ValidationError;
 
@@ -176,13 +177,12 @@ pub struct EppStandaloneConfig {
     pub max_inflight_requests: usize,
     /// Pin each `x-dynamo-session-id` to the worker that served it for this
     /// long after its last request (`DYN_EPP_SESSION_AFFINITY_TTL_SECS`).
-    /// `None` disables session affinity.
-    #[validate(range(
-        min = 1.0,
-        max = 31536000.0,
-        message = "DYN_EPP_SESSION_AFFINITY_TTL_SECS must be between 1 and 31536000 seconds"
-    ))]
+    /// `None` disables session affinity. The range is checked by the shared
+    /// `SessionAffinityConfig` validator when the selector starts.
     pub session_affinity_ttl_secs: Option<f64>,
+    /// How a bound session treats a dispatch that landed elsewhere
+    /// (`DYN_EPP_SESSION_AFFINITY_MODE`, `hard` or `soft`); `hard` unless set.
+    pub session_affinity_mode: SessionAffinityMode,
 }
 
 impl EppStandaloneConfig {
@@ -247,6 +247,11 @@ impl EppStandaloneConfig {
             max_inflight_requests: opt_parse::<usize>(get, "DYN_EPP_MAX_INFLIGHT_REQUESTS")?
                 .unwrap_or(DEFAULT_MAX_INFLIGHT_REQUESTS),
             session_affinity_ttl_secs: opt_parse::<f64>(get, "DYN_EPP_SESSION_AFFINITY_TTL_SECS")?,
+            session_affinity_mode: opt_parse::<SessionAffinityMode>(
+                get,
+                "DYN_EPP_SESSION_AFFINITY_MODE",
+            )?
+            .unwrap_or_default(),
         })
     }
 
