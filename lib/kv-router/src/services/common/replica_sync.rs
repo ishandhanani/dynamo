@@ -25,8 +25,6 @@ use crate::services::common::zmq::{
     create_bound_pub_socket, create_sub_socket_topics, validate_endpoint,
 };
 #[cfg(feature = "standalone-selection")]
-pub(crate) use crate::services::selection::affinity::AffinityBindingEvent;
-#[cfg(feature = "standalone-selection")]
 use crate::services::selection::affinity::{AffinityReplicaSink, replica_sink};
 
 pub(crate) const REPLICA_EVENT_CHANNEL_CAPACITY: usize = 100_000;
@@ -35,6 +33,22 @@ const REPLICA_TOPIC: &[u8] = b"dynamo.slot-tracker.v1";
 /// Session bindings use their own topic on the replica mesh.
 const AFFINITY_TOPIC: &[u8] = b"dynamo.session-affinity.v1";
 const AFFINITY_EVENT_CHANNEL_CAPACITY: usize = 4_096;
+
+/// One replicated session binding. The schema is shared by both replica
+/// transports, including slot-tracker builds without a selection service.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AffinityBindingEvent {
+    #[serde(flatten)]
+    pub partition: RoutingPartitionId,
+    pub session_id: String,
+    pub worker_id: u64,
+    pub dp_rank: Option<u32>,
+    pub sequence: u64,
+    /// The publishing replica's writer id: its discovery instance id where
+    /// the host has one (frontends), otherwise a random non-zero process id
+    /// (the standalone service). The applier ignores its own writer id.
+    pub writer_id: u64,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct ScopedReplicaEvent {

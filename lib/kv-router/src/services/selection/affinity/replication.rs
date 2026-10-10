@@ -9,29 +9,13 @@
 
 use std::sync::Arc;
 
-use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
 
 use super::{
     AffinityReplicaSink, AffinityTarget, AffinityVersion, ReplicaApplyOutcome, SessionAffinity,
 };
 use crate::identity::RoutingPartitionId;
-
-/// One replicated session binding. The partition scopes the session id: a
-/// binding for another partition is ignored on receipt.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct AffinityBindingEvent {
-    #[serde(flatten)]
-    pub partition: RoutingPartitionId,
-    pub session_id: String,
-    pub worker_id: u64,
-    pub dp_rank: Option<u32>,
-    pub sequence: u64,
-    /// The publishing replica's writer id: its discovery instance id where
-    /// the host has one (frontends), otherwise a random non-zero process id
-    /// (the standalone service). The applier ignores its own writer id.
-    pub writer_id: u64,
-}
+pub use crate::services::common::replica_sync::AffinityBindingEvent;
 
 impl AffinityBindingEvent {
     pub fn new(
