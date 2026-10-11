@@ -2,12 +2,14 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! The remote renderer owns prompt preparation; inspect only the fields the EPP
-//! needs before forwarding the original body. Message text, tools and media are
+//! needs before forwarding the renderer body. Message text, tools and media are
 //! borrowed or skipped, never copied into a second request tree.
 
 use std::borrow::Cow;
+use std::collections::BTreeMap;
 use std::fmt;
 
+use bytes::Bytes;
 use dynamo_llm::protocols::common::extensions::{InputTrigger, NvExt};
 use dynamo_llm::protocols::common::input_trigger::classify_chat_role;
 use serde::de::{SeqAccess, Visitor};
@@ -15,6 +17,20 @@ use serde::{Deserialize, Deserializer};
 use serde_json::value::RawValue;
 
 use crate::picker::PickError;
+
+/// NvExt belongs to Dynamo and is rejected by strict native renderers. Preserve
+/// all other fields, including backend-specific prompt options, as raw JSON so
+/// removing it does not build a second tree of messages or token IDs.
+pub(crate) fn renderer_request_body(body: &Bytes) -> Result<Bytes, PickError> {
+    let mut fields: BTreeMap<String, &RawValue> = serde_json::from_slice(body)
+        .map_err(|_| PickError::InvalidRequest("invalid request body".into()))?;
+    if fields.remove("nvext").is_none() {
+        return Ok(body.clone());
+    }
+    serde_json::to_vec(&fields)
+        .map(Bytes::from)
+        .map_err(|_| PickError::RoutingFailed("failed to prepare renderer request".into()))
+}
 
 #[derive(Deserialize)]
 pub(crate) struct RemoteRequest<'a> {
@@ -192,5 +208,33 @@ impl<'de> Deserialize<'de> for SinglePrompt {
             }
         }
         deserializer.deserialize_any(Prompt)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn renderer_body_preserves_bytes_without_nvext() {
+        let body = Bytes::from_static(br#"{ "model": "qwen", "prompt": [1, 42, 99] }"#);
+        let rendered = renderer_request_body(&body).unwrap();
+        assert_eq!(rendered.as_ptr(), body.as_ptr());
+    }
+
+    #[test]
+    fn renderer_body_strips_only_top_level_nvext_including_null() {
+        for extension in ["null", r#"{"agent_hints":{"priority":7}}"#] {
+            // An escaped key is still NvExt. Nested backend options remain opaque.
+            let body = Bytes::from(format!(
+                r#"{{"nv\u0065xt":{extension},"model":"qwen","prompt":[1, 42, 99],"chat_template_kwargs":{{"nvext":"keep"}},"future_backend_option":1e-2}}"#
+            ));
+            let rendered = renderer_request_body(&body).unwrap();
+            let fields: BTreeMap<String, &RawValue> = serde_json::from_slice(&rendered).unwrap();
+            assert!(!fields.contains_key("nvext"));
+            assert_eq!(fields["prompt"].get(), "[1, 42, 99]");
+            assert_eq!(fields["chat_template_kwargs"].get(), r#"{"nvext":"keep"}"#);
+            assert_eq!(fields["future_backend_option"].get(), "1e-2");
+        }
     }
 }

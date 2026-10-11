@@ -43,7 +43,7 @@ use crate::picker::{
 };
 use crate::pod_discovery::PodDiscovery;
 use crate::render_http::RenderError;
-use crate::request::RemoteRequest;
+use crate::request::{RemoteRequest, renderer_request_body};
 use crate::selector::Selector;
 use crate::sglang_renderer_client::SglangRendererClient;
 use crate::topology_adapter::{RegistrationDefaults, TopologyAdapter};
@@ -258,7 +258,7 @@ async fn prepare_remote_request(
         ));
     }
     let token_ids = renderer
-        .render(req.body.clone(), completion)
+        .render(renderer_request_body(&req.body)?, completion)
         .await
         .map_err(|error| render_error_to_pick_error(error, &req.request_id))?;
     Ok(SelectAndReserveRequest {
@@ -520,6 +520,9 @@ fn render_error_to_pick_error(error: RenderError, request_id: &str) -> PickError
         }
     }
 }
+
+#[cfg(test)]
+mod live_tests;
 
 #[cfg(test)]
 mod tests {
@@ -789,6 +792,10 @@ mod tests {
             async move {
                 tx.send(body.clone()).unwrap();
                 let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
+                assert!(
+                    value.get("nvext").is_none(),
+                    "strict renderers reject NvExt"
+                );
                 let prepared = if value.get("prompt").is_some() {
                     let request: dynamo_llm::types::openai::completions::NvCreateCompletionRequest =
                         serde_json::from_value(value).unwrap();
@@ -914,11 +921,10 @@ mod tests {
                     )
                     .await
                     .unwrap();
-                    assert_eq!(
-                        received.recv().await.unwrap(),
-                        req.body,
-                        "renderer must receive original bytes"
-                    );
+                    let rendered: serde_json::Value =
+                        serde_json::from_slice(&received.recv().await.unwrap()).unwrap();
+                    body.as_object_mut().unwrap().remove("nvext");
+                    assert_eq!(rendered, body, "only Dynamo extensions should be removed");
                     let routing = local.routing.as_ref().unwrap();
                     assert_eq!(
                         prepared.prompt.token_ids.as_deref(),
