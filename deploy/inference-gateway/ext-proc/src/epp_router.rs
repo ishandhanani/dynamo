@@ -32,14 +32,14 @@ use dynamo_kv_router::services::selection::{SelectionError, WorkerSelectionPolic
 use dynamo_llm::http::service::metadata::extract_metadata_from_header_pairs;
 use dynamo_llm::protocols::common::extensions::{
     agent_context_from_headers, apply_frontend_nvext_policy, request_routing_hints,
-    session_affinity_from_headers, to_selection_session_context,
+    resolve_cache_namespace, session_affinity_from_headers, to_selection_session_context,
 };
 use dynamo_llm::protocols::common::timing::RequestPhase;
 
 use crate::epp_standalone_config::{EppStandaloneConfig, RendererProtocol};
 use crate::picker::{
     CacheSaltForwarding, Endpoint, EndpointPicker, PickError, PickResult, RequestInfo,
-    request_header_map, resolve_cache_namespace,
+    request_header_map,
 };
 use crate::pod_discovery::PodDiscovery;
 use crate::render_http::RenderError;
@@ -234,11 +234,13 @@ async fn prepare_remote_request(
             "remote renderers do not implement nvext.token_data or nvext.use_raw_prompt".into(),
         ));
     }
+    // The frontend policy above has already applied the tenant header to NvExt.
     let cache_namespace = resolve_cache_namespace(
-        &req.headers,
+        None,
         nvext.as_ref().and_then(|ext| ext.cache_salt.as_deref()),
         envelope.cache_namespace.as_deref(),
-    );
+    )
+    .map(str::to_owned);
     let routing = request_routing_hints(nvext.as_ref(), None, cache_namespace).unwrap_or_default();
     if routing.prefill_worker_id.is_some() || routing.prefill_dp_rank.is_some() {
         return Err(PickError::InvalidRequest(
@@ -258,7 +260,7 @@ async fn prepare_remote_request(
     let token_ids = renderer
         .render(req.body.clone(), completion)
         .await
-        .map_err(|error| TokenizeError::Render(error).into_pick_error(&req.request_id))?;
+        .map_err(|error| render_error_to_pick_error(error, &req.request_id))?;
     Ok(SelectAndReserveRequest {
         model_name: model_name.to_owned(),
         routing_group: DEFAULT_ROUTING_GROUP.to_string(),
@@ -492,41 +494,28 @@ impl<R: ReservationReleaser> Drop for ReservationGuard<R> {
     }
 }
 
-/// Why tokenizing a request for routing failed. Kept typed so the picker can map
-/// each cause to the correct HTTP status instead of collapsing everything to 400.
-enum TokenizeError {
-    /// The renderer call failed; the specific variant decides the status.
-    Render(RenderError),
-}
-
-impl TokenizeError {
-    /// Map to a client-safe [`PickError`], logging the detailed cause (which may
-    /// include upstream URLs/bodies) server-side rather than returning it.
-    fn into_pick_error(self, request_id: &str) -> PickError {
-        match self {
-            TokenizeError::Render(e) => {
-                tracing::warn!(request_id, error = %e, "Tokenization render failed");
-                match &e {
-                    RenderError::Unavailable { .. } => PickError::TokenizerUnavailable,
-                    RenderError::Timeout { .. } => PickError::TokenizerTimeout,
-                    RenderError::InvalidResponse { .. } | RenderError::ResponseTooLarge { .. } => {
-                        PickError::TokenizerUpstreamError
-                    }
-                    RenderError::UpstreamStatus { status, .. } => {
-                        match status.as_u16() {
-                            // Only payload-validation statuses (400/422) mean the
-                            // client's request was bad → surface as a client 400.
-                            // Auth/misconfig (401/403/404), overload (429/503), any
-                            // other 4xx, and 5xx are the renderer's or our own fault.
-                            400 | 422 => PickError::InvalidRequest(
-                                "request rejected by tokenization service".to_string(),
-                            ),
-                            // Renderer overloaded / temporarily unavailable → retryable.
-                            429 | 503 => PickError::TokenizerUnavailable,
-                            _ => PickError::TokenizerUpstreamError,
-                        }
-                    }
-                }
+/// Map to a client-safe [`PickError`], logging the detailed cause (which may
+/// include upstream URLs/bodies) server-side rather than returning it.
+fn render_error_to_pick_error(error: RenderError, request_id: &str) -> PickError {
+    tracing::warn!(request_id, error = %error, "Tokenization render failed");
+    match error {
+        RenderError::Unavailable { .. } => PickError::TokenizerUnavailable,
+        RenderError::Timeout { .. } => PickError::TokenizerTimeout,
+        RenderError::InvalidResponse { .. } | RenderError::ResponseTooLarge { .. } => {
+            PickError::TokenizerUpstreamError
+        }
+        RenderError::UpstreamStatus { status, .. } => {
+            match status.as_u16() {
+                // Only payload-validation statuses (400/422) mean the
+                // client's request was bad → surface as a client 400.
+                // Auth/misconfig (401/403/404), overload (429/503), any
+                // other 4xx, and 5xx are the renderer's or our own fault.
+                400 | 422 => PickError::InvalidRequest(
+                    "request rejected by tokenization service".to_string(),
+                ),
+                // Renderer overloaded / temporarily unavailable → retryable.
+                429 | 503 => PickError::TokenizerUnavailable,
+                _ => PickError::TokenizerUpstreamError,
             }
         }
     }
@@ -593,11 +582,13 @@ mod tests {
         use reqwest::StatusCode;
 
         let map = |status: StatusCode| {
-            TokenizeError::Render(RenderError::UpstreamStatus {
-                status,
-                body: String::new(),
-            })
-            .into_pick_error("req-1")
+            render_error_to_pick_error(
+                RenderError::UpstreamStatus {
+                    status,
+                    body: String::new(),
+                },
+                "req-1",
+            )
         };
 
         // Renderer validated the client's payload and rejected it → client 400.

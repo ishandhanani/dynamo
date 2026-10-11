@@ -10,8 +10,10 @@
 use std::time::Duration;
 
 use anyhow::Context;
+use bytes::Bytes;
 use futures::StreamExt;
-use reqwest::{StatusCode, Url};
+use reqwest::header::CONTENT_TYPE;
+use reqwest::{Client, StatusCode, Url};
 use thiserror::Error;
 
 const MAX_ERROR_BODY_BYTES: usize = 1024;
@@ -57,7 +59,36 @@ pub(crate) fn parse_render_base_url(base_url: &str) -> anyhow::Result<Url> {
     Ok(url)
 }
 
-pub(crate) fn classify_transport_error(source: reqwest::Error, timeout: Duration) -> RenderError {
+/// Send the original request body and read a bounded successful response.
+/// Backend clients own response decoding; the EPP adapter owns HTTP error mapping.
+pub(crate) async fn post_render_request(
+    client: &Client,
+    endpoint: Url,
+    request_body: Bytes,
+    max_response_bytes: usize,
+    timeout: Duration,
+) -> Result<Vec<u8>, RenderError> {
+    let response = client
+        .post(endpoint)
+        .header(CONTENT_TYPE, "application/json")
+        .body(request_body)
+        .send()
+        .await
+        .map_err(|e| classify_transport_error(e, timeout))?;
+
+    let status = response.status();
+    if !status.is_success() {
+        return Err(RenderError::UpstreamStatus {
+            status,
+            body: read_error_body(response).await,
+        });
+    }
+
+    check_content_length(&response, max_response_bytes)?;
+    read_success_body(response, max_response_bytes, timeout).await
+}
+
+fn classify_transport_error(source: reqwest::Error, timeout: Duration) -> RenderError {
     if source.is_timeout() {
         RenderError::Timeout { timeout, source }
     } else {
@@ -71,10 +102,7 @@ pub(crate) fn classify_transport_error(source: reqwest::Error, timeout: Duration
 /// (the full JSON body is buffered before sending), so this fast-path is
 /// reliable for these backends. The streaming check in [`read_success_body`]
 /// enforces the limit for chunked or undeclared responses.
-pub(crate) fn check_content_length(
-    response: &reqwest::Response,
-    max_bytes: usize,
-) -> Result<(), RenderError> {
+fn check_content_length(response: &reqwest::Response, max_bytes: usize) -> Result<(), RenderError> {
     if let Some(received) = response.content_length()
         && received > max_bytes as u64
     {
@@ -86,7 +114,7 @@ pub(crate) fn check_content_length(
     Ok(())
 }
 
-pub(crate) async fn read_success_body(
+async fn read_success_body(
     response: reqwest::Response,
     max_bytes: usize,
     timeout: Duration,
@@ -109,7 +137,7 @@ pub(crate) async fn read_success_body(
     Ok(body)
 }
 
-pub(crate) async fn read_error_body(response: reqwest::Response) -> String {
+async fn read_error_body(response: reqwest::Response) -> String {
     let mut body = Vec::new();
     let mut stream = response.bytes_stream();
 

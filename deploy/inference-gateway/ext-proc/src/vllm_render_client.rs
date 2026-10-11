@@ -14,13 +14,10 @@ use std::time::Duration;
 
 use anyhow::Context;
 use bytes::Bytes;
-use reqwest::header::CONTENT_TYPE;
 use reqwest::{Client, Url};
 use serde::Deserialize;
 
-use crate::render_http::{
-    RenderError, check_content_length, classify_transport_error, read_error_body, read_success_body,
-};
+use crate::render_http::{RenderError, post_render_request};
 
 const CHAT_RENDER_PATH: &str = "/v1/chat/completions/render";
 
@@ -106,29 +103,18 @@ impl VllmRenderClient {
     }
 
     async fn render(&self, request_body: Bytes, completion: bool) -> Result<Vec<u32>, RenderError> {
-        let response = self
-            .client
-            .post(if completion {
+        let body = post_render_request(
+            &self.client,
+            if completion {
                 self.completion_endpoint.clone()
             } else {
                 self.endpoint.clone()
-            })
-            .header(CONTENT_TYPE, "application/json")
-            .body(request_body)
-            .send()
-            .await
-            .map_err(|e| classify_transport_error(e, self.timeout))?;
-
-        let status = response.status();
-        if !status.is_success() {
-            return Err(RenderError::UpstreamStatus {
-                status,
-                body: read_error_body(response).await,
-            });
-        }
-
-        check_content_length(&response, self.max_response_bytes)?;
-        let body = read_success_body(response, self.max_response_bytes, self.timeout).await?;
+            },
+            request_body,
+            self.max_response_bytes,
+            self.timeout,
+        )
+        .await?;
         if completion {
             let [response]: [VllmRenderResponse; 1] = serde_json::from_slice(&body)
                 .map_err(|source| RenderError::InvalidResponse { source })?;
@@ -152,6 +138,7 @@ mod tests {
     use axum::routing::post;
     use axum::{Json, Router};
     use futures::stream;
+    use reqwest::header::CONTENT_TYPE;
     use serde_json::json;
     use tokio::net::TcpListener;
     use tokio::sync::mpsc;
