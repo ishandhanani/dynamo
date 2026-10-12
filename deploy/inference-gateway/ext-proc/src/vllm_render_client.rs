@@ -14,13 +14,10 @@ use std::time::Duration;
 
 use anyhow::Context;
 use bytes::Bytes;
-use reqwest::header::CONTENT_TYPE;
 use reqwest::{Client, Url};
 use serde::Deserialize;
 
-use crate::render_http::{
-    RenderError, check_content_length, classify_transport_error, read_error_body, read_success_body,
-};
+use crate::render_http::{RenderError, post_render_request};
 
 const CHAT_RENDER_PATH: &str = "/v1/chat/completions/render";
 
@@ -29,6 +26,7 @@ const CHAT_RENDER_PATH: &str = "/v1/chat/completions/render";
 pub struct VllmRenderClient {
     client: Client,
     endpoint: Url,
+    completion_endpoint: Url,
     timeout: Duration,
     max_response_bytes: usize,
 }
@@ -69,6 +67,14 @@ impl VllmRenderClient {
         endpoint.set_query(None);
         endpoint.set_fragment(None);
 
+        let mut completion_endpoint = endpoint.clone();
+        completion_endpoint.set_path(&format!(
+            "{}/v1/completions/render",
+            endpoint
+                .path()
+                .strip_suffix(CHAT_RENDER_PATH)
+                .expect("chat render suffix was appended")
+        ));
         let client = Client::builder()
             .timeout(timeout)
             .build()
@@ -77,6 +83,7 @@ impl VllmRenderClient {
         Ok(Self {
             client,
             endpoint,
+            completion_endpoint,
             timeout,
             max_response_bytes,
         })
@@ -87,33 +94,41 @@ impl VllmRenderClient {
     /// The body is sent unchanged so vLLM remains responsible for validating
     /// engine-specific request fields and applying the chat template.
     pub async fn render_chat(&self, request_body: Bytes) -> Result<Vec<u32>, RenderError> {
-        let response = self
-            .client
-            .post(self.endpoint.clone())
-            .header(CONTENT_TYPE, "application/json")
-            .body(request_body)
-            .send()
-            .await
-            .map_err(|e| classify_transport_error(e, self.timeout))?;
+        self.render(request_body, false).await
+    }
 
-        let status = response.status();
-        if !status.is_success() {
-            return Err(RenderError::UpstreamStatus {
-                status,
-                body: read_error_body(response).await,
-            });
+    /// Render a raw text or token-ID completion without applying a chat template.
+    pub async fn render_completion(&self, request_body: Bytes) -> Result<Vec<u32>, RenderError> {
+        self.render(request_body, true).await
+    }
+
+    async fn render(&self, request_body: Bytes, completion: bool) -> Result<Vec<u32>, RenderError> {
+        let body = post_render_request(
+            &self.client,
+            if completion {
+                self.completion_endpoint.clone()
+            } else {
+                self.endpoint.clone()
+            },
+            request_body,
+            self.max_response_bytes,
+            self.timeout,
+        )
+        .await?;
+        if completion {
+            let [response]: [VllmRenderResponse; 1] = serde_json::from_slice(&body)
+                .map_err(|source| RenderError::InvalidResponse { source })?;
+            Ok(response.token_ids)
+        } else {
+            serde_json::from_slice::<VllmRenderResponse>(&body)
+                .map(|r| r.token_ids)
+                .map_err(|source| RenderError::InvalidResponse { source })
         }
-
-        check_content_length(&response, self.max_response_bytes)?;
-        let body = read_success_body(response, self.max_response_bytes, self.timeout).await?;
-        serde_json::from_slice::<VllmRenderResponse>(&body)
-            .map(|r| r.token_ids)
-            .map_err(|source| RenderError::InvalidResponse { source })
     }
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use std::convert::Infallible;
     use std::sync::Arc;
 
@@ -123,6 +138,7 @@ mod tests {
     use axum::routing::post;
     use axum::{Json, Router};
     use futures::stream;
+    use reqwest::header::CONTENT_TYPE;
     use serde_json::json;
     use tokio::net::TcpListener;
     use tokio::sync::mpsc;
@@ -134,7 +150,7 @@ mod tests {
     const TEST_TIMEOUT: Duration = Duration::from_secs(5);
     const TEST_MAX_RESPONSE_BYTES: usize = 1024;
 
-    async fn spawn_server(router: Router) -> (String, JoinHandle<()>) {
+    pub(crate) async fn spawn_server(router: Router) -> (String, JoinHandle<()>) {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
         let task = tokio::spawn(async move {

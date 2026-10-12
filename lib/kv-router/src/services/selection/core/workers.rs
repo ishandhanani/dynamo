@@ -109,6 +109,11 @@ impl SelectionCore {
         Ok(record)
     }
 
+    /// Read one worker's catalog metadata without scanning or cloning the fleet.
+    pub fn worker(&self, worker_id: WorkerId) -> Option<WorkerCatalogRecord> {
+        self.catalog.get(worker_id)
+    }
+
     pub fn list_workers(
         &self,
         model_name: Option<&str>,

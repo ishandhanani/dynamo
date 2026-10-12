@@ -38,15 +38,22 @@ fn classify_create_chat_completion_request(request: &CreateChatCompletionRequest
         return InputTrigger::Other;
     };
 
-    match last {
-        ChatCompletionRequestMessage::User(_) => InputTrigger::UserMessage,
-        ChatCompletionRequestMessage::Tool(_) | ChatCompletionRequestMessage::Function(_) => {
-            InputTrigger::ToolResult
-        }
-        ChatCompletionRequestMessage::Assistant(_) => InputTrigger::Other,
-        ChatCompletionRequestMessage::System(_) | ChatCompletionRequestMessage::Developer(_) => {
-            InputTrigger::Other
-        }
+    classify_chat_role(match last {
+        ChatCompletionRequestMessage::User(_) => "user",
+        ChatCompletionRequestMessage::Tool(_) | ChatCompletionRequestMessage::Function(_) => "tool",
+        ChatCompletionRequestMessage::Assistant(_)
+        | ChatCompletionRequestMessage::System(_)
+        | ChatCompletionRequestMessage::Developer(_) => "other",
+    })
+}
+
+/// Classify the last chat role without materializing message contents.
+/// Remote rendering adapters need the same causal metadata as local preprocessing.
+pub fn classify_chat_role(role: &str) -> InputTrigger {
+    match role {
+        "user" => InputTrigger::UserMessage,
+        "tool" | "function" => InputTrigger::ToolResult,
+        _ => InputTrigger::Other,
     }
 }
 

@@ -26,22 +26,25 @@ use std::time::Duration;
 use anyhow::Result;
 use tokio::sync::Semaphore;
 
+use dynamo_kv_router::DEFAULT_ROUTING_GROUP;
+use dynamo_kv_router::services::selection::{PromptRequest, SelectAndReserveRequest};
 use dynamo_kv_router::services::selection::{SelectionError, WorkerSelectionPolicyRegistry};
 use dynamo_llm::http::service::metadata::extract_metadata_from_header_pairs;
-use dynamo_llm::protocols::agents::HEADER_DYNAMO_SESSION_ID;
 use dynamo_llm::protocols::common::extensions::{
-    AgentHints, HEADER_REQUEST_PRIORITY, HEADER_REQUEST_STRICT_PRIORITY, resolve_request_priority,
+    agent_context_from_headers, apply_frontend_nvext_policy, request_routing_hints,
+    resolve_cache_namespace, session_affinity_from_headers, to_selection_session_context,
 };
-use serde::Deserialize;
+use dynamo_llm::protocols::common::timing::RequestPhase;
 
 use crate::epp_standalone_config::{EppStandaloneConfig, RendererProtocol};
 use crate::picker::{
     CacheSaltForwarding, Endpoint, EndpointPicker, PickError, PickResult, RequestInfo,
-    resolve_cache_namespace,
+    request_header_map,
 };
 use crate::pod_discovery::PodDiscovery;
 use crate::render_http::RenderError;
-use crate::selector::{SelectRequest, Selector};
+use crate::request::{RemoteRequest, renderer_request_body};
+use crate::selector::Selector;
 use crate::sglang_renderer_client::SglangRendererClient;
 use crate::topology_adapter::{RegistrationDefaults, TopologyAdapter};
 use crate::vllm_render_client::VllmRenderClient;
@@ -66,10 +69,12 @@ enum RenderClient {
 }
 
 impl RenderClient {
-    async fn render_chat(&self, body: bytes::Bytes) -> Result<Vec<u32>, RenderError> {
-        match self {
-            Self::Vllm(c) => c.render_chat(body).await,
-            Self::Sglang(c) => c.render_chat(body).await,
+    async fn render(&self, body: bytes::Bytes, completion: bool) -> Result<Vec<u32>, RenderError> {
+        match (self, completion) {
+            (Self::Vllm(c), false) => c.render_chat(body).await,
+            (Self::Sglang(c), false) => c.render_chat(body).await,
+            (Self::Vllm(c), true) => c.render_completion(body).await,
+            (Self::Sglang(c), true) => c.render_completion(body).await,
         }
     }
 }
@@ -83,6 +88,7 @@ pub struct EppRouter {
     _adapter: TopologyAdapter,
     reflector_ready: Arc<AtomicBool>,
     model_name: String,
+    nvext_enabled: bool,
     /// Bounds total concurrent in-flight `pick()`s. HTTP/2 stream multiplexing
     /// means the TCP-connection cap (`MAX_CONCURRENT_CONNECTIONS`) does NOT bound
     /// requests, so without this a burst could fan out unbounded tokenizer/render
@@ -90,15 +96,6 @@ pub struct EppRouter {
     /// and released (RAII) when it returns or is dropped/cancelled; when none are
     /// available the request is shed with `PickError::Overloaded` (not queued).
     inflight: Arc<Semaphore>,
-}
-
-/// Routing inputs parsed from a standalone EPP request.
-struct TokenizeResult {
-    token_ids: Vec<u32>,
-    priority_jump: Option<f64>,
-    strict_priority: Option<u32>,
-    cache_namespace: Option<String>,
-    expected_output_tokens: Option<u32>,
 }
 
 impl EppRouter {
@@ -138,6 +135,7 @@ impl EppRouter {
             _adapter: adapter,
             reflector_ready,
             model_name: cfg.model_name,
+            nvext_enabled: !dynamo_runtime::config::env_is_truthy("DYN_DISABLE_FRONTEND_NVEXT"),
             inflight: Arc::new(Semaphore::new(cfg.max_inflight_requests)),
         })
     }
@@ -148,51 +146,24 @@ impl EppRouter {
         self.reflector_ready.load(Ordering::Acquire)
     }
 
-    /// Tokenize a chat body and resolve its routing inputs.
-    async fn tokenize(
+    /// Prepare canonical selection inputs using the same NvExt and header policy as
+    /// the frontend. The remote renderer retains ownership of prompt semantics.
+    async fn prepare_request(
         &self,
-        request_body: bytes::Bytes,
-        headers: &[(String, String)],
-    ) -> Result<TokenizeResult, TokenizeError> {
-        // Parse only the routing hot-path fields — the worker re-parses the full
-        // body anyway, so we skip allocating the large `messages`/tools fields.
-        // Malformed JSON still fails here (→ 400); a well-formed body that is not
-        // a valid chat request is caught by the renderer below.
-        let hints: RoutingHints =
-            serde_json::from_slice(&request_body).map_err(TokenizeError::InvalidBody)?;
-        let priority_header = first_header(headers, HEADER_REQUEST_PRIORITY);
-        let strict_priority_header = first_header(headers, HEADER_REQUEST_STRICT_PRIORITY);
-        let resolved = resolve_request_priority(
-            hints.nvext.as_ref().and_then(|n| n.agent_hints.as_ref()),
-            priority_header,
-            strict_priority_header,
-        );
-        let expected_output_tokens = hints
-            .nvext
-            .as_ref()
-            .and_then(|n| n.agent_hints.as_ref())
-            .and_then(|h| h.osl);
-        let cache_namespace = resolve_cache_namespace(
-            headers,
-            hints
-                .nvext
-                .as_ref()
-                .and_then(|nvext| nvext.cache_namespace.as_deref()),
-            hints.cache_namespace.as_deref(),
-        );
-        // Moves the `Bytes` into reqwest (zero-copy) rather than copying.
-        let token_ids = self
-            .renderer
-            .render_chat(request_body)
-            .await
-            .map_err(TokenizeError::Render)?;
-        Ok(TokenizeResult {
-            token_ids,
-            priority_jump: resolved.priority_jump,
-            strict_priority: resolved.strict_priority,
-            expected_output_tokens,
-            cache_namespace,
-        })
+        req: &RequestInfo,
+        reservation_id: String,
+        allowed_worker_ids: Option<HashSet<u64>>,
+    ) -> Result<SelectAndReserveRequest, PickError> {
+        prepare_remote_request(
+            &self.renderer,
+            &self.selector,
+            &self.model_name,
+            self.nvext_enabled,
+            req,
+            reservation_id,
+            allowed_worker_ids,
+        )
+        .await
     }
 
     /// Ready workers inside an Envoy `candidate_subset`, resolved in a single index
@@ -231,35 +202,81 @@ pub(crate) fn endpoint_in_subset(
             .is_ok_and(|address| candidate_ips.contains(&address.ip()))
 }
 
-/// Minimal deserialize target for the routing hot path: only `nvext.agent_hints`
-/// is needed for priority resolution and `cache_namespace`,so the large
-/// `messages`/tools fields are never allocated.
-/// Unknown fields are ignored (no `deny_unknown_fields`).
-#[derive(Deserialize)]
-struct RoutingHints {
-    #[serde(default)]
-    nvext: Option<RoutingNvExt>,
-    /// Native vLLM top-level `cache_salt`.
-    #[serde(default, rename = "cache_salt")]
-    cache_namespace: Option<String>,
-}
-
-#[derive(Deserialize)]
-struct RoutingNvExt {
-    #[serde(default)]
-    agent_hints: Option<AgentHints>,
-    /// Dynamo-style `nvext.cache_salt`.
-    #[serde(default, rename = "cache_salt")]
-    cache_namespace: Option<String>,
-}
-
-/// Case-insensitive lookup of the first non-empty, trimmed value for `name`.
-fn first_header<'a>(headers: &'a [(String, String)], name: &str) -> Option<&'a str> {
-    headers
-        .iter()
-        .find(|(k, _)| k.eq_ignore_ascii_case(name))
-        .map(|(_, v)| v.trim())
-        .filter(|v| !v.is_empty())
+/// Kept separate from Kubernetes discovery so the actual rendering-to-selection
+/// adapter can be exercised against a local renderer and selection service.
+#[allow(clippy::too_many_arguments)]
+async fn prepare_remote_request(
+    renderer: &RenderClient,
+    selector: &Selector,
+    model_name: &str,
+    nvext_enabled: bool,
+    req: &RequestInfo,
+    reservation_id: String,
+    allowed_worker_ids: Option<HashSet<u64>>,
+) -> Result<SelectAndReserveRequest, PickError> {
+    let mut envelope: RemoteRequest =
+        serde_json::from_slice(&req.body).map_err(PickError::invalid_request_body)?;
+    let completion = envelope.is_completion()?;
+    if envelope.model != model_name {
+        return Err(PickError::InvalidRequest("request model must match the configured standalone model; LoRA aliases are unsupported".into()));
+    }
+    let headers = request_header_map(&req.headers)?;
+    let mut session = agent_context_from_headers(&headers);
+    if let Some(session) = &mut session {
+        session.input_trigger = Some(envelope.input_trigger());
+    }
+    let nvext = apply_frontend_nvext_policy(envelope.nvext.take(), &headers, nvext_enabled);
+    if nvext
+        .as_ref()
+        .is_some_and(|ext| ext.token_data.is_some() || ext.use_raw_prompt == Some(true))
+    {
+        return Err(PickError::InvalidRequest(
+            "remote renderers do not implement nvext.token_data or nvext.use_raw_prompt".into(),
+        ));
+    }
+    // The frontend policy above has already applied the tenant header to NvExt.
+    let cache_namespace = resolve_cache_namespace(
+        None,
+        nvext.as_ref().and_then(|ext| ext.cache_salt.as_deref()),
+        envelope.cache_namespace.as_deref(),
+    )
+    .map(str::to_owned);
+    let routing = request_routing_hints(nvext.as_ref(), None, cache_namespace).unwrap_or_default();
+    if routing.prefill_worker_id.is_some() || routing.prefill_dp_rank.is_some() {
+        return Err(PickError::InvalidRequest(
+            "standalone EPP does not support prefill worker pins".into(),
+        ));
+    }
+    let pinned_worker = routing
+        .worker_pin(RequestPhase::Aggregated)
+        .map(|(worker_id, rank)| selector.resolve_pinned_worker(worker_id, rank))
+        .transpose()
+        .map_err(|error| PickError::InvalidRequest(error.to_string()))?;
+    let token_ids = renderer
+        .render(renderer_request_body(&req.body)?, completion)
+        .await
+        .map_err(|error| render_error_to_pick_error(error, &req.request_id))?;
+    Ok(SelectAndReserveRequest {
+        model_name: model_name.to_owned(),
+        routing_group: DEFAULT_ROUTING_GROUP.to_string(),
+        selection_id: Some(reservation_id),
+        prompt: PromptRequest {
+            token_ids: Some(token_ids),
+            cache_namespace: routing.cache_namespace,
+            lora_name: routing.lora_name,
+            ..Default::default()
+        },
+        router_config_override: None,
+        expected_output_tokens: routing.expected_output_tokens,
+        priority_jump: routing.priority_jump,
+        strict_priority: routing.strict_priority,
+        session_id: session_affinity_from_headers(&headers).map(|id| id.as_str().to_owned()),
+        session_context: session.as_ref().map(to_selection_session_context),
+        affinity_target: None,
+        pinned_worker,
+        allowed_worker_ids,
+        routing_constraints: routing.routing_constraints.unwrap_or_default(),
+    })
 }
 
 #[tonic::async_trait]
@@ -340,22 +357,12 @@ impl EndpointPicker for EppRouter {
             });
         }
 
-        let TokenizeResult {
-            token_ids: tokens,
-            priority_jump,
-            strict_priority,
-            cache_namespace,
-            expected_output_tokens,
-        } = self
-            .tokenize(req.body.clone(), &req.headers)
-            .await
-            .map_err(|e| e.into_pick_error(&req.request_id))?;
         let policy_class = requested_policy_class(&req.headers)?;
-
-        // EPP-minted booking key (not the reused `x-request-id`): stays
-        // EPP-known/releasable and rides back on `PickResult::reservation_id`,
-        // so the server frees it via the callbacks without a shared map.
         let reservation_id = uuid::Uuid::new_v4().to_string();
+        let select_req = self
+            .prepare_request(req, reservation_id.clone(), allowed)
+            .await?;
+        let cache_namespace = select_req.prompt.cache_namespace.clone();
 
         // Free the booking if this pick is dropped before it is adopted — the
         // ext-proc stream can close after the scheduler booked but before the
@@ -365,25 +372,13 @@ impl EndpointPicker for EppRouter {
         let mut reservation_guard =
             ReservationGuard::new(self.selector.clone(), reservation_id.clone());
 
-        let select_req = SelectRequest {
-            model_name: self.model_name.clone(),
-            reservation_id: reservation_id.clone(),
-            token_ids: tokens,
-            session_id: first_header(&req.headers, HEADER_DYNAMO_SESSION_ID).map(str::to_owned),
-            // `None` on the ordinary path: the selector schedules over its
-            // catalog; `Some` only carries an Envoy subset constraint.
-            allowed_worker_ids: allowed,
-            // Effective header-over-body values; `None` only when unset everywhere.
-            priority_jump,
-            strict_priority,
-            expected_output_tokens,
-            policy_class,
-            cache_namespace: cache_namespace.clone(),
-        };
-
         // On either error return below the guard (still armed) frees the booking.
 
-        let resp = match self.selector.select_and_reserve(select_req).await {
+        let resp = match self
+            .selector
+            .select_and_reserve(select_req, policy_class)
+            .await
+        {
             Ok(resp) => resp,
             Err(SelectionError::BadRequest(message)) => {
                 return Err(PickError::InvalidRequest(message));
@@ -414,8 +409,10 @@ impl EndpointPicker for EppRouter {
             // Worker re-tokenizes the forwarded request (llm-d parity); no inject.
             token_ids: None,
             cache_namespace,
-            // Native vLLM has no Dynamo handler to tag the salt; the EPP does.
-            cache_salt_forwarding: CacheSaltForwarding::NativeVllm,
+            cache_salt_forwarding: match &self.renderer {
+                RenderClient::Vllm(_) => CacheSaltForwarding::NativeVllm,
+                RenderClient::Sglang(_) => CacheSaltForwarding::NativeSglang,
+            },
             // Booking id for the server's lifecycle callbacks (no shared map).
             reservation_id: Some(reservation_id),
             ..Default::default()
@@ -492,48 +489,28 @@ impl<R: ReservationReleaser> Drop for ReservationGuard<R> {
     }
 }
 
-/// Why tokenizing a request for routing failed. Kept typed so the picker can map
-/// each cause to the correct HTTP status instead of collapsing everything to 400.
-enum TokenizeError {
-    /// The request body could not be parsed — a genuine client (400) error.
-    InvalidBody(serde_json::Error),
-    /// The renderer call failed; the specific variant decides the status.
-    Render(RenderError),
-}
-
-impl TokenizeError {
-    /// Map to a client-safe [`PickError`], logging the detailed cause (which may
-    /// include upstream URLs/bodies) server-side rather than returning it.
-    fn into_pick_error(self, request_id: &str) -> PickError {
-        match self {
-            // The serde message describes the client's own JSON, not our
-            // internals, so it is safe to surface as a 400.
-            TokenizeError::InvalidBody(e) => {
-                PickError::InvalidRequest(format!("invalid request body: {e}"))
-            }
-            TokenizeError::Render(e) => {
-                tracing::warn!(request_id, error = %e, "Tokenization render failed");
-                match &e {
-                    RenderError::Unavailable { .. } => PickError::TokenizerUnavailable,
-                    RenderError::Timeout { .. } => PickError::TokenizerTimeout,
-                    RenderError::InvalidResponse { .. } | RenderError::ResponseTooLarge { .. } => {
-                        PickError::TokenizerUpstreamError
-                    }
-                    RenderError::UpstreamStatus { status, .. } => {
-                        match status.as_u16() {
-                            // Only payload-validation statuses (400/422) mean the
-                            // client's request was bad → surface as a client 400.
-                            // Auth/misconfig (401/403/404), overload (429/503), any
-                            // other 4xx, and 5xx are the renderer's or our own fault.
-                            400 | 422 => PickError::InvalidRequest(
-                                "request rejected by tokenization service".to_string(),
-                            ),
-                            // Renderer overloaded / temporarily unavailable → retryable.
-                            429 | 503 => PickError::TokenizerUnavailable,
-                            _ => PickError::TokenizerUpstreamError,
-                        }
-                    }
-                }
+/// Map to a client-safe [`PickError`], logging the detailed cause (which may
+/// include upstream URLs/bodies) server-side rather than returning it.
+fn render_error_to_pick_error(error: RenderError, request_id: &str) -> PickError {
+    tracing::warn!(request_id, error = %error, "Tokenization render failed");
+    match error {
+        RenderError::Unavailable { .. } => PickError::TokenizerUnavailable,
+        RenderError::Timeout { .. } => PickError::TokenizerTimeout,
+        RenderError::InvalidResponse { .. } | RenderError::ResponseTooLarge { .. } => {
+            PickError::TokenizerUpstreamError
+        }
+        RenderError::UpstreamStatus { status, .. } => {
+            match status.as_u16() {
+                // Only payload-validation statuses (400/422) mean the
+                // client's request was bad → surface as a client 400.
+                // Auth/misconfig (401/403/404), overload (429/503), any
+                // other 4xx, and 5xx are the renderer's or our own fault.
+                400 | 422 => PickError::InvalidRequest(
+                    "request rejected by tokenization service".to_string(),
+                ),
+                // Renderer overloaded / temporarily unavailable → retryable.
+                429 | 503 => PickError::TokenizerUnavailable,
+                _ => PickError::TokenizerUpstreamError,
             }
         }
     }
@@ -600,11 +577,13 @@ mod tests {
         use reqwest::StatusCode;
 
         let map = |status: StatusCode| {
-            TokenizeError::Render(RenderError::UpstreamStatus {
-                status,
-                body: String::new(),
-            })
-            .into_pick_error("req-1")
+            render_error_to_pick_error(
+                RenderError::UpstreamStatus {
+                    status,
+                    body: String::new(),
+                },
+                "req-1",
+            )
         };
 
         // Renderer validated the client's payload and rejected it → client 400.
@@ -699,5 +678,202 @@ mod tests {
             guard.disarm();
         }
         assert!(!fired.load(Ordering::SeqCst));
+    }
+    #[tokio::test]
+    async fn local_and_remote_metadata_match() {
+        use axum::{Json, Router, routing::post};
+        use dynamo_kv_router::services::selection::CatalogReconciler;
+        use dynamo_llm::preprocessor::OpenAIPreprocessor;
+        use serde_json::{Value, json};
+
+        let preprocessor =
+            OpenAIPreprocessor::new(crate::epp::tests::model_card("TinyLlama_v1.1")).unwrap();
+        let render = |uri: axum::http::Uri, Json(body): Json<Value>| async move {
+            assert!(body.get("nvext").is_none());
+            let completion = body.get("prompt").is_some();
+            assert_eq!(uri.path().ends_with("/v1/completions/render"), completion);
+            let tokens = json!({"token_ids":[1,42,99],"input_ids":[1,42,99]});
+            Json(if body["n"] == 2 {
+                json!([tokens, tokens])
+            } else if completion {
+                json!([tokens])
+            } else {
+                tokens
+            })
+        };
+        let prefix = "/prefix/chat/completions/render";
+        let app = Router::new()
+            .route(
+                &format!("{prefix}/v1/chat/completions/render"),
+                post(render),
+            )
+            .route(&format!("{prefix}/v1/completions/render"), post(render));
+        let (url, server) = crate::vllm_render_client::tests::spawn_server(app).await;
+        let url = format!("{url}{prefix}");
+        let selector = crate::selector::tests::selector_with_schedulable_worker().await;
+        let mut worker = crate::selector::tests::schedulable_registration(1);
+        worker.taints.insert("gpu=test".into());
+        CatalogReconciler::new(selector.service.core().clone())
+            .apply(&[worker])
+            .await
+            .unwrap();
+
+        for sglang in [false, true] {
+            let renderer = if sglang {
+                RenderClient::Sglang(
+                    SglangRendererClient::new(&url, Duration::from_secs(5), 1024 * 1024).unwrap(),
+                )
+            } else {
+                RenderClient::Vllm(
+                    VllmRenderClient::new(&url, Duration::from_secs(5), 1024 * 1024).unwrap(),
+                )
+            };
+            for input in [
+                json!({"messages":[{"role":"user","content":"hello"},{"role":"tool","tool_call_id":"call-1","content":"done"}]}),
+                json!({"prompt":"hello world"}),
+                json!({"prompt":[1,42,99]}),
+            ] {
+                for (enabled, pinned) in [(false, false), (true, false), (true, true)] {
+                    let mut body = input.clone();
+                    body["model"] = "test-model".into();
+                    body["cache_salt"] = "legacy-salt".into();
+                    body["nvext"] = json!({"cache_salt":"body-salt","agent_hints":{"priority":-3,"strict_priority":9,"osl":128},
+                        "routing_constraints":{"required_taints":["gpu=test"]}});
+                    let mut headers = vec![
+                        (":path", "/gateway/v1/chat/completions"),
+                        ("x-dynamo-dp-rank", "0"),
+                        ("x-dynamo-request-priority", "7"),
+                        ("x-dynamo-request-strict-priority", "malformed"),
+                        ("x-tenant-id", "old"),
+                        ("X-Tenant-ID", " tenant-header "),
+                        ("x-tenant-id", " "),
+                        ("x-claude-code-session-id", "root"),
+                        ("x-claude-code-agent-id", "child"),
+                        ("x-dynamo-session-final", "true"),
+                        ("x-codex-future", "one"),
+                        ("x-codex-future", "two"),
+                    ];
+                    if pinned {
+                        body["nvext"]["backend_instance_id"] = 2.into();
+                        headers.push(("x-dynamo-worker-instance-id", "1"));
+                    }
+                    let req = RequestInfo {
+                        request_id: "parity".into(),
+                        model: "test-model".into(),
+                        headers: headers
+                            .into_iter()
+                            .map(|(k, v)| (k.into(), v.into()))
+                            .collect(),
+                        body: bytes::Bytes::from(body.to_string()),
+                        candidate_subset: Vec::new(),
+                    };
+                    let local = crate::epp::prepare_local_request(
+                        &preprocessor,
+                        std::str::from_utf8(&req.body).unwrap(),
+                        &req.headers,
+                        enabled,
+                    )
+                    .await
+                    .unwrap()
+                    .request;
+                    let remote = prepare_remote_request(
+                        &renderer,
+                        &selector,
+                        "test-model",
+                        enabled,
+                        &req,
+                        req.request_id.clone(),
+                        None,
+                    )
+                    .await
+                    .unwrap();
+                    let routing = local.routing.unwrap();
+                    assert_eq!(
+                        remote.prompt.token_ids.as_deref(),
+                        Some([1, 42, 99].as_slice())
+                    );
+                    assert_eq!(remote.prompt.cache_namespace, routing.cache_namespace);
+                    assert_eq!(remote.priority_jump, routing.priority_jump);
+                    assert_eq!(remote.strict_priority, routing.strict_priority);
+                    assert_eq!(
+                        remote.expected_output_tokens,
+                        routing.expected_output_tokens
+                    );
+                    assert_eq!(
+                        remote.session_context,
+                        local
+                            .agent_context
+                            .as_ref()
+                            .map(to_selection_session_context)
+                    );
+                    assert_eq!(
+                        remote.routing_constraints,
+                        routing.routing_constraints.unwrap_or_default()
+                    );
+                    assert_eq!(
+                        remote.pinned_worker.map(|w| w.worker_id),
+                        pinned.then_some(1)
+                    );
+                    let selected = selector.select_and_reserve(remote, None).await.unwrap();
+                    assert_eq!(selected.worker_id, 1);
+                    selector
+                        .free_reservation(&selected.reservation_id)
+                        .await
+                        .unwrap();
+                }
+            }
+            assert!(matches!(
+                renderer
+                    .render(bytes::Bytes::from_static(br#"{"prompt":[1],"n":2}"#), true)
+                    .await,
+                Err(RenderError::InvalidResponse { .. })
+            ));
+        }
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn unsupported_remote_inputs_fail_before_render() {
+        use serde_json::json;
+        let selector = crate::selector::tests::selector_with_schedulable_worker().await;
+        let renderer = RenderClient::Vllm(
+            VllmRenderClient::new("http://renderer.invalid", Duration::from_millis(10), 1024)
+                .unwrap(),
+        );
+        for body in [
+            json!({"model":"adapter","prompt":"hi"}),
+            json!({"model":"test-model","prompt":["a","b"]}),
+            json!({"model":"test-model","prompt":[[1],[2]]}),
+            json!({"model":"test-model","prompt":"hi","n":2}),
+            json!({"model":"test-model","prompt":"hi","prompt_embeds":"AAAA"}),
+            json!({"model":"test-model","messages":[{"role":"user","content":[{"type":"image_url","image_url":{"url":"data:image/png;base64,AAA"}}]}]}),
+            json!({"model":"test-model","prompt":"hi","nvext":{"agent_context":{"session_id":"forged"}}}),
+            json!({"model":"test-model","prompt":"hi","nvext":{"token_data":[1]}}),
+            json!({"model":"test-model","prompt":"hi","nvext":{"backend_instance_id":1,"dp_rank":7}}),
+            json!({"model":"test-model","prompt":"hi","nvext":{"prefill_worker_id":1}}),
+        ] {
+            let req = RequestInfo {
+                request_id: "invalid".into(),
+                model: "test-model".into(),
+                body: bytes::Bytes::from(body.to_string()),
+                headers: Vec::new(),
+                candidate_subset: Vec::new(),
+            };
+            let error = prepare_remote_request(
+                &renderer,
+                &selector,
+                "test-model",
+                true,
+                &req,
+                "invalid".into(),
+                None,
+            )
+            .await
+            .unwrap_err();
+            assert!(
+                matches!(error, PickError::InvalidRequest(_)),
+                "{body}: {error}"
+            );
+        }
     }
 }

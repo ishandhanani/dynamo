@@ -11,6 +11,7 @@ use std::collections::HashMap;
 use bytes::Bytes;
 use dynamo_llm::http::service::metadata::MetadataHeaderError;
 
+#[cfg(test)]
 use dynamo_llm::protocols::common::extensions::{HEADER_TENANT_ID, last_non_empty_trimmed_value};
 
 /// A model server pod endpoint available for serving requests.
@@ -66,6 +67,8 @@ pub enum CacheSaltForwarding {
     /// Raw native vLLM has no Dynamo code in the request path to add the
     /// marker, so the EPP must add it.
     NativeVllm,
+    /// Native SGLang publishes cache_salt verbatim in its KV events.
+    NativeSglang,
 }
 
 /// The endpoint selection result, with the Dynamo-specific routing headers
@@ -106,24 +109,42 @@ pub struct PickResult {
 /// Resolve the request's cache namespace with the canonical precedence:
 /// non-empty `x-tenant-id` header, then `nvext.cache_salt`, then top-level
 /// `cache_salt`. Empty values count as absent.
-pub fn resolve_cache_namespace(
+#[cfg(test)]
+pub(crate) fn resolve_cache_namespace(
     headers: &[(String, String)],
     nvext_cache_salt: Option<&str>,
     top_level_cache_salt: Option<&str>,
 ) -> Option<String> {
-    last_non_empty_trimmed_value(
-        headers
-            .iter()
-            .filter(|(name, _)| name.eq_ignore_ascii_case(HEADER_TENANT_ID))
-            .map(|(_, value)| value.as_str()),
+    dynamo_llm::protocols::common::extensions::resolve_cache_namespace(
+        last_non_empty_trimmed_value(
+            headers
+                .iter()
+                .filter(|(name, _)| name.eq_ignore_ascii_case(HEADER_TENANT_ID))
+                .map(|(_, value)| value.as_str()),
+        ),
+        nvext_cache_salt,
+        top_level_cache_salt,
     )
     .map(str::to_owned)
-    .or_else(|| non_empty_owned(nvext_cache_salt))
-    .or_else(|| non_empty_owned(top_level_cache_salt))
 }
 
-fn non_empty_owned(value: Option<&str>) -> Option<String> {
-    value.filter(|v| !v.is_empty()).map(str::to_owned)
+/// Preserve repeated ordinary headers when adapting Envoy metadata to the shared
+/// HTTP request policy. Pseudo-headers describe transport, not routing extensions.
+pub(crate) fn request_header_map(
+    headers: &[(String, String)],
+) -> Result<axum::http::HeaderMap, PickError> {
+    let mut result = axum::http::HeaderMap::with_capacity(headers.len());
+    for (name, value) in headers {
+        if name.starts_with(':') {
+            continue;
+        }
+        let name = axum::http::HeaderName::from_bytes(name.as_bytes())
+            .map_err(|_| PickError::InvalidRequest("invalid HTTP header name".into()))?;
+        let value = axum::http::HeaderValue::from_str(value)
+            .map_err(|_| PickError::InvalidRequest("invalid HTTP header value".into()))?;
+        result.append(name, value);
+    }
+    Ok(result)
 }
 
 /// The central abstraction for endpoint selection.
@@ -182,6 +203,9 @@ pub enum PickError {
     NoEndpoints,
     #[error("routing failed: {0}")]
     RoutingFailed(String),
+    /// Local preprocessing failed; uses the frontend's sanitized HTTP policy.
+    #[error("request preparation failed: {0}")]
+    RequestPreparation(dynamo_llm::http::service::error::HttpError),
     /// Malformed client input (unparseable body, or a 4xx from the renderer) → 400.
     #[error("invalid request: {0}")]
     InvalidRequest(String),
@@ -203,6 +227,20 @@ pub enum PickError {
     /// multiplexing means the connection cap does not bound concurrent requests.
     #[error("endpoint picker overloaded")]
     Overloaded,
+}
+
+impl PickError {
+    /// Preserve useful client-input diagnostics without echoing an unbounded
+    /// malformed value. Upstream and preprocessing failures use separate policies.
+    pub(crate) fn invalid_request_body(error: impl std::fmt::Display) -> Self {
+        let detail = error.to_string();
+        let mut chars = detail.chars();
+        let mut message: String = chars.by_ref().take(256).collect();
+        if chars.next().is_some() {
+            message.push_str("...");
+        }
+        Self::InvalidRequest(format!("invalid request body: {message}"))
+    }
 }
 
 #[cfg(test)]
