@@ -1634,8 +1634,8 @@ impl<
                 .eligibility_with_overloaded(overloaded_worker_ids.as_ref())
                 .with_available_workers(available_worker_ids.as_deref());
             // The pin rule: a `Hard` session binding limits every policy to its
-            // eligible target. An ineligible target selects normally. A `Soft`
-            // binding reaches the policy as context only. Admission never narrows.
+            // eligible target. An ineligible target selects normally. Admission
+            // never narrows to an affinity target.
             let hard_affinity_enforced = if let Some(affinity) = request.affinity
                 && affinity.is_hard()
             {
@@ -1655,6 +1655,18 @@ impl<
             } else {
                 false
             };
+            // Default Soft selection also excludes other workers. Share that
+            // restriction with the observer so it only compares selectable ranks.
+            // Explicit request pins take precedence over a Soft preference.
+            if !hard_affinity_enforced
+                && self.selector.uses_exclusive_affinity_target()
+                && eligibility.pinned_worker().is_none()
+                && let Some(affinity) = request.affinity
+                && !affinity.is_hard()
+                && eligibility.affinity_target_is_eligible(&workers, affinity.target)
+            {
+                eligibility = eligibility.with_affinity_target(affinity.target);
+            }
             self.selector
                 .select_worker(WorkerSelectionInput::configured(
                     &workers,

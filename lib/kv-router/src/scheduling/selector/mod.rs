@@ -36,6 +36,14 @@ pub trait WorkerSelector<C: WorkerConfigLike> {
     /// Optional worker data required by this selector.
     fn required_worker_inputs(&self) -> WorkerInputs;
 
+    /// Whether an eligible affinity target excludes alternatives during selection.
+    ///
+    /// The host uses the same restriction for overlap observations, never admission.
+    /// Hard affinity is enforced independently; custom Soft policies remain advisory.
+    fn uses_exclusive_affinity_target(&self) -> bool {
+        false
+    }
+
     fn select_worker(
         &self,
         input: WorkerSelectionInput<'_, C>,

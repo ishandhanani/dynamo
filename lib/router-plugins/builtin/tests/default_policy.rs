@@ -87,6 +87,234 @@ fn explicit_pin_overrides_a_soft_affinity_preference() {
 }
 
 #[test]
+fn soft_fallback_preserves_selection_and_random_stream() {
+    use dynamo_kv_router::WorkerSelectionInput;
+    use std::collections::HashSet;
+
+    for temperature in [0.0, 0.7] {
+        for case in ["overloaded", "allowlist", "missing", "missing-rank"] {
+            let (mut workers, mut request) = fixture(8, 127);
+            request.affinity = Some(AffinityRequirement::soft(WorkerAffinityTarget::new(
+                3,
+                Some(if case == "missing-rank" { 2 } else { 1 }),
+            )));
+            let overloaded = (case == "overloaded").then(|| HashSet::from([3]));
+            if case == "allowlist" {
+                request.allowed_worker_ids = Some((0..8).filter(|id| *id != 3).collect());
+            }
+            if case == "missing" {
+                workers.remove(&3);
+            }
+            let config = KvRouterConfig {
+                router_temperature: temperature,
+                ..Default::default()
+            };
+            let reference =
+                dynamo_kv_router::DefaultWorkerSelector::new(Some(config.clone()), "test");
+            let plugin = default_policy(config.clone(), "test");
+            let seeded_reference = dynamo_kv_router::DefaultWorkerSelector::new_seeded(
+                Some(config.clone()),
+                "test",
+                42,
+            );
+            let seeded_plugin = DefaultWorkerSelector::new_seeded(Some(config), "test", 42);
+            for seed in 0..64 {
+                let input = WorkerSelectionInput::configured(
+                    &workers,
+                    &request,
+                    request.eligibility_with_overloaded(overloaded.as_ref()),
+                    16,
+                );
+                fastrand::seed(seed);
+                let expected = reference.select_worker(input).unwrap();
+                let next_random = fastrand::u64(..);
+                fastrand::seed(seed);
+                let actual = plugin.select_worker(input).unwrap();
+                assert_eq!(
+                    actual.worker, expected.worker,
+                    "case={case} temperature={temperature}"
+                );
+                assert_eq!(actual.cached_tokens, expected.cached_tokens);
+                assert_eq!(fastrand::u64(..), next_random);
+                assert_eq!(
+                    seeded_plugin.select_worker(input).unwrap().worker,
+                    seeded_reference.select_worker(input).unwrap().worker,
+                    "seeded case={case} temperature={temperature}",
+                );
+            }
+        }
+    }
+}
+
+#[tokio::test]
+async fn actor_observer_respects_default_soft_candidates() {
+    use dynamo_kv_router::scheduling::{
+        ScheduleMode, overlap_refresh::NoopOverlapScoresRefresh, policy_config::PolicyProfile,
+    };
+    use dynamo_kv_router::{
+        ActiveSequencesMultiWorker, NoopSequencePublisher, RouterQueuePolicy, SchedulerQueue,
+        SequenceRequest,
+    };
+    use std::{collections::HashSet, sync::Arc, time::Duration};
+    use tokio::{
+        sync::{mpsc, oneshot, watch},
+        time::Instant,
+    };
+
+    struct FirstWorkerPicker;
+    impl WorkerPicker for FirstWorkerPicker {
+        fn pick(
+            &mut self,
+            _: &WorkerSelectionContext<'_>,
+            input: WorkerInputView<'_>,
+        ) -> Result<usize, WorkerSelectionPolicyError> {
+            Ok(input
+                .candidates()
+                .iter()
+                .enumerate()
+                .min_by_key(|(_, candidate)| candidate.worker())
+                .unwrap()
+                .0)
+        }
+    }
+
+    let preferred = WorkerWithDpRank::new(0, 0);
+    let same_worker_rank = WorkerWithDpRank::new(0, 1);
+    let other_worker = WorkerWithDpRank::new(1, 0);
+    for case in [
+        "exact",
+        "worker-only",
+        "custom",
+        "missing",
+        "allowlist",
+        "overloaded",
+        "explicit-pin",
+    ] {
+        let (workers, mut request) = fixture(3, 512);
+        let slots = Arc::new(ActiveSequencesMultiWorker::new_without_expiry(
+            NoopSequencePublisher,
+            16,
+            workers.keys().map(|&worker| (worker, (0, 2))).collect(),
+            false,
+            0,
+            "test",
+        ));
+        // Give the default policy one unique load winner, while other ranks
+        // have better overlap. This makes an observer event meaningful.
+        for worker in workers
+            .keys()
+            .flat_map(|&id| (0..2).map(move |rank| WorkerWithDpRank::new(id, rank)))
+        {
+            if worker != preferred {
+                slots
+                    .add_request(
+                        SequenceRequest {
+                            request_id: format!("active-{worker:?}"),
+                            token_sequence: None,
+                            track_prefill_tokens: false,
+                            expected_output_tokens: None,
+                            prefill_load_hint: None,
+                            worker,
+                            lora_name: None,
+                        },
+                        Instant::now(),
+                    )
+                    .unwrap();
+            }
+        }
+        let config = KvRouterConfig {
+            overlap_score_credit: 0.0,
+            prefill_load_scale: 0.0,
+            decode_active_request_weight: 100.0,
+            ..Default::default()
+        };
+        let policy = if case == "custom" {
+            WorkerSelectionPolicy::new(config, "test", vec![], Box::new(FirstWorkerPicker))
+        } else {
+            default_policy(config, "test")
+        };
+        let (_config_tx, config_rx) = watch::channel(workers);
+        let queue = SchedulerQueue::new(
+            Arc::clone(&slots),
+            config_rx,
+            PolicyProfile::synthetic(None, RouterQueuePolicy::Fcfs),
+            16,
+            policy,
+            None,
+            None::<Arc<NoopOverlapScoresRefresh>>,
+            (case == "overloaded").then(|| Arc::new(|| Some(HashSet::from([2_u64]))) as _),
+            None,
+        );
+        let (event_tx, mut event_rx) = mpsc::unbounded_channel();
+        assert!(
+            queue.set_non_max_overlap_selection_observer(Arc::new(move |_, event| {
+                event_tx.send(event).unwrap();
+            }))
+        );
+        let (response_tx, response_rx) = oneshot::channel();
+        request.mode = ScheduleMode::Tracked {
+            request_id: case.into(),
+        };
+        request.resp_tx = Some(response_tx);
+        request.overlap = Default::default();
+        request.overlap.effective_overlap_blocks.extend([
+            (preferred, 1.0),
+            (same_worker_rank, 4.0),
+            (other_worker, 20.0),
+        ]);
+        request.affinity = Some(AffinityRequirement::soft(WorkerAffinityTarget::new(
+            match case {
+                "missing" => 99,
+                "allowlist" | "overloaded" => 2,
+                _ => 0,
+            },
+            (case != "worker-only").then_some(0),
+        )));
+        if case == "allowlist" {
+            request.allowed_worker_ids = Some(HashSet::from([0, 1]));
+        }
+        if case == "explicit-pin" {
+            request.pinned_worker = Some(other_worker);
+        }
+        queue.enqueue(request).await;
+        let selected = response_rx.await.unwrap().unwrap().best_worker;
+        assert_eq!(
+            selected,
+            if case == "explicit-pin" {
+                other_worker
+            } else {
+                preferred
+            },
+            "case={case}"
+        );
+        if matches!(case, "exact" | "explicit-pin") {
+            assert!(
+                tokio::time::timeout(Duration::from_millis(100), event_rx.recv())
+                    .await
+                    .is_err(),
+                "case={case} observed an unselectable alternative"
+            );
+        } else {
+            let event = tokio::time::timeout(Duration::from_secs(1), event_rx.recv())
+                .await
+                .expect("observer did not run")
+                .unwrap();
+            assert_eq!(
+                event.highest_overlap_worker,
+                if case == "worker-only" {
+                    same_worker_rank
+                } else {
+                    other_worker
+                },
+                "case={case}"
+            );
+            assert_eq!(event.selected_worker, preferred);
+        }
+        slots.free(&case.to_owned(), Instant::now()).unwrap();
+    }
+}
+
+#[test]
 fn seeded_selection_matches_reference_across_cache_and_load_shapes() {
     for temperature in [0.0, 0.7] {
         for prompt in [1, 17, 127, 2048] {

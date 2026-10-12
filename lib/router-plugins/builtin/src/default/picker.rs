@@ -116,12 +116,10 @@ impl WorkerPicker for DefaultPicker {
         if context.pinned_worker().is_some() {
             return Ok(0);
         }
-        // A `Soft` session binding keeps the request on its bound worker (and
-        // rank) while that worker is a candidate; otherwise every candidate
-        // competes. A `Hard` binding arrives with the candidate set already
-        // limited to its target.
-        let affinity = context.affinity_target();
-        if affinity.is_none() && self.rng.is_none() {
+        // The policy has already restricted eligible affinity targets before
+        // scoring. If that target is absent, all supplied candidates compete.
+        // Unseeded selection reads those rows directly, including on fallback.
+        let Some(rng) = &self.rng else {
             return Ok(if self.temperature == 0.0 {
                 lowest_cost_index(
                     candidates.iter(),
@@ -137,43 +135,14 @@ impl WorkerPicker for DefaultPicker {
                     &mut self.probabilities,
                 )
             });
-        }
+        };
         self.entries.clear();
         self.entries.extend(
             candidates
                 .iter()
                 .enumerate()
-                .filter(|(_, candidate)| {
-                    affinity.is_none_or(|target| target.matches(candidate.worker()))
-                })
                 .map(|(row, candidate)| (row, candidate.cost())),
         );
-        if self.entries.is_empty() {
-            self.entries.extend(
-                candidates
-                    .iter()
-                    .enumerate()
-                    .map(|(row, candidate)| (row, candidate.cost())),
-            );
-        }
-        let Some(rng) = &self.rng else {
-            let selected = if self.temperature == 0.0 {
-                lowest_cost_index(
-                    self.entries.iter(),
-                    |(_, cost)| *cost,
-                    |ties| fastrand::usize(0..ties),
-                )
-            } else {
-                softmax_sample_index(
-                    &self.entries,
-                    |(_, cost)| *cost,
-                    self.temperature,
-                    fastrand::f64(),
-                    &mut self.probabilities,
-                )
-            };
-            return Ok(self.entries[selected].0);
-        };
         // Canonical order is required only for deterministic replay, never for production ties.
         self.entries.sort_unstable_by_key(|(row, _)| {
             let worker = candidates[*row].worker();

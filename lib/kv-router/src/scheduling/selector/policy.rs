@@ -333,6 +333,10 @@ pub(super) fn collect_policy_candidates<C: WorkerConfigLike>(
 }
 
 impl<C: WorkerConfigLike> WorkerSelector<C> for WorkerSelectionPolicy {
+    fn uses_exclusive_affinity_target(&self) -> bool {
+        self.exclusive_affinity
+    }
+
     fn required_worker_inputs(&self) -> WorkerInputs {
         match &self.state {
             #[cfg(any(test, feature = "bench"))]
