@@ -40,9 +40,14 @@ const DIRECT_ZMQ_RCVHWM: i32 = 1_024;
 fn apply_update(
     table: &WeakSessionAffinity,
     partition: &RoutingPartitionId,
+    local_publisher_id: u64,
+    source_publisher_id: u64,
     event: AffinityBindingEvent,
     is_live: impl Fn(AffinityTarget) -> bool,
 ) -> bool {
+    if source_publisher_id == local_publisher_id {
+        return true;
+    }
     let Some(table) = table.upgrade() else {
         return false;
     };
@@ -76,14 +81,24 @@ impl ReplicaSyncRuntime {
         )
         .await
         .context("create session affinity event publisher")?;
+        let publisher_id = publisher.publisher_id();
         let cancel = CancellationToken::new();
         let receive_partition = partition.clone();
         let subscriber_task = start_subscriber(
             &client,
             transport_kind,
-            publisher.publisher_id(),
+            publisher_id,
             cancel.clone(),
-            move |event| apply_update(&table, &receive_partition, event, &is_live),
+            move |source_publisher_id, event| {
+                apply_update(
+                    &table,
+                    &receive_partition,
+                    publisher_id,
+                    source_publisher_id,
+                    event,
+                    &is_live,
+                )
+            },
         )
         .await?;
 
@@ -182,7 +197,7 @@ async fn start_subscriber(
     transport_kind: EventTransportKind,
     publisher_id: u64,
     cancel: CancellationToken,
-    apply: impl Fn(AffinityBindingEvent) -> bool + Clone + Send + Sync + 'static,
+    apply: impl Fn(u64, AffinityBindingEvent) -> bool + Clone + Send + Sync + 'static,
 ) -> Result<JoinHandle<()>> {
     let subject = SESSION_AFFINITY_SUBJECT;
     let endpoint = &client.endpoint;
@@ -193,7 +208,7 @@ async fn start_subscriber(
             let payload = codec
                 .decode_payload::<AffinityBindingEvent>(&envelope.payload)
                 .context("decode session affinity update")?;
-            if !apply(payload) {
+            if !apply(envelope.publisher_id, payload) {
                 handler_cancel.cancel();
             }
             Ok(())
@@ -241,8 +256,8 @@ async fn start_subscriber(
             let Some(event) = event else {
                 return;
             };
-            let payload = match event {
-                Ok((_envelope, payload)) => payload,
+            let (envelope, payload) = match event {
+                Ok(event) => event,
                 Err(error) => {
                     tracing::trace!(
                         %error,
@@ -251,7 +266,7 @@ async fn start_subscriber(
                     continue;
                 }
             };
-            if !apply(payload) {
+            if !apply(envelope.publisher_id, payload) {
                 return;
             }
         }
@@ -301,13 +316,55 @@ mod tests {
             sequence: 5,
             writer_id: 9,
         };
-        assert!(apply_update(&weak, &partition, event.clone(), |_| true));
+        assert!(apply_update(&weak, &partition, 7, 8, event.clone(), |_| {
+            true
+        }));
         assert_eq!(
             table.query_target("session", None).unwrap(),
             Some(AffinityTarget::new(10, Some(0)))
         );
         drop(table);
-        assert!(!apply_update(&weak, &partition, event, |_| true));
+        assert!(!apply_update(&weak, &partition, 7, 8, event, |_| true));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn subscriber_filters_sender_without_filtering_binding_writer() {
+        let partition = crate::kv_router::embedded::embedded_partition_key(Some("model"));
+        let table = table();
+        let (sink, _events) = ReplicaSyncRuntime::for_test(16);
+        assert!(table.enable_replication(100, sink));
+        let weak = table.downgrade();
+        let event = AffinityBindingEvent {
+            partition: partition.clone(),
+            session_id: "session".to_string(),
+            worker_id: 10,
+            dp_rank: Some(0),
+            sequence: 5,
+            writer_id: 100,
+        };
+
+        // A peer can publish a binding originally written by this table.
+        assert!(apply_update(&weak, &partition, 7, 8, event.clone(), |_| {
+            true
+        }));
+        assert_eq!(
+            table.query_target("session", None).unwrap(),
+            Some(event.target())
+        );
+
+        tokio::time::advance(Duration::from_secs(6)).await;
+        // Conversely, a local publication can carry another writer's version.
+        // Dropping the echo must not extend the binding's idle deadline.
+        let local_event = AffinityBindingEvent {
+            writer_id: 200,
+            sequence: 6,
+            ..event
+        };
+        assert!(apply_update(&weak, &partition, 7, 7, local_event, |_| {
+            panic!("local publications must not reach the shared applier")
+        }));
+        tokio::time::advance(Duration::from_secs(5)).await;
+        assert_eq!(table.query_target("session", None).unwrap(), None);
     }
 
     fn table() -> SessionAffinity {

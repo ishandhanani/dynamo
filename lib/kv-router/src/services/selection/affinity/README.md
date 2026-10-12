@@ -38,7 +38,7 @@ The KV frontend embeds `SelectionService` and uses that service partition's tabl
 
 ## Replication
 
-`AffinityBindingEvent` contains the routing partition, session id, worker and optional rank, and `(sequence, writer_id)` version. `replica_sink` queues this event for the host transport. `SessionAffinity::apply_replica_event` checks partition and writer identity, advances the clock, checks host liveness, and applies the versioned binding.
+`AffinityBindingEvent` contains the routing partition, session id, worker and optional rank, and `(sequence, writer_id)` version. `replica_sink` queues this event for the host transport. `SessionAffinity::apply_replica_event` checks the partition, advances the clock, checks host liveness, and applies the versioned binding. Refreshing an adopted binding preserves its version, so its writer can differ from the sender. Transports exclude their own publications: the frontend checks the envelope's publisher id, and the native mesh connects to other replicas' endpoints.
 
 The selection service uses its existing ZMQ peer mesh and `dynamo.session-affinity.v1` topic. The frontend uses its runtime event plane and `session_affinity_events` subject. Both carry the same payload; neither has a legacy schema or dual-publish path. These are internal protocols and replicas must run compatible versions. Frontends use their discovery instance id as writer id; the service uses a random nonzero process id.
 

@@ -44,9 +44,10 @@ pub struct AffinityBindingEvent {
     pub worker_id: u64,
     pub dp_rank: Option<u32>,
     pub sequence: u64,
-    /// The publishing replica's writer id: its discovery instance id where
-    /// the host has one (frontends), otherwise a random non-zero process id
-    /// (the standalone service). The applier ignores its own writer id.
+    /// The binding version's writer id: its discovery instance id where the
+    /// host has one (frontends), otherwise a random non-zero process id
+    /// (the standalone service). Refreshes retain this id even when another
+    /// replica publishes them; transport sender identity is separate.
     pub writer_id: u64,
 }
 

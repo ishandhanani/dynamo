@@ -66,16 +66,15 @@ pub fn replica_sink(
 
 impl SessionAffinity {
     /// Apply a binding another replica published, for the table serving
-    /// `partition`. Every host's transport ends here.
+    /// `partition`. Every host's transport ends here and must exclude its own
+    /// publications. The binding's writer may differ from the event sender:
+    /// a replica refreshing an adopted binding retains the original version.
     pub fn apply_replica_event(
         &self,
         partition: &RoutingPartitionId,
         event: AffinityBindingEvent,
         is_live: impl Fn(AffinityTarget) -> bool,
     ) -> Option<ReplicaApplyOutcome> {
-        if event.writer_id == self.writer_id() {
-            return None;
-        }
         if event.partition != *partition {
             return None;
         }
@@ -157,17 +156,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn applier_scopes_by_partition_writer_and_liveness() {
+    async fn applier_scopes_by_partition_and_liveness() {
         let partition = partition_id("model");
         let table = table();
         let _events = record_events(&table, 7, &partition);
 
-        assert_eq!(
-            table.apply_replica_event(&partition, event(&partition, 7, 1), |_| {
-                panic!("own events must be rejected before liveness checking")
-            }),
-            None
-        );
         assert_eq!(
             table.apply_replica_event(&partition, event(&partition_id("other"), 9, 2), |_| {
                 panic!("other partitions must be rejected before liveness checking")
@@ -244,6 +237,56 @@ mod tests {
             Some(AffinityTarget::new(2, Some(0))),
             "the frontend converges on the service's newer binding"
         );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn peer_refresh_keeps_the_original_writers_binding_alive() {
+        let partition = partition_id("model");
+        let target = AffinityTarget::new(1, Some(0));
+        let original = table();
+        let peer = table();
+        let mut original_events = record_events(&original, 100, &partition);
+        let mut peer_events = record_events(&peer, 200, &partition);
+
+        bind(&original, target);
+        while let Ok(event) = original_events.try_recv() {
+            assert_eq!(event.writer_id, 100);
+            assert!(
+                peer.apply_replica_event(&partition, event, |_| true)
+                    .is_some()
+            );
+        }
+        assert_eq!(peer.query_target("s", None).unwrap(), Some(target));
+
+        tokio::time::advance(Duration::from_secs(30)).await;
+        let hold = peer.acquire("s", None).await.unwrap();
+        drop(peer.commit(hold, target).unwrap());
+
+        // Both dispatch and completion refresh the adopted version. Its
+        // original writer must accept these updates from the peer.
+        let mut refresh_count = 0;
+        while let Ok(event) = peer_events.try_recv() {
+            assert_eq!(event.writer_id, 100);
+            assert_eq!(
+                original.apply_replica_event(&partition, event, |_| true),
+                Some(ReplicaApplyOutcome::Refreshed)
+            );
+            refresh_count += 1;
+        }
+        assert_eq!(refresh_count, 2);
+        assert!(
+            original_events.is_empty(),
+            "applying a refresh must not echo it"
+        );
+
+        tokio::time::advance(Duration::from_secs(31)).await;
+        for table in [&original, &peer] {
+            assert_eq!(table.query_target("s", None).unwrap(), Some(target));
+        }
+        tokio::time::advance(Duration::from_secs(30)).await;
+        for table in [&original, &peer] {
+            assert_eq!(table.query_target("s", None).unwrap(), None);
+        }
     }
 
     fn bind(table: &SessionAffinity, target: AffinityTarget) {
