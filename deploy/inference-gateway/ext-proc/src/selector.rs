@@ -430,7 +430,7 @@ models:
 
     /// Reconcile a single schedulable worker into a fresh selector, asserting the
     /// core admitted it (so the reserve paths below actually book).
-    async fn selector_with_schedulable_worker() -> Selector {
+    pub(crate) async fn selector_with_schedulable_worker() -> Selector {
         let selector = Selector::new(&test_config(), WorkerSelectionPolicyRegistry::default())
             .await
             .expect("selector should build");

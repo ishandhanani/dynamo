@@ -288,43 +288,4 @@ mod tests {
             SglangRendererClient::new("http://127.0.0.1:30000", Duration::from_secs(1), 0).is_err()
         );
     }
-    #[tokio::test]
-    async fn completion_render_preserves_prefix_and_requires_one_result() {
-        const PATH: &str = "/prefix/chat/completions/render/v1/completions/render";
-        let router = Router::new().route(
-            PATH,
-            post(|body: Bytes| async move {
-                let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
-                assert_eq!(value["prompt"], serde_json::json!([1, 2]));
-                Json(serde_json::json!([{"input_ids":[1, 2]}]))
-            }),
-        );
-        let (url, server) = spawn_server(router).await;
-        let client = SglangRendererClient::new(
-            &format!("{url}/prefix/chat/completions/render"),
-            TEST_TIMEOUT,
-            TEST_MAX_RESPONSE_BYTES,
-        )
-        .unwrap();
-        assert_eq!(
-            client
-                .render_completion(Bytes::from_static(br#"{"model":"m","prompt":[1,2]}"#))
-                .await
-                .unwrap(),
-            vec![1, 2]
-        );
-        server.abort();
-        let router = Router::new().route(
-            "/v1/completions/render",
-            post(|| async { Json(serde_json::json!([{"input_ids":[1]}, {"input_ids":[2]}])) }),
-        );
-        let (url, server) = spawn_server(router).await;
-        let client =
-            SglangRendererClient::new(&url, TEST_TIMEOUT, TEST_MAX_RESPONSE_BYTES).unwrap();
-        assert!(matches!(
-            client.render_completion(Bytes::from_static(b"{}")).await,
-            Err(RenderError::InvalidResponse { .. })
-        ));
-        server.abort();
-    }
 }

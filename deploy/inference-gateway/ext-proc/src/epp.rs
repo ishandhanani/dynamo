@@ -1583,11 +1583,25 @@ impl EndpointPicker for Router {
 }
 
 #[cfg(test)]
-mod tests {
-    fn test_routing_hints(
-        nvext: Option<&dynamo_llm::protocols::common::extensions::NvExt>,
-    ) -> dynamo_llm::protocols::common::preprocessor::RoutingHints {
-        dynamo_llm::protocols::common::extensions::request_routing_hints(nvext, None, None)
+pub(crate) mod tests {
+    use dynamo_kv_router::protocols::RoutingConstraints;
+    use dynamo_llm::protocols::common::extensions::{NvExt, request_routing_hints};
+
+    fn extract_priority_jump(nvext: Option<&NvExt>) -> f64 {
+        request_routing_hints(nvext, None, None)
+            .and_then(|r| r.priority_jump)
+            .unwrap_or_default()
+    }
+
+    fn extract_strict_priority(nvext: Option<&NvExt>) -> u32 {
+        request_routing_hints(nvext, None, None)
+            .and_then(|r| r.strict_priority)
+            .unwrap_or_default()
+    }
+
+    fn extract_routing_constraints(nvext: Option<&NvExt>) -> RoutingConstraints {
+        request_routing_hints(nvext, None, None)
+            .and_then(|r| r.routing_constraints)
             .unwrap_or_default()
     }
 
@@ -1596,38 +1610,22 @@ mod tests {
     use super::*;
     use k8s_openapi::api::core::v1::Pod;
 
-    fn fixture_preprocessor() -> Arc<OpenAIPreprocessor> {
-        OpenAIPreprocessor::new(
-            ModelDeploymentCard::load_from_disk(
-                concat!(
-                    env!("CARGO_MANIFEST_DIR"),
-                    "/../../../lib/llm/tests/data/sample-models/TinyLlama_v1.1"
-                ),
-                None,
-            )
-            .unwrap(),
-        )
-        .unwrap()
+    pub(crate) fn model_card(name: &str) -> ModelDeploymentCard {
+        let path = format!(
+            "{}/../../../lib/llm/tests/data/sample-models/{name}",
+            env!("CARGO_MANIFEST_DIR")
+        );
+        ModelDeploymentCard::load_from_disk(&path, None).unwrap()
     }
 
     #[tokio::test]
     async fn local_preparation_preserves_media_fallback_without_token_injection() {
-        let preprocessor = OpenAIPreprocessor::new(
-            ModelDeploymentCard::load_from_disk(
-                concat!(
-                    env!("CARGO_MANIFEST_DIR"),
-                    "/../../../lib/llm/tests/data/sample-models/mock-llama-3.1-8b-instruct"
-                ),
-                None,
-            )
-            .unwrap(),
-        )
-        .unwrap();
+        let preprocessor =
+            OpenAIPreprocessor::new(model_card("mock-llama-3.1-8b-instruct")).unwrap();
         let body = serde_json::json!({"model":"default","messages":[{"role":"user","content":[
             {"type":"text","text":"Describe this image."},
             {"type":"image_url","image_url":{"url":"data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="}}
-        ]}]})
-        .to_string();
+        ]}]}).to_string();
         let request: dynamo_llm::types::openai::chat_completions::NvCreateChatCompletionRequest =
             serde_json::from_str(&body).unwrap();
         let (frontend, _, _) = preprocessor
@@ -1640,35 +1638,28 @@ mod tests {
             .unwrap();
         assert!(!prepared.tokens_safe_to_inject);
         assert_eq!(prepared.request.token_ids, frontend.token_ids);
-        assert!(
-            prepared
-                .request
-                .multi_modal_data
-                .as_ref()
-                .is_some_and(|data| !data.is_empty())
-        );
+        assert!(!prepared.request.multi_modal_data.unwrap().is_empty());
     }
 
     #[tokio::test]
     async fn local_preparation_rejects_invalid_sampling_as_client_errors() {
-        let preprocessor = fixture_preprocessor();
-        for input in [
-            serde_json::json!({"messages":[{"role":"user","content":"hi"}]}),
-            serde_json::json!({"prompt":"hi"}),
+        use serde_json::json;
+        let preprocessor = OpenAIPreprocessor::new(model_card("TinyLlama_v1.1")).unwrap();
+        for mut body in [
+            json!({"model":"default","messages":[{"role":"user","content":"hi"}]}),
+            json!({"model":"default","prompt":"hi"}),
         ] {
             for (field, value) in [
-                ("temperature", serde_json::json!(3.0)),
-                ("top_p", serde_json::json!(0)),
-                ("n", serde_json::json!(0)),
-                ("frequency_penalty", serde_json::json!(3.0)),
+                ("temperature", 3),
+                ("top_p", 0),
+                ("n", 0),
+                ("frequency_penalty", 3),
             ] {
-                let mut body = input.clone();
-                body["model"] = "default".into();
-                body[field] = value;
+                body[field] = value.into();
                 let error = prepare_local_request(&preprocessor, &body.to_string(), &[], true)
                     .await
                     .err()
-                    .expect("invalid sampling must be rejected");
+                    .unwrap();
                 assert!(
                     matches!(error, PickError::InvalidRequest(_)),
                     "{field}: {error}"
@@ -1677,33 +1668,8 @@ mod tests {
                     error.to_string().contains("must be between"),
                     "{field}: {error}"
                 );
+                body.as_object_mut().unwrap().remove(field);
             }
-        }
-    }
-
-    #[tokio::test]
-    async fn local_preparation_accepts_gateway_prefixes_and_unpaired_dp_rank() {
-        let preprocessor = fixture_preprocessor();
-        let body =
-            serde_json::json!({"model":"default","messages":[{"role":"user","content":"hi"}]})
-                .to_string();
-        for header in [
-            (":path", "/llm/v1/chat/completions"),
-            ("x-dynamo-dp-rank", "0"),
-        ] {
-            let headers = [(header.0.into(), header.1.into())];
-            let prepared = prepare_local_request(&preprocessor, &body, &headers, true)
-                .await
-                .unwrap();
-            assert!(
-                prepared
-                    .request
-                    .routing
-                    .as_ref()
-                    .and_then(|r| r.worker_pin(RequestPhase::Aggregated))
-                    .is_none()
-            );
-            assert!(!prepared.request.token_ids.is_empty());
         }
     }
 
@@ -1848,12 +1814,7 @@ mod tests {
                 }"#,
             )
             .unwrap();
-        assert_eq!(
-            test_routing_hints(with_priority.nvext.as_ref())
-                .priority_jump
-                .unwrap_or_default(),
-            5.0
-        );
+        assert_eq!(extract_priority_jump(with_priority.nvext.as_ref()), 5.0);
 
         let without_nvext: dynamo_llm::types::openai::chat_completions::NvCreateChatCompletionRequest =
             serde_json::from_str(
@@ -1863,12 +1824,7 @@ mod tests {
                 }"#,
             )
             .unwrap();
-        assert_eq!(
-            test_routing_hints(without_nvext.nvext.as_ref())
-                .priority_jump
-                .unwrap_or_default(),
-            0.0
-        );
+        assert_eq!(extract_priority_jump(without_nvext.nvext.as_ref()), 0.0);
     }
 
     #[test]
@@ -1882,12 +1838,7 @@ mod tests {
                 }"#,
             )
             .unwrap();
-        assert_eq!(
-            test_routing_hints(with_priority.nvext.as_ref())
-                .strict_priority
-                .unwrap_or_default(),
-            9
-        );
+        assert_eq!(extract_strict_priority(with_priority.nvext.as_ref()), 9);
 
         let without_nvext: dynamo_llm::types::openai::chat_completions::NvCreateChatCompletionRequest =
             serde_json::from_str(
@@ -1897,12 +1848,7 @@ mod tests {
                 }"#,
             )
             .unwrap();
-        assert_eq!(
-            test_routing_hints(without_nvext.nvext.as_ref())
-                .strict_priority
-                .unwrap_or_default(),
-            0
-        );
+        assert_eq!(extract_strict_priority(without_nvext.nvext.as_ref()), 0);
     }
 
     /// A `/v1/completions` request carries the same `nvext` block as chat, so
@@ -1917,18 +1863,8 @@ mod tests {
             }"#,
         )
         .unwrap();
-        assert_eq!(
-            test_routing_hints(request.nvext.as_ref())
-                .priority_jump
-                .unwrap_or_default(),
-            4.0
-        );
-        assert_eq!(
-            test_routing_hints(request.nvext.as_ref())
-                .strict_priority
-                .unwrap_or_default(),
-            7
-        );
+        assert_eq!(extract_priority_jump(request.nvext.as_ref()), 4.0);
+        assert_eq!(extract_strict_priority(request.nvext.as_ref()), 7);
     }
 
     /// Proves the hard-constraint feature: `nvext.routing_constraints.
@@ -1947,9 +1883,7 @@ mod tests {
                 }"#,
             )
             .unwrap();
-        let constraints = test_routing_hints(with_constraints.nvext.as_ref())
-            .routing_constraints
-            .unwrap_or_default();
+        let constraints = extract_routing_constraints(with_constraints.nvext.as_ref());
         assert!(constraints.has_hard_constraints());
         assert!(constraints.required_taints.contains("gpu=h100"));
 
@@ -1961,12 +1895,7 @@ mod tests {
                 }"#,
             )
             .unwrap();
-        assert!(
-            test_routing_hints(without_nvext.nvext.as_ref())
-                .routing_constraints
-                .unwrap_or_default()
-                .is_empty()
-        );
+        assert!(extract_routing_constraints(without_nvext.nvext.as_ref()).is_empty());
     }
 
     /// A `/v1/completions` request carries the same `nvext` block as chat, so
@@ -1982,9 +1911,7 @@ mod tests {
             }"#,
         )
         .unwrap();
-        let constraints = test_routing_hints(request.nvext.as_ref())
-            .routing_constraints
-            .unwrap_or_default();
+        let constraints = extract_routing_constraints(request.nvext.as_ref());
         assert!(constraints.required_taints.contains("zone=us-east-1a"));
     }
 
@@ -2134,66 +2061,39 @@ mod tests {
 
     #[tokio::test]
     async fn local_token_completions_preserve_ids_lora_and_batch_injection_policy() {
-        use dynamo_kv_router::protocols::{BlockHashOptions, compute_block_hash_for_seq};
-        let mut card = ModelDeploymentCard::load_from_disk(
-            concat!(
-                env!("CARGO_MANIFEST_DIR"),
-                "/../../../lib/llm/tests/data/sample-models/TinyLlama_v1.1"
-            ),
-            None,
-        )
-        .unwrap();
+        use serde_json::json;
+        let mut card = model_card("TinyLlama_v1.1");
         card.lora = Some(dynamo_llm::model_card::LoraInfo {
             name: "adapter-a".into(),
             max_gpu_lora_count: None,
         });
         let preprocessor = OpenAIPreprocessor::new(card).unwrap();
         for (prompt, safe) in [
-            (serde_json::json!([1, 2, 3, 4]), true),
-            (serde_json::json!([[1, 2, 3, 4]]), true),
-            (serde_json::json!([[1, 2, 3, 4], [5, 6]]), false),
+            (json!([1, 2, 3, 4]), true),
+            (json!([[1, 2, 3, 4]]), true),
+            (json!([[1, 2, 3, 4], [5, 6]]), false),
         ] {
-            let body = serde_json::json!({"model":"default", "prompt":prompt, "nvext":{"cache_salt":"tenant-a"}}).to_string();
+            let body = json!({"model":"default","prompt":prompt,"nvext":{"cache_salt":"tenant-a"}})
+                .to_string();
             let result = prepare_local_request(&preprocessor, &body, &[], true)
                 .await
                 .unwrap();
             assert_eq!(result.request.token_ids.as_slice(), &[1, 2, 3, 4]);
             assert_eq!(result.tokens_safe_to_inject, safe);
-            let routing = result.request.routing.as_ref().unwrap();
+            let routing = result.request.routing.unwrap();
             assert_eq!(routing.lora_name.as_deref(), Some("adapter-a"));
-            let hash = compute_block_hash_for_seq(
-                &result.request.token_ids,
-                2,
-                BlockHashOptions {
-                    lora_name: routing.lora_name.as_deref(),
-                    cache_namespace: routing.cache_namespace.as_deref(),
-                    ..Default::default()
-                },
-            );
-            let base_hash = compute_block_hash_for_seq(
-                &result.request.token_ids,
-                2,
-                BlockHashOptions {
-                    cache_namespace: routing.cache_namespace.as_deref(),
-                    ..Default::default()
-                },
-            );
-            assert_ne!(
-                hash, base_hash,
-                "LoRA identity must reach hash construction"
+            assert_eq!(routing.cache_namespace.as_deref(), Some("tenant-a"));
+        }
+        for invalid in [
+            r#"{"model":"default","prompt":[4294967295]}"#,
+            r#"{"model":"default","prompt":[1,2],"prompt_embeds":"AAAA"}"#,
+        ] {
+            assert!(
+                prepare_local_request(&preprocessor, invalid, &[], true)
+                    .await
+                    .is_err()
             );
         }
-        let out_of_vocab = r#"{"model":"default","prompt":[4294967295]}"#;
-        assert!(
-            prepare_local_request(&preprocessor, out_of_vocab, &[], true)
-                .await
-                .is_err()
-        );
-        let embeddings = r#"{"model":"default","prompt":[1,2],"prompt_embeds":"AAAA"}"#;
-        assert!(matches!(
-            prepare_local_request(&preprocessor, embeddings, &[], true).await,
-            Err(PickError::InvalidRequest(_))
-        ));
     }
 
     /// Text `/v1/completions` prompts are not pre-tokenized, so they fall

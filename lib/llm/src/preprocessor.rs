@@ -12013,34 +12013,23 @@ mod tests {
 
     #[test]
     fn routing_priorities_keep_strict_tier_independent() {
+        use crate::protocols::common::extensions::{NvExt, request_routing_hints};
+
         let hints = crate::protocols::common::extensions::AgentHints {
             priority: Some(-3),
             strict_priority: Some(7),
             ..Default::default()
         };
 
-        assert_eq!(
-            {
-                let routing = crate::protocols::common::extensions::request_routing_hints(
-                    Some(&crate::protocols::common::extensions::NvExt {
-                        agent_hints: Some(hints),
-                        ..Default::default()
-                    }),
-                    None,
-                    None,
-                )
-                .unwrap();
-                (
-                    routing.priority_jump,
-                    routing.strict_priority,
-                    routing.priority,
-                )
-            },
-            (Some(0.0), Some(7), Some(-3))
-        );
-        assert!(
-            crate::protocols::common::extensions::request_routing_hints(None, None, None).is_none()
-        );
+        let nvext = NvExt {
+            agent_hints: Some(hints),
+            ..Default::default()
+        };
+        let routing = request_routing_hints(Some(&nvext), None, None).unwrap();
+        assert_eq!(routing.priority_jump, Some(0.0));
+        assert_eq!(routing.strict_priority, Some(7));
+        assert_eq!(routing.priority, Some(-3));
+        assert!(request_routing_hints(None, None, None).is_none());
     }
 
     fn test_llm_metrics_annotation() -> LLMMetricAnnotation {

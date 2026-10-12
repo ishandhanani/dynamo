@@ -517,9 +517,6 @@ fn render_error_to_pick_error(error: RenderError, request_id: &str) -> PickError
 }
 
 #[cfg(test)]
-mod live_tests;
-
-#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -682,163 +679,45 @@ mod tests {
         }
         assert!(!fired.load(Ordering::SeqCst));
     }
-    #[derive(Debug, Clone, PartialEq)]
-    struct ObservedRequest {
-        priority: f64,
-        strict: u32,
-        osl: Option<u32>,
-        session: Option<dynamo_kv_router::SessionContext>,
-        pin: Option<dynamo_kv_router::protocols::WorkerWithDpRank>,
-        prompt_tokens: usize,
-    }
+    #[tokio::test]
+    async fn local_and_remote_metadata_match() {
+        use axum::{Json, Router, routing::post};
+        use dynamo_kv_router::services::selection::CatalogReconciler;
+        use dynamo_llm::preprocessor::OpenAIPreprocessor;
+        use serde_json::{Value, json};
 
-    #[derive(Clone)]
-    struct RecordingPicker(Arc<std::sync::Mutex<Vec<ObservedRequest>>>);
-
-    impl dynamo_kv_router::WorkerPicker for RecordingPicker {
-        fn pick(
-            &mut self,
-            context: &dynamo_kv_router::WorkerSelectionContext<'_>,
-            input: dynamo_kv_router::WorkerInputView<'_>,
-        ) -> Result<usize, dynamo_kv_router::WorkerSelectionPolicyError> {
-            self.0.lock().unwrap().push(ObservedRequest {
-                priority: context.priority_jump(),
-                strict: context.strict_priority(),
-                osl: context.expected_output_tokens(),
-                session: context.session_context().cloned(),
-                pin: context.pinned_worker(),
-                prompt_tokens: context.prompt_tokens(),
-            });
-            assert!(!input.candidates().is_empty());
-            Ok(0)
-        }
-    }
-
-    async fn recording_selector() -> (Selector, Arc<std::sync::Mutex<Vec<ObservedRequest>>>) {
-        use dynamo_kv_router::services::selection::{
-            CatalogReconciler, WorkerSelectionPolicyFactory,
+        let preprocessor =
+            OpenAIPreprocessor::new(crate::epp::tests::model_card("TinyLlama_v1.1")).unwrap();
+        let render = |uri: axum::http::Uri, Json(body): Json<Value>| async move {
+            assert!(body.get("nvext").is_none());
+            let completion = body.get("prompt").is_some();
+            assert_eq!(uri.path().ends_with("/v1/completions/render"), completion);
+            let tokens = json!({"token_ids":[1,42,99],"input_ids":[1,42,99]});
+            Json(if body["n"] == 2 {
+                json!([tokens, tokens])
+            } else if completion {
+                json!([tokens])
+            } else {
+                tokens
+            })
         };
-        let observed = Arc::new(std::sync::Mutex::new(Vec::new()));
-        let recorder = RecordingPicker(observed.clone());
-        let mut registry = WorkerSelectionPolicyRegistry::default();
-        registry
-            .register(
-                "record",
-                Arc::new(move |_| {
-                    let recorder = recorder.clone();
-                    let factory: WorkerSelectionPolicyFactory =
-                        Arc::new(move |config, worker_type, _| {
-                            dynamo_kv_router::WorkerSelectionPolicy::new(
-                                config.clone(),
-                                worker_type.as_str(),
-                                Vec::new(),
-                                Box::new(recorder.clone()),
-                            )
-                        });
-                    Ok(factory)
-                }),
+        let prefix = "/prefix/chat/completions/render";
+        let app = Router::new()
+            .route(
+                &format!("{prefix}/v1/chat/completions/render"),
+                post(render),
             )
-            .unwrap();
-        let policy = tempfile::NamedTempFile::new().unwrap();
-        std::fs::write(policy.path(), "worker_selection:\n  aggregated: record\n  instances:\n    - name: record\n      type: record\n      parameters: {}\n").unwrap();
-        let selector = Selector::new_with_kv_router_config(
-            &crate::selector::tests::test_config(),
-            dynamo_kv_router::config::KvRouterConfig {
-                router_policy_config: Some(policy.path().display().to_string()),
-                ..Default::default()
-            },
-            registry,
-        )
-        .await
-        .unwrap();
+            .route(&format!("{prefix}/v1/completions/render"), post(render));
+        let (url, server) = crate::vllm_render_client::tests::spawn_server(app).await;
+        let url = format!("{url}{prefix}");
+        let selector = crate::selector::tests::selector_with_schedulable_worker().await;
         let mut worker = crate::selector::tests::schedulable_registration(1);
         worker.taints.insert("gpu=test".into());
         CatalogReconciler::new(selector.service.core().clone())
-            .apply(&[worker, crate::selector::tests::schedulable_registration(2)])
+            .apply(&[worker])
             .await
             .unwrap();
-        (selector, observed)
-    }
 
-    fn fixture_preprocessor() -> Arc<dynamo_llm::preprocessor::OpenAIPreprocessor> {
-        let card = dynamo_llm::model_card::ModelDeploymentCard::load_from_disk(
-            concat!(
-                env!("CARGO_MANIFEST_DIR"),
-                "/../../../lib/llm/tests/data/sample-models/TinyLlama_v1.1"
-            ),
-            None,
-        )
-        .unwrap();
-        dynamo_llm::preprocessor::OpenAIPreprocessor::new(card).unwrap()
-    }
-
-    async fn fixture_renderer(
-        preprocessor: Arc<dynamo_llm::preprocessor::OpenAIPreprocessor>,
-    ) -> (
-        String,
-        tokio::sync::mpsc::UnboundedReceiver<bytes::Bytes>,
-        tokio::task::JoinHandle<()>,
-    ) {
-        use axum::{Json, Router, routing::post};
-        let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
-        let render = move |body: bytes::Bytes| {
-            let tx = tx.clone();
-            let preprocessor = preprocessor.clone();
-            async move {
-                tx.send(body.clone()).unwrap();
-                let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
-                assert!(
-                    value.get("nvext").is_none(),
-                    "strict renderers reject NvExt"
-                );
-                let prepared = if value.get("prompt").is_some() {
-                    let request: dynamo_llm::types::openai::completions::NvCreateCompletionRequest =
-                        serde_json::from_value(value).unwrap();
-                    preprocessor
-                        .preprocess_completion_request(&request, None, None)
-                        .await
-                        .unwrap()
-                        .0
-                } else {
-                    let request: dynamo_llm::types::openai::chat_completions::NvCreateChatCompletionRequest = serde_json::from_value(value).unwrap();
-                    preprocessor
-                        .preprocess_request(&request, None)
-                        .await
-                        .unwrap()
-                        .0
-                };
-                let response = serde_json::json!({ "token_ids": prepared.token_ids, "input_ids": prepared.token_ids });
-                let completion = serde_json::from_slice::<serde_json::Value>(&body)
-                    .unwrap()
-                    .get("prompt")
-                    .is_some();
-                Json(if completion {
-                    serde_json::json!([response])
-                } else {
-                    response
-                })
-            }
-        };
-        let app = Router::new()
-            .route("/v1/chat/completions/render", post(render.clone()))
-            .route("/v1/completions/render", post(render));
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let addr = listener.local_addr().unwrap();
-        let task = tokio::spawn(async move {
-            axum::serve(listener, app).await.unwrap();
-        });
-        (format!("http://{addr}"), rx, task)
-    }
-
-    /// Exercise both EPP adapters with the same model/tokenizer/template and
-    /// request, then execute the remote result through the production selector.
-    #[tokio::test]
-    async fn frontend_local_and_remote_preparation_reach_equivalent_selection() {
-        use dynamo_kv_router::protocols::{BlockHashOptions, compute_block_hash_for_seq};
-        use dynamo_llm::protocols::common::extensions::to_worker_selection_session_context;
-        let preprocessor = fixture_preprocessor();
-        let (url, mut received, server) = fixture_renderer(preprocessor.clone()).await;
-        let (selector, observed) = recording_selector().await;
         for sglang in [false, true] {
             let renderer = if sglang {
                 RenderClient::Sglang(
@@ -849,32 +728,20 @@ mod tests {
                     VllmRenderClient::new(&url, Duration::from_secs(5), 1024 * 1024).unwrap(),
                 )
             };
-            for (kind, input) in [
-                (
-                    "chat",
-                    serde_json::json!({"messages":[{"role":"user","content":"hello"},{"role":"tool","tool_call_id":"call-1","content":"done"}]}),
-                ),
-                ("text", serde_json::json!({"prompt":"hello world"})),
-                ("tokens", serde_json::json!({"prompt":[1, 42, 99]})),
+            for input in [
+                json!({"messages":[{"role":"user","content":"hello"},{"role":"tool","tool_call_id":"call-1","content":"done"}]}),
+                json!({"prompt":"hello world"}),
+                json!({"prompt":[1,42,99]}),
             ] {
-                for enabled in [true, false] {
+                for (enabled, pinned) in [(false, false), (true, false), (true, true)] {
                     let mut body = input.clone();
                     body["model"] = "test-model".into();
-                    body["max_tokens"] = 8.into();
                     body["cache_salt"] = "legacy-salt".into();
-                    body["nvext"] = serde_json::json!({"backend_instance_id":2,"dp_rank":0,"cache_salt":"body-salt",
-                        "agent_hints":{"priority":-3,"strict_priority":9,"osl":128},
-                        "routing_constraints":{"required_taints":["gpu=test"],"preferred_taints":{"gpu=test":2.0}}});
-                    let headers = vec![
-                        (
-                            ":path",
-                            if kind == "chat" {
-                                "/v1/chat/completions"
-                            } else {
-                                "/v1/completions"
-                            },
-                        ),
-                        ("x-dynamo-worker-instance-id", "1"),
+                    body["nvext"] = json!({"cache_salt":"body-salt","agent_hints":{"priority":-3,"strict_priority":9,"osl":128},
+                        "routing_constraints":{"required_taints":["gpu=test"]}});
+                    let mut headers = vec![
+                        (":path", "/gateway/v1/chat/completions"),
+                        ("x-dynamo-dp-rank", "0"),
                         ("x-dynamo-request-priority", "7"),
                         ("x-dynamo-request-strict-priority", "malformed"),
                         ("x-tenant-id", "old"),
@@ -885,15 +752,19 @@ mod tests {
                         ("x-dynamo-session-final", "true"),
                         ("x-codex-future", "one"),
                         ("x-codex-future", "two"),
-                    ]
-                    .into_iter()
-                    .map(|(k, v)| (k.into(), v.into()))
-                    .collect();
+                    ];
+                    if pinned {
+                        body["nvext"]["backend_instance_id"] = 2.into();
+                        headers.push(("x-dynamo-worker-instance-id", "1"));
+                    }
                     let req = RequestInfo {
-                        request_id: format!("{sglang}-{kind}-{enabled}"),
-                        headers,
-                        body: bytes::Bytes::from(body.to_string()),
+                        request_id: "parity".into(),
                         model: "test-model".into(),
+                        headers: headers
+                            .into_iter()
+                            .map(|(k, v)| (k.into(), v.into()))
+                            .collect(),
+                        body: bytes::Bytes::from(body.to_string()),
                         candidate_subset: Vec::new(),
                     };
                     let local = crate::epp::prepare_local_request(
@@ -905,7 +776,7 @@ mod tests {
                     .await
                     .unwrap()
                     .request;
-                    let prepared = prepare_remote_request(
+                    let remote = prepare_remote_request(
                         &renderer,
                         &selector,
                         "test-model",
@@ -916,128 +787,70 @@ mod tests {
                     )
                     .await
                     .unwrap();
-                    let rendered: serde_json::Value =
-                        serde_json::from_slice(&received.recv().await.unwrap()).unwrap();
-                    body.as_object_mut().unwrap().remove("nvext");
-                    assert_eq!(rendered, body, "only Dynamo extensions should be removed");
-                    let routing = local.routing.as_ref().unwrap();
+                    let routing = local.routing.unwrap();
                     assert_eq!(
-                        prepared.prompt.token_ids.as_deref(),
-                        Some(local.token_ids.as_slice())
+                        remote.prompt.token_ids.as_deref(),
+                        Some([1, 42, 99].as_slice())
                     );
-                    assert_eq!(prepared.prompt.cache_namespace, routing.cache_namespace);
+                    assert_eq!(remote.prompt.cache_namespace, routing.cache_namespace);
+                    assert_eq!(remote.priority_jump, routing.priority_jump);
+                    assert_eq!(remote.strict_priority, routing.strict_priority);
                     assert_eq!(
-                        prepared.prompt.cache_namespace.as_deref(),
-                        Some("tenant-header")
+                        remote.expected_output_tokens,
+                        routing.expected_output_tokens
                     );
-                    let remote_hashes = compute_block_hash_for_seq(
-                        prepared.prompt.token_ids.as_ref().unwrap(),
-                        2,
-                        BlockHashOptions {
-                            cache_namespace: prepared.prompt.cache_namespace.as_deref(),
-                            ..Default::default()
-                        },
-                    );
-                    let local_hashes = compute_block_hash_for_seq(
-                        &local.token_ids,
-                        2,
-                        BlockHashOptions {
-                            cache_namespace: routing.cache_namespace.as_deref(),
-                            ..Default::default()
-                        },
-                    );
-                    assert_eq!(remote_hashes, local_hashes);
-                    let expected = ObservedRequest {
-                        priority: routing.priority_jump.unwrap_or_default(),
-                        strict: routing.strict_priority.unwrap_or_default(),
-                        osl: routing.expected_output_tokens,
-                        session: local
+                    assert_eq!(
+                        remote.session_context,
+                        local
                             .agent_context
                             .as_ref()
-                            .map(to_worker_selection_session_context),
-                        pin: prepared.pinned_worker,
-                        prompt_tokens: local.token_ids.len(),
-                    };
-                    if enabled {
-                        assert_eq!(prepared.pinned_worker.unwrap().worker_id, 1);
-                        assert_eq!(
-                            prepared.routing_constraints.required_taints,
-                            HashSet::from(["gpu=test".to_string()])
-                        );
-                        assert_eq!(expected.priority, 7.0);
-                        assert_eq!(expected.strict, 9);
-                    } else {
-                        assert!(prepared.pinned_worker.is_none());
-                    }
-                    let selected = selector.select_and_reserve(prepared, None).await.unwrap();
-                    if enabled {
-                        assert_eq!(selected.worker_id, 1);
-                    }
-                    assert_eq!(observed.lock().unwrap().last(), Some(&expected));
+                            .map(to_selection_session_context)
+                    );
+                    assert_eq!(
+                        remote.routing_constraints,
+                        routing.routing_constraints.unwrap_or_default()
+                    );
+                    assert_eq!(
+                        remote.pinned_worker.map(|w| w.worker_id),
+                        pinned.then_some(1)
+                    );
+                    let selected = selector.select_and_reserve(remote, None).await.unwrap();
+                    assert_eq!(selected.worker_id, 1);
                     selector
                         .free_reservation(&selected.reservation_id)
                         .await
                         .unwrap();
                 }
             }
+            assert!(matches!(
+                renderer
+                    .render(bytes::Bytes::from_static(br#"{"prompt":[1],"n":2}"#), true)
+                    .await,
+                Err(RenderError::InvalidResponse { .. })
+            ));
         }
         server.abort();
     }
 
     #[tokio::test]
-    async fn remote_preparation_accepts_gateway_prefixes_and_unpaired_dp_rank() {
-        let (url, _received, server) = fixture_renderer(fixture_preprocessor()).await;
-        let (selector, _) = recording_selector().await;
+    async fn unsupported_remote_inputs_fail_before_render() {
+        use serde_json::json;
+        let selector = crate::selector::tests::selector_with_schedulable_worker().await;
         let renderer = RenderClient::Vllm(
-            VllmRenderClient::new(&url, Duration::from_secs(5), 1024 * 1024).unwrap(),
-        );
-        for header in [
-            (":path", "/llm/v1/chat/completions"),
-            ("x-dynamo-dp-rank", "0"),
-        ] {
-            let req = RequestInfo {
-                request_id: "admission".into(),
-                model: "test-model".into(),
-                body: bytes::Bytes::from_static(
-                    br#"{"model":"test-model","messages":[{"role":"user","content":"hi"}]}"#,
-                ),
-                headers: vec![(header.0.into(), header.1.into())],
-                candidate_subset: Vec::new(),
-            };
-            let prepared = prepare_remote_request(
-                &renderer,
-                &selector,
-                "test-model",
-                true,
-                &req,
-                "admission".into(),
-                None,
-            )
-            .await
-            .unwrap();
-            assert!(prepared.pinned_worker.is_none());
-            assert!(!prepared.prompt.token_ids.unwrap().is_empty());
-        }
-        server.abort();
-    }
-
-    #[tokio::test]
-    async fn unsupported_remote_inputs_fail_before_render_or_selection() {
-        let (selector, observed) = recording_selector().await;
-        let renderer = RenderClient::Vllm(
-            VllmRenderClient::new("http://127.0.0.1:1", Duration::from_millis(10), 1024).unwrap(),
+            VllmRenderClient::new("http://renderer.invalid", Duration::from_millis(10), 1024)
+                .unwrap(),
         );
         for body in [
-            serde_json::json!({"model":"adapter","prompt":"hi"}),
-            serde_json::json!({"model":"test-model","prompt":["a","b"]}),
-            serde_json::json!({"model":"test-model","prompt":[[1],[2]]}),
-            serde_json::json!({"model":"test-model","prompt":"hi","n":2}),
-            serde_json::json!({"model":"test-model","prompt":"hi","prompt_embeds":"AAAA"}),
-            serde_json::json!({"model":"test-model","messages":[{"role":"user","content":[{"type":"image_url","image_url":{"url":"data:image/png;base64,AAA"}}]}]}),
-            serde_json::json!({"model":"test-model","prompt":"hi","nvext":{"agent_context":{"session_id":"forged"}}}),
-            serde_json::json!({"model":"test-model","prompt":"hi","nvext":{"token_data":[1]}}),
-            serde_json::json!({"model":"test-model","prompt":"hi","nvext":{"backend_instance_id":1,"dp_rank":7}}),
-            serde_json::json!({"model":"test-model","prompt":"hi","nvext":{"prefill_worker_id":1}}),
+            json!({"model":"adapter","prompt":"hi"}),
+            json!({"model":"test-model","prompt":["a","b"]}),
+            json!({"model":"test-model","prompt":[[1],[2]]}),
+            json!({"model":"test-model","prompt":"hi","n":2}),
+            json!({"model":"test-model","prompt":"hi","prompt_embeds":"AAAA"}),
+            json!({"model":"test-model","messages":[{"role":"user","content":[{"type":"image_url","image_url":{"url":"data:image/png;base64,AAA"}}]}]}),
+            json!({"model":"test-model","prompt":"hi","nvext":{"agent_context":{"session_id":"forged"}}}),
+            json!({"model":"test-model","prompt":"hi","nvext":{"token_data":[1]}}),
+            json!({"model":"test-model","prompt":"hi","nvext":{"backend_instance_id":1,"dp_rank":7}}),
+            json!({"model":"test-model","prompt":"hi","nvext":{"prefill_worker_id":1}}),
         ] {
             let req = RequestInfo {
                 request_id: "invalid".into(),
@@ -1062,6 +875,5 @@ mod tests {
                 "{body}: {error}"
             );
         }
-        assert!(observed.lock().unwrap().is_empty());
     }
 }

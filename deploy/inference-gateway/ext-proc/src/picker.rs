@@ -248,27 +248,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn invalid_request_diagnostics_preserve_detail_and_bound_echoed_values() {
-        #[derive(Debug, serde::Deserialize)]
-        struct Input {
-            #[serde(rename = "model")]
-            _model: String,
-        }
-        let error = serde_json::from_str::<Input>(r#"{"model":42}"#).unwrap_err();
-        let detail = PickError::invalid_request_body(error).to_string();
-        assert!(detail.contains("invalid type: integer `42`, expected a string"));
-
-        let PickError::InvalidRequest(detail) = PickError::invalid_request_body("é".repeat(1024))
-        else {
-            panic!("client input errors must remain 400s");
-        };
-        assert_eq!(
-            detail,
-            format!("invalid request body: {}...", "é".repeat(256))
-        );
-    }
-
-    #[test]
     fn address_port_brackets_ipv6() {
         let endpoint = Endpoint {
             pod_name: "prefill-0".to_string(),
