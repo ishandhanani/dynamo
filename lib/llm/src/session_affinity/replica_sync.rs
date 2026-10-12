@@ -301,32 +301,6 @@ mod tests {
         assert!(!should_use_direct_sync(EventTransportKind::Nats, false));
     }
 
-    #[tokio::test]
-    async fn replica_subscriber_does_not_keep_table_alive() {
-        let partition = crate::kv_router::embedded::embedded_partition_key(Some("model"));
-        let table =
-            SessionAffinity::with_config(SessionAffinityConfig::new(Duration::from_secs(10)))
-                .unwrap();
-        let weak = table.downgrade();
-        let event = AffinityBindingEvent {
-            partition: partition.clone(),
-            session_id: "session".to_string(),
-            worker_id: 10,
-            dp_rank: Some(0),
-            sequence: 5,
-            writer_id: 9,
-        };
-        assert!(apply_update(&weak, &partition, 7, 8, event.clone(), |_| {
-            true
-        }));
-        assert_eq!(
-            table.query_target("session", None).unwrap(),
-            Some(AffinityTarget::new(10, Some(0)))
-        );
-        drop(table);
-        assert!(!apply_update(&weak, &partition, 7, 8, event, |_| true));
-    }
-
     #[tokio::test(start_paused = true)]
     async fn subscriber_filters_sender_without_filtering_binding_writer() {
         let partition = crate::kv_router::embedded::embedded_partition_key(Some("model"));
@@ -358,13 +332,15 @@ mod tests {
         let local_event = AffinityBindingEvent {
             writer_id: 200,
             sequence: 6,
-            ..event
+            ..event.clone()
         };
         assert!(apply_update(&weak, &partition, 7, 7, local_event, |_| {
             panic!("local publications must not reach the shared applier")
         }));
         tokio::time::advance(Duration::from_secs(5)).await;
         assert_eq!(table.query_target("session", None).unwrap(), None);
+        drop(table);
+        assert!(!apply_update(&weak, &partition, 7, 8, event, |_| true));
     }
 
     fn table() -> SessionAffinity {

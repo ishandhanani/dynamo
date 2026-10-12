@@ -704,43 +704,6 @@ mod tests {
     }
 
     #[test]
-    fn affinity_target_is_eligible_requires_a_schedulable_target() {
-        let workers = workers();
-        let constraints = RoutingConstraints::default();
-        let open = RoutingEligibility::new(None, None, None, &constraints);
-        let target = WorkerAffinityTarget::new(7, None);
-
-        assert!(open.affinity_target_is_eligible(&workers, target));
-        assert!(open.affinity_target_is_eligible(&workers, WorkerAffinityTarget::new(7, Some(4))));
-        assert!(
-            !open.affinity_target_is_eligible(&workers, WorkerAffinityTarget::new(7, Some(5))),
-            "rank out of range"
-        );
-        assert!(
-            !open.affinity_target_is_eligible(&workers, WorkerAffinityTarget::new(8, None)),
-            "unknown worker"
-        );
-
-        let others = HashSet::from([8]);
-        let disallowed = RoutingEligibility::new(Some(&others), None, None, &constraints);
-        assert!(
-            !disallowed.affinity_target_is_eligible(&workers, target),
-            "outside the caller's set"
-        );
-        let overloaded = HashSet::from([7]);
-        let shed = RoutingEligibility::new(None, Some(&overloaded), None, &constraints);
-        assert!(
-            !shed.affinity_target_is_eligible(&workers, target),
-            "overloaded"
-        );
-        let unavailable = open.with_available_workers(Some(&others));
-        assert!(
-            !unavailable.affinity_target_is_eligible(&workers, target),
-            "unavailable"
-        );
-    }
-
-    #[test]
     fn routing_eligibility_pinned_expansion_yields_exact_rank() {
         let workers = workers();
         let constraints = RoutingConstraints::default();

@@ -1095,4 +1095,170 @@ pub fn validate_dispatch_target(
 }
 
 #[cfg(test)]
-mod tests;
+mod tests {
+    use super::*;
+
+    const TTL: Duration = Duration::from_secs(10);
+
+    fn table() -> SessionAffinity {
+        SessionAffinity::with_config(SessionAffinityConfig::new(TTL)).expect("affinity table")
+    }
+
+    fn initialize(table: &SessionAffinity) -> AffinityInitialization {
+        match table.try_acquire("s", None).expect("acquire") {
+            AcquireStep::Held(Hold::Initialize(init)) => init,
+            AcquireStep::Held(Hold::Bound { .. }) => panic!("session is already bound"),
+            AcquireStep::Wait(_) => panic!("session is being initialized"),
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn joined_lease_released_before_the_commit_is_not_counted() {
+        let table = table();
+        let target = AffinityTarget::new(2, Some(0));
+        let init = initialize(&table);
+        let joined = table
+            .join_initializing("s", target)
+            .expect("join an initializing session");
+        assert_eq!(table.lease_count("s"), Some(2));
+
+        // The joiner finishes while the initializer is still queued.
+        drop(joined);
+        assert_eq!(
+            table.lease_count("s"),
+            Some(1),
+            "early release leaves the initializer's use"
+        );
+
+        tokio::time::advance(TTL + Duration::from_secs(1)).await;
+        assert_eq!(table.query_target("s", None).expect("query"), Some(target));
+
+        let lease = init.commit(target).expect("commit");
+        assert_eq!(
+            table.lease_count("s"),
+            Some(1),
+            "commit counts only the initializer"
+        );
+        drop(lease);
+        assert_eq!(table.lease_count("s"), Some(0));
+        tokio::time::advance(TTL + Duration::from_secs(1)).await;
+        assert_eq!(
+            table.query_target("s", None).expect("query"),
+            None,
+            "a binding with no live leases idles out"
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn joined_lease_counts_once_the_competing_initialization_commits() {
+        let table = table();
+        let target = AffinityTarget::new(2, Some(0));
+        let init = initialize(&table);
+        let AcquireStep::Wait(waiter) = table.try_acquire("s", None).expect("waiter") else {
+            panic!("initialization must have a waiter");
+        };
+        let joined = table
+            .join_initializing("s", target)
+            .expect("join an initializing session");
+        tokio::time::timeout(Duration::from_millis(1), waiter)
+            .await
+            .expect("joining must wake existing waiters");
+        assert_eq!(table.lease_count("s"), Some(2));
+        assert!(
+            table.join_initializing("x", target).is_none(),
+            "no join without an initializer"
+        );
+
+        let lease = init.commit(target).expect("commit");
+        assert_eq!(table.lease_count("s"), Some(2));
+        assert_eq!(table.query_target("s", None).expect("query"), Some(target));
+
+        drop(lease);
+        assert_eq!(table.lease_count("s"), Some(1));
+        // The joiner's release is a use of the binding: it refreshes the idle
+        // deadline, so the binding outlives the initializer's own TTL.
+        tokio::time::advance(TTL - Duration::from_secs(1)).await;
+        drop(joined);
+        assert_eq!(table.lease_count("s"), Some(0));
+        tokio::time::advance(Duration::from_secs(2)).await;
+        assert_eq!(
+            table.query_target("s", None).expect("query"),
+            Some(target),
+            "joined lease release must refresh the idle deadline"
+        );
+        tokio::time::advance(TTL).await;
+        assert_eq!(table.query_target("s", None).expect("query"), None);
+        assert!(
+            matches!(
+                table.try_acquire("s", None).expect("acquire"),
+                AcquireStep::Held(Hold::Initialize(_))
+            ),
+            "an idled binding re-initializes"
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn joined_binding_survives_the_initializer_dropping() {
+        let table = table();
+        let init = initialize(&table);
+        let target = AffinityTarget::new(2, Some(0));
+        let joined = table
+            .join_initializing("s", target)
+            .expect("join an initializing session");
+        assert_eq!(table.entry_count(), 1);
+
+        drop(init);
+        assert_eq!(table.entry_count(), 1);
+        assert_eq!(table.query_target("s", None).expect("query"), Some(target));
+        assert_eq!(table.lease_count("s"), Some(1));
+        drop(joined);
+        assert_eq!(table.lease_count("s"), Some(0));
+        tokio::time::advance(TTL + Duration::from_secs(1)).await;
+        assert_eq!(table.query_target("s", None).expect("query"), None);
+
+        // Once the completed booking's TTL expires, another target can bind.
+        let init = initialize(&table);
+        let lease = init
+            .commit(AffinityTarget::new(3, Some(0)))
+            .expect("commit");
+        assert_eq!(table.lease_count("s"), Some(1));
+        drop(lease);
+        assert_eq!(table.lease_count("s"), Some(0));
+    }
+
+    #[tokio::test]
+    async fn initializer_cannot_change_the_joined_rank_in_hard_mode() {
+        let table = table();
+        let init = initialize(&table);
+        let target = AffinityTarget::new(2, Some(0));
+        let joined = table.join_initializing("s", target).expect("join");
+        assert!(init.commit(AffinityTarget::new(2, Some(1))).is_err());
+        assert_eq!(table.query_target("s", None).expect("query"), Some(target));
+        assert_eq!(table.lease_count("s"), Some(1));
+        drop(joined);
+        assert_eq!(table.lease_count("s"), Some(0));
+    }
+
+    #[tokio::test]
+    async fn soft_initializer_follows_dispatch_and_keeps_worker_only_affinity() {
+        let table = SessionAffinity::with_config(
+            SessionAffinityConfig::new(TTL).with_mode(SessionAffinityMode::Soft),
+        )
+        .expect("table");
+        let init = initialize(&table);
+        let joined = table
+            .join_initializing("s", AffinityTarget::new(2, None))
+            .expect("join");
+        let lease = init
+            .commit(AffinityTarget::new(3, Some(0)))
+            .expect("commit");
+        assert_eq!(
+            table.query_target("s", None).expect("query"),
+            Some(AffinityTarget::new(3, None))
+        );
+        assert_eq!(table.lease_count("s"), Some(2));
+        drop(lease);
+        drop(joined);
+        assert_eq!(table.lease_count("s"), Some(0));
+    }
+}

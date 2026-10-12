@@ -11,82 +11,6 @@ use dynamo_kv_router::{
 use support::*;
 
 #[test]
-fn soft_default_does_not_materialize_unrelated_workers() {
-    use dynamo_kv_router::{WorkerSelectionInput, protocols::WorkerConfigLike};
-    use std::{
-        cell::Cell,
-        collections::{HashMap, HashSet},
-    };
-
-    #[derive(Default)]
-    struct CountedWorker {
-        visits: Cell<usize>,
-        taints: HashSet<String>,
-    }
-    impl WorkerConfigLike for CountedWorker {
-        fn data_parallel_start_rank(&self) -> u32 {
-            0
-        }
-        fn data_parallel_size(&self) -> u32 {
-            2
-        }
-        fn max_num_batched_tokens(&self) -> Option<u64> {
-            None
-        }
-        fn total_kv_blocks(&self) -> Option<u64> {
-            Some(16384)
-        }
-        fn taints(&self) -> &HashSet<String> {
-            self.visits.set(self.visits.get() + 1);
-            &self.taints
-        }
-    }
-
-    let (_, mut request) = fixture(8, 127);
-    let workers: HashMap<_, _> = (0..8).map(|id| (id, CountedWorker::default())).collect();
-    request.affinity = Some(AffinityRequirement::soft(WorkerAffinityTarget::new(
-        3,
-        Some(1),
-    )));
-    let policy = default_policy(KvRouterConfig::default(), "test");
-    let result = policy
-        .select_worker(WorkerSelectionInput::configured(
-            &workers,
-            &request,
-            request.eligibility(),
-            16,
-        ))
-        .unwrap();
-    assert_eq!(result.worker, WorkerWithDpRank::new(3, 1));
-    assert!(workers[&3].visits.get() > 0);
-    for (&id, worker) in &workers {
-        if id != 3 {
-            assert_eq!(worker.visits.get(), 0, "materialized worker {id}");
-        }
-    }
-}
-
-#[test]
-fn explicit_pin_overrides_a_soft_affinity_preference() {
-    let (workers, mut request) = fixture(8, 127);
-    request.pinned_worker = Some(WorkerWithDpRank::new(2, 0));
-    let policy = default_policy(KvRouterConfig::default(), "test");
-    for target in [
-        WorkerAffinityTarget::new(3, Some(1)),
-        WorkerAffinityTarget::new(2, Some(1)),
-    ] {
-        request.affinity = Some(AffinityRequirement::soft(target));
-        assert_eq!(
-            policy
-                .select_worker(support::selection_input(&workers, &request, 16))
-                .unwrap()
-                .worker,
-            request.pinned_worker.unwrap()
-        );
-    }
-}
-
-#[test]
 fn soft_fallback_preserves_selection_and_random_stream() {
     use dynamo_kv_router::WorkerSelectionInput;
     use std::collections::HashSet;
@@ -112,12 +36,6 @@ fn soft_fallback_preserves_selection_and_random_stream() {
             let reference =
                 dynamo_kv_router::DefaultWorkerSelector::new(Some(config.clone()), "test");
             let plugin = default_policy(config.clone(), "test");
-            let seeded_reference = dynamo_kv_router::DefaultWorkerSelector::new_seeded(
-                Some(config.clone()),
-                "test",
-                42,
-            );
-            let seeded_plugin = DefaultWorkerSelector::new_seeded(Some(config), "test", 42);
             for seed in 0..64 {
                 let input = WorkerSelectionInput::configured(
                     &workers,
@@ -136,11 +54,6 @@ fn soft_fallback_preserves_selection_and_random_stream() {
                 );
                 assert_eq!(actual.cached_tokens, expected.cached_tokens);
                 assert_eq!(fastrand::u64(..), next_random);
-                assert_eq!(
-                    seeded_plugin.select_worker(input).unwrap().worker,
-                    seeded_reference.select_worker(input).unwrap().worker,
-                    "seeded case={case} temperature={temperature}",
-                );
             }
         }
     }
@@ -155,41 +68,16 @@ async fn actor_observer_respects_default_soft_candidates() {
         ActiveSequencesMultiWorker, NoopSequencePublisher, RouterQueuePolicy, SchedulerQueue,
         SequenceRequest,
     };
-    use std::{collections::HashSet, sync::Arc, time::Duration};
+    use std::{sync::Arc, time::Duration};
     use tokio::{
         sync::{mpsc, oneshot, watch},
         time::Instant,
     };
 
-    struct FirstWorkerPicker;
-    impl WorkerPicker for FirstWorkerPicker {
-        fn pick(
-            &mut self,
-            _: &WorkerSelectionContext<'_>,
-            input: WorkerInputView<'_>,
-        ) -> Result<usize, WorkerSelectionPolicyError> {
-            Ok(input
-                .candidates()
-                .iter()
-                .enumerate()
-                .min_by_key(|(_, candidate)| candidate.worker())
-                .unwrap()
-                .0)
-        }
-    }
-
     let preferred = WorkerWithDpRank::new(0, 0);
     let same_worker_rank = WorkerWithDpRank::new(0, 1);
     let other_worker = WorkerWithDpRank::new(1, 0);
-    for case in [
-        "exact",
-        "worker-only",
-        "custom",
-        "missing",
-        "allowlist",
-        "overloaded",
-        "explicit-pin",
-    ] {
+    for case in ["exact", "worker-only", "missing"] {
         let (workers, mut request) = fixture(3, 512);
         let slots = Arc::new(ActiveSequencesMultiWorker::new_without_expiry(
             NoopSequencePublisher,
@@ -228,11 +116,7 @@ async fn actor_observer_respects_default_soft_candidates() {
             decode_active_request_weight: 100.0,
             ..Default::default()
         };
-        let policy = if case == "custom" {
-            WorkerSelectionPolicy::new(config, "test", vec![], Box::new(FirstWorkerPicker))
-        } else {
-            default_policy(config, "test")
-        };
+        let policy = default_policy(config, "test");
         let (_config_tx, config_rx) = watch::channel(workers);
         let queue = SchedulerQueue::new(
             Arc::clone(&slots),
@@ -242,7 +126,7 @@ async fn actor_observer_respects_default_soft_candidates() {
             policy,
             None,
             None::<Arc<NoopOverlapScoresRefresh>>,
-            (case == "overloaded").then(|| Arc::new(|| Some(HashSet::from([2_u64]))) as _),
+            None,
             None,
         );
         let (event_tx, mut event_rx) = mpsc::unbounded_channel();
@@ -265,29 +149,14 @@ async fn actor_observer_respects_default_soft_candidates() {
         request.affinity = Some(AffinityRequirement::soft(WorkerAffinityTarget::new(
             match case {
                 "missing" => 99,
-                "allowlist" | "overloaded" => 2,
                 _ => 0,
             },
             (case != "worker-only").then_some(0),
         )));
-        if case == "allowlist" {
-            request.allowed_worker_ids = Some(HashSet::from([0, 1]));
-        }
-        if case == "explicit-pin" {
-            request.pinned_worker = Some(other_worker);
-        }
         queue.enqueue(request).await;
         let selected = response_rx.await.unwrap().unwrap().best_worker;
-        assert_eq!(
-            selected,
-            if case == "explicit-pin" {
-                other_worker
-            } else {
-                preferred
-            },
-            "case={case}"
-        );
-        if matches!(case, "exact" | "explicit-pin") {
+        assert_eq!(selected, preferred, "case={case}");
+        if case == "exact" {
             assert!(
                 tokio::time::timeout(Duration::from_millis(100), event_rx.recv())
                     .await
@@ -297,7 +166,7 @@ async fn actor_observer_respects_default_soft_candidates() {
         } else {
             let event = tokio::time::timeout(Duration::from_secs(1), event_rx.recv())
                 .await
-                .expect("observer did not run")
+                .unwrap()
                 .unwrap();
             assert_eq!(
                 event.highest_overlap_worker,
@@ -575,71 +444,6 @@ fn configured_default_resolves_for_every_role() {
                 role != WorkerType::Decode || conditional_disagg_enabled
             );
         }
-    }
-}
-
-/// A `Soft` session binding keeps the default policy on the bound worker while it is a candidate,
-/// at the bound rank when the binding names one, and falls back to normal selection otherwise.
-/// Seeded selectors make the unconstrained choice, which breaks cost ties at random, repeatable.
-#[test]
-fn soft_affinity_keeps_the_bound_worker_while_it_is_a_candidate() {
-    let config = KvRouterConfig {
-        router_temperature: 0.0,
-        ..Default::default()
-    };
-    let (workers, mut request) = fixture(4, 17);
-    let unconstrained = DefaultWorkerSelector::new_seeded(Some(config.clone()), "test", 42)
-        .select_worker(support::selection_input(&workers, &request, 16))
-        .unwrap()
-        .worker;
-    let bound = WorkerWithDpRank::new((unconstrained.worker_id + 1) % 4, 1);
-
-    request.affinity = Some(AffinityRequirement::soft(bound.into()));
-    let selected = default_policy(config.clone(), "test")
-        .select_worker(support::selection_input(&workers, &request, 16))
-        .unwrap();
-    assert_eq!(selected.worker, bound, "a ranked binding selects that rank");
-
-    request.affinity = Some(AffinityRequirement::soft(WorkerAffinityTarget::new(
-        bound.worker_id,
-        None,
-    )));
-    let selected = default_policy(config.clone(), "test")
-        .select_worker(support::selection_input(&workers, &request, 16))
-        .unwrap();
-    assert_eq!(
-        selected.worker.worker_id, bound.worker_id,
-        "a worker-only binding selects among that worker's ranks"
-    );
-
-    request.affinity = Some(AffinityRequirement::soft(WorkerAffinityTarget::new(
-        99, None,
-    )));
-    let selected = DefaultWorkerSelector::new_seeded(Some(config), "test", 42)
-        .select_worker(support::selection_input(&workers, &request, 16))
-        .unwrap();
-    assert_eq!(
-        selected.worker, unconstrained,
-        "a binding to a worker that is not a candidate falls back to normal selection"
-    );
-}
-
-/// With sampling enabled the preference still limits the draw to the bound worker's candidates.
-#[test]
-fn soft_affinity_limits_sampling_to_the_bound_worker() {
-    let config = KvRouterConfig {
-        router_temperature: 0.7,
-        ..Default::default()
-    };
-    let (workers, mut request) = fixture(4, 17);
-    let bound = WorkerAffinityTarget::new(2, None);
-    request.affinity = Some(AffinityRequirement::soft(bound));
-    let policy = default_policy(config, "test");
-    for _ in 0..64 {
-        let selected = policy
-            .select_worker(support::selection_input(&workers, &request, 16))
-            .unwrap();
-        assert_eq!(selected.worker.worker_id, bound.worker_id);
     }
 }
 

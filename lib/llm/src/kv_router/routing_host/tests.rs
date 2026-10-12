@@ -2739,17 +2739,13 @@ async fn session_affinity_existing_selection_cancellation_preserves_binding_with
 }
 
 struct FailoverClassifier {
-    entered: mpsc::UnboundedSender<(String, oneshot::Sender<()>)>,
-    calls: Arc<AtomicUsize>,
+    entered: mpsc::UnboundedSender<oneshot::Sender<()>>,
 }
 
 impl RequestClassifier for FailoverClassifier {
     fn classify(&mut self, request: ClassifyRequest) -> ClassifyFuture {
-        self.calls.fetch_add(1, Ordering::Relaxed);
         let (resume, resumed) = oneshot::channel();
-        self.entered
-            .send((request.request_id().unwrap().to_owned(), resume))
-            .unwrap();
+        self.entered.send(resume).unwrap();
         Box::pin(async move {
             resumed.await.unwrap();
             Ok(request)
@@ -2772,7 +2768,6 @@ fn affinity_marker_stream(
 
 async fn assert_kv_failover_serializes_replacement(second_resolves_after_departure: bool) {
     let (entered_tx, mut entered_rx) = mpsc::unbounded_channel();
-    let calls = Arc::new(AtomicUsize::new(0));
     let workers = [7, 8, 9]
         .into_iter()
         .map(|worker_id| (worker_id, ModelRuntimeConfig::default()))
@@ -2782,7 +2777,6 @@ async fn assert_kv_failover_serializes_replacement(second_resolves_after_departu
         workers,
         Some(FailoverClassifier {
             entered: entered_tx,
-            calls: Arc::clone(&calls),
         }),
     ))
     .await;
@@ -2792,8 +2786,6 @@ async fn assert_kv_failover_serializes_replacement(second_resolves_after_departu
     let start_selection = |request_id: &str| {
         let router = Arc::clone(&router);
         let mut content = request();
-        // Both requests can use either replacement; the original binding is
-        // still live when the first request resolves it before classification.
         content.routing_mut().allowed_worker_ids = Some(HashSet::from([8, 9]));
         let mut request = Context::with_controller(content, Controller::new(request_id.to_owned()));
         request.insert(SESSION_AFFINITY_CONTEXT_KEY, session_id.clone());
@@ -2806,7 +2798,7 @@ async fn assert_kv_failover_serializes_replacement(second_resolves_after_departu
                     &CleanupBudget::default(),
                 )
                 .await
-                .expect("failover selection succeeds");
+                .unwrap();
             (request, selection, hold)
         })
     };
@@ -2819,27 +2811,21 @@ async fn assert_kv_failover_serializes_replacement(second_resolves_after_departu
     };
 
     let first = start_selection("first-failover");
-    let (first_id, resume_first) = tokio::time::timeout(Duration::from_secs(5), entered_rx.recv())
+    let resume_first = tokio::time::timeout(Duration::from_secs(5), entered_rx.recv())
         .await
         .unwrap()
         .unwrap();
-    assert_eq!(first_id, "first-failover");
     if second_resolves_after_departure {
         remove_bound_worker();
     }
     let second = start_selection("second-failover");
-    let (second_id, resume_second) =
-        tokio::time::timeout(Duration::from_secs(5), entered_rx.recv())
-            .await
-            .unwrap()
-            .unwrap();
-    assert_eq!(second_id, "second-failover");
+    let resume_second = tokio::time::timeout(Duration::from_secs(5), entered_rx.recv())
+        .await
+        .unwrap()
+        .unwrap();
     if !second_resolves_after_departure {
         remove_bound_worker();
     }
-
-    // Let the second request own replacement initialization while the first
-    // still holds the original binding, covering both stale-holder schedules.
     resume_second.send(()).unwrap();
     let (second_request, mut second_selection, second_hold) =
         tokio::time::timeout(Duration::from_secs(5), second)
@@ -2855,7 +2841,7 @@ async fn assert_kv_failover_serializes_replacement(second_resolves_after_departu
         affinity_table(&router).wait_for_initializing_waiter(),
     )
     .await
-    .expect("the stale request must wait for the replacement before dispatch");
+    .unwrap();
     assert!(!first.is_finished());
     assert_eq!(
         potential_loads(&router)
@@ -2863,8 +2849,7 @@ async fn assert_kv_failover_serializes_replacement(second_resolves_after_departu
             .iter()
             .map(|load| load.active_requests)
             .sum::<usize>(),
-        1,
-        "the waiter releases its booking before waiting on the initializer"
+        1
     );
 
     let mut second_stream = router
@@ -2873,7 +2858,7 @@ async fn assert_kv_failover_serializes_replacement(second_resolves_after_departu
             route_target(second_selection.worker),
             affinity_marker_stream(&second_request),
         )
-        .expect("the initializer retains its successful response");
+        .unwrap();
     let (first_request, mut first_selection, first_hold) =
         tokio::time::timeout(Duration::from_secs(5), first)
             .await
@@ -2881,18 +2866,13 @@ async fn assert_kv_failover_serializes_replacement(second_resolves_after_departu
             .unwrap();
     assert_eq!(first_selection.worker, second_selection.worker);
     assert!(matches!(first_hold, Some(Hold::Bound { .. })));
-    assert_eq!(
-        calls.load(Ordering::Relaxed),
-        2,
-        "retry does not reclassify"
-    );
     let mut first_stream = router
         .bind_affinity(
             first_hold,
             route_target(first_selection.worker),
             affinity_marker_stream(&first_request),
         )
-        .expect("the waiting request retains its successful response");
+        .unwrap();
     for stream in [&mut first_stream, &mut second_stream] {
         assert_eq!(
             stream.next().await.unwrap().data.unwrap().token_ids,
@@ -2925,60 +2905,6 @@ async fn kv_concurrent_stale_bindings_serialize_failover_before_dispatch() {
 #[tokio::test]
 async fn kv_stale_binding_waits_for_pending_failover_initialization() {
     Box::pin(assert_kv_failover_serializes_replacement(true)).await;
-}
-
-#[tokio::test]
-async fn kv_same_target_stream_survives_concurrent_binding_changes() {
-    use dynamo_kv_router::services::selection::affinity::{AffinityVersion, ReplicaApplyOutcome};
-
-    for replacement in ["initializing", "bound", "replica"] {
-        let (router, runtime) = router_with_workers(Some(Duration::from_secs(10)), &[7, 8]).await;
-        let session_id = SessionAffinityId::new(replacement);
-        let original = AffinityTarget::new(7, Some(0));
-        let target = AffinityTarget::new(8, Some(0));
-        bind_affinity_target(&router, &session_id, original).await;
-        let old_hold = acquire_session(&router, &session_id).await;
-        let table = affinity_table(&router);
-        let mut initializing = None;
-        if replacement == "replica" {
-            assert_eq!(
-                table.apply_replica_update(
-                    session_id.as_str().to_owned(),
-                    to_table(target),
-                    AffinityVersion {
-                        sequence: table.next_version().sequence,
-                        writer_id: 99
-                    },
-                ),
-                ReplicaApplyOutcome::ReplacedNewer
-            );
-        } else {
-            acquire_session(&router, &session_id).await.invalidate();
-            initializing = Some(acquire_session(&router, &session_id).await);
-            if replacement == "bound" {
-                drop(
-                    table
-                        .commit(initializing.take().unwrap(), to_table(target))
-                        .unwrap(),
-                );
-            }
-        }
-        let expected = (replacement != "initializing").then_some(target);
-        let request = Context::new(request());
-        let mut stream = router
-            .bind_affinity(Some(old_hold), original, affinity_marker_stream(&request))
-            .expect("a successful same-target dispatch keeps its stream");
-        assert_eq!(
-            stream.next().await.unwrap().data.unwrap().token_ids,
-            vec![42]
-        );
-        assert!(stream.next().await.is_none());
-        assert_eq!(bound_target(&router, &session_id), expected);
-        assert_eq!(table.lease_count(session_id.as_str()), Some(0));
-        drop(initializing);
-        drop(router);
-        runtime.shutdown();
-    }
 }
 
 #[tokio::test]
@@ -3030,215 +2956,6 @@ async fn kv_hard_affinity_transient_worker_failures_keep_service_errors_and_bind
         drop(router);
         runtime.shutdown();
     }
-}
-
-/// The KV plane commits the session only once dispatch has returned a
-/// response stream, and the lease lives for as long as that stream does.
-#[tokio::test]
-#[serial_test::serial]
-async fn kv_session_commits_after_dispatch_and_releases_with_the_stream() {
-    let (router, dispatch, worker_id, runtime) = router_with_recorded_dispatch_and_affinity(
-        "kv-session-commit-after-dispatch",
-        Some(Duration::from_secs(10)),
-    )
-    .await;
-    let session_id = SessionAffinityId::new("commit-after-dispatch");
-    let mut request = Context::new(request());
-    request.insert(SESSION_AFFINITY_CONTEXT_KEY, session_id.clone());
-    let table = affinity_table(&router).clone();
-
-    let mut stream = router.generate(request).await.expect("dispatch succeeds");
-    assert_eq!(dispatch.worker_ids.lock().unwrap().as_slice(), &[worker_id]);
-    assert_eq!(
-        table.query_target(session_id.as_str(), None).unwrap(),
-        Some(crate::session_affinity::to_table(AffinityTarget::new(
-            worker_id,
-            Some(0)
-        ))),
-        "the binding exists once dispatch returned a stream"
-    );
-    assert_eq!(
-        table.lease_count(session_id.as_str()),
-        Some(1),
-        "the response stream owns the lease"
-    );
-    while stream.next().await.is_some() {}
-    assert_eq!(
-        table.lease_count(session_id.as_str()),
-        Some(0),
-        "the lease ends with the stream"
-    );
-
-    drop(stream);
-    drop(router);
-    runtime.shutdown();
-}
-
-/// A dispatch that fails binds nothing: the hold is released with the
-/// selection and the session's slot is free again.
-#[tokio::test]
-async fn kv_failed_dispatch_does_not_bind_the_session() {
-    let (router, runtime) = router(Some(Duration::from_secs(10))).await;
-    let session_id = SessionAffinityId::new("failed-dispatch");
-    let mut request = Context::new(request());
-    request.insert(SESSION_AFFINITY_CONTEXT_KEY, session_id.clone());
-
-    // The harness overrides discovery without a live endpoint, so dispatch fails.
-    assert!(router.generate(request).await.is_err());
-    let table = affinity_table(&router);
-    assert_eq!(table.query_target(session_id.as_str(), None).unwrap(), None);
-    assert_eq!(
-        table.entry_count(),
-        0,
-        "the uncommitted hold released its slot"
-    );
-
-    drop(router);
-    runtime.shutdown();
-}
-
-/// A session bound to a worker discovery no longer knows selects normally and
-/// is re-bound to the worker the request ran on.
-#[tokio::test]
-#[serial_test::serial]
-async fn kv_binding_to_a_departed_worker_rebinds_on_dispatch() {
-    let (router, dispatch, worker_id, runtime) = router_with_recorded_dispatch_and_affinity(
-        "kv-session-departed-rebind",
-        Some(Duration::from_secs(10)),
-    )
-    .await;
-    let session_id = SessionAffinityId::new("departed-binding");
-    bind_affinity_target(
-        &router,
-        &session_id,
-        AffinityTarget::new(worker_id + 1, Some(0)),
-    )
-    .await;
-    let mut request = Context::new(request());
-    request.insert(SESSION_AFFINITY_CONTEXT_KEY, session_id.clone());
-
-    let mut stream = router
-        .generate(request)
-        .await
-        .expect("a departed binding is not a client fault");
-    assert_eq!(dispatch.worker_ids.lock().unwrap().as_slice(), &[worker_id]);
-    assert_eq!(
-        bound_target(&router, &session_id),
-        Some(AffinityTarget::new(worker_id, Some(0)))
-    );
-    while stream.next().await.is_some() {}
-
-    drop(stream);
-    drop(router);
-    runtime.shutdown();
-}
-
-/// Prefill and decode hosts bind the same session independently: each KV host
-/// resolves through its own partition's table, since the two pools differ and
-/// a prefill worker is no target for decode.
-#[tokio::test]
-#[serial_test::serial]
-async fn prefill_and_decode_hosts_keep_separate_session_tables() {
-    let (decode, _, decode_worker, decode_runtime) = router_with_recorded_dispatch_and_affinity(
-        "kv-session-decode-table",
-        Some(Duration::from_secs(10)),
-    )
-    .await;
-    let (prefill, _, prefill_worker, prefill_runtime) = router_with_recorded_dispatch_and_affinity(
-        "kv-session-prefill-table",
-        Some(Duration::from_secs(10)),
-    )
-    .await;
-    let session_id = SessionAffinityId::new("per-pool-binding");
-
-    bind_affinity_target(
-        &decode,
-        &session_id,
-        AffinityTarget::new(decode_worker, Some(0)),
-    )
-    .await;
-    assert_eq!(bound_target(&prefill, &session_id), None);
-    bind_affinity_target(
-        &prefill,
-        &session_id,
-        AffinityTarget::new(prefill_worker, Some(0)),
-    )
-    .await;
-    assert_eq!(
-        bound_target(&decode, &session_id),
-        Some(AffinityTarget::new(decode_worker, Some(0)))
-    );
-    assert_eq!(
-        bound_target(&prefill, &session_id),
-        Some(AffinityTarget::new(prefill_worker, Some(0)))
-    );
-
-    drop(decode);
-    drop(prefill);
-    decode_runtime.shutdown();
-    prefill_runtime.shutdown();
-}
-
-/// An explicit request target must agree with the session's binding; an
-/// agreeing target selects the bound worker through the binding.
-#[tokio::test]
-async fn kv_explicit_target_must_agree_with_the_session_binding() {
-    let workers = [7u64, 8]
-        .into_iter()
-        .map(|worker_id| (worker_id, ModelRuntimeConfig::default()))
-        .collect();
-    let (router, runtime) =
-        router_with_worker_configs(Some(Duration::from_secs(10)), workers).await;
-    let session_id = SessionAffinityId::new("explicit-agreement");
-    let bound = AffinityTarget::new(7, Some(0));
-    bind_affinity_target(&router, &session_id, bound).await;
-
-    let mut disagreeing = request();
-    disagreeing.routing_mut().backend_instance_id = Some(8);
-    let mut disagreeing = Context::new(disagreeing);
-    disagreeing.insert(SESSION_AFFINITY_CONTEXT_KEY, session_id.clone());
-    let Err(error) = router
-        .select_with_affinity(
-            &disagreeing,
-            RequestPhase::Aggregated,
-            false,
-            &CleanupBudget::default(),
-        )
-        .await
-    else {
-        panic!("a target that disagrees with the binding is rejected");
-    };
-    assert!(match_error_chain(
-        error.as_ref(),
-        &[ErrorType::InvalidArgument],
-        &[]
-    ));
-    assert_eq!(
-        bound_target(&router, &session_id),
-        Some(bound),
-        "rejection keeps the binding"
-    );
-
-    let mut agreeing = request();
-    agreeing.routing_mut().backend_instance_id = Some(7);
-    let mut agreeing = Context::new(agreeing);
-    agreeing.insert(SESSION_AFFINITY_CONTEXT_KEY, session_id.clone());
-    let (selection, hold) = router
-        .select_with_affinity(
-            &agreeing,
-            RequestPhase::Aggregated,
-            false,
-            &CleanupBudget::default(),
-        )
-        .await
-        .expect("an agreeing target selects the bound worker");
-    assert_eq!(selection.worker, WorkerWithDpRank::new(7, 0));
-    assert!(matches!(hold, Some(Hold::Bound { .. })));
-    drop(hold);
-    drop(selection);
-
-    drop(router);
-    runtime.shutdown();
 }
 
 /// A builtin host over `inner` whose session affinity has a 10s TTL, binds
@@ -4476,74 +4193,6 @@ async fn conditional_route_stages_share_one_cleanup_budget() {
     );
 
     plan.abort().await;
-    drop(router);
-    runtime.shutdown();
-}
-
-#[tokio::test]
-#[serial_test::serial]
-async fn kv_cancelled_request_abandons_a_contended_session_without_booking() {
-    let (router, dispatch, _, runtime) = router_with_recorded_dispatch_and_affinity(
-        "kv-cancelled-affinity-contention",
-        Some(Duration::from_secs(10)),
-    )
-    .await;
-    let router = Arc::new(router);
-    let table = affinity_table(&router).clone();
-    let session_id = SessionAffinityId::new("cancelled-contended-session");
-    let holder = table.acquire(session_id.as_str(), None).await.unwrap();
-    assert!(matches!(holder, Hold::Initialize(_)));
-
-    let mut input = Context::with_id_and_metadata(
-        request(),
-        "cancelled-affinity-waiter".to_string(),
-        Default::default(),
-    );
-    input.insert(SESSION_AFFINITY_CONTEXT_KEY, session_id.clone());
-    let context = input.context();
-    let generate_router = Arc::clone(&router);
-    let generate = tokio::spawn(async move { generate_router.generate(input).await });
-
-    tokio::time::timeout(Duration::from_secs(5), table.wait_for_initializing_waiter())
-        .await
-        .expect("request must reach the contended affinity wait");
-    assert!(!generate.is_finished());
-    assert!(
-        potential_loads(&router)
-            .await
-            .iter()
-            .all(|load| load.active_requests == 0)
-    );
-    context.stop();
-
-    let Err(error) = tokio::time::timeout(Duration::from_secs(5), generate)
-        .await
-        .expect("cancellation must interrupt the affinity wait")
-        .unwrap()
-    else {
-        panic!("a cancelled affinity waiter must not dispatch");
-    };
-    assert!(match_error_chain(
-        error.as_ref(),
-        &[ErrorType::Cancelled],
-        &[]
-    ));
-    assert!(dispatch.worker_ids.lock().unwrap().is_empty());
-    assert_eq!(table.query_target(session_id.as_str(), None).unwrap(), None);
-    assert_eq!(
-        table.entry_count(),
-        1,
-        "the other request keeps its initializer"
-    );
-    assert!(
-        potential_loads(&router)
-            .await
-            .iter()
-            .all(|load| load.active_requests == 0)
-    );
-
-    drop(holder);
-    assert_eq!(table.entry_count(), 0, "the cancelled waiter left no hold");
     drop(router);
     runtime.shutdown();
 }

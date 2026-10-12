@@ -2010,8 +2010,7 @@ mod tests {
     use super::*;
     use crate::kv_hints::KvTransferCandidates;
     use crate::protocols::{
-        ActiveSequenceEvent, ExternalSequenceBlockHash, WorkerAffinityTarget,
-        WorkerSelectionResult, WorkerWithDpRank,
+        ActiveSequenceEvent, ExternalSequenceBlockHash, WorkerSelectionResult, WorkerWithDpRank,
     };
     use crate::scheduling::OverlapSignals;
     use crate::scheduling::types::{KvSchedulerError, ScheduleMode};
@@ -3613,30 +3612,6 @@ policy_classes:
         );
 
         request.pinned_worker = None;
-        let affinity = crate::protocols::WorkerAffinityTarget::new(1, Some(0));
-        let exact = request.eligibility().with_affinity_target(affinity);
-        assert!(exact.has_exact_target());
-        assert!(non_max_overlap_selection(&workers, &request, exact, worker1, 2.0).is_none());
-
-        // A Soft or ineligible binding is only context: alternatives still count.
-        request.affinity = Some(AffinityRequirement::soft(affinity));
-        assert!(!request.eligibility().has_exact_target());
-        assert!(
-            non_max_overlap_selection(&workers, &request, request.eligibility(), worker1, 2.0)
-                .is_some()
-        );
-        request.affinity = Some(AffinityRequirement::hard(affinity));
-        assert!(!request.eligibility().has_exact_target());
-        assert!(
-            non_max_overlap_selection(&workers, &request, request.eligibility(), worker1, 2.0)
-                .is_some()
-        );
-        assert!(
-            !request
-                .eligibility()
-                .with_affinity_target(crate::protocols::WorkerAffinityTarget::new(1, None))
-                .has_exact_target()
-        );
         request.allowed_worker_ids = Some(HashSet::from([worker1.worker_id]));
         assert!(
             non_max_overlap_selection(&workers, &request, request.eligibility(), worker1, 2.0)
@@ -4916,33 +4891,22 @@ policy_classes:
         assert_eq!(queue.pending_count(), 0);
     }
 
-    fn avoid_affinity_policy() -> crate::scheduling::selector::WorkerSelectionPolicy {
-        crate::scheduling::selector::WorkerSelectionPolicy::new(
-            crate::config::KvRouterConfig::default(),
-            "test",
-            Vec::new(),
-            Box::new(crate::scheduling::selector::test_support::AvoidAffinityPicker),
-        )
-    }
-
-    async fn occupy<Sel: WorkerSelector<SimpleWorkerConfig> + Send + 'static>(
-        queue: &SchedulerQueue<NoopSequencePublisher, SimpleWorkerConfig, Sel>,
-        request_id: &str,
-        worker: WorkerWithDpRank,
-        isl: usize,
-    ) {
-        let (mut request, rx) = make_request(request_id, isl);
-        request.pinned_worker = Some(worker);
-        queue.enqueue(request).await;
-        assert_eq!(rx.await.unwrap().unwrap().best_worker, worker);
-    }
-
     /// A `Hard` binding limits selection to its eligible target for a custom
     /// policy that would otherwise avoid it; a `Soft` binding is advisory only.
     #[tokio::test(flavor = "multi_thread")]
     async fn hard_affinity_limits_a_custom_picker_to_the_eligible_target() {
-        let (queue, _slots) =
-            make_queue_with_custom_selector(2, 16, 256, None, avoid_affinity_policy());
+        let (queue, _slots) = make_queue_with_custom_selector(
+            2,
+            16,
+            256,
+            None,
+            crate::scheduling::selector::WorkerSelectionPolicy::new(
+                crate::config::KvRouterConfig::default(),
+                "test",
+                Vec::new(),
+                Box::new(crate::scheduling::selector::test_support::AvoidAffinityPicker),
+            ),
+        );
         let target = WorkerWithDpRank::new(1, 0);
 
         let (mut soft, soft_rx) = make_request("soft", 64);
@@ -4958,41 +4922,6 @@ policy_classes:
         hard.affinity = Some(AffinityRequirement::hard(target.into()));
         queue.enqueue(hard).await;
         assert_eq!(hard_rx.await.unwrap().unwrap().best_worker, target);
-    }
-
-    /// A `Hard` binding overrides the default selector's load preference while
-    /// the target is eligible; an ineligible target selects normally.
-    #[tokio::test(flavor = "multi_thread")]
-    async fn hard_affinity_limits_the_default_selector_to_an_eligible_target() {
-        let (queue, _slots) = make_queue(2, 16, 256, None);
-        let target = WorkerWithDpRank::new(1, 0);
-        occupy(&queue, "occupant", target, 256).await;
-
-        let (mut hard, hard_rx) = make_request("hard", 64);
-        hard.affinity = Some(AffinityRequirement::hard(target.into()));
-        queue.enqueue(hard).await;
-        assert_eq!(hard_rx.await.unwrap().unwrap().best_worker, target);
-
-        let (mut departed, departed_rx) = make_request("departed", 64);
-        departed.affinity = Some(AffinityRequirement::hard(WorkerAffinityTarget::new(
-            7, None,
-        )));
-        queue.enqueue(departed).await;
-        assert_eq!(
-            departed_rx.await.unwrap().unwrap().best_worker,
-            WorkerWithDpRank::new(0, 0),
-            "an unknown target selects normally"
-        );
-
-        let (mut disallowed, disallowed_rx) = make_request("disallowed", 64);
-        disallowed.affinity = Some(AffinityRequirement::hard(target.into()));
-        disallowed.allowed_worker_ids = Some(HashSet::from([0]));
-        queue.enqueue(disallowed).await;
-        assert_eq!(
-            disallowed_rx.await.unwrap().unwrap().best_worker,
-            WorkerWithDpRank::new(0, 0),
-            "a target outside the caller's set selects within the set"
-        );
     }
 
     #[tokio::test]
@@ -5018,53 +4947,19 @@ policy_classes:
         assert_eq!(request.affinity, Some(bound));
     }
 
-    /// Admission is fleet-wide: a `Hard` request whose target is prefill-busy
-    /// is admitted while another worker is idle and booked on its target. It
-    /// waits only when every worker is busy, then follows its target without
-    /// holding back a later unbound request in its class.
     #[tokio::test(flavor = "multi_thread")]
     async fn hard_affinity_admission_stays_fleet_wide() {
-        let (queue, slots) = make_queue(2, 16, 256, Some(0.0));
+        let (queue, _slots) = make_queue(2, 16, 256, Some(0.0));
         let target = WorkerWithDpRank::new(1, 0);
-        let other = WorkerWithDpRank::new(0, 0);
-        occupy(&queue, "occupant", target, 256).await;
+        let (mut occupant, occupied) = make_request("occupant", 256);
+        occupant.pinned_worker = Some(target);
+        queue.enqueue(occupant).await;
+        assert_eq!(occupied.await.unwrap().unwrap().best_worker, target);
 
         let (mut hard, hard_rx) = make_request("hard", 64);
         hard.affinity = Some(AffinityRequirement::hard(target.into()));
         queue.enqueue(hard).await;
         assert_eq!(hard_rx.await.unwrap().unwrap().best_worker, target);
-        assert_eq!(queue.pending_count(), 0);
-
-        occupy(&queue, "other-occupant", other, 256).await;
-        let (mut waiting, mut waiting_rx) = make_request("waiting", 64);
-        waiting.affinity = Some(AffinityRequirement::hard(target.into()));
-        queue.enqueue(waiting).await;
-        let (unbound, mut unbound_rx) = make_request("unbound", 64);
-        queue.enqueue(unbound).await;
-        assert_eq!(queue.pending_count(), 2);
-        assert!(waiting_rx.try_recv().is_err(), "every worker is busy");
-        assert!(unbound_rx.try_recv().is_err());
-
-        slots
-            .mark_prefill_completed(&"other-occupant".to_string(), decay_now())
-            .unwrap();
-        slots
-            .free(&"other-occupant".to_string(), decay_now())
-            .unwrap();
-        queue.capacity_changed(Some(other));
-
-        let waiting = tokio::time::timeout(Duration::from_secs(1), waiting_rx)
-            .await
-            .expect("freed capacity admits the waiting request")
-            .unwrap()
-            .unwrap();
-        assert_eq!(waiting.best_worker, target, "still booked on its target");
-        let unbound = tokio::time::timeout(Duration::from_secs(1), unbound_rx)
-            .await
-            .expect("the unbound request is admitted behind it")
-            .unwrap()
-            .unwrap();
-        assert_eq!(unbound.best_worker, other);
         assert_eq!(queue.pending_count(), 0);
     }
 

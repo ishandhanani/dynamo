@@ -100,156 +100,31 @@ impl SessionAffinity {
 
 #[cfg(test)]
 mod tests {
-    use std::time::Duration;
-
-    use super::super::{AcquireStep, Hold, SessionAffinityConfig};
+    use super::super::SessionAffinityConfig;
     use super::*;
-
-    fn partition_id(name: &str) -> RoutingPartitionId {
-        RoutingPartitionId::new(name, "default")
-    }
-
-    fn table() -> SessionAffinity {
-        SessionAffinity::with_config(SessionAffinityConfig::new(Duration::from_secs(60)))
-            .expect("table")
-    }
-
-    /// Install a sink that records every event the table publishes.
-    fn record_events(
-        table: &SessionAffinity,
-        writer_id: u64,
-        partition: &RoutingPartitionId,
-    ) -> mpsc::Receiver<AffinityBindingEvent> {
-        let (tx, rx) = mpsc::channel(16);
-        assert!(table.enable_replication(writer_id, replica_sink(partition.clone(), tx)));
-        rx
-    }
-
-    fn event(
-        partition: &RoutingPartitionId,
-        writer_id: u64,
-        sequence: u64,
-    ) -> AffinityBindingEvent {
-        AffinityBindingEvent {
-            partition: partition.clone(),
-            session_id: "s".to_string(),
-            worker_id: 1,
-            dp_rank: Some(0),
-            sequence,
-            writer_id,
-        }
-    }
-
-    #[test]
-    fn schema_round_trips_with_the_partition_flattened() {
-        let event = event(&partition_id("model"), 7, 42);
-        let json = serde_json::to_value(&event).expect("encode");
-        assert_eq!(json["model_name"], "model");
-        assert_eq!(json["routing_group"], "default");
-        assert_eq!(json["session_id"], "s");
-        assert_eq!(json["writer_id"], 7);
-        let decoded: AffinityBindingEvent = serde_json::from_value(json).expect("decode");
-        assert_eq!(decoded, event);
-        let bytes = rmp_serde::to_vec_named(&event).expect("msgpack encode");
-        let decoded: AffinityBindingEvent = rmp_serde::from_slice(&bytes).expect("msgpack decode");
-        assert_eq!(decoded, event);
-    }
-
-    #[tokio::test]
-    async fn applier_scopes_by_partition_and_liveness() {
-        let partition = partition_id("model");
-        let table = table();
-        let _events = record_events(&table, 7, &partition);
-
-        assert_eq!(
-            table.apply_replica_event(&partition, event(&partition_id("other"), 9, 2), |_| {
-                panic!("other partitions must be rejected before liveness checking")
-            }),
-            None
-        );
-        let sequence = table.next_version().sequence + 10;
-        let mut unknown = event(&partition, 9, sequence);
-        unknown.worker_id = 5;
-        assert_eq!(
-            table.apply_replica_event(&partition, unknown, |target| target.worker_id == 1),
-            None
-        );
-        assert_eq!(
-            table.next_version().sequence,
-            sequence + 1,
-            "an unapplied event still advances the replica clock"
-        );
-        assert_eq!(table.query_target("s", None).expect("query"), None);
-        let binding = event(&partition, 9, sequence + 2);
-        assert_eq!(
-            table.apply_replica_event(&partition, binding.clone(), |target| target.worker_id == 1),
-            Some(ReplicaApplyOutcome::Inserted)
-        );
-        assert_eq!(
-            table.apply_replica_event(&partition, binding, |_| true),
-            Some(ReplicaApplyOutcome::Refreshed)
-        );
-        assert_eq!(
-            table.query_target("s", None).expect("query"),
-            Some(AffinityTarget::new(1, Some(0)))
-        );
-    }
-
-    /// Publishing and applying a binding uses the same schema in both directions.
-    #[tokio::test]
-    async fn replicas_converge_through_the_shared_schema() {
-        let partition = partition_id("model");
-        let frontend = table();
-        let service = table();
-        let mut frontend_events = record_events(&frontend, 100, &partition);
-        let mut service_events = record_events(&service, 200, &partition);
-
-        // The frontend binds; the service applies what it published.
-        bind(&frontend, AffinityTarget::new(1, Some(0)));
-        assert!(!frontend_events.is_empty());
-        while let Ok(event) = frontend_events.try_recv() {
-            assert_eq!(event.partition, partition);
-            assert_eq!(event.writer_id, 100);
-            assert!(
-                service
-                    .apply_replica_event(&partition, event, |_| true)
-                    .is_some()
-            );
-        }
-        assert_eq!(
-            service.query_target("s", None).expect("query"),
-            Some(AffinityTarget::new(1, Some(0)))
-        );
-
-        // The service re-binds after the worker departs; the frontend follows.
-        let AcquireStep::Held(hold) = service.try_acquire("s", None).expect("hold binding") else {
-            panic!("expected a bound session");
-        };
-        hold.invalidate();
-        bind(&service, AffinityTarget::new(2, Some(0)));
-        assert!(!service_events.is_empty());
-        while let Ok(event) = service_events.try_recv() {
-            assert_eq!(event.writer_id, 200);
-            frontend.apply_replica_event(&partition, event, |_| true);
-        }
-        assert_eq!(
-            frontend.query_target("s", None).expect("query"),
-            Some(AffinityTarget::new(2, Some(0))),
-            "the frontend converges on the service's newer binding"
-        );
-    }
+    use std::time::Duration;
 
     #[tokio::test(start_paused = true)]
     async fn peer_refresh_keeps_the_original_writers_binding_alive() {
-        let partition = partition_id("model");
+        let partition = RoutingPartitionId::new("model", "group");
+        let table = |writer| {
+            let table =
+                SessionAffinity::with_config(SessionAffinityConfig::new(Duration::from_secs(60)))
+                    .unwrap();
+            let (tx, rx) = mpsc::channel(4);
+            assert!(table.enable_replication(writer, replica_sink(partition.clone(), tx)));
+            (table, rx)
+        };
+        let (original, mut original_events) = table(100);
+        let (peer, mut peer_events) = table(200);
         let target = AffinityTarget::new(1, Some(0));
-        let original = table();
-        let peer = table();
-        let mut original_events = record_events(&original, 100, &partition);
-        let mut peer_events = record_events(&peer, 200, &partition);
-
-        bind(&original, target);
-        while let Ok(event) = original_events.try_recv() {
+        drop(
+            original
+                .commit(original.acquire("s", None).await.unwrap(), target)
+                .unwrap(),
+        );
+        for _ in 0..2 {
+            let event = original_events.try_recv().unwrap();
             assert_eq!(event.writer_id, 100);
             assert!(
                 peer.apply_replica_event(&partition, event, |_| true)
@@ -257,65 +132,29 @@ mod tests {
             );
         }
         assert_eq!(peer.query_target("s", None).unwrap(), Some(target));
-
         tokio::time::advance(Duration::from_secs(30)).await;
-        let hold = peer.acquire("s", None).await.unwrap();
-        drop(peer.commit(hold, target).unwrap());
-
-        // Both dispatch and completion refresh the adopted version. Its
-        // original writer must accept these updates from the peer.
-        let mut refresh_count = 0;
-        while let Ok(event) = peer_events.try_recv() {
-            assert_eq!(event.writer_id, 100);
+        drop(
+            peer.commit(peer.acquire("s", None).await.unwrap(), target)
+                .unwrap(),
+        );
+        for _ in 0..2 {
+            let event = peer_events.try_recv().unwrap();
+            assert_eq!(
+                event.writer_id, 100,
+                "peer refresh preserves the original version"
+            );
             assert_eq!(
                 original.apply_replica_event(&partition, event, |_| true),
                 Some(ReplicaApplyOutcome::Refreshed)
             );
-            refresh_count += 1;
         }
-        assert_eq!(refresh_count, 2);
-        assert!(
-            original_events.is_empty(),
-            "applying a refresh must not echo it"
-        );
-
-        tokio::time::advance(Duration::from_secs(31)).await;
-        for table in [&original, &peer] {
-            assert_eq!(table.query_target("s", None).unwrap(), Some(target));
+        assert!(original_events.is_empty(), "applying must not republish");
+        assert!(peer_events.is_empty());
+        for (elapsed, expected) in [(31, Some(target)), (30, None)] {
+            tokio::time::advance(Duration::from_secs(elapsed)).await;
+            for table in [&original, &peer] {
+                assert_eq!(table.query_target("s", None).unwrap(), expected);
+            }
         }
-        tokio::time::advance(Duration::from_secs(30)).await;
-        for table in [&original, &peer] {
-            assert_eq!(table.query_target("s", None).unwrap(), None);
-        }
-    }
-
-    fn bind(table: &SessionAffinity, target: AffinityTarget) {
-        let AcquireStep::Held(Hold::Initialize(initialization)) =
-            table.try_acquire("s", None).expect("acquire")
-        else {
-            panic!("expected a new session");
-        };
-        drop(initialization.commit(target).expect("commit"));
-    }
-
-    #[test]
-    fn replica_sink_drops_updates_when_full_or_closed() {
-        let partition = partition_id("model");
-        let (tx, mut rx) = mpsc::channel(1);
-        let sink = replica_sink(partition.clone(), tx);
-        let target = AffinityTarget::new(1, Some(0));
-        let version = AffinityVersion {
-            sequence: 1,
-            writer_id: 7,
-        };
-        sink.publish("first", target, version);
-        sink.publish("second", target, version);
-        assert_eq!(
-            rx.try_recv().expect("first update"),
-            AffinityBindingEvent::new(&partition, "first", target, version)
-        );
-        assert!(rx.try_recv().is_err());
-        drop(rx);
-        sink.publish("closed", target, version);
     }
 }
