@@ -11,6 +11,7 @@ use std::collections::HashMap;
 use bytes::Bytes;
 use dynamo_llm::http::service::metadata::MetadataHeaderError;
 
+#[cfg(test)]
 use dynamo_llm::protocols::common::extensions::{HEADER_TENANT_ID, last_non_empty_trimmed_value};
 
 /// A model server pod endpoint available for serving requests.
@@ -108,7 +109,8 @@ pub struct PickResult {
 /// Resolve the request's cache namespace with the canonical precedence:
 /// non-empty `x-tenant-id` header, then `nvext.cache_salt`, then top-level
 /// `cache_salt`. Empty values count as absent.
-pub fn resolve_cache_namespace(
+#[cfg(test)]
+pub(crate) fn resolve_cache_namespace(
     headers: &[(String, String)],
     nvext_cache_salt: Option<&str>,
     top_level_cache_salt: Option<&str>,
@@ -227,9 +229,44 @@ pub enum PickError {
     Overloaded,
 }
 
+impl PickError {
+    /// Preserve useful client-input diagnostics without echoing an unbounded
+    /// malformed value. Upstream and preprocessing failures use separate policies.
+    pub(crate) fn invalid_request_body(error: impl std::fmt::Display) -> Self {
+        let detail = error.to_string();
+        let mut chars = detail.chars();
+        let mut message: String = chars.by_ref().take(256).collect();
+        if chars.next().is_some() {
+            message.push_str("...");
+        }
+        Self::InvalidRequest(format!("invalid request body: {message}"))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn invalid_request_diagnostics_preserve_detail_and_bound_echoed_values() {
+        #[derive(Debug, serde::Deserialize)]
+        struct Input {
+            #[serde(rename = "model")]
+            _model: String,
+        }
+        let error = serde_json::from_str::<Input>(r#"{"model":42}"#).unwrap_err();
+        let detail = PickError::invalid_request_body(error).to_string();
+        assert!(detail.contains("invalid type: integer `42`, expected a string"));
+
+        let PickError::InvalidRequest(detail) = PickError::invalid_request_body("é".repeat(1024))
+        else {
+            panic!("client input errors must remain 400s");
+        };
+        assert_eq!(
+            detail,
+            format!("invalid request body: {}...", "é".repeat(256))
+        );
+    }
 
     #[test]
     fn address_port_brackets_ipv6() {

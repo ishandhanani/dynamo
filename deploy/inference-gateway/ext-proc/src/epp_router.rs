@@ -214,9 +214,9 @@ async fn prepare_remote_request(
     reservation_id: String,
     allowed_worker_ids: Option<HashSet<u64>>,
 ) -> Result<SelectAndReserveRequest, PickError> {
-    let mut envelope: RemoteRequest = serde_json::from_slice(&req.body)
-        .map_err(|_| PickError::InvalidRequest("invalid request body".into()))?;
-    let completion = envelope.is_completion(&req.headers)?;
+    let mut envelope: RemoteRequest =
+        serde_json::from_slice(&req.body).map_err(PickError::invalid_request_body)?;
+    let completion = envelope.is_completion()?;
     if envelope.model != model_name {
         return Err(PickError::InvalidRequest("request model must match the configured standalone model; LoRA aliases are unsupported".into()));
     }
@@ -252,11 +252,6 @@ async fn prepare_remote_request(
         .map(|(worker_id, rank)| selector.resolve_pinned_worker(worker_id, rank))
         .transpose()
         .map_err(|error| PickError::InvalidRequest(error.to_string()))?;
-    if routing.dp_rank.is_some() && pinned_worker.is_none() {
-        return Err(PickError::InvalidRequest(
-            "dp_rank requires an explicit worker pin".into(),
-        ));
-    }
     let token_ids = renderer
         .render(renderer_request_body(&req.body)?, completion)
         .await
@@ -985,6 +980,43 @@ mod tests {
                         .unwrap();
                 }
             }
+        }
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn remote_preparation_accepts_gateway_prefixes_and_unpaired_dp_rank() {
+        let (url, _received, server) = fixture_renderer(fixture_preprocessor()).await;
+        let (selector, _) = recording_selector().await;
+        let renderer = RenderClient::Vllm(
+            VllmRenderClient::new(&url, Duration::from_secs(5), 1024 * 1024).unwrap(),
+        );
+        for header in [
+            (":path", "/llm/v1/chat/completions"),
+            ("x-dynamo-dp-rank", "0"),
+        ] {
+            let req = RequestInfo {
+                request_id: "admission".into(),
+                model: "test-model".into(),
+                body: bytes::Bytes::from_static(
+                    br#"{"model":"test-model","messages":[{"role":"user","content":"hi"}]}"#,
+                ),
+                headers: vec![(header.0.into(), header.1.into())],
+                candidate_subset: Vec::new(),
+            };
+            let prepared = prepare_remote_request(
+                &renderer,
+                &selector,
+                "test-model",
+                true,
+                &req,
+                "admission".into(),
+                None,
+            )
+            .await
+            .unwrap();
+            assert!(prepared.pinned_worker.is_none());
+            assert!(!prepared.prompt.token_ids.unwrap().is_empty());
         }
         server.abort();
     }

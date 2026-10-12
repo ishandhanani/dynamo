@@ -22,8 +22,8 @@ use crate::picker::PickError;
 /// all other fields, including backend-specific prompt options, as raw JSON so
 /// removing it does not build a second tree of messages or token IDs.
 pub(crate) fn renderer_request_body(body: &Bytes) -> Result<Bytes, PickError> {
-    let mut fields: BTreeMap<String, &RawValue> = serde_json::from_slice(body)
-        .map_err(|_| PickError::InvalidRequest("invalid request body".into()))?;
+    let mut fields: BTreeMap<String, &RawValue> =
+        serde_json::from_slice(body).map_err(PickError::invalid_request_body)?;
     if fields.remove("nvext").is_none() {
         return Ok(body.clone());
     }
@@ -49,7 +49,7 @@ pub(crate) struct RemoteRequest<'a> {
 }
 
 impl RemoteRequest<'_> {
-    pub fn is_completion(&self, headers: &[(String, String)]) -> Result<bool, PickError> {
+    pub fn is_completion(&self) -> Result<bool, PickError> {
         let completion = match (self.messages.as_ref(), self.prompt) {
             (Some(messages), None) if messages.count > 0 => false,
             (None, Some(_)) => true,
@@ -59,19 +59,6 @@ impl RemoteRequest<'_> {
                 ));
             }
         };
-        if let Some((_, path)) = headers.iter().find(|(name, _)| name == ":path") {
-            let path = path.split('?').next().unwrap_or(path);
-            let expected = if completion {
-                "/v1/completions"
-            } else {
-                "/v1/chat/completions"
-            };
-            if path != expected {
-                return Err(PickError::InvalidRequest(
-                    "request body does not match a supported completion endpoint".into(),
-                ));
-            }
-        }
         if self.n.is_some_and(|n| n != 1) || self.lora_path.is_some() {
             return Err(PickError::InvalidRequest(
                 "standalone EPP supports one output and no per-request LoRA adapter".into(),
@@ -92,8 +79,8 @@ impl RemoteRequest<'_> {
             ));
         }
         if let Some(prompt) = self.prompt {
-            let shape: SinglePrompt = serde_json::from_str(prompt.get())
-                .map_err(|_| PickError::InvalidRequest("invalid completion prompt".into()))?;
+            let shape: SinglePrompt =
+                serde_json::from_str(prompt.get()).map_err(PickError::invalid_request_body)?;
             if !shape.0 {
                 return Err(PickError::InvalidRequest(
                     "standalone EPP does not support batched completion prompts".into(),

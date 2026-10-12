@@ -18,6 +18,7 @@ use dashmap::DashMap;
 use dynamo_kv_router::config::{RouterConfigOverride, try_kv_router_config_from_dynamo_env};
 use dynamo_kv_router::protocols::WorkerWithDpRank;
 use dynamo_llm::discovery::{ModelManager, WORKER_TYPE_DECODE};
+use dynamo_llm::engines::ValidateRequest;
 use dynamo_llm::kv_router::prefill_router::PrefillReservation;
 use dynamo_llm::kv_router::{FindBestMatchOutcome, ManagedKvRouter, PrefillRouter};
 use dynamo_llm::model_card::ModelDeploymentCard;
@@ -54,7 +55,8 @@ const DYN_KUBE_DISCOVERY_MODE: &str = "DYN_KUBE_DISCOVERY_MODE";
 /// [`OpenAIPreprocessor::gather_tokens`]'s own refusal to trust `token_data`
 /// for a `TextInput::Batch` of more than one prompt) — injecting them as
 /// `nvext.token_data` would apply prompt 1's tokens to every split of the
-/// batch. Chat and single/pre-tokenized completion requests are always safe.
+/// batch. Media requests also keep token injection disabled because the backend
+/// owns media processing and may expand placeholder tokens.
 pub(crate) struct TokenizeResult {
     pub(crate) request: PreprocessedRequest,
     pub(crate) tokens_safe_to_inject: bool,
@@ -260,8 +262,7 @@ impl Router {
     /// Returns the routing inputs, including the cache namespace resolved from
     /// the headers and body. Priorities default to zero and constraints default
     /// to empty when absent. Supports both `/v1/chat/completions` and
-    /// `/v1/completions` bodies, discriminated by a non-empty `messages` array
-    /// (chat) versus a `prompt` (completions).
+    /// `/v1/completions` bodies, discriminated by the presence of `prompt`.
     async fn tokenize(
         &self,
         request_json: &str,
@@ -509,29 +510,17 @@ pub(crate) async fn prepare_local_request(
     nvext_enabled: bool,
 ) -> Result<TokenizeResult, PickError> {
     let headers_map = request_header_map(headers)?;
-    let value: serde_json::Value = serde_json::from_str(request_json)
-        .map_err(|_| PickError::InvalidRequest("invalid request body".into()))?;
+    let value: serde_json::Value =
+        serde_json::from_str(request_json).map_err(PickError::invalid_request_body)?;
     let completion = value.get("prompt").is_some();
     if completion && value.get("messages").is_some() {
         return Err(PickError::InvalidRequest(
             "supply messages or prompt, not both".into(),
         ));
     }
-    if let Some((_, path)) = headers.iter().find(|(name, _)| name == ":path") {
-        let expected = if completion {
-            "/v1/completions"
-        } else {
-            "/v1/chat/completions"
-        };
-        if path.split('?').next() != Some(expected) {
-            return Err(PickError::InvalidRequest(
-                "request body does not match a supported completion endpoint".into(),
-            ));
-        }
-    }
     let (mut preprocessed, input_trigger, tokens_safe_to_inject) = if completion {
-        let mut request: NvCreateCompletionRequest = serde_json::from_value(value)
-            .map_err(|_| PickError::InvalidRequest("invalid completion request".into()))?;
+        let mut request: NvCreateCompletionRequest =
+            serde_json::from_value(value).map_err(PickError::invalid_request_body)?;
         if request.inner.prompt_embeds.is_some() {
             return Err(PickError::InvalidRequest(
                 "EPP cannot route prompt embeddings without token metadata".into(),
@@ -539,6 +528,9 @@ pub(crate) async fn prepare_local_request(
         }
         request.nvext =
             apply_frontend_nvext_policy(request.nvext.take(), &headers_map, nvext_enabled);
+        request
+            .validate()
+            .map_err(PickError::invalid_request_body)?;
         let safe = completion_text_tokens_safe_to_inject(&request.inner.prompt)
             && !matches!(&request.inner.prompt, Prompt::ArrayOfIntegerArray(prompts) if prompts.len() > 1);
         if !safe
@@ -577,9 +569,12 @@ pub(crate) async fn prepare_local_request(
             .map_err(local_preprocessing_error)?;
         (preprocessed, input_trigger, safe)
     } else {
-        let mut request: dynamo_llm::types::openai::chat_completions::NvCreateChatCompletionRequest = serde_json::from_value(value).map_err(|_| PickError::InvalidRequest("invalid chat request".into()))?;
+        let mut request: dynamo_llm::types::openai::chat_completions::NvCreateChatCompletionRequest = serde_json::from_value(value).map_err(PickError::invalid_request_body)?;
         request.nvext =
             apply_frontend_nvext_policy(request.nvext.take(), &headers_map, nvext_enabled);
+        request
+            .validate()
+            .map_err(PickError::invalid_request_body)?;
         let input_trigger = classify_chat_request(&request);
         let (preprocessed, _, _) = preprocessor
             .preprocess_request(&request, None)
@@ -599,22 +594,10 @@ pub(crate) async fn prepare_local_request(
             "runtime EPP does not support explicit prefill pins".into(),
         ));
     }
-    if routing.is_some_and(|routing| {
-        routing.dp_rank.is_some() && routing.worker_pin(RequestPhase::Aggregated).is_none()
-    }) {
-        return Err(PickError::InvalidRequest(
-            "dp_rank requires an explicit worker pin".into(),
-        ));
-    }
     let has_media = preprocessed
         .multi_modal_data
         .as_ref()
         .is_some_and(|data| !data.is_empty());
-    if has_media && preprocessed.mm_routing_info.is_none() {
-        return Err(PickError::InvalidRequest(
-            "local preprocessor did not provide multimodal routing hashes".into(),
-        ));
-    }
     Ok(TokenizeResult {
         request: preprocessed,
         tokens_safe_to_inject: tokens_safe_to_inject && !has_media,
@@ -1543,7 +1526,7 @@ impl EndpointPicker for Router {
         // backend applies nvext.token_data to every split (see
         // `TokenizeResult`), so omit it and let the backend tokenize each
         // prompt itself.
-        let token_ids = tokens_safe_to_inject.then(|| request.token_ids.as_ref().clone());
+        let token_ids = tokens_safe_to_inject.then(|| Arc::unwrap_or_clone(request.token_ids));
 
         Ok(PickResult {
             endpoint,
@@ -1612,6 +1595,117 @@ mod tests {
 
     use super::*;
     use k8s_openapi::api::core::v1::Pod;
+
+    fn fixture_preprocessor() -> Arc<OpenAIPreprocessor> {
+        OpenAIPreprocessor::new(
+            ModelDeploymentCard::load_from_disk(
+                concat!(
+                    env!("CARGO_MANIFEST_DIR"),
+                    "/../../../lib/llm/tests/data/sample-models/TinyLlama_v1.1"
+                ),
+                None,
+            )
+            .unwrap(),
+        )
+        .unwrap()
+    }
+
+    #[tokio::test]
+    async fn local_preparation_preserves_media_fallback_without_token_injection() {
+        let preprocessor = OpenAIPreprocessor::new(
+            ModelDeploymentCard::load_from_disk(
+                concat!(
+                    env!("CARGO_MANIFEST_DIR"),
+                    "/../../../lib/llm/tests/data/sample-models/mock-llama-3.1-8b-instruct"
+                ),
+                None,
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        let body = serde_json::json!({"model":"default","messages":[{"role":"user","content":[
+            {"type":"text","text":"Describe this image."},
+            {"type":"image_url","image_url":{"url":"data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="}}
+        ]}]})
+        .to_string();
+        let request: dynamo_llm::types::openai::chat_completions::NvCreateChatCompletionRequest =
+            serde_json::from_str(&body).unwrap();
+        let (frontend, _, _) = preprocessor
+            .preprocess_request(&request, None)
+            .await
+            .unwrap();
+        assert!(frontend.mm_routing_info.is_none());
+        let prepared = prepare_local_request(&preprocessor, &body, &[], true)
+            .await
+            .unwrap();
+        assert!(!prepared.tokens_safe_to_inject);
+        assert_eq!(prepared.request.token_ids, frontend.token_ids);
+        assert!(
+            prepared
+                .request
+                .multi_modal_data
+                .as_ref()
+                .is_some_and(|data| !data.is_empty())
+        );
+    }
+
+    #[tokio::test]
+    async fn local_preparation_rejects_invalid_sampling_as_client_errors() {
+        let preprocessor = fixture_preprocessor();
+        for input in [
+            serde_json::json!({"messages":[{"role":"user","content":"hi"}]}),
+            serde_json::json!({"prompt":"hi"}),
+        ] {
+            for (field, value) in [
+                ("temperature", serde_json::json!(3.0)),
+                ("top_p", serde_json::json!(0)),
+                ("n", serde_json::json!(0)),
+                ("frequency_penalty", serde_json::json!(3.0)),
+            ] {
+                let mut body = input.clone();
+                body["model"] = "default".into();
+                body[field] = value;
+                let error = prepare_local_request(&preprocessor, &body.to_string(), &[], true)
+                    .await
+                    .err()
+                    .expect("invalid sampling must be rejected");
+                assert!(
+                    matches!(error, PickError::InvalidRequest(_)),
+                    "{field}: {error}"
+                );
+                assert!(
+                    error.to_string().contains("must be between"),
+                    "{field}: {error}"
+                );
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn local_preparation_accepts_gateway_prefixes_and_unpaired_dp_rank() {
+        let preprocessor = fixture_preprocessor();
+        let body =
+            serde_json::json!({"model":"default","messages":[{"role":"user","content":"hi"}]})
+                .to_string();
+        for header in [
+            (":path", "/llm/v1/chat/completions"),
+            ("x-dynamo-dp-rank", "0"),
+        ] {
+            let headers = [(header.0.into(), header.1.into())];
+            let prepared = prepare_local_request(&preprocessor, &body, &headers, true)
+                .await
+                .unwrap();
+            assert!(
+                prepared
+                    .request
+                    .routing
+                    .as_ref()
+                    .and_then(|r| r.worker_pin(RequestPhase::Aggregated))
+                    .is_none()
+            );
+            assert!(!prepared.request.token_ids.is_empty());
+        }
+    }
 
     #[test]
     fn preprocessing_errors_preserve_class_without_exposing_diagnostics() {
