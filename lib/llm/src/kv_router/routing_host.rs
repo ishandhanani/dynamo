@@ -1,16 +1,11 @@
 // SPDX-FileCopyrightText: Copyright (c) 2024-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-use std::{
-    collections::HashSet,
-    future::{Future, ready},
-    sync::Arc,
-    time::Duration,
-};
+use std::{collections::HashSet, future::Future, sync::Arc, time::Duration};
 
 use dynamo_kv_router::{
     protocols::{TokensWithHashes, WorkerConfigLike, WorkerWithDpRank},
-    scheduling::{AbortCause, KvSchedulerError},
+    scheduling::{AbortCause, AffinityRequirement, KvSchedulerError},
     selector::{WorkerInputs, WorkerSelector},
 };
 use dynamo_runtime::{
@@ -40,8 +35,9 @@ use crate::{
         timing::{RequestPhase, RoutingData, WORKER_TYPE_DECODE, WORKER_TYPE_PREFILL},
     },
     session_affinity::{
-        AffinityCoordinator, AffinityTarget, Hold, SessionAffinityMode, affinity_id,
-        explicit_target, from_table, invalid_argument, subagent_group_affinity_id,
+        AffinityTarget, Hold, SessionAffinity, SessionAffinityMode, affinity_error, affinity_id,
+        explicit_target, from_table, invalid_argument, subagent_group_affinity_id, target_is_live,
+        to_table, tracked_stream,
     },
 };
 
@@ -296,7 +292,7 @@ pub struct RoutingHost {
     inner: PushRouter<PreprocessedRequest, Annotated<LLMEngineOutput>>,
     policy: RoutingPolicy,
     request_metrics: Arc<RouterRequestMetrics>,
-    affinity: Option<AffinityCoordinator>,
+    affinity: Option<SessionAffinity>,
     session_affinity_mode: SessionAffinityMode,
     hosted_occupancy: Option<HostedOccupancy>,
     lora: Option<LoraRouting>,
@@ -377,10 +373,10 @@ impl RoutingHost {
         session_affinity_ttl: Option<Duration>,
     ) -> Result<Self, Error> {
         let affinity = session_affinity_ttl
-            .map(|ttl| kv_router.affinity_coordinator(ttl, SessionAffinityMode::Hard))
+            .map(|ttl| kv_router.session_affinity(ttl, SessionAffinityMode::Hard))
             .transpose()?;
 
-        Ok(Self::new_with_coordinator(inner, kv_router, affinity))
+        Ok(Self::new_with_affinity(inner, kv_router, affinity))
     }
 
     pub fn new_with_load_context(
@@ -391,10 +387,10 @@ impl RoutingHost {
         session_affinity_mode: SessionAffinityMode,
     ) -> Result<Self, Error> {
         let affinity = session_affinity_ttl
-            .map(|ttl| kv_router.affinity_coordinator(ttl, session_affinity_mode))
+            .map(|ttl| kv_router.session_affinity(ttl, session_affinity_mode))
             .transpose()?;
 
-        Ok(Self::new_with_load_context_and_coordinator(
+        Ok(Self::new_with_load_context_and_affinity(
             inner,
             kv_router,
             load_context,
@@ -402,21 +398,21 @@ impl RoutingHost {
         ))
     }
 
-    pub(crate) fn new_with_coordinator(
+    pub(crate) fn new_with_affinity(
         inner: PushRouter<PreprocessedRequest, Annotated<LLMEngineOutput>>,
         kv_router: Arc<KvRouter>,
-        affinity: Option<AffinityCoordinator>,
+        affinity: Option<SessionAffinity>,
     ) -> Self {
-        Self::new_with_optional_load_context_and_coordinator(inner, kv_router, None, affinity)
+        Self::new_with_optional_load_context_and_affinity(inner, kv_router, None, affinity)
     }
 
-    pub(crate) fn new_with_load_context_and_coordinator(
+    pub(crate) fn new_with_load_context_and_affinity(
         inner: PushRouter<PreprocessedRequest, Annotated<LLMEngineOutput>>,
         kv_router: Arc<KvRouter>,
         load_context: Arc<crate::kv_router::RoutingLoadContext>,
-        affinity: Option<AffinityCoordinator>,
+        affinity: Option<SessionAffinity>,
     ) -> Self {
-        Self::new_with_optional_load_context_and_coordinator(
+        Self::new_with_optional_load_context_and_affinity(
             inner,
             kv_router,
             Some(load_context),
@@ -424,11 +420,11 @@ impl RoutingHost {
         )
     }
 
-    fn new_with_optional_load_context_and_coordinator(
+    fn new_with_optional_load_context_and_affinity(
         inner: PushRouter<PreprocessedRequest, Annotated<LLMEngineOutput>>,
         kv_router: Arc<KvRouter>,
         load_context: Option<Arc<crate::kv_router::RoutingLoadContext>>,
-        affinity: Option<AffinityCoordinator>,
+        affinity: Option<SessionAffinity>,
     ) -> Self {
         // Eagerly register router request metrics (as zeros) so they are
         // scrapeable before any requests arrive. Both the frontend pipeline
@@ -442,7 +438,7 @@ impl RoutingHost {
             request_metrics,
             session_affinity_mode: affinity
                 .as_ref()
-                .map(AffinityCoordinator::mode)
+                .map(SessionAffinity::mode)
                 .unwrap_or_default(),
             affinity,
             hosted_occupancy: None,
@@ -459,10 +455,10 @@ impl RoutingHost {
         Self::new_builtin_with_capabilities(inner, load_context, None, None)
     }
 
-    pub(crate) fn new_builtin_with_coordinator(
+    pub(crate) fn new_builtin_with_affinity(
         inner: PushRouter<PreprocessedRequest, Annotated<LLMEngineOutput>>,
         load_context: Arc<crate::kv_router::RoutingLoadContext>,
-        affinity: Option<AffinityCoordinator>,
+        affinity: Option<SessionAffinity>,
     ) -> Result<Self, Error> {
         Self::new_builtin_with_capabilities(inner, load_context, affinity, None)
     }
@@ -470,7 +466,7 @@ impl RoutingHost {
     pub(crate) fn new_builtin_with_capabilities(
         inner: PushRouter<PreprocessedRequest, Annotated<LLMEngineOutput>>,
         load_context: Arc<crate::kv_router::RoutingLoadContext>,
-        affinity: Option<AffinityCoordinator>,
+        affinity: Option<SessionAffinity>,
         lora: Option<(Arc<LoraFilter>, Arc<LoadEstimator>)>,
     ) -> Result<Self, Error> {
         if affinity.is_some() && lora.is_some() {
@@ -519,7 +515,7 @@ impl RoutingHost {
             request_metrics,
             session_affinity_mode: affinity
                 .as_ref()
-                .map(AffinityCoordinator::mode)
+                .map(SessionAffinity::mode)
                 .unwrap_or_default(),
             affinity,
             hosted_occupancy,
@@ -605,8 +601,21 @@ impl RoutingHost {
         )))
     }
 
-    /// Commit a held session to the dispatched worker; a request without a
-    /// session passes its stream through.
+    fn affinity_target_is_live(
+        &self,
+        target: dynamo_kv_router::protocols::WorkerAffinityTarget,
+    ) -> bool {
+        target_is_live(
+            &self.inner.client,
+            self.kv_router_if_enabled()
+                .map(|router| &router.workers_with_configs),
+            target,
+        )
+    }
+
+    /// Commit a held session to the dispatched worker and keep the lease for
+    /// as long as the response stream runs; a request without a session
+    /// passes its stream through. Hard failover is serialized before dispatch.
     fn bind_affinity(
         &self,
         hold: Option<Hold>,
@@ -616,7 +625,10 @@ impl RoutingHost {
         let (Some(hold), Some(affinity)) = (hold, self.affinity.as_ref()) else {
             return Ok(stream);
         };
-        affinity.commit_to_stream(hold, dispatched_target, stream)
+        affinity
+            .commit(hold, to_table(dispatched_target))
+            .map(|lease| tracked_stream(lease, stream))
+            .map_err(affinity_error)
     }
 
     /// Check request-supplied targets only at initial selection, not after a route preview
@@ -653,130 +665,82 @@ impl RoutingHost {
         Ok(())
     }
 
-    fn affinity_target_is_valid(&self, target: AffinityTarget) -> bool {
-        if !self.inner.client.is_instance_discovered(target.worker_id) {
-            return false;
-        }
-        let Some(kv_router) = self.kv_router_if_enabled() else {
-            return true;
-        };
-        let workers = kv_router.workers_with_configs.borrow();
-        let Some(config) = workers.get(&target.worker_id) else {
-            return true;
-        };
-        let Some(dp_rank) = target.dp_rank else {
-            return true;
-        };
-        let start = config.data_parallel_start_rank();
-        let end = start.saturating_add(config.data_parallel_size());
-        (start..end).contains(&dp_rank)
-    }
-
-    /// Take a session-affinity slot under the same cleanup policy as every other
-    /// routing stage.
-    ///
-    /// `acquire_with_context` cancels its own wait as soon as the context stops,
-    /// and it runs upstream of every other stage. A decode leg with staged KV
-    /// would therefore die here — before any of the wrapped stages could let it
-    /// through — whenever a concurrent request for the same session is still
-    /// `Initializing`. On that path we wait through the stop instead, drawing on
-    /// the request's shared budget so the wait is still bounded.
-    #[allow(clippy::too_many_arguments)]
-    async fn acquire_affinity_slot(
-        &self,
-        affinity: &AffinityCoordinator,
-        session_id: &SessionAffinityId,
-        requested_target: Option<AffinityTarget>,
-        context: &dyn AsyncEngineContext,
-        phase: RequestPhase,
-        staged_kv: StagedKv,
-        budget: &CleanupBudget,
-    ) -> Result<Hold, Error> {
-        match DispatchCancellation::for_request(phase, staged_kv) {
-            DispatchCancellation::CancelWhenStopped => {
-                affinity
-                    .acquire_with_context(session_id, requested_target, context)
-                    .await
-            }
-            DispatchCancellation::DispatchWhenStopped => await_with_cleanup_policy(
-                context,
-                phase,
-                staged_kv,
-                "affinity.acquire",
-                budget,
-                affinity.acquire(session_id, requested_target),
-            )
-            .await
-            .and_then(|result| result),
-        }
-    }
-
-    async fn select_with_session_affinity<T, Select, SelectionFuture>(
+    /// Resolve before selection; the host keeps the hold until dispatch succeeds.
+    /// Query-only requests read the binding without holding it. A decode leg
+    /// with staged KV waits through client stop under the shared cleanup budget.
+    async fn resolve_hosted_session(
         &self,
         request: &SingleIn<PreprocessedRequest>,
         phase: RequestPhase,
         is_query_only: bool,
         budget: &CleanupBudget,
-        mut select: Select,
-    ) -> Result<(T, Option<Hold>), Error>
-    where
-        Select: FnMut(Option<AffinityTarget>) -> SelectionFuture,
-        SelectionFuture: Future<Output = Result<T, Error>>,
-    {
-        let staged_kv = StagedKv::for_request(request.content());
+    ) -> Result<(Option<Hold>, Option<AffinityRequirement>), Error> {
         let Some(affinity) = self.affinity.as_ref() else {
-            return Ok((select(None).await?, None));
+            return Ok((None, None));
         };
         let Some(session_id) = affinity_id(request)? else {
-            return Ok((select(None).await?, None));
+            return Ok((None, None));
         };
         let explicit = explicit_target(request.content(), phase)?;
         let session_id = self
             .group_binding_id(request, explicit)
             .unwrap_or(session_id);
+        let requested = explicit.map(to_table);
+        let table = affinity;
         if is_query_only {
-            let target = affinity.query_target(&session_id, explicit)?;
-            return Ok((select(target).await?, None));
+            return Ok((
+                None,
+                table
+                    .query_target(session_id.as_str(), requested)
+                    .map_err(affinity_error)?
+                    .map(|target| table.requirement(target)),
+            ));
         }
-
-        let request_context = request.context();
-        let operation = self
-            .acquire_affinity_slot(
-                affinity,
-                &session_id,
-                explicit,
-                request_context.as_ref(),
+        let had_binding = matches!(self.policy, RoutingPolicy::Direct)
+            && table
+                .query_target(session_id.as_str(), None)
+                .map_err(affinity_error)?
+                .is_some();
+        let context = request.context();
+        let staged_kv = StagedKv::for_request(request.content());
+        let is_live = |target| self.affinity_target_is_live(target);
+        let hold = match DispatchCancellation::for_request(phase, staged_kv) {
+            DispatchCancellation::CancelWhenStopped => table
+                .resolve(session_id.as_str(), requested, is_live, async {
+                    tokio::select! {
+                        _ = context.stopped() => {}
+                        _ = context.killed() => {}
+                    }
+                })
+                .await
+                .map_err(affinity_error)?,
+            DispatchCancellation::DispatchWhenStopped => await_with_cleanup_policy(
+                context.as_ref(),
                 phase,
                 staged_kv,
+                "affinity.resolve",
                 budget,
+                table.resolve(
+                    session_id.as_str(),
+                    requested,
+                    is_live,
+                    std::future::pending(),
+                ),
             )
-            .await?;
-        let target = operation.target().map(from_table);
-        match select(target).await {
-            Ok(selection) => Ok((selection, Some(operation))),
-            Err(error) if is_cancelled(&error) => Err(error),
-            Err(_error)
-                if self.session_affinity_mode == SessionAffinityMode::Hard
-                    && explicit.is_none()
-                    && target.is_some_and(|target| !self.affinity_target_is_valid(target)) =>
-            {
-                operation.invalidate();
-                let retry = self
-                    .acquire_affinity_slot(
-                        affinity,
-                        &session_id,
-                        None,
-                        request_context.as_ref(),
-                        phase,
-                        staged_kv,
-                        budget,
-                    )
-                    .await?;
-                let selection = select(retry.target().map(from_table)).await?;
-                Ok((selection, Some(retry)))
-            }
-            Err(error) => Err(error),
+            .await?
+            .map_err(affinity_error)?,
+        };
+        let requirement = hold
+            .as_ref()
+            .and_then(Hold::target)
+            .map(|target| table.requirement(target));
+        if had_binding && explicit.is_none() && requirement.is_none() {
+            return Err(DynamoError::builder()
+                .error_type(ErrorType::WorkerUnavailable)
+                .message(format!("the worker bound to this session is no longer available for {phase} Direct routing"))
+                .build().into());
         }
+        Ok((hold, requirement))
     }
 
     pub(crate) async fn select_and_dispatch_prefill<M, F>(
@@ -844,7 +808,7 @@ impl AsyncEngine<SingleIn<PreprocessedRequest>, ManyOut<Annotated<LLMEngineOutpu
         let phase = request.phase();
         let phase_label = phase.to_string();
         let route_guard = StageGuard::new(STAGE_ROUTE, &phase_label);
-        let (mut selection, mut operation) = self
+        let (mut selection, operation) = self
             .select_with_affinity(&request, phase, is_query_only, &budget)
             .await?;
         if is_query_only {
@@ -898,21 +862,10 @@ impl AsyncEngine<SingleIn<PreprocessedRequest>, ManyOut<Annotated<LLMEngineOutpu
         };
         drop(route_guard);
         let selected_target = route_target(selection.worker);
-        let stream = match self
+        // A failed dispatch binds nothing: the hold is released with it.
+        let stream = self
             .dispatch_selection(request, selection, guard, &budget)
-            .await
-        {
-            Ok(stream) => stream,
-            Err(error) => {
-                if self.session_affinity_mode == SessionAffinityMode::Hard
-                    && !self.affinity_target_is_valid(selected_target)
-                    && let Some(operation) = operation.take()
-                {
-                    operation.invalidate();
-                }
-                return Err(error);
-            }
-        };
+            .await?;
         self.bind_affinity(operation, selected_target, stream)
     }
 }

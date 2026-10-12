@@ -1,6 +1,8 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
+//! Affinity lifecycle contract tests exercise the shared table and frontend stream adapter.
+
 use std::{sync::Arc, time::Duration};
 
 use dynamo_runtime::{
@@ -11,26 +13,47 @@ use dynamo_runtime::{
 };
 use futures::{StreamExt, stream};
 
-use super::SessionAffinityMode::{Hard, Soft};
+use super::SessionAffinityMode::{self, Hard};
 use super::{
-    AffinityCoordinator, AffinityTarget, Hold, LlmResponse, affinity_id,
-    coordinator::{ReplicaApplyOutcome, tracked_stream},
-    explicit_target, subagent_group_affinity_id, to_table,
+    AffinityTarget, Hold, LlmResponse, affinity_error, affinity_id, explicit_target,
+    replica_sync::ReplicaSyncRuntime, subagent_group_affinity_id, to_table, tracked_stream,
 };
 use crate::{
     preprocessor::PreprocessedRequest,
     protocols::common::{
-        extensions::{SESSION_AFFINITY_CONTEXT_KEY, SessionAffinityId},
-        llm_backend::LLMEngineOutput,
-        preprocessor::RoutingHints,
-        timing::RequestPhase,
+        extensions::SESSION_AFFINITY_CONTEXT_KEY, llm_backend::LLMEngineOutput,
+        preprocessor::RoutingHints, timing::RequestPhase,
     },
     types::Annotated,
 };
-use dynamo_kv_router::services::selection::affinity::MAX_SESSION_AFFINITY_ID_BYTES;
+use dynamo_kv_router::services::selection::affinity::{
+    AffinityBindingEvent, AffinityVersion, MAX_SESSION_AFFINITY_ID_BYTES, ReplicaApplyOutcome,
+    SessionAffinity, SessionAffinityConfig,
+};
 
-fn session_id() -> SessionAffinityId {
-    SessionAffinityId::new("session-1")
+const TTL: Duration = Duration::from_secs(10);
+
+fn session_id() -> String {
+    "session-1".into()
+}
+
+fn coordinator() -> SessionAffinity {
+    SessionAffinity::with_config(SessionAffinityConfig::new(Duration::from_secs(10))).unwrap()
+}
+
+async fn bind(table: &SessionAffinity, target: dynamo_kv_router::protocols::WorkerAffinityTarget) {
+    let hold = table.acquire(&session_id(), None).await.unwrap();
+    drop(table.commit(hold, target).unwrap());
+}
+
+fn enable_replica(
+    table: &SessionAffinity,
+    writer_id: u64,
+    capacity: usize,
+) -> tokio::sync::mpsc::Receiver<AffinityBindingEvent> {
+    let (sink, rx) = ReplicaSyncRuntime::for_test(capacity);
+    assert!(table.enable_replication(writer_id, sink));
+    rx
 }
 
 fn target(worker_id: u64, dp_rank: Option<u32>) -> AffinityTarget {
@@ -42,14 +65,6 @@ fn table_target(
     dp_rank: Option<u32>,
 ) -> dynamo_kv_router::services::selection::affinity::AffinityTarget {
     to_table(target(worker_id, dp_rank))
-}
-
-fn coordinator() -> AffinityCoordinator {
-    AffinityCoordinator::new(Duration::from_secs(10), Hard).unwrap()
-}
-
-fn soft_coordinator() -> AffinityCoordinator {
-    AffinityCoordinator::new(Duration::from_secs(10), Soft).unwrap()
 }
 
 fn response_stream(items: usize) -> dynamo_runtime::pipeline::ManyOut<LlmResponse> {
@@ -73,19 +88,11 @@ fn cancelled_response_stream() -> dynamo_runtime::pipeline::ManyOut<LlmResponse>
     ResponseStream::new(Box::pin(stream::empty()), Arc::new(controller))
 }
 
-async fn bind(coordinator: &AffinityCoordinator, target: AffinityTarget) {
-    let operation = coordinator.acquire(&session_id(), None).await.unwrap();
-    let mut stream = coordinator
-        .commit_to_stream(operation, target, response_stream(1))
-        .unwrap();
-    while stream.next().await.is_some() {}
-}
-
-async fn assert_binding_expires_after_refreshed_ttl(coordinator: &AffinityCoordinator) {
+async fn assert_binding_expires_after_refreshed_ttl(coordinator: &SessionAffinity) {
     tokio::time::advance(Duration::from_secs(9)).await;
     assert_eq!(
         coordinator.query_target(&session_id(), None).unwrap(),
-        Some(target(7, Some(0)))
+        Some(table_target(7, Some(0)))
     );
     tokio::time::advance(Duration::from_secs(2)).await;
     assert_eq!(coordinator.query_target(&session_id(), None).unwrap(), None);
@@ -219,8 +226,9 @@ async fn session_affinity_wait_stops_when_request_is_cancelled() {
     let waiter_coordinator = coordinator.clone();
     let waiter = tokio::spawn(async move {
         waiter_coordinator
-            .acquire_with_context(&session_id(), None, waiter_context.as_ref())
+            .resolve(&session_id(), None, |_| true, waiter_context.stopped())
             .await
+            .map_err(affinity_error)
     });
     coordinator.wait_for_initializing_waiter().await;
     context.stop();
@@ -240,7 +248,7 @@ async fn session_affinity_wait_stops_when_request_is_cancelled() {
 async fn session_affinity_validates_worker_and_rank_contract() {
     let coordinator = coordinator();
     let Hold::Initialize(initializer) = coordinator
-        .acquire(&session_id(), Some(target(7, None)))
+        .acquire(&session_id(), Some(table_target(7, None)))
         .await
         .unwrap()
     else {
@@ -250,19 +258,19 @@ async fn session_affinity_validates_worker_and_rank_contract() {
 
     assert!(
         coordinator
-            .acquire(&session_id(), Some(target(8, None)))
+            .acquire(&session_id(), Some(table_target(8, None)))
             .await
             .is_err()
     );
     assert!(
         coordinator
-            .acquire(&session_id(), Some(target(7, Some(0))))
+            .acquire(&session_id(), Some(table_target(7, Some(0))))
             .await
             .is_err()
     );
     assert!(
         coordinator
-            .acquire(&session_id(), Some(target(7, None)))
+            .acquire(&session_id(), Some(table_target(7, None)))
             .await
             .is_ok()
     );
@@ -348,9 +356,12 @@ async fn session_affinity_cancelled_stream_refreshes_idle_ttl() {
 async fn session_affinity_committed_binding_survives_cancelled_stream_until_ttl() {
     let coordinator = coordinator();
     let operation = coordinator.acquire(&session_id(), None).await.unwrap();
-    let mut stream = coordinator
-        .commit_to_stream(operation, target(7, Some(0)), cancelled_response_stream())
-        .unwrap();
+    let mut stream = tracked_stream(
+        coordinator
+            .commit(operation, to_table(target(7, Some(0))))
+            .unwrap(),
+        cancelled_response_stream(),
+    );
     tokio::time::advance(Duration::from_secs(9)).await;
     assert!(stream.next().await.is_none());
 
@@ -405,7 +416,7 @@ async fn session_affinity_bound_lease_drop_refreshes_idle_ttl() {
     tokio::task::yield_now().await;
     assert_eq!(
         coordinator.query_target(&session_id(), None).unwrap(),
-        Some(target(7, Some(0)))
+        Some(table_target(7, Some(0)))
     );
     drop(lease);
 
@@ -431,7 +442,7 @@ async fn session_affinity_query_is_read_only() {
     drop(initializer.commit(table_target(7, Some(0))).unwrap());
     assert_eq!(
         coordinator.query_target(&session_id(), None).unwrap(),
-        Some(target(7, Some(0)))
+        Some(table_target(7, Some(0)))
     );
     coordinator.expire_for_test(&session_id());
     assert_eq!(coordinator.query_target(&session_id(), None).unwrap(), None);
@@ -463,8 +474,11 @@ fn session_affinity_rejects_invalid_ttl_before_starting_reaper() {
         Duration::ZERO,
         Duration::from_secs(super::MAX_SESSION_AFFINITY_TTL_SECS + 1),
     ] {
-        let Err(error) = AffinityCoordinator::new(ttl, Hard) else {
-            panic!("invalid TTL must fail coordinator construction");
+        let Err(error) =
+            SessionAffinity::with_config(SessionAffinityConfig::new(ttl).with_mode(Hard))
+                .map_err(affinity_error)
+        else {
+            panic!("invalid TTL must fail host construction");
         };
         assert!(dynamo_runtime::error::match_error_chain(
             error.as_ref(),
@@ -476,107 +490,19 @@ fn session_affinity_rejects_invalid_ttl_before_starting_reaper() {
 }
 
 #[tokio::test(start_paused = true)]
-async fn session_affinity_enforces_id_and_entry_limits() {
-    let coordinator = AffinityCoordinator::with_test_limits(1, 8);
-    let oversized = SessionAffinityId::new("123456789");
-    let Err(error) = coordinator.acquire(&oversized, None).await else {
-        panic!("oversized session ID must fail");
-    };
-    assert!(dynamo_runtime::error::match_error_chain(
-        error.as_ref(),
-        &[ErrorType::InvalidArgument],
-        &[]
-    ));
-    assert_eq!(coordinator.entry_count(), 0);
-
-    let first_id = SessionAffinityId::new("first");
-    let first = coordinator.acquire(&first_id, None).await.unwrap();
-    let second_id = SessionAffinityId::new("second");
-    let Err(error) = coordinator.acquire(&second_id, None).await else {
-        panic!("entry limit must reject a second session");
-    };
-    assert!(dynamo_runtime::error::match_error_chain(
-        error.as_ref(),
-        &[ErrorType::ResourceExhausted],
-        &[]
-    ));
-
-    drop(first);
-    assert_eq!(coordinator.entry_count(), 0);
-    assert!(matches!(
-        coordinator.acquire(&second_id, None).await.unwrap(),
-        Hold::Initialize(_)
-    ));
-}
-
-#[tokio::test(start_paused = true)]
-async fn session_affinity_replica_applies_first_live_binding_wins() {
-    let coordinator = coordinator();
-    let local_target = target(7, Some(0));
-    let conflicting_target = target(8, Some(1));
-
-    assert_eq!(
-        coordinator.apply_replica_update_for_test("replicated", local_target),
-        ReplicaApplyOutcome::Inserted
-    );
-    assert_eq!(
-        coordinator
-            .query_target(&SessionAffinityId::new("replicated"), None)
-            .unwrap(),
-        Some(local_target)
-    );
-    assert_eq!(
-        coordinator.apply_replica_update_for_test("replicated", conflicting_target),
-        ReplicaApplyOutcome::IgnoredConflict
-    );
-
-    coordinator.expire_for_test(&SessionAffinityId::new("replicated"));
-    assert_eq!(
-        coordinator.apply_replica_update_for_test("replicated", conflicting_target),
-        ReplicaApplyOutcome::ReplacedExpired
-    );
-    assert_eq!(
-        coordinator
-            .query_target(&SessionAffinityId::new("replicated"), None)
-            .unwrap(),
-        Some(conflicting_target)
-    );
-}
-
-#[tokio::test(start_paused = true)]
-async fn session_affinity_replica_duplicate_refreshes_local_ttl() {
-    let coordinator = coordinator();
-    let replicated_id = SessionAffinityId::new("replicated");
-    let replicated_target = target(7, Some(0));
-
-    assert_eq!(
-        coordinator.apply_replica_update_for_test("replicated", replicated_target),
-        ReplicaApplyOutcome::Inserted
-    );
-    tokio::time::advance(Duration::from_secs(9)).await;
-    assert_eq!(
-        coordinator.apply_replica_update_for_test("replicated", replicated_target),
-        ReplicaApplyOutcome::Refreshed
-    );
-    tokio::time::advance(Duration::from_secs(2)).await;
-    assert_eq!(
-        coordinator.query_target(&replicated_id, None).unwrap(),
-        Some(replicated_target)
-    );
-    tokio::time::advance(Duration::from_secs(9)).await;
-    assert_eq!(
-        coordinator.query_target(&replicated_id, None).unwrap(),
-        None
-    );
-}
-
-#[tokio::test(start_paused = true)]
 async fn session_affinity_replica_ignores_initializing_sessions() {
     let coordinator = coordinator();
     let initializing = coordinator.acquire(&session_id(), None).await.unwrap();
 
     assert_eq!(
-        coordinator.apply_replica_update_for_test(session_id().as_str(), target(7, Some(0))),
+        coordinator.apply_replica_update(
+            session_id().into(),
+            table_target(7, Some(0)),
+            AffinityVersion {
+                sequence: 0,
+                writer_id: 0
+            }
+        ),
         ReplicaApplyOutcome::IgnoredInitializing
     );
     assert_eq!(coordinator.query_target(&session_id(), None).unwrap(), None);
@@ -584,36 +510,21 @@ async fn session_affinity_replica_ignores_initializing_sessions() {
 }
 
 #[tokio::test(start_paused = true)]
-async fn session_affinity_replica_enforces_id_and_entry_limits() {
-    let coordinator = AffinityCoordinator::with_test_limits(1, 8);
-
-    assert_eq!(
-        coordinator.apply_replica_update_for_test("123456789", target(7, Some(0))),
-        ReplicaApplyOutcome::RejectedSessionId
-    );
-    assert_eq!(
-        coordinator.apply_replica_update_for_test("first", target(7, Some(0))),
-        ReplicaApplyOutcome::Inserted
-    );
-    assert_eq!(
-        coordinator.apply_replica_update_for_test("second", target(8, Some(0))),
-        ReplicaApplyOutcome::RejectedCapacity
-    );
-    assert_eq!(coordinator.entry_count(), 1);
-}
-
-#[tokio::test(start_paused = true)]
 async fn session_affinity_publishes_after_dispatch_and_lease_completion() {
     let coordinator = coordinator();
-    let mut updates = coordinator.enable_test_replica(99, 4);
+    let (replica, mut updates) = ReplicaSyncRuntime::for_test(4);
+    assert!(coordinator.enable_replication(99, replica.clone()));
     let selected_target = target(7, Some(0));
     let operation = coordinator.acquire(&session_id(), None).await.unwrap();
-    let stream = coordinator
-        .commit_to_stream(operation, selected_target, response_stream(1))
-        .unwrap();
+    let stream = tracked_stream(
+        coordinator
+            .commit(operation, to_table(selected_target))
+            .unwrap(),
+        response_stream(1),
+    );
 
     let after_dispatch = updates.recv().await.unwrap();
-    assert_eq!(after_dispatch.session_id, session_id().as_str());
+    assert_eq!(after_dispatch.session_id, session_id());
     assert_eq!(after_dispatch.worker_id, selected_target.worker_id);
     assert_eq!(after_dispatch.dp_rank, selected_target.dp_rank);
     assert_eq!(after_dispatch.writer_id, 99);
@@ -625,65 +536,39 @@ async fn session_affinity_publishes_after_dispatch_and_lease_completion() {
 }
 
 #[tokio::test(start_paused = true)]
-async fn session_affinity_republishes_the_stored_replica_version() {
-    let coordinator = coordinator();
-    let mut updates = coordinator.enable_test_replica(99, 1);
-    let replicated_target = target(7, Some(0));
-    assert_eq!(
-        coordinator.apply_versioned_replica_update_for_test(
-            session_id().as_str(),
-            replicated_target,
-            123,
-            7,
-        ),
-        ReplicaApplyOutcome::Inserted
-    );
-
-    let Hold::Bound { lease, .. } = coordinator.acquire(&session_id(), None).await.unwrap() else {
-        panic!("replicated binding must be acquired");
-    };
-    drop(lease);
-
-    let update = updates.recv().await.unwrap();
-    assert_eq!(update.sequence, 123);
-    assert_eq!(update.writer_id, 7);
-}
-
-#[tokio::test(start_paused = true)]
 async fn session_affinity_worker_only_binding_allows_ranked_dispatch_without_narrowing() {
     let coordinator = coordinator();
-    let worker_binding = target(7, None);
+    let worker_binding = table_target(7, None);
 
     let initialization = coordinator.acquire(&session_id(), None).await.unwrap();
-    drop(
-        coordinator
-            .commit_to_stream(initialization, worker_binding, response_stream(1))
-            .unwrap(),
-    );
+    drop(coordinator.commit(initialization, worker_binding).unwrap());
 
     let continuation = coordinator.acquire(&session_id(), None).await.unwrap();
-    let stream = coordinator
-        .commit_to_stream(continuation, target(7, Some(3)), response_stream(1))
-        .expect("worker-only affinity must allow the scheduler to select a DP rank");
+    let lease = coordinator
+        .commit(continuation, table_target(7, Some(3)))
+        .expect("worker-only coordinator must allow the scheduler to select a DP rank");
 
     assert_eq!(
         coordinator.query_target(&session_id(), None).unwrap(),
         Some(worker_binding)
     );
-    drop(stream);
+    drop(lease);
 }
 
 #[tokio::test(start_paused = true)]
 async fn soft_worker_only_binding_stays_worker_scoped_after_ranked_dispatch() {
-    let coordinator = soft_coordinator();
-    let worker_binding = target(7, None);
+    let coordinator = SessionAffinity::with_config(
+        SessionAffinityConfig::new(TTL).with_mode(SessionAffinityMode::Soft),
+    )
+    .unwrap();
+    let worker_binding = table_target(7, None);
     bind(&coordinator, worker_binding).await;
 
     let continuation = coordinator.acquire(&session_id(), None).await.unwrap();
-    let mut stream = coordinator
-        .commit_to_stream(continuation, target(7, Some(3)), response_stream(1))
+    let lease = coordinator
+        .commit(continuation, table_target(7, Some(3)))
         .unwrap();
-    while stream.next().await.is_some() {}
+    drop(lease);
 
     assert_eq!(
         coordinator.query_target(&session_id(), None).unwrap(),
@@ -693,15 +578,18 @@ async fn soft_worker_only_binding_stays_worker_scoped_after_ranked_dispatch() {
 
 #[tokio::test(start_paused = true)]
 async fn soft_ranked_binding_is_not_widened_by_worker_only_dispatch() {
-    let coordinator = soft_coordinator();
-    let ranked_binding = target(7, Some(2));
+    let coordinator = SessionAffinity::with_config(
+        SessionAffinityConfig::new(TTL).with_mode(SessionAffinityMode::Soft),
+    )
+    .unwrap();
+    let ranked_binding = table_target(7, Some(2));
     bind(&coordinator, ranked_binding).await;
 
     let continuation = coordinator.acquire(&session_id(), None).await.unwrap();
-    let mut stream = coordinator
-        .commit_to_stream(continuation, target(8, None), response_stream(1))
+    let lease = coordinator
+        .commit(continuation, table_target(8, None))
         .unwrap();
-    while stream.next().await.is_some() {}
+    drop(lease);
 
     assert_eq!(
         coordinator.query_target(&session_id(), None).unwrap(),
@@ -712,19 +600,15 @@ async fn soft_ranked_binding_is_not_widened_by_worker_only_dispatch() {
 #[tokio::test(start_paused = true)]
 async fn session_affinity_ranked_binding_rejects_mismatched_rank_dispatch() {
     let coordinator = coordinator();
-    let binding = target(7, Some(2));
+    let binding = table_target(7, Some(2));
 
     let initialization = coordinator.acquire(&session_id(), None).await.unwrap();
-    drop(
-        coordinator
-            .commit_to_stream(initialization, binding, response_stream(1))
-            .unwrap(),
-    );
+    drop(coordinator.commit(initialization, binding).unwrap());
 
     let continuation = coordinator.acquire(&session_id(), None).await.unwrap();
     assert!(
         coordinator
-            .commit_to_stream(continuation, target(7, Some(3)), response_stream(1))
+            .commit(continuation, table_target(7, Some(3)))
             .is_err()
     );
     assert_eq!(coordinator.query_target(&session_id(), None).unwrap(), None);
@@ -732,9 +616,12 @@ async fn session_affinity_ranked_binding_rejects_mismatched_rank_dispatch() {
 
 #[tokio::test(start_paused = true)]
 async fn soft_affinity_rebinds_after_dispatch() {
-    let coordinator = soft_coordinator();
-    let original = target(7, Some(0));
-    let replacement = target(8, Some(1));
+    let coordinator = SessionAffinity::with_config(
+        SessionAffinityConfig::new(TTL).with_mode(SessionAffinityMode::Soft),
+    )
+    .unwrap();
+    let original = table_target(7, Some(0));
+    let replacement = table_target(8, Some(1));
     bind(&coordinator, original).await;
 
     let failed_attempt = coordinator.acquire(&session_id(), None).await.unwrap();
@@ -745,34 +632,31 @@ async fn soft_affinity_rebinds_after_dispatch() {
     );
 
     let successful_attempt = coordinator.acquire(&session_id(), None).await.unwrap();
-    let stream = coordinator
-        .commit_to_stream(successful_attempt, replacement, response_stream(1))
-        .unwrap();
+    let lease = coordinator.commit(successful_attempt, replacement).unwrap();
     assert_eq!(
         coordinator.query_target(&session_id(), None).unwrap(),
         Some(replacement)
     );
-    drop(stream);
+    drop(lease);
 }
 
 #[tokio::test(start_paused = true)]
 async fn concurrent_soft_rebind_uses_observed_version_cas() {
-    let coordinator = soft_coordinator();
-    let original = target(7, Some(0));
-    let winner = target(8, Some(0));
-    let stale = target(9, Some(0));
+    let coordinator = SessionAffinity::with_config(
+        SessionAffinityConfig::new(TTL).with_mode(SessionAffinityMode::Soft),
+    )
+    .unwrap();
+    let original = table_target(7, Some(0));
+    let winner = table_target(8, Some(0));
+    let stale = table_target(9, Some(0));
     bind(&coordinator, original).await;
     let first = coordinator.acquire(&session_id(), None).await.unwrap();
     let second = coordinator.acquire(&session_id(), None).await.unwrap();
 
-    let mut first_stream = coordinator
-        .commit_to_stream(first, winner, response_stream(1))
-        .unwrap();
-    let mut second_stream = coordinator
-        .commit_to_stream(second, stale, response_stream(1))
-        .unwrap();
-    while first_stream.next().await.is_some() {}
-    while second_stream.next().await.is_some() {}
+    let first_lease = coordinator.commit(first, winner).unwrap();
+    let second_lease = coordinator.commit(second, stale).unwrap();
+    drop(first_lease);
+    drop(second_lease);
     assert_eq!(
         coordinator.query_target(&session_id(), None).unwrap(),
         Some(winner)
@@ -782,26 +666,45 @@ async fn concurrent_soft_rebind_uses_observed_version_cas() {
 #[tokio::test(start_paused = true)]
 async fn replica_applies_only_newer_affinity_versions() {
     let coordinator = coordinator();
-    let first = target(7, Some(0));
-    let newer = target(8, Some(0));
-    let stale = target(9, Some(0));
+    let first = table_target(7, Some(0));
+    let newer = table_target(8, Some(0));
+    let stale = table_target(9, Some(0));
 
     assert_eq!(
-        coordinator.apply_versioned_replica_update_for_test("ordered", first, 3, 10),
+        coordinator.apply_replica_update(
+            "ordered".into(),
+            first,
+            AffinityVersion {
+                sequence: 3,
+                writer_id: 10
+            }
+        ),
         ReplicaApplyOutcome::Inserted
     );
     assert_eq!(
-        coordinator.apply_versioned_replica_update_for_test("ordered", newer, 4, 10),
+        coordinator.apply_replica_update(
+            "ordered".into(),
+            newer,
+            AffinityVersion {
+                sequence: 4,
+                writer_id: 10
+            }
+        ),
         ReplicaApplyOutcome::ReplacedNewer
     );
     assert_eq!(
-        coordinator.apply_versioned_replica_update_for_test("ordered", stale, 3, 11),
+        coordinator.apply_replica_update(
+            "ordered".into(),
+            stale,
+            AffinityVersion {
+                sequence: 3,
+                writer_id: 11
+            }
+        ),
         ReplicaApplyOutcome::IgnoredConflict
     );
     assert_eq!(
-        coordinator
-            .query_target(&SessionAffinityId::new("ordered"), None)
-            .unwrap(),
+        coordinator.query_target("ordered", None).unwrap(),
         Some(newer)
     );
 }
@@ -809,16 +712,18 @@ async fn replica_applies_only_newer_affinity_versions() {
 #[tokio::test(start_paused = true)]
 async fn stale_lease_cannot_invalidate_or_refresh_newer_replica_binding() {
     let coordinator = coordinator();
-    let original = target(7, Some(0));
-    let replacement = target(8, Some(0));
+    let original = table_target(7, Some(0));
+    let replacement = table_target(8, Some(0));
     bind(&coordinator, original).await;
     let stale = coordinator.acquire(&session_id(), None).await.unwrap();
     let replacement_sequence = u64::MAX / 2;
-    coordinator.apply_versioned_replica_update_for_test(
-        session_id().as_str(),
+    coordinator.apply_replica_update(
+        session_id().into(),
         replacement,
-        replacement_sequence,
-        1,
+        AffinityVersion {
+            sequence: replacement_sequence,
+            writer_id: 1,
+        },
     );
     stale.invalidate();
     assert_eq!(
@@ -828,11 +733,13 @@ async fn stale_lease_cannot_invalidate_or_refresh_newer_replica_binding() {
 
     let stale = coordinator.acquire(&session_id(), None).await.unwrap();
     tokio::time::advance(Duration::from_secs(9)).await;
-    coordinator.apply_versioned_replica_update_for_test(
-        session_id().as_str(),
+    coordinator.apply_replica_update(
+        session_id().into(),
         replacement,
-        replacement_sequence.saturating_add(1),
-        1,
+        AffinityVersion {
+            sequence: replacement_sequence.saturating_add(1),
+            writer_id: 1,
+        },
     );
     tokio::time::advance(Duration::from_secs(9)).await;
     drop(stale);
@@ -843,31 +750,33 @@ async fn stale_lease_cannot_invalidate_or_refresh_newer_replica_binding() {
 #[tokio::test(start_paused = true)]
 async fn session_affinity_completion_restores_expired_remote_binding() {
     let origin = coordinator();
-    let mut updates = origin.enable_test_replica(99, 4);
+    let mut updates = enable_replica(&origin, 99, 4);
     let replica = coordinator();
-    let replicated_target = target(7, Some(0));
+    let replicated_target = table_target(7, Some(0));
     let operation = origin.acquire(&session_id(), None).await.unwrap();
-    let stream = origin
-        .commit_to_stream(operation, replicated_target, response_stream(1))
-        .unwrap();
+    let lease = origin.commit(operation, replicated_target).unwrap();
 
     let after_dispatch = updates.recv().await.unwrap();
+    let version = after_dispatch.version();
     assert_eq!(
-        replica.apply_replica_update_for_test(
+        replica.apply_replica_update(
             after_dispatch.session_id,
-            target(after_dispatch.worker_id, after_dispatch.dp_rank),
+            table_target(after_dispatch.worker_id, after_dispatch.dp_rank),
+            version
         ),
         ReplicaApplyOutcome::Inserted
     );
     tokio::time::advance(Duration::from_secs(11)).await;
     assert_eq!(replica.query_target(&session_id(), None).unwrap(), None);
 
-    drop(stream);
+    drop(lease);
     let after_completion = updates.recv().await.unwrap();
+    let version = after_completion.version();
     assert_eq!(
-        replica.apply_replica_update_for_test(
+        replica.apply_replica_update(
             after_completion.session_id,
-            target(after_completion.worker_id, after_completion.dp_rank),
+            table_target(after_completion.worker_id, after_completion.dp_rank),
+            version
         ),
         ReplicaApplyOutcome::ReplacedExpired
     );

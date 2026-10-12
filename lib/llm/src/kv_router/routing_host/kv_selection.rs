@@ -7,15 +7,16 @@ use dynamo_kv_router::{
     RouterConfigOverride,
     indexer::RoutingDecisionHashes,
     kv_hints::KvHint,
-    protocols::{
-        BlockExtraInfo, RoutingConstraints, WorkerAffinityTarget, WorkerId, WorkerWithDpRank,
-    },
+    protocols::{BlockExtraInfo, RoutingConstraints, WorkerId, WorkerWithDpRank},
     scheduling::{
-        AdvisoryWorkerLoad, QueueRejection, RequestLifecycle, RoutingEligibility,
-        queue::BookingHandle,
+        AdvisoryWorkerLoad, AffinityRequirement, QueueRejection, RequestLifecycle,
+        RoutingEligibility, queue::BookingHandle,
     },
 };
-use dynamo_runtime::{dynamo_nvtx_range, pipeline::Error};
+use dynamo_runtime::{
+    dynamo_nvtx_range,
+    pipeline::{Error, SingleIn},
+};
 
 use crate::{
     kv_router::{FindBestMatchAdmission, FindBestMatchOutcome, routing_host::RoutingHost},
@@ -24,7 +25,7 @@ use crate::{
         TokenIdType,
         common::{preprocessor::RoutingHints, timing::RequestPhase},
     },
-    session_affinity::AffinityTarget,
+    session_affinity::affinity_id,
 };
 
 pub(super) struct WorkerSelection {
@@ -77,8 +78,7 @@ impl<'a> RoutingRequestParts<'a> {
 }
 
 pub(super) struct SelectionOptions {
-    pub(super) pinned_target: Option<AffinityTarget>,
-    pub(super) affinity_target: Option<AffinityTarget>,
+    pub(super) affinity: Option<AffinityRequirement>,
     pub(super) planned_worker: Option<WorkerWithDpRank>,
     pub(super) policy_class: Option<String>,
     pub(super) session_context: Option<dynamo_kv_router::SessionContext>,
@@ -98,7 +98,7 @@ struct BestMatchArgs<'a> {
     policy_class: Option<String>,
     session_context: Option<dynamo_kv_router::SessionContext>,
     expected_output_tokens: Option<u32>,
-    affinity_target: Option<WorkerAffinityTarget>,
+    affinity: Option<AffinityRequirement>,
     pinned_worker: Option<WorkerWithDpRank>,
     allowed_worker_ids: Option<HashSet<WorkerId>>,
     routing_constraints: RoutingConstraints,
@@ -123,7 +123,7 @@ impl RoutingHost {
                 args.policy_class,
                 args.session_context,
                 args.expected_output_tokens,
-                args.affinity_target,
+                args.affinity,
                 args.pinned_worker,
                 args.allowed_worker_ids,
                 args.routing_constraints,
@@ -165,7 +165,7 @@ impl RoutingHost {
     pub(super) async fn select_worker_outcome(
         &self,
         context_id: &str,
-        request: &PreprocessedRequest,
+        request: &SingleIn<PreprocessedRequest>,
         routing_parts: RoutingRequestParts<'_>,
         phase: RequestPhase,
         is_query_only: bool,
@@ -213,46 +213,16 @@ impl RoutingHost {
         let return_routing_hashes =
             !is_query_only && self.kv_router().indexer().records_routing_decisions();
         let SelectionOptions {
-            pinned_target,
-            affinity_target,
+            affinity,
             planned_worker,
             policy_class,
             session_context,
             admission,
         } = options;
-        let worker_only_affinity = pinned_target.filter(|target| target.dp_rank.is_none());
-        if let Some(target) = worker_only_affinity {
-            match &mut allowed_worker_ids {
-                Some(allowed_workers) => {
-                    allowed_workers.retain(|worker_id| *worker_id == target.worker_id);
-                }
-                None => {
-                    allowed_worker_ids = Some(HashSet::from([target.worker_id]));
-                }
-            }
-        }
-        let explicit_pin = match (explicit_pin, worker_only_affinity) {
-            (Some((worker_id, None)), Some(affinity_target))
-                if worker_id == affinity_target.worker_id =>
-            {
-                // A worker-only session binding allows the KV scheduler to select this
-                // request's rank, so do not turn a matching worker-only request hint into an
-                // exact-rank pin.
-                None
-            }
-            (explicit_pin, _) => explicit_pin,
-        };
-        let affinity_pin = pinned_target.and_then(|target| {
-            target
-                .dp_rank
-                .map(|dp_rank| (target.worker_id, Some(dp_rank)))
-        });
-        let requested_pin = merge_affinity_pin(explicit_pin, affinity_pin);
-        let pinned_worker = match planned_worker {
-            Some(planned_worker) => {
-                if let Some((worker_id, dp_rank)) = requested_pin
-                    && (worker_id != planned_worker.worker_id
-                        || dp_rank.is_some_and(|dp_rank| dp_rank != planned_worker.dp_rank))
+        let pinned_worker = match (planned_worker, explicit_pin) {
+            (Some(planned_worker), Some((worker_id, dp_rank))) => {
+                if worker_id != planned_worker.worker_id
+                    || dp_rank.is_some_and(|dp_rank| dp_rank != planned_worker.dp_rank)
                 {
                     return Err(anyhow::anyhow!(
                         "Previewed worker {} dp_rank {} conflicts with requested worker {} dp_rank {:?}",
@@ -264,14 +234,32 @@ impl RoutingHost {
                 }
                 Some(planned_worker)
             }
-            None => match requested_pin {
-                Some((worker_id, requested_dp_rank)) => Some(resolve_pinned_worker_rank(
-                    worker_id,
-                    requested_dp_rank,
-                    self.kv_router().unique_dp_rank_for_worker(worker_id),
-                )?),
-                None => None,
-            },
+            (Some(planned_worker), None) => Some(planned_worker),
+            (None, Some((worker_id, dp_rank))) => {
+                let unique_dp_rank = self.kv_router().unique_dp_rank_for_worker(worker_id);
+                if dp_rank.is_none()
+                    && unique_dp_rank.is_none()
+                    && self.affinity.is_some()
+                    && affinity_id(request)?.is_some()
+                {
+                    // A worker-only target on a multi-rank worker: the session's
+                    // binding, or selection within the worker, chooses the rank.
+                    match &mut allowed_worker_ids {
+                        Some(allowed_workers) => {
+                            allowed_workers.retain(|allowed| *allowed == worker_id);
+                        }
+                        None => allowed_worker_ids = Some(HashSet::from([worker_id])),
+                    }
+                    None
+                } else {
+                    Some(resolve_pinned_worker_rank(
+                        worker_id,
+                        dp_rank,
+                        unique_dp_rank,
+                    )?)
+                }
+            }
+            (None, None) => None,
         };
         let Some(pinned_worker) = pinned_worker else {
             let _nvtx_kv = dynamo_nvtx_range!("route.kv_match");
@@ -289,8 +277,7 @@ impl RoutingHost {
                     policy_class,
                     session_context,
                     expected_output_tokens,
-                    affinity_target: affinity_target
-                        .map(|target| WorkerAffinityTarget::new(target.worker_id, target.dp_rank)),
+                    affinity,
                     pinned_worker: None,
                     allowed_worker_ids,
                     routing_constraints: routing_constraints.clone(),
@@ -357,28 +344,13 @@ impl RoutingHost {
             policy_class,
             session_context,
             expected_output_tokens,
-            affinity_target: None,
+            affinity,
             pinned_worker: Some(pinned_worker),
             allowed_worker_ids,
             routing_constraints,
             admission,
         })
         .await
-    }
-}
-
-fn merge_affinity_pin(
-    explicit: Option<(u64, Option<u32>)>,
-    affinity: Option<(u64, Option<u32>)>,
-) -> Option<(u64, Option<u32>)> {
-    match (explicit, affinity) {
-        (Some((worker_id, None)), Some((affinity_worker_id, affinity_rank)))
-            if worker_id == affinity_worker_id =>
-        {
-            Some((worker_id, affinity_rank))
-        }
-        (Some(explicit), _) => Some(explicit),
-        (None, affinity) => affinity,
     }
 }
 
@@ -427,7 +399,7 @@ mod tests {
         scheduling::{RoutingEligibility, WorkerEligibilityError},
     };
 
-    use super::{merge_affinity_pin, pinned_worker_hint, resolve_pinned_worker_rank};
+    use super::{pinned_worker_hint, resolve_pinned_worker_rank};
     use crate::{
         local_model::runtime_config::ModelRuntimeConfig,
         protocols::common::{preprocessor::RoutingHints, timing::RequestPhase},
@@ -453,18 +425,6 @@ mod tests {
             .unwrap_err()
             .to_string();
         assert!(error.contains("requires an explicit dp_rank"));
-    }
-
-    #[test]
-    fn affinity_pin_supplies_rank_for_matching_explicit_worker() {
-        assert_eq!(
-            merge_affinity_pin(Some((7, None)), Some((7, Some(0)))),
-            Some((7, Some(0)))
-        );
-        assert_eq!(
-            merge_affinity_pin(Some((7, Some(2))), Some((7, Some(3)))),
-            Some((7, Some(2)))
-        );
     }
 
     #[test]

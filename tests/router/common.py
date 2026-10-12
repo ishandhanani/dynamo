@@ -708,7 +708,8 @@ def _test_session_affinity(
     test_payload: dict[str, Any],
     store_backend: str = "etcd",
 ):
-    """Verify replica affinity overrides conflicting per-frontend KV placement."""
+    """Verify replica placement and peer refreshes of the original binding."""
+    affinity_ttl_secs = 10
     with (
         FrontendRouterProcess(
             request,
@@ -719,7 +720,7 @@ def _test_session_affinity(
             router_mode="kv",
             min_initial_workers=engine_workers.num_workers,
             event_plane="nats",
-            session_affinity_ttl_secs=300,
+            session_affinity_ttl_secs=affinity_ttl_secs,
         ),
         FrontendRouterProcess(
             request,
@@ -730,7 +731,7 @@ def _test_session_affinity(
             router_mode="kv",
             min_initial_workers=engine_workers.num_workers,
             event_plane="nats",
-            session_affinity_ttl_secs=300,
+            session_affinity_ttl_secs=affinity_ttl_secs,
         ),
     ):
         urls = [f"http://localhost:{port}/v1/chat/completions" for port in router_ports]
@@ -882,6 +883,46 @@ def _test_session_affinity(
                 assert await send(
                     client, urls[1], payload(prefix_b), session_a_headers
                 ) == (worker_a, 0)
+
+                # A created this binding; only B now uses it. Those refreshes
+                # retain A's version writer but must extend A's local TTL.
+                # Keep a separate prefix cached only on worker B so an expired
+                # binding has a deterministic, different routing result.
+                probe_prefix = " ".join(
+                    [f"affinity-refresh-{suffix}"] * (block_size * 2)
+                )
+                await send(
+                    client,
+                    urls[1],
+                    payload(probe_prefix),
+                    {
+                        "x-dynamo-worker-instance-id": str(worker_b),
+                        "x-dynamo-dp-rank": "0",
+                    },
+                )
+                await wait_for_prefix_target(
+                    client, urls[0], probe_prefix, (worker_b, 0)
+                )
+                refresh_until = time.monotonic() + affinity_ttl_secs + 2
+                while time.monotonic() < refresh_until:
+                    assert await send(
+                        client, urls[1], payload(prefix_a), session_a_headers
+                    ) == (worker_a, 0)
+                    await asyncio.sleep(0.5)
+
+                # Query-only probes do not acquire a lease or refresh the TTL.
+                assert await send(
+                    client, urls[0], payload(probe_prefix, query_only=True)
+                ) == (worker_b, 0)
+                assert await send(
+                    client,
+                    urls[0],
+                    payload(probe_prefix, query_only=True),
+                    session_a_headers,
+                ) == (
+                    worker_a,
+                    0,
+                ), "peer refreshes must keep the creator's binding alive"
 
         asyncio.run(run_test())
 

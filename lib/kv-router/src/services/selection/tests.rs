@@ -1778,6 +1778,7 @@ async fn selector_replica_sync_propagates_request_lifecycle() {
         threads: 1,
         indexer_peers: Vec::new(),
         session_affinity_ttl: None,
+        session_affinity_mode: Default::default(),
         replica_sync_port: Some(port_a),
         replica_sync_peers: Vec::new(),
         kv_router_config: test_config(),

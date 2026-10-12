@@ -12,19 +12,20 @@ use dynamo_tokens::SequenceHash;
 use crate::identity::RoutingPartitionId;
 use crate::kv_hints::KvHint;
 use crate::protocols::{
-    LocalBlockHash, RoutingConstraints, SharedCacheHits, WorkerAffinityTarget, WorkerId,
-    WorkerWithDpRank,
+    LocalBlockHash, RoutingConstraints, SharedCacheHits, WorkerId, WorkerWithDpRank,
 };
 use crate::scheduling::config::RouterConfigOverride;
 use crate::scheduling::queue::BookingHandle;
-use crate::scheduling::{AdvisoryWorkerLoad, QueueRejection, SchedulingResponse, SessionContext};
+use crate::scheduling::{
+    AdvisoryWorkerLoad, AffinityRequirement, QueueRejection, SchedulingResponse, SessionContext,
+};
 
 use super::super::error::SelectionError;
 use super::super::input::PromptView;
 
 /// Every input to one selection. Fields are independent: `session_context`
 /// feeds worker selection, `session` says what the core does with the session
-/// table, `affinity_target` and `pinned_worker` are explicit steering.
+/// table, `affinity` carries host-resolved session steering; `pinned_worker` is explicit.
 pub struct SelectionOperation<'a> {
     pub key: RoutingPartitionId,
     pub prompt: PromptView<'a>,
@@ -35,7 +36,7 @@ pub struct SelectionOperation<'a> {
     pub policy_class: Option<String>,
     pub session_context: Option<SessionContext>,
     pub session: SessionBinding,
-    pub affinity_target: Option<WorkerAffinityTarget>,
+    pub affinity: Option<AffinityRequirement>,
     pub pinned_worker: Option<WorkerWithDpRank>,
     pub allowed_worker_ids: Option<HashSet<WorkerId>>,
     pub routing_constraints: RoutingConstraints,

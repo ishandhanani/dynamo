@@ -9,6 +9,31 @@ use dynamo_kv_router::plugins::worker_selection::{
 use parking_lot::Mutex;
 use std::sync::Arc;
 
+/// Index of the lowest-cost entry, breaking exact ties uniformly with `tie_break(n)` in `0..n`.
+fn lowest_cost_index<T>(
+    entries: impl Iterator<Item = T>,
+    cost: impl Fn(&T) -> f64,
+    mut tie_break: impl FnMut(usize) -> usize,
+) -> usize {
+    let mut best = 0;
+    let mut best_cost = f64::INFINITY;
+    let mut ties = 0;
+    for (index, entry) in entries.enumerate() {
+        let cost = cost(&entry);
+        if cost < best_cost {
+            best = index;
+            best_cost = cost;
+            ties = 1;
+        } else if cost == best_cost {
+            ties += 1;
+            if tie_break(ties) == 0 {
+                best = index;
+            }
+        }
+    }
+    best
+}
+
 fn softmax_sample_index<T>(
     entries: &[T],
     cost: impl Fn(&T) -> f64,
@@ -91,33 +116,25 @@ impl WorkerPicker for DefaultPicker {
         if context.pinned_worker().is_some() {
             return Ok(0);
         }
-        if self.temperature == 0.0 && self.rng.is_none() {
-            let mut best_row = 0;
-            let mut best_cost = f64::INFINITY;
-            let mut ties = 0;
-            for (row, candidate) in candidates.iter().enumerate() {
-                let cost = candidate.cost();
-                if cost < best_cost {
-                    best_row = row;
-                    best_cost = cost;
-                    ties = 1;
-                } else if cost == best_cost {
-                    ties += 1;
-                    if fastrand::usize(0..ties) == 0 {
-                        best_row = row;
-                    }
-                }
-            }
-            return Ok(best_row);
-        }
+        // The policy has already restricted eligible affinity targets before
+        // scoring. If that target is absent, all supplied candidates compete.
+        // Unseeded selection reads those rows directly, including on fallback.
         let Some(rng) = &self.rng else {
-            return Ok(softmax_sample_index(
-                candidates,
-                |candidate| candidate.cost(),
-                self.temperature,
-                fastrand::f64(),
-                &mut self.probabilities,
-            ));
+            return Ok(if self.temperature == 0.0 {
+                lowest_cost_index(
+                    candidates.iter(),
+                    |candidate| candidate.cost(),
+                    |ties| fastrand::usize(0..ties),
+                )
+            } else {
+                softmax_sample_index(
+                    candidates,
+                    |candidate| candidate.cost(),
+                    self.temperature,
+                    fastrand::f64(),
+                    &mut self.probabilities,
+                )
+            });
         };
         self.entries.clear();
         self.entries.extend(
@@ -133,22 +150,11 @@ impl WorkerPicker for DefaultPicker {
         });
         let mut rng = rng.lock();
         let selected = if self.temperature == 0.0 {
-            let mut best = 0;
-            let mut best_cost = f64::INFINITY;
-            let mut ties = 0;
-            for (index, (_, cost)) in self.entries.iter().enumerate() {
-                if *cost < best_cost {
-                    best = index;
-                    best_cost = *cost;
-                    ties = 1;
-                } else if *cost == best_cost {
-                    ties += 1;
-                    if rng.usize(0..ties) == 0 {
-                        best = index;
-                    }
-                }
-            }
-            best
+            lowest_cost_index(
+                self.entries.iter(),
+                |(_, cost)| *cost,
+                |ties| rng.usize(0..ties),
+            )
         } else {
             softmax_sample_index(
                 &self.entries,

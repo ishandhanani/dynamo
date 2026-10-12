@@ -9,7 +9,7 @@
 //! frontend retains transport, stream leases, and request-expiry ownership.
 
 use std::collections::HashMap;
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
@@ -175,7 +175,6 @@ pub(crate) struct EmbeddedSelection {
     /// the router holds the partition.
     service: Arc<SelectionService>,
     partition: SelectionPartition,
-    affinity: OnceLock<crate::session_affinity::AffinityCoordinator>,
     worker_type: &'static str,
     /// Queue gauges and rejection counters per policy class, index-aligned with
     /// the scheduler's `class_queue_stats`.
@@ -351,7 +350,6 @@ impl EmbeddedSelection {
             Self {
                 service,
                 partition,
-                affinity: OnceLock::new(),
                 worker_type: args.metric_worker_type,
                 queue_metrics,
                 queue_metric_indices,
@@ -369,19 +367,16 @@ impl EmbeddedSelection {
         });
     }
 
-    pub(crate) fn affinity_coordinator(
+    /// Share the selection partition's session table with the frontend host.
+    pub(crate) fn session_affinity(
         &self,
         ttl: Duration,
         mode: crate::session_affinity::SessionAffinityMode,
-    ) -> Result<crate::session_affinity::AffinityCoordinator> {
-        let table = self.partition.session_affinity(
+    ) -> Result<crate::session_affinity::SessionAffinity> {
+        Ok(self.partition.session_affinity(
             dynamo_kv_router::services::selection::affinity::SessionAffinityConfig::new(ttl)
                 .with_mode(mode),
-        )?;
-        Ok(self
-            .affinity
-            .get_or_init(|| crate::session_affinity::AffinityCoordinator::wrap(table))
-            .clone())
+        )?)
     }
 
     pub(crate) fn partition_key(&self) -> &RoutingPartitionId {

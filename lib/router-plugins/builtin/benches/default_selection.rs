@@ -228,5 +228,61 @@ fn shared_cache(c: &mut Criterion) {
     }
 }
 
-criterion_group!(benches, bench, stacked, shared_cache);
+fn affinity(c: &mut Criterion) {
+    use dynamo_kv_router::{
+        AffinityRequirement, WorkerSelectionInput, protocols::WorkerAffinityTarget,
+    };
+    use std::collections::HashSet;
+
+    for temperature in [0.0, 0.7] {
+        let mut group = c.benchmark_group(format!("default_affinity/t{temperature}"));
+        group
+            .warm_up_time(Duration::from_millis(200))
+            .measurement_time(Duration::from_secs(1))
+            .sample_size(30);
+        for count in [8, 64, 512] {
+            for case in ["unbound", "soft", "overloaded", "allowlist", "missing"] {
+                let (mut workers, mut request) = support::fixture(count, 2048);
+                if case != "unbound" {
+                    request.affinity = Some(AffinityRequirement::soft(WorkerAffinityTarget::new(
+                        3,
+                        Some(1),
+                    )));
+                }
+                let overloaded = (case == "overloaded").then(|| HashSet::from([3]));
+                if case == "allowlist" {
+                    request.allowed_worker_ids =
+                        Some((0..count as u64).filter(|id| *id != 3).collect());
+                }
+                if case == "missing" {
+                    workers.remove(&3);
+                }
+                let policy = default_policy(
+                    KvRouterConfig {
+                        router_temperature: temperature,
+                        ..Default::default()
+                    },
+                    "test",
+                );
+                group.bench_function(BenchmarkId::new(case, count), |b| {
+                    b.iter(|| {
+                        black_box(
+                            policy
+                                .select_worker(WorkerSelectionInput::configured(
+                                    &workers,
+                                    &request,
+                                    request.eligibility_with_overloaded(overloaded.as_ref()),
+                                    16,
+                                ))
+                                .unwrap(),
+                        )
+                    });
+                });
+            }
+        }
+        group.finish();
+    }
+}
+
+criterion_group!(benches, bench, stacked, shared_cache, affinity);
 criterion_main!(benches);

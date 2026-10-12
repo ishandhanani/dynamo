@@ -374,10 +374,16 @@ impl SelectionCore {
         // Hold the session before booking: holding after would wait on an
         // initializer that may itself be waiting for this worker's capacity.
         let session = match (session_id.as_deref(), entry.affinity.get()) {
-            (Some(session_id), Some(table)) => self
-                .hold_session(table, session_id, &key)
-                .await?
-                .map(|hold| (table, session_id, hold)),
+            (Some(session_id), Some(table)) => table
+                .resolve(
+                    session_id,
+                    None,
+                    |target| self.catalog.is_schedulable(target, &key),
+                    self.cancel_token.cancelled(),
+                )
+                .await
+                .map_err(affinity_error)?
+                .map(|hold| (table, hold)),
             _ => None,
         };
         // Strict booking: never lazily recreate a worker/rank removed since the
@@ -395,9 +401,11 @@ impl SelectionCore {
                 lora_name,
             })?;
         let affinity_lease = match session {
-            Some((table, session_id, hold)) => {
-                self.commit_session(table, hold, session_id, worker, &key)?
-            }
+            Some((table, hold)) => table
+                .commit_or_failover(hold, worker.into(), |target| {
+                    self.catalog.is_schedulable(target, &key)
+                })
+                .map_err(affinity_error)?,
             None => None,
         };
         if let Some(hashes) = routing_hashes {
