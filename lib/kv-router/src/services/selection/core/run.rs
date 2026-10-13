@@ -284,8 +284,9 @@ impl SelectionCore {
             _ => None,
         };
 
-        // Session stickiness: a bound session steers selection (exclusive for
-        // the default selector); a new session is bound to the worker booked.
+        // Session stickiness: a bound session steers selection with the table's
+        // mode as strength, an explicit request target is a `Soft` preference,
+        // and a new session is bound to the worker booked.
         let table = entry.affinity.get();
         let mut affinity_hold = None;
         let managed_session = match (&session, table) {
@@ -297,15 +298,25 @@ impl SelectionCore {
             (SessionBinding::Managed { session_id }, Some(table)) => Some((table, session_id)),
             _ => None,
         };
-        let affinity_target = match (&session, table) {
+        let affinity = match (&session, table) {
             (SessionBinding::Managed { session_id }, Some(table)) => {
                 affinity_hold = self.hold_session(table, session_id, &key).await?;
-                affinity_hold.as_ref().and_then(Hold::target)
+                affinity_hold
+                    .as_ref()
+                    .and_then(Hold::target)
+                    .map(|target| AffinityRequirement {
+                        target,
+                        strength: table.mode().into(),
+                    })
             }
             (SessionBinding::Query { session_id }, Some(table)) => table
                 .query_target(session_id, None)
-                .map_err(affinity_error)?,
-            _ => affinity_target,
+                .map_err(affinity_error)?
+                .map(|target| AffinityRequirement {
+                    target,
+                    strength: table.mode().into(),
+                }),
+            _ => affinity_target.map(AffinityRequirement::soft),
         };
         // Router hints are attached to bookings only, and only when a worker in
         // this partition can consume them and the indexer can retain the
@@ -424,7 +435,7 @@ impl SelectionCore {
             policy_class,
             session_context,
             expected_output_tokens,
-            affinity_target,
+            affinity,
             pinned_worker,
             allowed_worker_ids,
             routing_constraints,
@@ -462,7 +473,17 @@ impl SelectionCore {
             Err(KvSchedulerError::QueueRejected(rejection)) => {
                 return Ok(SelectionOutcome::QueueRejected { rejection });
             }
-            Err(error) => return Err(error.into()),
+            Err(error) => {
+                // Under Hard, a policy filter that rejects the bound worker leaves no candidate.
+                // Drop the binding so the session re-binds instead of failing on every retry.
+                if matches!(error, KvSchedulerError::AllEligibleWorkersFiltered)
+                    && table.is_some_and(|table| table.mode() == SessionAffinityMode::Hard)
+                    && let Some(hold @ Hold::Bound { .. }) = affinity_hold
+                {
+                    hold.invalidate();
+                }
+                return Err(error.into());
+            }
         };
         let (endpoint, total_kv_blocks) = if matches!(admission, SelectionAdmission::Lease { .. }) {
             // The embedding host dispatches by worker id and discards wire metadata.

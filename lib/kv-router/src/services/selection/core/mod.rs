@@ -32,10 +32,11 @@ use crate::protocols::{
 use crate::scheduling::queue::SchedulerBookingDescriptor;
 use crate::scheduling::selector::WorkerSelectionPolicy;
 use crate::scheduling::{
-    KvSchedulerError, LocalScheduler, LoraWorkerFilter, OverlapAnalysis, OverlapSignals,
-    OverloadedWorkerProvider, PotentialLoad, PrefillLoadEstimator, ScheduleMode, ScheduleRequest,
-    SessionContext, TieredOverlapRefresher, WorkerAvailabilityProvider, effective_prefill_tokens,
-    narrow_allowed_worker_ids_by_lora, prefill_load_hint_from_effective_tokens,
+    AffinityRequirement, KvSchedulerError, LocalScheduler, LoraWorkerFilter, OverlapAnalysis,
+    OverlapSignals, OverloadedWorkerProvider, PotentialLoad, PrefillLoadEstimator, ScheduleMode,
+    ScheduleRequest, SessionContext, TieredOverlapRefresher, WorkerAvailabilityProvider,
+    effective_prefill_tokens, narrow_allowed_worker_ids_by_lora,
+    prefill_load_hint_from_effective_tokens,
 };
 use crate::sequences::{
     ActiveSequencesMultiWorker, LifecycleMutationOutcome, ReplicaRequestLeaseObserver,

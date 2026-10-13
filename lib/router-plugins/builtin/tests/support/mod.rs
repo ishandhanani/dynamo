@@ -32,7 +32,7 @@ pub fn fixture(
         isl_tokens: prompt_tokens,
         lora_name: None,
         expected_output_tokens: None,
-        affinity_target: None,
+        affinity: None,
         pinned_worker: None,
         allowed_worker_ids: None,
         routing_constraints: RoutingConstraints::default(),

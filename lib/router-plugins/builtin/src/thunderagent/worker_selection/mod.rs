@@ -105,7 +105,9 @@ mod tests {
     use std::collections::HashMap;
 
     use dynamo_kv_router::protocols::{RoutingConstraints, WorkerConfigLike, WorkerWithDpRank};
-    use dynamo_kv_router::scheduling::{OverlapSignals, ScheduleMode, SchedulingRequest};
+    use dynamo_kv_router::scheduling::{
+        AffinityRequirement, OverlapSignals, ScheduleMode, SchedulingRequest,
+    };
     use dynamo_kv_router::{
         KvRouterConfig, WorkerLoadProjection, WorkerSelectionInput, WorkerSelectionPolicy,
         WorkerSelector,
@@ -142,7 +144,7 @@ mod tests {
             isl_tokens: 16,
             lora_name: None,
             expected_output_tokens: None,
-            affinity_target: Some(target.into()),
+            affinity: Some(AffinityRequirement::soft(target.into())),
             pinned_worker: None,
             allowed_worker_ids: None,
             routing_constraints: RoutingConstraints::default(),

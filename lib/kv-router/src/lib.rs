@@ -71,8 +71,8 @@ pub use scheduling::LoraWorkerFilter;
 pub use scheduling::PrefillLoadEstimator;
 pub use scheduling::policy::{FcfsPolicy, RouterSchedulingPolicy, SchedulingPolicy, WsptPolicy};
 pub use scheduling::{
-    KvSchedulerError, PotentialLoad, SchedulingRequest, SchedulingResponse, SessionContext,
-    WorkerSelectionInputTrigger, WorkerSelectionPolicyError,
+    AffinityRequirement, AffinityStrength, KvSchedulerError, PotentialLoad, SchedulingRequest,
+    SchedulingResponse, SessionContext, WorkerSelectionInputTrigger, WorkerSelectionPolicyError,
 };
 #[cfg(any(test, feature = "bench"))]
 pub use selector::DefaultWorkerSelector;

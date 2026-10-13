@@ -16,6 +16,7 @@ use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, OnceLock, Weak};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use crate::scheduling::AffinityStrength;
 use dashmap::{DashMap, mapref::entry::Entry};
 use serde::{Deserialize, Serialize};
 use tokio::sync::Notify;
@@ -38,6 +39,15 @@ pub enum SessionAffinityMode {
     Hard,
     /// The binding follows the dispatch: the session rebinds to where it ran.
     Soft,
+}
+
+impl From<SessionAffinityMode> for AffinityStrength {
+    fn from(mode: SessionAffinityMode) -> Self {
+        match mode {
+            SessionAffinityMode::Hard => Self::Hard,
+            SessionAffinityMode::Soft => Self::Soft,
+        }
+    }
 }
 
 impl std::str::FromStr for SessionAffinityMode {
