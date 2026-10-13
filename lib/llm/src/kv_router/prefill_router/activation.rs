@@ -375,12 +375,17 @@ impl PrefillRouter {
                 )
                 .await?;
 
-            let affinity = create_affinity_coordinator(
-                prefill_session_affinity_ttl,
-                context.session_affinity_mode,
-                client.clone(),
-            )
-            .await?;
+            // The prefill partition's own table: a session binds to a prefill
+            // worker and a decode worker independently, since the pools differ.
+            let affinity = match prefill_session_affinity_ttl {
+                Some(ttl) => {
+                    let affinity =
+                        kv_chooser.affinity_coordinator(ttl, context.session_affinity_mode)?;
+                    affinity.enable_replica_sync(client.clone()).await?;
+                    Some(affinity)
+                }
+                None => None,
+            };
 
             // Build the PushRouter for prefill with KV mode using the shared client
             let push_router = PushRouter::<PreprocessedRequest, Annotated<LLMEngineOutput>>::from_client_with_monitor(

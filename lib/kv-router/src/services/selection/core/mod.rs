@@ -111,14 +111,31 @@ impl SelectionPartition {
         &self.0.indexer
     }
 
-    /// Return this partition's affinity table, initialized with `config`.
+    /// Return this partition's affinity table, initialized with `config` and
+    /// the catalog as its liveness source.
     pub fn session_affinity(
         &self,
         config: SessionAffinityConfig,
     ) -> Result<SessionAffinity, SelectionError> {
         self.0
-            .session_affinity(config)
+            .session_affinity_with(config, None)
             .map(|resolver| resolver.table().clone())
+    }
+
+    /// Return this partition's session resolver, initialized with `config`
+    /// and the host's own liveness source. A resolver already installed with
+    /// the same configuration is returned as is, whatever its liveness.
+    pub fn session_affinity_with_liveness(
+        &self,
+        config: SessionAffinityConfig,
+        liveness: Arc<dyn TargetLiveness>,
+    ) -> Result<&AffinityResolver, SelectionError> {
+        self.0.session_affinity_with(config, Some(liveness))
+    }
+
+    /// This partition's session resolver, if session affinity is configured.
+    pub fn session_resolver(&self) -> Option<&AffinityResolver> {
+        self.0.affinity.get()
     }
 }
 
@@ -150,9 +167,12 @@ impl TargetLiveness for CatalogLiveness {
 }
 
 impl SelectionEntry {
-    fn session_affinity(
+    /// The partition's resolver, created on first use with `liveness` or,
+    /// when the host supplies none, the catalog.
+    fn session_affinity_with(
         &self,
         config: SessionAffinityConfig,
+        liveness: Option<Arc<dyn TargetLiveness>>,
     ) -> Result<&AffinityResolver, SelectionError> {
         let resolver = self
             .affinity
@@ -163,13 +183,13 @@ impl SelectionEntry {
                 {
                     table.enable_replication(config.process_id(), sink);
                 }
-                Ok(AffinityResolver::new(
-                    table,
+                let liveness = liveness.unwrap_or_else(|| {
                     Arc::new(CatalogLiveness {
                         catalog: Arc::clone(&self.catalog),
                         key: self.key.clone(),
-                    }),
-                ))
+                    })
+                });
+                Ok(AffinityResolver::new(table, liveness))
             })?;
         let table = resolver.table();
         if table.ttl() != config.ttl || table.mode() != config.mode {

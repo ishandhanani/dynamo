@@ -369,19 +369,30 @@ impl EmbeddedSelection {
         });
     }
 
+    /// The partition's session resolver, created on first use with the
+    /// frontend's liveness source, wrapped for the coordinator-based hosts.
     pub(crate) fn affinity_coordinator(
         &self,
         ttl: Duration,
         mode: crate::session_affinity::SessionAffinityMode,
+        liveness: Arc<dyn dynamo_kv_router::services::selection::affinity::TargetLiveness>,
     ) -> Result<crate::session_affinity::AffinityCoordinator> {
-        let table = self.partition.session_affinity(
+        let resolver = self.partition.session_affinity_with_liveness(
             dynamo_kv_router::services::selection::affinity::SessionAffinityConfig::new(ttl)
                 .with_mode(mode),
+            liveness,
         )?;
+        let table = resolver.table().clone();
         Ok(self
             .affinity
             .get_or_init(|| crate::session_affinity::AffinityCoordinator::wrap(table))
             .clone())
+    }
+
+    pub(crate) fn affinity_resolver(
+        &self,
+    ) -> Option<&dynamo_kv_router::services::selection::affinity::AffinityResolver> {
+        self.partition.session_resolver()
     }
 
     pub(crate) fn partition_key(&self) -> &RoutingPartitionId {

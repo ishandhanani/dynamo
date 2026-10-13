@@ -209,6 +209,13 @@ impl Hold {
         }
     }
 
+    pub fn session_id(&self) -> &str {
+        match self {
+            Self::Initialize(initialization) => &initialization.session_id,
+            Self::Bound { lease, .. } => lease.session_id(),
+        }
+    }
+
     /// The session id, shared with the hold so a caller that consumes the
     /// hold can still name the session without copying it.
     pub(crate) fn shared_session_id(&self) -> Arc<str> {

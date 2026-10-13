@@ -1378,6 +1378,83 @@ async fn lease_admission_installs_no_index_row_and_records_nothing() {
     wait_until("booking release", || !entry.scheduler.has_request("leased")).await;
 }
 
+/// A `Lease` admission with a managed session returns the hold uncommitted:
+/// the host binds the session once it has dispatched. A query binding reads
+/// the binding without a hold.
+#[tokio::test]
+async fn lease_admission_returns_the_session_hold_for_the_host_to_commit() {
+    let core = core_with_session_affinity();
+    core.upsert_worker(worker(1)).await.expect("worker upsert");
+    let key = default_key();
+    let entry = core.entry(&key).expect("entry");
+    let resolver = entry.affinity.get().expect("affinity resolver");
+
+    let first = reserve_request("leased");
+    let mut operation = lease_operation(first.prompt.view(), "leased", true);
+    operation.session = SessionBinding::Managed {
+        session_id: "s".into(),
+        requested_target: None,
+    };
+    let Ok(SelectionOutcome::Selected(mut selected)) = core.run_selection(operation).await.result
+    else {
+        panic!("lease selection failed");
+    };
+    let hold = selected
+        .affinity_hold
+        .take()
+        .expect("the hold travels with the selection");
+    assert!(matches!(hold, Hold::Initialize(_)));
+    assert_eq!(
+        bound_worker(&core, "s"),
+        None,
+        "nothing is bound before the host commits"
+    );
+    assert!(core.reservation_index.read().is_empty());
+    let lease = resolver
+        .commit(hold, selected.response.best_worker.into())
+        .expect("commit")
+        .expect("lease");
+    assert_eq!(bound_worker(&core, "s"), Some(1));
+    drop(lease);
+
+    let second = reserve_request("leased-2");
+    let mut operation = lease_operation(second.prompt.view(), "leased-2", true);
+    operation.session = SessionBinding::Managed {
+        session_id: "s".into(),
+        requested_target: None,
+    };
+    let Ok(SelectionOutcome::Selected(mut bound)) = core.run_selection(operation).await.result
+    else {
+        panic!("lease selection failed");
+    };
+    assert!(matches!(
+        bound.affinity_hold.take(),
+        Some(Hold::Bound { .. })
+    ));
+
+    let mut operation = lease_operation(second.prompt.view(), "q", true);
+    operation.admission = SelectionAdmission::Query {
+        request_id: Some("q".to_string()),
+    };
+    operation.session = SessionBinding::Query {
+        session_id: "s".into(),
+        requested_target: None,
+    };
+    let Ok(SelectionOutcome::Selected(queried)) = core.run_selection(operation).await.result else {
+        panic!("query selection failed");
+    };
+    assert!(queried.affinity_hold.is_none());
+    assert_eq!(queried.response.best_worker.worker_id, 1);
+    assert_eq!(lease_count(&core, "s"), Some(0));
+
+    drop(selected);
+    drop(bound);
+    wait_until("booking release", || {
+        !entry.scheduler.has_request("leased") && !entry.scheduler.has_request("leased-2")
+    })
+    .await;
+}
+
 #[tokio::test]
 async fn dropped_selection_future_frees_its_booking() {
     let core = local_core(test_config(false));
