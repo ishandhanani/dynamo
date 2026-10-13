@@ -10,6 +10,10 @@
 //! target and an [`AffinityLease`] that keeps the binding alive until the
 //! response stream ends. Bindings are versioned so replicas can exchange them
 //! through an [`AffinityReplicaSink`]; the transport is the host's.
+//!
+//! The selection core drives the table through [`super::AffinityResolver`],
+//! which adds the liveness check, cancellation, failover, and the full-table
+//! policy; the frontend's `AffinityCoordinator` still drives it directly.
 
 use std::pin::Pin;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
@@ -72,6 +76,10 @@ pub enum AffinityError {
     ResourceExhausted(String),
     #[error("session affinity table dropped")]
     Dropped,
+    /// The host's cancel signal fired while `AffinityResolver::resolve`
+    /// waited; the table itself never produces it.
+    #[error("session affinity wait was cancelled")]
+    Cancelled,
 }
 
 /// Ordering for replicated bindings: higher wins, ties broken by writer.
@@ -198,6 +206,15 @@ impl Hold {
         match self {
             Self::Initialize(_) => None,
             Self::Bound { target, .. } => Some(*target),
+        }
+    }
+
+    /// The session id, shared with the hold so a caller that consumes the
+    /// hold can still name the session without copying it.
+    pub(crate) fn shared_session_id(&self) -> Arc<str> {
+        match self {
+            Self::Initialize(initialization) => Arc::clone(&initialization.session_id),
+            Self::Bound { lease, .. } => Arc::clone(&lease.session_id),
         }
     }
 
@@ -347,7 +364,7 @@ impl SessionAffinity {
                 Ok(AcquireStep::Held(Hold::Initialize(
                     AffinityInitialization {
                         coordinator: Arc::downgrade(&self.inner),
-                        session_id: session_id.to_string(),
+                        session_id: Arc::from(session_id),
                         revision,
                         notify,
                         requested_target,
@@ -383,7 +400,7 @@ impl SessionAffinity {
                     Ok(AcquireStep::Held(Hold::Initialize(
                         AffinityInitialization {
                             coordinator: Arc::downgrade(&self.inner),
-                            session_id: session_id.to_string(),
+                            session_id: Arc::from(session_id),
                             revision,
                             notify,
                             requested_target,
@@ -411,7 +428,7 @@ impl SessionAffinity {
                         target: *target,
                         lease: AffinityLease {
                             coordinator: Arc::downgrade(&self.inner),
-                            session_id: session_id.to_string(),
+                            session_id: Arc::from(session_id),
                             revision: *revision,
                             version: *version,
                             active: true,
@@ -465,7 +482,7 @@ impl SessionAffinity {
         notify.notify_waiters();
         let lease = AffinityLease {
             coordinator: Arc::downgrade(&self.inner),
-            session_id: session_id.to_string(),
+            session_id: Arc::from(session_id),
             revision,
             version,
             active: true,
@@ -723,7 +740,7 @@ impl Inner {
 /// releases the slot and wakes waiters, unless another request already bound it.
 pub struct AffinityInitialization {
     coordinator: Weak<Inner>,
-    session_id: String,
+    session_id: Arc<str>,
     revision: u64,
     notify: Arc<Notify>,
     requested_target: Option<AffinityTarget>,
@@ -737,7 +754,7 @@ impl AffinityInitialization {
         let Some(inner) = self.coordinator.upgrade() else {
             return Err(AffinityError::Dropped);
         };
-        let Some(mut entry) = inner.entries.get_mut(&self.session_id) else {
+        let Some(mut entry) = inner.entries.get_mut(&*self.session_id) else {
             return Err(AffinityError::InvalidArgument(
                 "session affinity initialization was cancelled".to_string(),
             ));
@@ -810,7 +827,7 @@ impl Drop for AffinityInitialization {
         let Some(inner) = self.coordinator.upgrade() else {
             return;
         };
-        let removed = inner.entries.remove_if_mut(&self.session_id, |_, entry| {
+        let removed = inner.entries.remove_if_mut(&*self.session_id, |_, entry| {
             match entry {
                 AffinityEntry::Initializing { revision, .. } => *revision == self.revision,
                 AffinityEntry::Bound {
@@ -838,7 +855,7 @@ impl Drop for AffinityInitialization {
 /// the idle deadline.
 pub struct AffinityLease {
     coordinator: Weak<Inner>,
-    session_id: String,
+    session_id: Arc<str>,
     revision: u64,
     version: AffinityVersion,
     active: bool,
@@ -861,7 +878,7 @@ impl AffinityLease {
         let Some(inner) = self.coordinator.upgrade() else {
             return false;
         };
-        let Some(mut entry) = inner.entries.get_mut(&self.session_id) else {
+        let Some(mut entry) = inner.entries.get_mut(&*self.session_id) else {
             return false;
         };
         let AffinityEntry::Bound {
@@ -904,7 +921,7 @@ impl AffinityLease {
             return;
         };
         let (target, version) = {
-            let Some(mut entry) = inner.entries.get_mut(&self.session_id) else {
+            let Some(mut entry) = inner.entries.get_mut(&*self.session_id) else {
                 return;
             };
             let AffinityEntry::Bound {
@@ -940,7 +957,7 @@ impl AffinityLease {
             self.active = false;
             return;
         };
-        let removed = inner.entries.remove_if(&self.session_id, |_, entry| {
+        let removed = inner.entries.remove_if(&*self.session_id, |_, entry| {
             matches!(
                 entry,
                 AffinityEntry::Bound { revision, version, .. }
