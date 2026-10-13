@@ -76,6 +76,11 @@ impl AffinityResolver {
         &self.table
     }
 
+    /// Whether the host can schedule `target` right now.
+    pub fn is_schedulable(&self, target: AffinityTarget) -> bool {
+        self.liveness.is_schedulable(target)
+    }
+
     /// Requests that ran without a session binding because the table was
     /// full: at `resolve`, or at a failover `commit` that found no room to
     /// re-bind.

@@ -22,9 +22,8 @@ use tokio_util::sync::CancellationToken;
 use super::SessionAffinityMode::{Hard, Soft};
 use super::{
     AffinityTarget, AlwaysLive, Hold, HostAffinity, LlmResponse, affinity_error, affinity_id,
-    explicit_target, from_table,
-    replica_sync::{ReplicaSyncRuntime, SessionAffinityUpdate},
-    subagent_group_affinity_id, to_table, tracked_stream,
+    explicit_target, from_table, replica_sync::ReplicaSyncRuntime, subagent_group_affinity_id,
+    to_table, tracked_stream,
 };
 use crate::{
     preprocessor::PreprocessedRequest,
@@ -37,8 +36,8 @@ use crate::{
     types::Annotated,
 };
 use dynamo_kv_router::services::selection::affinity::{
-    AffinityResolver, AffinityVersion, MAX_SESSION_AFFINITY_ID_BYTES, ReplicaApplyOutcome,
-    Resolution, SessionAffinity, SessionAffinityConfig,
+    AffinityBindingEvent, AffinityResolver, AffinityVersion, MAX_SESSION_AFFINITY_ID_BYTES,
+    ReplicaApplyOutcome, Resolution, SessionAffinity, SessionAffinityConfig,
 };
 
 fn session_id() -> SessionAffinityId {
@@ -181,7 +180,7 @@ impl TestAffinity {
         &self,
         router_id: u64,
         capacity: usize,
-    ) -> mpsc::Receiver<SessionAffinityUpdate> {
+    ) -> mpsc::Receiver<AffinityBindingEvent> {
         let (replica, rx) = ReplicaSyncRuntime::for_test(capacity);
         assert!(
             self.table().enable_replication(router_id, replica.sink()),

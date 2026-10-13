@@ -385,7 +385,12 @@ impl EmbeddedSelection {
         )?;
         Ok(self
             .affinity
-            .get_or_init(|| crate::session_affinity::HostAffinity::from_resolver(resolver))
+            .get_or_init(|| {
+                crate::session_affinity::HostAffinity::from_resolver(
+                    resolver,
+                    self.partition.key().clone(),
+                )
+            })
             .clone())
     }
 

@@ -6,8 +6,10 @@
 //! [`AffinityResolver`] drives it for one request; `README.md` in this
 //! directory maps the routing hosts onto both.
 
+mod replication;
 mod resolver;
 mod table;
 
+pub use replication::{AffinityBindingEvent, AffinityEventSink, ReplicaEventDisposition};
 pub use resolver::{AffinityResolver, Resolution, TargetLiveness};
 pub use table::*;

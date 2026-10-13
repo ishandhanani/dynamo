@@ -346,6 +346,12 @@ impl SessionAffinity {
         self.inner.mode
     }
 
+    /// This replica's writer id, installed with its replication sink; zero
+    /// until then.
+    pub fn writer_id(&self) -> u64 {
+        self.inner.writer_id.load(Ordering::Relaxed)
+    }
+
     /// Acquire `session_id` for a request. `requested_target` is an explicit
     /// pin the request carries; a bound session must agree with it.
     pub fn try_acquire(

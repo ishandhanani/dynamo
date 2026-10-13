@@ -32,6 +32,17 @@ impl DiscoveryLiveness {
 #[cfg(test)]
 pub(crate) struct AlwaysLive;
 
+/// Exactly these workers are live; for tests of liveness-dependent paths.
+#[cfg(test)]
+pub(crate) struct LiveWorkers(pub(crate) std::collections::HashSet<u64>);
+
+#[cfg(test)]
+impl TargetLiveness for LiveWorkers {
+    fn is_schedulable(&self, target: TableTarget) -> bool {
+        self.0.contains(&target.worker_id)
+    }
+}
+
 #[cfg(test)]
 impl TargetLiveness for AlwaysLive {
     fn is_schedulable(&self, _target: TableTarget) -> bool {
