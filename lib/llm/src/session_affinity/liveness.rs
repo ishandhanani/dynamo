@@ -28,6 +28,17 @@ impl DiscoveryLiveness {
     }
 }
 
+/// Every bound worker is live; for tests of the table and lease rules.
+#[cfg(test)]
+pub(crate) struct AlwaysLive;
+
+#[cfg(test)]
+impl TargetLiveness for AlwaysLive {
+    fn is_schedulable(&self, _target: TableTarget) -> bool {
+        true
+    }
+}
+
 impl TargetLiveness for DiscoveryLiveness {
     fn is_schedulable(&self, target: TableTarget) -> bool {
         if !self.client.is_instance_discovered(target.worker_id) {

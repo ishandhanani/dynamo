@@ -297,7 +297,7 @@ fn should_use_direct_sync(transport_kind: EventTransportKind, direct_zmq_topolog
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::session_affinity::AffinityCoordinator;
+    use crate::session_affinity::{AlwaysLive, HostAffinity};
     use dynamo_runtime::{
         DistributedRuntime, Runtime,
         discovery::{DiscoveryQuery, EventChannelQuery},
@@ -344,20 +344,26 @@ mod tests {
         assert!(rx.try_recv().is_err());
     }
 
-    #[tokio::test]
-    async fn rejected_worker_update_still_advances_replica_clock() {
-        let coordinator = AffinityCoordinator::new(
+    fn host_affinity() -> HostAffinity {
+        HostAffinity::standalone(
             Duration::from_secs(10),
             crate::session_affinity::SessionAffinityMode::Hard,
+            Arc::new(AlwaysLive),
         )
-        .unwrap();
-        let baseline = coordinator.next_version_for_test();
+        .unwrap()
+    }
+
+    #[tokio::test]
+    async fn rejected_worker_update_still_advances_replica_clock() {
+        let affinity = host_affinity();
+        let table = affinity.resolver().table();
+        let baseline = table.next_version();
         let sequence = baseline.sequence.saturating_add(10);
         let (_tx, discovered_instances) = watch::channel(Vec::new());
         let applier = ReplicaUpdateApplier {
             local_publisher_id: 7,
             discovered_instances,
-            table: coordinator.table_for_test(),
+            table: table.downgrade(),
         };
 
         assert!(applier.apply(
@@ -371,10 +377,7 @@ mod tests {
             }
         ));
 
-        assert_eq!(
-            coordinator.next_version_for_test().sequence,
-            sequence.saturating_add(1)
-        );
+        assert_eq!(table.next_version().sequence, sequence.saturating_add(1));
     }
 
     #[tokio::test]
@@ -397,11 +400,7 @@ mod tests {
         ));
         let client = endpoint.client().await.unwrap();
 
-        let original = AffinityCoordinator::new(
-            Duration::from_secs(10),
-            crate::session_affinity::SessionAffinityMode::Hard,
-        )
-        .unwrap();
+        let original = host_affinity();
         let shared = original.clone();
         let (first, second) = tokio::join!(
             original.enable_replica_sync(client.clone()),
@@ -417,11 +416,7 @@ mod tests {
         drop(shared);
         wait_for_registration_count(&drt, &query, 0).await;
 
-        let replacement = AffinityCoordinator::new(
-            Duration::from_secs(10),
-            crate::session_affinity::SessionAffinityMode::Hard,
-        )
-        .unwrap();
+        let replacement = host_affinity();
         replacement.enable_replica_sync(client).await.unwrap();
         wait_for_registration_count(&drt, &query, 1).await;
 

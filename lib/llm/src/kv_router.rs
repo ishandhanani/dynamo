@@ -1625,23 +1625,18 @@ impl KvRouter {
         self.selection.scheduler().free(request_id).await
     }
 
-    pub(crate) fn affinity_coordinator(
+    /// Session affinity over this router's partition, with the frontend's
+    /// liveness source (discovery plus the DP-rank range).
+    pub(crate) fn host_affinity(
         &self,
         ttl: std::time::Duration,
         mode: crate::session_affinity::SessionAffinityMode,
-    ) -> anyhow::Result<crate::session_affinity::AffinityCoordinator> {
+    ) -> anyhow::Result<crate::session_affinity::HostAffinity> {
         let liveness = Arc::new(crate::session_affinity::DiscoveryLiveness::new(
             self.client().clone(),
             Some(self.workers_with_configs.clone()),
         ));
-        self.selection.affinity_coordinator(ttl, mode, liveness)
-    }
-
-    /// The partition's session resolver, once session affinity is configured.
-    pub(crate) fn affinity_resolver(
-        &self,
-    ) -> Option<&dynamo_kv_router::services::selection::affinity::AffinityResolver> {
-        self.selection.affinity_resolver()
+        self.selection.host_affinity(ttl, mode, liveness)
     }
 
     pub(crate) fn request_lease_manager(&self) -> &request_lease::RequestLeaseManager {

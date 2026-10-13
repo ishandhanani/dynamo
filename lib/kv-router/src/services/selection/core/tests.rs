@@ -938,7 +938,7 @@ async fn full_affinity_table_routes_without_pinning() {
             key: default_key(),
         }),
     );
-    assert!(entry.affinity.set(resolver).is_ok());
+    assert!(entry.affinity.set(Arc::new(resolver)).is_ok());
 
     for (selection_id, session_id) in [("first", "s1"), ("second", "s2")] {
         let mut request = reserve_request(selection_id);

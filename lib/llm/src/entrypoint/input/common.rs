@@ -24,7 +24,7 @@ use crate::{
     preprocessor::{OpenAIPreprocessor, prompt::prompt_formatter_from_mdc},
     protocols::common::llm_backend::{BackendOutput, LLMEngineOutput, PreprocessedRequest},
     request_template::RequestTemplate,
-    session_affinity::{AffinityCoordinator, SessionAffinityMode, create_affinity_coordinator},
+    session_affinity::{DiscoveryLiveness, HostAffinity, SessionAffinityMode},
     types::{
         Annotated,
         openai::chat_completions::{
@@ -156,7 +156,7 @@ fn preprocessed_backend_engine(
     chooser: Option<Arc<KvRouter>>,
     model_manager: &Arc<crate::discovery::ModelManager>,
     endpoint_id: &dynamo_runtime::protocols::EndpointId,
-    affinity: Option<AffinityCoordinator>,
+    affinity: Option<HostAffinity>,
     load_context: Arc<RoutingLoadContext>,
 ) -> anyhow::Result<Arc<RoutingHost>> {
     // Reject LoRA + unsupported-mode combinations up front (single source of truth, shared with
@@ -173,7 +173,7 @@ fn preprocessed_backend_engine(
             let Some(chooser) = chooser else {
                 anyhow::bail!("RouterMode::KV requires KVRouter to not be null");
             };
-            Arc::new(RoutingHost::new_with_load_context_and_coordinator(
+            Arc::new(RoutingHost::new_with_load_context_and_affinity(
                 router,
                 chooser,
                 load_context,
@@ -253,11 +253,21 @@ pub(crate) async fn build_preprocessed_routing_with_session_affinity_mode(
     let ttl = session_affinity_ttl_secs.map(Duration::from_secs);
     let affinity = match (ttl, chooser.as_ref()) {
         (Some(ttl), Some(chooser)) => {
-            let affinity = chooser.affinity_coordinator(ttl, session_affinity_mode)?;
+            let affinity = chooser.host_affinity(ttl, session_affinity_mode)?;
             affinity.enable_replica_sync(router_client.clone()).await?;
             Some(affinity)
         }
-        _ => create_affinity_coordinator(ttl, session_affinity_mode, router_client.clone()).await?,
+        // Builtin modes have no selection partition: their own table, with
+        // discovery as the liveness source.
+        _ => {
+            HostAffinity::standalone_with_replica_sync(
+                ttl,
+                session_affinity_mode,
+                Arc::new(DiscoveryLiveness::new(router_client.clone(), None)),
+                router_client.clone(),
+            )
+            .await?
+        }
     };
 
     let embedding_cache_indexer = if enable_multimodal_cache_indexer
