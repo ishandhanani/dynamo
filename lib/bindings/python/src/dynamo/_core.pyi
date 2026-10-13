@@ -413,6 +413,15 @@ class ModelCardInstanceId:
         ...
 
 
+def validate_session_affinity_ttl_secs(
+    ttl_secs: float, name: str = "session_affinity_ttl_secs"
+) -> None:
+    """Raise ``ValueError`` unless ``ttl_secs`` is a finite session-affinity idle
+    TTL between 1 and 31536000 seconds. ``name`` is the parameter to blame in
+    the error, so an argument parser can report its own flag.
+    """
+    ...
+
 def compute_block_hash_for_seq(
     tokens: List[int],
     kv_block_size: int,
@@ -765,11 +774,14 @@ class SelectionService:
         replica_sync_peers: Optional[list[str]] = None,
         selection_cache: Optional[SelectionCacheConfig] = None,
         session_affinity_ttl_secs: Optional[float] = None,
+        session_affinity_mode: str = "hard",
     ) -> None:
         """Create a selection service. `indexer_threads` sizes the KV indexer pool.
 
         `session_affinity_ttl_secs` enables session affinity with an idle TTL
-        between 1 and 31536000 seconds.
+        between 1 and 31536000 seconds. `session_affinity_mode` is ``hard``
+        (a bound session stays on its worker while that worker is eligible) or
+        ``soft`` (the binding is a preference the selection policy may override).
         """
         ...
 

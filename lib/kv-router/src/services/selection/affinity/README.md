@@ -47,6 +47,10 @@ One writer-id rule: the id installed with the table's replication sink. Frontend
 
 Two transports stay: the selection service's ZMQ peer mesh (`services/common/replica_sync.rs`, topics `dynamo.session-affinity.v1` and `.v2`) and the frontend's runtime event plane (`lib/llm/src/session_affinity/replica_sync.rs`, subjects `session_affinity_events` for the old partition-less payload and `session_affinity_events_v2` for the shared schema). For one release both transports publish and apply both versions, so mixed-version replicas converge; applying the same binding twice is idempotent (the second apply refreshes the same version). The v1 forms carry a removal TODO.
 
+## Configuration
+
+`SessionAffinityConfig` (TTL, mode, entry limit, session-id limit) is the one configuration, and `SessionAffinityConfig::validate` the one validator; `ttl_from_secs_f64` is the one range check for a TTL given in seconds. The selection service builder, the frontend hosts, the Python bindings (`SelectionService`, `KvRouter`, and the `validate_session_affinity_ttl_secs` function the frontend's argument parser calls), and the EPP all go through it. The mode (`hard` or `soft`, `hard` by default) is settable on every host: `--router-session-affinity-mode` on the frontend, `--session-affinity-mode` and `SelectionService(session_affinity_mode=...)` on the standalone service, `DYN_EPP_SESSION_AFFINITY_MODE` on the EPP.
+
 ## Errors
 
 Hosts map `AffinityError` onto their own error types. The core maps `InvalidArgument` (the request contradicts the binding or exceeds the session-id limit) to `BadRequest`, `ResourceExhausted` to `NotReady`, `Cancelled` to scheduler shutdown, and `Dropped` to `Internal`. A full table never fails `resolve`: the request routes without affinity and `full_table_fallbacks` counts it (a plain counter on the resolver; not exported as a metric).

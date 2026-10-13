@@ -336,10 +336,12 @@ The first successfully dispatched request binds the session ID to its selected w
 
 | Mode | Behavior |
 |---|---|
-| `hard` | Default. Exact-dispatch to the stored target. If the worker or rank is no longer valid, invalidate the binding and retry normal selection once |
-| `soft` | Pass the stored target through the normal selection pipeline as an advisory target. The built-in selector retains it while eligible; a custom policy can choose another worker |
+| `hard` | Default. Selection is limited to the bound worker (and rank) while it is eligible, for every selection policy. A hard-bound request goes to its worker and queues there; the router holds it only when every eligible worker is busy, as for any request. A bound worker that discovery no longer knows drops the binding before selection and the session re-binds to the worker the request runs on. A bound worker that is live but excluded by the request's own constraints (allowed workers, taints, migration exclusions, or the overload detector) selects another worker and the request is rejected before dispatch as invalid, keeping the binding |
+| `soft` | The stored target enters the normal selection pipeline as a preference. The built-in selector keeps it while it is a candidate; a custom policy can choose another worker, and the session rebinds to the worker the request ran on |
 
-**Experimental.** Available since v1.6. When session affinity is enabled (`--router-session-affinity-ttl-secs`), a request that carries a parent session id binds under an internal key derived from that parent id instead of its own session, so the subagents of one parent share a binding while the parent keeps its own. Dynamo's affinity coordinator owns that binding: it commits only after a successful dispatch, is version-checked against concurrent updates, expires on the same TTL, and counts against the same global entry limit as any session binding. A request that carries an explicit worker target stays on its own session, so it is neither rejected against the group nor able to move it. Under the default `hard` mode the group is pinned to its first worker and does not migrate because of load; the binding resets only when the target becomes unusable or dispatch fails.
+Explicit request targets (`nvext.backend_instance_id`, `decode_worker_id`, `prefill_worker_id`) stay exact in both modes and must agree with an existing binding. When the affinity table is full (65,536 sessions per router), a new session routes without affinity rather than failing; the router counts these fallbacks.
+
+**Experimental.** Available since v1.6. When session affinity is enabled (`--router-session-affinity-ttl-secs`), a request that carries a parent session id binds under an internal key derived from that parent id instead of its own session, so the subagents of one parent share a binding while the parent keeps its own. Dynamo's session resolver owns that binding: it commits only after a successful dispatch, is version-checked against concurrent updates, expires on the same TTL, and counts against the same global entry limit as any session binding. A request that carries an explicit worker target stays on its own session, so it is neither rejected against the group nor able to move it. Under the default `hard` mode the group is pinned to its first worker and does not migrate because of load; the binding resets only when the bound worker leaves the pool.
 
 One behavior is known and unresolved: because siblings share one binding, a concurrent fan-out waits for the first sibling's dispatch to commit before the others are placed.
 
@@ -354,7 +356,7 @@ python -m dynamo.frontend \
   --router-session-affinity-mode soft
 ```
 
-Concurrent requests can share a binding. Versioned updates prevent an older concurrent request from replacing a newer soft rebind. Active requests prevent expiry. When a request lease ends after EOF, early drop, error, or cancellation, the idle timer restarts. A missing hard-bound worker or a non-cancellation hard-mode selection, setup, dispatch, or target-validation failure invalidates the binding.
+Concurrent requests can share a binding. Versioned updates prevent an older concurrent request from replacing a newer soft rebind. Active requests prevent expiry. When a request lease ends after EOF, early drop, error, or cancellation, the idle timer restarts. A hard-bound worker that leaves the pool invalidates the binding before the next request selects; a failed dispatch binds nothing and leaves an existing binding as it was. The same session layer serves the frontend (KV and builtin routing modes), the standalone selection service, and the EPP, so a binding means the same thing on every host.
 
 The configured value is the idle timeout. It is independent of
 `--router-ttl-secs` and `--router-predicted-ttl-secs`. Omit the session-affinity
@@ -368,7 +370,11 @@ When session affinity is enabled, routers synchronize affinity bindings through 
 Runtime event plane. The origin publishes a binding after successful dispatch so
 concurrent requests can observe it, then publishes it again when the request lease
 ends so peer idle timers restart when the request becomes idle. The extra event
-fanout is an intentional tradeoff.
+fanout is an intentional tradeoff. Bindings travel on the `session_affinity_events_v2`
+subject, whose payload names the routing partition (model name and routing group)
+so a binding applies only to the partition it belongs to; for one release routers
+also publish and apply the older partition-less `session_affinity_events` subject so
+mixed-version replicas keep converging.
 
 Synchronization is advisory. Each replica owns its local idle TTL and uses the
 first live binding it observes. A matching update refreshes that local deadline,

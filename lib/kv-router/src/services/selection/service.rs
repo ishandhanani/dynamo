@@ -16,7 +16,7 @@ use crate::services::common::replica_sync::{
 use crate::services::indexer::backend::IndexerPolicy;
 use crate::tracking_hash::TrackingHashContext;
 
-use super::affinity::SessionAffinityConfig;
+use super::affinity::{SessionAffinityConfig, SessionAffinityMode};
 use super::core::{KvIndexSource, SelectionCore, SelectionHost, SelectionServiceConfig};
 use super::error::SelectionError;
 use super::pending::SelectionCacheConfig;
@@ -40,6 +40,7 @@ pub struct SelectionServiceBuilder {
     host: SelectionHost,
     worker_selection_policy_factory: Option<WorkerSelectionPolicyFactory>,
     session_affinity_ttl: Option<Duration>,
+    session_affinity_mode: SessionAffinityMode,
     host_manages_request_lifecycle: bool,
 }
 
@@ -81,6 +82,7 @@ impl SelectionServiceBuilder {
             host: SelectionHost::default(),
             worker_selection_policy_factory: None,
             session_affinity_ttl: None,
+            session_affinity_mode: SessionAffinityMode::default(),
             host_manages_request_lifecycle: false,
         }
     }
@@ -125,6 +127,13 @@ impl SelectionServiceBuilder {
         self
     }
 
+    /// How a bound session treats a dispatch that landed elsewhere; `Hard`
+    /// unless set. Takes effect only with [`Self::session_affinity`].
+    pub fn session_affinity_mode(mut self, mode: SessionAffinityMode) -> Self {
+        self.session_affinity_mode = mode;
+        self
+    }
+
     pub fn replica_sync(mut self, port: u16, peers: Vec<String>) -> Self {
         self.replica_sync_port = Some(port);
         self.replica_sync_peers = peers;
@@ -149,8 +158,11 @@ impl SelectionServiceBuilder {
         self.kv_router_config
             .apply_policy_config()
             .map_err(anyhow::Error::msg)?;
-        if let Some(ttl) = self.session_affinity_ttl {
-            super::affinity::SessionAffinity::validate_ttl(ttl)?;
+        let session_affinity = self
+            .session_affinity_ttl
+            .map(|ttl| SessionAffinityConfig::new(ttl).with_mode(self.session_affinity_mode));
+        if let Some(config) = &session_affinity {
+            config.validate()?;
         }
         self.kv_router_config
             .validate_config()
@@ -197,7 +209,7 @@ impl SelectionServiceBuilder {
             self.selection_cache,
             tracking_hash,
             indexer_policy,
-            self.session_affinity_ttl.map(SessionAffinityConfig::new),
+            session_affinity,
         ));
 
         if recover_from_peers {
@@ -267,7 +279,9 @@ impl SelectionServiceConfig {
             builder = builder.replica_sync(port, self.replica_sync_peers.clone());
         }
         if let Some(ttl) = self.session_affinity_ttl {
-            builder = builder.session_affinity(ttl);
+            builder = builder
+                .session_affinity(ttl)
+                .session_affinity_mode(self.session_affinity_mode);
         }
         builder
     }

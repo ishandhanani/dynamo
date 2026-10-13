@@ -12,7 +12,8 @@ mod replica_sync;
 
 pub(crate) use dynamo_kv_router::services::selection::affinity::Hold;
 pub use dynamo_kv_router::services::selection::affinity::{
-    MAX_SESSION_AFFINITY_TTL_SECS, SessionAffinityMode,
+    MAX_SESSION_AFFINITY_TTL_SECS, MIN_SESSION_AFFINITY_TTL_SECS, SessionAffinityConfig,
+    SessionAffinityMode,
 };
 pub use host::{AffinityTarget, HostAffinity, explicit_target};
 pub(crate) use host::{

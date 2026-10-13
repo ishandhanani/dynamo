@@ -304,6 +304,8 @@ pub struct SelectionServiceConfig {
     pub selection_cache: SelectionCacheConfig,
     /// Session stickiness TTL; `None` disables session affinity.
     pub session_affinity_ttl: Option<Duration>,
+    /// How a bound session treats a dispatch that landed elsewhere.
+    pub session_affinity_mode: super::affinity::SessionAffinityMode,
 }
 
 type SelectionEntries = RwLock<HashMap<RoutingPartitionId, Arc<OnceCell<Arc<SelectionEntry>>>>>;
