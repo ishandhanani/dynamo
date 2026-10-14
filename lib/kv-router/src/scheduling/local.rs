@@ -21,7 +21,7 @@ use super::queue::{
     SchedulerQueue,
 };
 use super::request_classifier::{RequestClassifierRuntime, RequestLifecycle};
-use super::selector::{WorkerInputs, WorkerSelector};
+use super::selector::{WorkerInputs, WorkerLoadInput, WorkerSelector};
 use super::types::{
     AdmissionAttempt, AdmittedSchedulingResponse, AdvisorySchedulingResponse, AttemptId,
     KvSchedulerError, NonMaxOverlapSelectionObserver, OverloadedWorkerProvider, PotentialLoad,
@@ -413,6 +413,26 @@ where
         // one entry per worker; the actor projects load again before selection.
         request.worker_loads = FxHashMap::default();
         classifier.classify_with(classification).await.map(Some)
+    }
+
+    /// Live load reader for [`RequestClassifierContext::with_worker_loads`]. Each call
+    /// projects current load on every registered rank, with no request attached.
+    ///
+    /// [`RequestClassifierContext::with_worker_loads`]: crate::plugins::request_classifier::RequestClassifierContext::with_worker_loads
+    #[doc(hidden)]
+    pub fn worker_load_reader(
+        &self,
+    ) -> impl Fn() -> Vec<(WorkerWithDpRank, WorkerLoadInput)> + Send + Sync + 'static {
+        let slots = Arc::clone(&self.slots);
+        move || {
+            slots
+                .project_worker_loads(None, Instant::now())
+                .into_iter()
+                .map(|(worker, projection)| {
+                    (worker, WorkerLoadInput::from_projection(Some(projection)))
+                })
+                .collect()
+        }
     }
 
     /// Install the request classifier plugin. Must be called from within a
@@ -1416,6 +1436,41 @@ mod tests {
             .expect("declared inputs must reach the classifier");
         rows.sort_by_key(|row| row.0);
         assert_eq!(rows, vec![(cached, 2.0, true, 0), (busy, 0.0, true, 1)]);
+        cancel_token.cancel();
+    }
+
+    #[tokio::test]
+    async fn worker_load_reader_reads_current_load() {
+        let idle = WorkerWithDpRank::new(0, 0);
+        let busy = WorkerWithDpRank::new(1, 0);
+        let workers = HashMap::from([
+            (0, SimpleWorkerConfig::default()),
+            (1, SimpleWorkerConfig::default()),
+        ]);
+        let (scheduler, _slots, _cfg_tx, cancel_token) = make_scheduler(workers, None, false, None);
+        let read = scheduler.worker_load_reader();
+        let active_requests = || {
+            let mut loads: Vec<_> = read()
+                .into_iter()
+                .map(|(worker, load)| (worker, load.is_available(), load.active_requests()))
+                .collect();
+            loads.sort_by_key(|load| load.0);
+            loads
+        };
+        assert_eq!(active_requests(), vec![(idle, true, 0), (busy, true, 0)]);
+
+        let _booking = scheduler
+            .add_request_if_registered_guarded(SequenceRequest {
+                request_id: "busy".into(),
+                token_sequence: None,
+                track_prefill_tokens: true,
+                expected_output_tokens: None,
+                prefill_load_hint: None,
+                worker: busy,
+                lora_name: None,
+            })
+            .unwrap();
+        assert_eq!(active_requests(), vec![(idle, true, 0), (busy, true, 1)]);
         cancel_token.cancel();
     }
 

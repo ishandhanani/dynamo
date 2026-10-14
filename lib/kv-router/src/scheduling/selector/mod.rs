@@ -272,14 +272,7 @@ fn worker_input_row(
         WorkerCacheData::default()
     };
     let load = if inputs.contains(WorkerInputs::LOAD) {
-        let available = worker_load.is_some();
-        let worker_load = worker_load.unwrap_or_default();
-        WorkerLoadInput {
-            available,
-            active_prefill_tokens: worker_load.active_prefill_tokens,
-            decode_cost_blocks: worker_load.potential_decode_blocks() as f64,
-            active_requests: worker_load.active_requests,
-        }
+        WorkerLoadInput::from_projection(worker_load)
     } else {
         WorkerLoadInput::default()
     };

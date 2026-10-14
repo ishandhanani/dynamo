@@ -951,7 +951,8 @@ impl KvRouter {
         Ok(())
     }
 
-    /// Cached per-rank capacity and registration state for this router's classifier.
+    /// Cached per-rank capacity and registration state, plus live load, for this
+    /// router's classifier.
     pub fn request_classifier_context(&self) -> RequestClassifierContext {
         let workers = self.workers_with_configs.clone();
         RequestClassifierContext::new(self.block_size, move || {
@@ -970,6 +971,7 @@ impl KvRouter {
                 })
                 .collect()
         })
+        .with_worker_loads(self.selection.scheduler().worker_load_reader())
     }
 
     pub(crate) fn begin_request_lifecycle(
@@ -2306,6 +2308,7 @@ mod tests {
         router.workers_with_configs = workers;
         let context = router.request_classifier_context();
         assert_eq!(context.block_size(), 16);
+        assert!(context.worker_loads().is_some());
         let mut snapshot = context.workers();
         snapshot.sort_by_key(RequestClassifierWorker::worker);
         assert_eq!(
