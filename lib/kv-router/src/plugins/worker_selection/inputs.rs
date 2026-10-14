@@ -4,6 +4,7 @@
 //! Worker input groups, stored snapshots, and component-scoped borrowed views.
 
 use crate::protocols::{SharedCacheHits, WorkerWithDpRank};
+use crate::sequences::WorkerLoadProjection;
 use std::ops::BitOr;
 
 /// Host-owned row materialized once for the union of component input requirements.
@@ -382,6 +383,18 @@ impl<'a> WorkerCacheInput<'a> {
 }
 
 impl WorkerLoadInput {
+    /// `None` marks a worker with no host projection, distinct from an idle worker.
+    pub(crate) fn from_projection(projection: Option<WorkerLoadProjection>) -> Self {
+        let available = projection.is_some();
+        let projection = projection.unwrap_or_default();
+        Self {
+            available,
+            active_prefill_tokens: projection.active_prefill_tokens,
+            decode_cost_blocks: projection.potential_decode_blocks() as f64,
+            active_requests: projection.active_requests,
+        }
+    }
+
     /// Whether the host supplied a load projection for this worker in this selection.
     /// False distinguishes a missing observation from an observed idle worker.
     pub fn is_available(&self) -> bool {

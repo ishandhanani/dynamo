@@ -222,6 +222,7 @@ The factory receives a `RequestClassifierContext` with router-wide information:
 |---|---|
 | `block_size()` | Tokens per KV block |
 | `workers()` | Registered worker ranks from cached discovery information, updated as worker registrations change |
+| `worker_loads()` | Current load on every registered worker rank as `(WorkerWithDpRank, WorkerLoadInput)` pairs, read fresh on each call, or `None` when the host does not track load |
 
 Each entry returned by `workers()` is a `RequestClassifierWorker`:
 
@@ -269,7 +270,7 @@ impl RequestClassifier for LoadAwareClass {
 Dynamo builds these rows with the same code that worker selection uses, so `CACHE`, `LOAD`, and `PREFERRED_TAINT` have the same meaning in both plugins. Dynamo reads `required_worker_inputs` once, when it installs the classifier. With the default `WorkerInputs::NONE`, Dynamo builds no rows and `read_worker_inputs` returns `None`.
 
 - Rows cover each worker rank that is eligible for the request, including overloaded workers. Row order is unspecified.
-- The rows are a snapshot taken before `classify`. Dynamo does not refresh them while the classifier holds the request, so do not treat them as current load when a deferred request is admitted later.
+- The rows are a snapshot taken before `classify`. Dynamo does not refresh them while the classifier holds the request. To decide when to release a deferred request, call `RequestClassifierContext::worker_loads()` instead. It reads current load but has no request attached, so its `decode_cost_blocks` excludes the held request's prompt.
 - Worker selection takes its own snapshot when it picks a worker, so it can pick a different worker than the classifier expected. Use `set_worker_selection_target` to state a preference.
 - Do not keep the view after the callback returns.
 
