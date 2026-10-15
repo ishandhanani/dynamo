@@ -65,9 +65,10 @@ rank_busy = any(configured check is true)
 worker_busy = all(data-parallel ranks are busy)
 ```
 
-The fractional and absolute prefill checks can be enabled separately or together. A worker is not
-excluded until all of its data-parallel ranks are busy, which avoids discarding capacity on ranks that
-can still admit work.
+The fractional and absolute prefill checks can be enabled separately or together. The absolute check,
+`--active-prefill-tokens-threshold`, is deprecated and will be removed in v1.7; use
+`--active-prefill-tokens-threshold-frac`. A worker is not excluded until all of its data-parallel ranks
+are busy, which avoids discarding capacity on ranks that can still admit work.
 
 Decode-block rejection depends on the KV router worker-load path. `--router-mode kv` initializes that
 path. `--router-track-output-blocks` adds generated output tokens to the router's observed active-block
@@ -88,6 +89,11 @@ for busy rejection.
 A `POST /busy_threshold` update changes the stored threshold configuration. It does not synchronously
 recompute every worker. The next worker-load or runtime-configuration update triggers reevaluation, so
 a new threshold can take a short time to change routing decisions.
+
+With `--router-mode kv`, the KV router applies the thresholds itself. When it selects a worker for a
+request, it checks each worker's ranks against the current thresholds using the load it has booked at
+that moment, and skips workers whose ranks are all busy. `KvWorkerMonitor` does not compute a busy set
+from the thresholds in this mode. A `POST /busy_threshold` update takes effect at the next selection.
 
 ## Rejection Path
 

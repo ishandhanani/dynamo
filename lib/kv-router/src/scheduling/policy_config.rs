@@ -4,6 +4,7 @@
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::Path;
+use std::sync::Arc;
 
 use serde::Deserialize;
 use thiserror::Error;
@@ -68,6 +69,42 @@ impl PolicyClassConfig {
 
     /// Whether a worker rank can take more work under this class's limits.
     pub fn has_room(&self, worker: WorkerRoomInput) -> bool {
+        self.capacity_limits().has_room(worker)
+    }
+
+    /// The thresholds this class waits on.
+    pub fn capacity_limits(&self) -> CapacityLimits {
+        CapacityLimits {
+            prefill_busy_threshold: self.prefill_busy_threshold,
+            prefill_busy_threshold_frac: self.prefill_busy_threshold_frac,
+            decode_busy_threshold_frac: self.decode_busy_threshold_frac,
+        }
+    }
+}
+
+/// Per-rank load thresholds. A policy class waits while every eligible worker is past
+/// its limits; a host's [`RejectLimitsProvider`] limits shed workers from selection.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct CapacityLimits {
+    /// Booked prefill tokens above which a rank is full.
+    // TODO(v1.7): Remove the absolute threshold; use `prefill_busy_threshold_frac`.
+    pub prefill_busy_threshold: Option<usize>,
+    /// Fraction of the rank's `max_num_batched_tokens` above which it is full.
+    pub prefill_busy_threshold_frac: Option<f64>,
+    /// Fraction of the rank's `total_kv_blocks` above which held KV makes it full.
+    pub decode_busy_threshold_frac: Option<f64>,
+}
+
+impl CapacityLimits {
+    /// Whether any limit is set.
+    pub fn is_configured(&self) -> bool {
+        self.prefill_busy_threshold.is_some()
+            || self.prefill_busy_threshold_frac.is_some()
+            || self.decode_busy_threshold_frac.is_some()
+    }
+
+    /// Whether a worker rank is within every configured limit.
+    pub fn has_room(&self, worker: WorkerRoomInput) -> bool {
         let tokens = worker.active_prefill_tokens;
         let prefill_budget = worker
             .max_num_batched_tokens
@@ -87,6 +124,10 @@ impl PolicyClassConfig {
         !(absolute_full || fractional_full || decode_full)
     }
 }
+
+/// Supplies the host's live reject limits. Selection skips a worker whose every rank is
+/// past them, and rejects the request when no eligible worker remains.
+pub type RejectLimitsProvider = Arc<dyn Fn() -> CapacityLimits + Send + Sync + 'static>;
 
 /// Booked load and advertised capacity of one worker rank, as read by
 /// [`PolicyClassConfig::has_room`].
@@ -652,6 +693,13 @@ fn resolve_policy_class(
             )));
         }
     };
+    // TODO(v1.7): Remove `prefill_busy_threshold`.
+    if raw.prefill_busy_threshold.is_some() {
+        tracing::warn!(
+            policy_class = %raw.name,
+            "prefill_busy_threshold is deprecated and will be removed in v1.7; use prefill_busy_threshold_frac"
+        );
+    }
     Ok(ResolvedPolicyClass {
         config: PolicyClassConfig {
             name: raw.name,

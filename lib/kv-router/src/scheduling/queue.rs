@@ -21,7 +21,9 @@ use super::overlap::SelectedWorkerTierSnapshot;
 use super::overlap_refresh::{
     NoopOverlapScoresRefresh, OverlapScoresRefresh, read_overlap_refresh_after, refresh_overlap,
 };
-use super::policy_config::{PolicyClassConfig, PolicyProfile, WorkerRoomInput};
+use super::policy_config::{
+    PolicyClassConfig, PolicyProfile, RejectLimitsProvider, WorkerRoomInput,
+};
 use super::policy_queue::{PolicyQueue, QueueMetadata, QueueSnapshot};
 use super::prefill_load::{PrefillLoadEstimator, effective_prefill_tokens};
 use super::queue_admission::WorkerPlacement;
@@ -81,6 +83,19 @@ struct SelectedWorkerForRequest {
     selected_worker_tiers: SelectedWorkerTierSnapshot,
     selected_worker_load: AdvisoryWorkerLoad,
     non_max_overlap_selection: Option<NonMaxOverlapSelection>,
+}
+
+fn union_worker_sets(
+    first: Option<HashSet<WorkerId>>,
+    second: Option<HashSet<WorkerId>>,
+) -> Option<HashSet<WorkerId>> {
+    match (first, second) {
+        (Some(mut first), Some(second)) => {
+            first.extend(second);
+            Some(first)
+        }
+        (first, second) => first.or(second),
+    }
 }
 
 fn non_max_overlap_selection<C: WorkerConfigLike>(
@@ -491,6 +506,7 @@ struct SchedulerQueueActor<
     overloaded_worker_provider: Option<OverloadedWorkerProvider>,
     available_worker_provider: Option<WorkerAvailabilityProvider>,
     non_max_overlap_selection_observer: Arc<OnceLock<NonMaxOverlapSelectionObserver>>,
+    reject_limits: Arc<OnceLock<RejectLimitsProvider>>,
 }
 
 /// Queue that gates scheduling requests behind a capacity check.
@@ -520,6 +536,7 @@ pub struct SchedulerQueue<
     available_worker_provider: Option<WorkerAvailabilityProvider>,
     supports_overlap_refresh: bool,
     non_max_overlap_selection_observer: Arc<OnceLock<NonMaxOverlapSelectionObserver>>,
+    reject_limits: Arc<OnceLock<RejectLimitsProvider>>,
     #[allow(clippy::type_complexity)]
     // Covariant type markers, without ownership or auto-trait bounds.
     _marker: PhantomData<fn() -> (P, C, Sel, RF)>,
@@ -619,6 +636,7 @@ impl<
         let (admission_tx, admission_rx) = mpsc::channel(admission_channel_capacity);
         let cleanup = Arc::new(AdmissionCleanup::default());
         let non_max_overlap_selection_observer = Arc::new(OnceLock::new());
+        let reject_limits = Arc::new(OnceLock::new());
         let start_time = Instant::now();
         let capacity_updates = queueing_enabled.then(|| Arc::new(CapacityUpdates::new()));
         let direct_release: DirectBookingRelease = {
@@ -659,6 +677,7 @@ impl<
             overloaded_worker_provider,
             available_worker_provider: available_worker_provider.clone(),
             non_max_overlap_selection_observer: Arc::clone(&non_max_overlap_selection_observer),
+            reject_limits: Arc::clone(&reject_limits),
         };
         tokio::spawn(actor.run(admission_rx));
         Self {
@@ -675,6 +694,7 @@ impl<
             available_worker_provider,
             supports_overlap_refresh: overlap_refresh_after.is_some(),
             non_max_overlap_selection_observer,
+            reject_limits,
             _marker: PhantomData,
         }
     }
@@ -697,6 +717,13 @@ impl<
         self.non_max_overlap_selection_observer
             .set(observer)
             .is_ok()
+    }
+
+    /// Install the host's live reject limits.
+    ///
+    /// Returns `false` when limits are already installed.
+    pub fn set_reject_limits_provider(&self, provider: RejectLimitsProvider) -> bool {
+        self.reject_limits.set(provider).is_ok()
     }
 
     /// Enqueue a new request through the router-owned policy queue.
@@ -1623,10 +1650,12 @@ impl<
 
         {
             let workers = self.workers_with_configs.borrow();
-            let overloaded_worker_ids = self
-                .overloaded_worker_provider
-                .as_ref()
-                .and_then(|provider| provider());
+            let overloaded_worker_ids = union_worker_sets(
+                self.overloaded_worker_provider
+                    .as_ref()
+                    .and_then(|provider| provider()),
+                self.workers_over_reject_limits(request, &workers),
+            );
             let mut eligibility = request
                 .eligibility_with_overloaded(overloaded_worker_ids.as_ref())
                 .with_available_workers(available_worker_ids.as_deref());
@@ -1903,6 +1932,43 @@ impl<
             initial_effective_prefill_tokens: effective_isl,
             expected_prefill_duration,
         })
+    }
+
+    /// Workers whose every rank is past the host's reject limits on this request's
+    /// projected load.
+    fn workers_over_reject_limits(
+        &self,
+        request: &SchedulingRequest,
+        workers: &HashMap<WorkerId, C>,
+    ) -> Option<HashSet<WorkerId>> {
+        let limits = (self.reject_limits.get()?)();
+        if !limits.is_configured() {
+            return None;
+        }
+        let over_limits = workers
+            .iter()
+            .filter(|(worker_id, config)| {
+                let worker_id = **worker_id;
+                let start = config.data_parallel_start_rank();
+                let end = start.saturating_add(config.data_parallel_size());
+                start < end
+                    && (start..end).all(|dp_rank| {
+                        let load = request
+                            .worker_loads
+                            .get(&WorkerWithDpRank::new(worker_id, dp_rank))
+                            .copied()
+                            .unwrap_or_default();
+                        !limits.has_room(WorkerRoomInput {
+                            active_prefill_tokens: load.active_prefill_tokens,
+                            max_num_batched_tokens: config.max_num_batched_tokens(),
+                            active_decode_blocks: load.active_decode_blocks,
+                            total_kv_blocks: config.total_kv_blocks(),
+                        })
+                    })
+            })
+            .map(|(&worker_id, _)| worker_id)
+            .collect();
+        Some(over_limits)
     }
 
     fn all_eligible_workers_full(
@@ -3413,6 +3479,7 @@ policy_classes:
             non_max_overlap_selection_observer: Arc::clone(
                 &queue.non_max_overlap_selection_observer,
             ),
+            reject_limits: Arc::clone(&queue.reject_limits),
         }
     }
 
@@ -3979,6 +4046,68 @@ policy_classes:
                 .unwrap();
             slots.free(&request_id.to_string(), decay_now()).unwrap();
         }
+    }
+
+    #[tokio::test]
+    async fn reject_limits_shed_full_workers_and_reject_when_none_remain() {
+        let profile = PolicyProfile::synthetic(None, RouterQueuePolicy::Fcfs);
+        let (queue, slots, cfg_tx) = make_queue_with_profile_and_sender(2, 16, 1_000_000, profile);
+        let worker_config = SimpleWorkerConfig {
+            max_num_batched_tokens: Some(1_000_000),
+            total_kv_blocks: Some(8),
+            ..Default::default()
+        };
+        cfg_tx
+            .send(HashMap::from([
+                (0, worker_config.clone()),
+                (1, worker_config),
+            ]))
+            .unwrap();
+        assert!(
+            queue.set_reject_limits_provider(Arc::new(|| crate::scheduling::CapacityLimits {
+                decode_busy_threshold_frac: Some(0.5),
+                ..Default::default()
+            }))
+        );
+
+        // Hold 6 of 8 KV blocks on `worker` with a decoding request.
+        let hold = |request_id: &'static str, worker: WorkerWithDpRank| {
+            let (mut held, held_rx) = make_request(request_id, 96);
+            held.token_seq = Some((0..6).collect());
+            held.pinned_worker = Some(worker);
+            (held, held_rx)
+        };
+        let first = WorkerWithDpRank::new(0, 0);
+        let second = WorkerWithDpRank::new(1, 0);
+        let (held, held_rx) = hold("held-0", first);
+        queue.enqueue(held).await;
+        held_rx.await.unwrap().unwrap();
+        slots
+            .mark_prefill_completed(&"held-0".to_string(), decay_now())
+            .unwrap();
+
+        let (next, next_rx) = make_request("next", 16);
+        queue.enqueue(next).await;
+        assert_eq!(
+            next_rx.await.unwrap().unwrap().best_worker,
+            second,
+            "a worker past the reject limits must be skipped"
+        );
+        slots.free(&"next".to_string(), decay_now()).unwrap();
+
+        let (held, held_rx) = hold("held-1", second);
+        queue.enqueue(held).await;
+        held_rx.await.unwrap().unwrap();
+        slots
+            .mark_prefill_completed(&"held-1".to_string(), decay_now())
+            .unwrap();
+
+        let (rejected, rejected_rx) = make_request("rejected", 16);
+        queue.enqueue(rejected).await;
+        assert!(matches!(
+            rejected_rx.await.unwrap(),
+            Err(KvSchedulerError::AllEligibleWorkersOverloaded)
+        ));
     }
 
     #[tokio::test]

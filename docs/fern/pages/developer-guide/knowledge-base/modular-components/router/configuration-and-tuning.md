@@ -266,7 +266,8 @@ Each class owns a shared FCFS or WSPT heap plus one heap for each exact-worker
 lane, along with its busy thresholds, queue limits, quantum, deficit, and
 counters. Arbitration compares the shared head with the currently dispatchable
 exact-worker lane heads. Absolute and fractional busy thresholds use OR
-semantics. `decode_busy_threshold_frac` also marks a worker busy when the KV
+semantics. The absolute `prefill_busy_threshold` is deprecated and will be
+removed in v1.7; use `prefill_busy_threshold_frac`. `decode_busy_threshold_frac` also marks a worker busy when the KV
 blocks its active requests hold, prompt and output included, exceed that
 fraction of its `total_kv_blocks`, so a worker filled by long-running decodes
 stops taking new work even after their prefill completes. A worker that does

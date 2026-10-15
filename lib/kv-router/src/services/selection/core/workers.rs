@@ -364,6 +364,9 @@ impl SelectionCore {
                     worker_label,
                     true,
                 );
+                if let Some(reject_limits) = self.host.load.reject_limits.clone() {
+                    scheduler.set_reject_limits_provider(reject_limits);
+                }
                 Ok(Arc::new(SelectionEntry {
                     key: key.clone(),
                     block_size,
