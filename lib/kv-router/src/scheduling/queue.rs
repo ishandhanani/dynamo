@@ -1221,10 +1221,10 @@ impl<
                 .and_then(|provider| provider(&request));
             let should_queue = class.queueing_enabled()
                 && (self.pending.has_backlog(class_index) || {
-                    let active_tokens = self.slots.active_tokens(decay_now);
+                    let worker_loads = self.slots.project_worker_loads(None, decay_now);
                     let configs = self.workers_with_configs.borrow();
                     Self::all_eligible_workers_full(
-                        &active_tokens,
+                        &worker_loads,
                         &configs,
                         class,
                         request
@@ -1390,20 +1390,20 @@ impl<
 
     fn has_dispatchable_ready_head(&self) -> bool {
         let decay_now = Instant::now();
-        let mut active_tokens = None;
+        let mut worker_loads = None;
         self.pending.any_ready_head(|_, class, queued| {
             if !class.queueing_enabled() {
                 return true;
             }
-            let active_tokens =
-                active_tokens.get_or_insert_with(|| self.slots.active_tokens(decay_now));
+            let worker_loads = worker_loads
+                .get_or_insert_with(|| self.slots.project_worker_loads(None, decay_now));
             let available = self
                 .available_worker_provider
                 .as_ref()
                 .and_then(|provider| provider(&queued.request));
             let configs = self.workers_with_configs.borrow();
             !Self::all_eligible_workers_full(
-                active_tokens,
+                worker_loads,
                 &configs,
                 class,
                 queued
@@ -1487,7 +1487,7 @@ impl<
             let decay_now = Instant::now();
             // Share a capacity snapshot within this pass only. The next admission
             // must observe the capacity reserved by the previous one.
-            let mut active_tokens = None;
+            let mut worker_loads = None;
             let popped = {
                 let slots = &self.slots;
                 let provider = self.available_worker_provider.as_ref();
@@ -1496,15 +1496,15 @@ impl<
                     if !class.queueing_enabled() {
                         return true;
                     }
-                    let active_tokens =
-                        active_tokens.get_or_insert_with(|| slots.active_tokens(decay_now));
+                    let worker_loads = worker_loads
+                        .get_or_insert_with(|| slots.project_worker_loads(None, decay_now));
                     let available = provider.and_then(|provider| provider(&queued.request));
                     let configs = workers.borrow();
                     // TODO: This preserves head-of-line blocking within each policy
                     // class. A blocked constrained head can stall later entries in
                     // that class until a bounded non-HOL policy is introduced.
                     !Self::all_eligible_workers_full(
-                        active_tokens,
+                        worker_loads,
                         &configs,
                         class,
                         queued
@@ -1906,15 +1906,18 @@ impl<
     }
 
     fn all_eligible_workers_full(
-        active_tokens: &HashMap<crate::protocols::WorkerWithDpRank, usize>,
+        worker_loads: &FxHashMap<WorkerWithDpRank, WorkerLoadProjection>,
         configs: &HashMap<WorkerId, C>,
         class: &PolicyClassConfig,
         eligibility: RoutingEligibility<'_>,
     ) -> bool {
         let has_room = |worker: WorkerWithDpRank, config: &C| {
+            let load = worker_loads.get(&worker).copied().unwrap_or_default();
             class.has_room(WorkerRoomInput {
-                active_prefill_tokens: active_tokens.get(&worker).copied().unwrap_or(0),
+                active_prefill_tokens: load.active_prefill_tokens,
                 max_num_batched_tokens: config.max_num_batched_tokens(),
+                active_decode_blocks: load.active_decode_blocks,
+                total_kv_blocks: config.total_kv_blocks(),
             })
         };
 
@@ -3976,6 +3979,59 @@ policy_classes:
                 .unwrap();
             slots.free(&request_id.to_string(), decay_now()).unwrap();
         }
+    }
+
+    #[tokio::test]
+    async fn decode_limit_holds_new_work_until_held_kv_frees() {
+        let profile = policy_profile(
+            r#"
+default_policy_family: standard
+uncached_isl_buckets:
+  - min_tokens: 0
+    bucket: all
+policy_classes:
+  - name: decode-bound
+    policy_family: standard
+    cache_bucket: all
+    quantum: 1
+    decode_busy_threshold_frac: 0.5
+"#,
+        );
+        let (queue, slots, cfg_tx) = make_queue_with_profile_and_sender(1, 16, 1_000_000, profile);
+        cfg_tx
+            .send(HashMap::from([(
+                0,
+                SimpleWorkerConfig {
+                    max_num_batched_tokens: Some(1_000_000),
+                    total_kv_blocks: Some(8),
+                    ..Default::default()
+                },
+            )]))
+            .unwrap();
+
+        // A decoding request holds 6 of the worker's 8 KV blocks; its prefill load is gone.
+        let (mut held, held_rx) = make_request("held", 96);
+        held.token_seq = Some((0..6).collect());
+        queue.enqueue(held).await;
+        held_rx.await.unwrap().unwrap();
+        slots
+            .mark_prefill_completed(&"held".to_string(), decay_now())
+            .unwrap();
+
+        let (next, mut next_rx) = make_request("next", 16);
+        queue.enqueue(next).await;
+        queue.update().await;
+        assert!(
+            next_rx.try_recv().is_err(),
+            "held KV above the decode limit must keep new work queued"
+        );
+
+        slots.free(&"held".to_string(), decay_now()).unwrap();
+        queue.update().await;
+        next_rx
+            .await
+            .unwrap()
+            .expect("freed KV must release the queued request");
     }
 
     #[tokio::test(flavor = "multi_thread")]

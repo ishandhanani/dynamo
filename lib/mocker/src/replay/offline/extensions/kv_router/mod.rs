@@ -1133,14 +1133,14 @@ impl OfflineReplayRouter {
         let mut admissions = Vec::new();
         loop {
             // Most completions find an empty queue, which never consults the
-            // predicate, so only snapshot active tokens once one is needed.
-            let mut active_tokens = None;
+            // predicate, so only snapshot worker loads once one is needed.
+            let mut worker_loads = None;
             let slots = &self.slots;
             let workers = &self.workers_with_configs;
             let Some(popped) = self.pending.pop_next(|_, class, _| {
-                let active_tokens =
-                    active_tokens.get_or_insert_with(|| slots.active_tokens(decay_now));
-                !Self::all_workers_busy_with(active_tokens, workers, class)
+                let worker_loads =
+                    worker_loads.get_or_insert_with(|| slots.project_worker_loads(None, decay_now));
+                !Self::all_workers_busy_with(worker_loads, workers, class)
             }) else {
                 break;
             };
@@ -1160,12 +1160,12 @@ impl OfflineReplayRouter {
     }
 
     fn all_workers_busy(&self, class: &PolicyClassConfig, decay_now: Instant) -> bool {
-        let active_tokens = self.slots.active_tokens(decay_now);
-        Self::all_workers_busy_with(&active_tokens, &self.workers_with_configs, class)
+        let worker_loads = self.slots.project_worker_loads(None, decay_now);
+        Self::all_workers_busy_with(&worker_loads, &self.workers_with_configs, class)
     }
 
     fn all_workers_busy_with(
-        active_tokens: &HashMap<WorkerWithDpRank, usize>,
+        worker_loads: &FxHashMap<WorkerWithDpRank, WorkerLoadProjection>,
         workers_with_configs: &HashMap<WorkerId, ReplayWorkerConfig>,
         class: &PolicyClassConfig,
     ) -> bool {
@@ -1174,9 +1174,12 @@ impl OfflineReplayRouter {
             let end = start.saturating_add(config.data_parallel_size());
             (start..end).all(|dp_rank| {
                 let worker = WorkerWithDpRank::new(worker_id, dp_rank);
+                let load = worker_loads.get(&worker).copied().unwrap_or_default();
                 !class.has_room(WorkerRoomInput {
-                    active_prefill_tokens: active_tokens.get(&worker).copied().unwrap_or(0),
+                    active_prefill_tokens: load.active_prefill_tokens,
                     max_num_batched_tokens: config.max_num_batched_tokens(),
+                    active_decode_blocks: load.active_decode_blocks,
+                    total_kv_blocks: config.total_kv_blocks(),
                 })
             })
         })
