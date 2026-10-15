@@ -30,7 +30,7 @@ pub use overlap_refresh::{
     NoopOverlapScoresRefresh, OverlapScoresRefresh, RefreshedOverlap, TieredOverlapRefresher,
 };
 pub use policy_config::{
-    PolicyClassConfig, PolicyProfile, RouterPolicyConfig, RouterPolicyConfigError,
+    PolicyClassConfig, PolicyProfile, RouterPolicyConfig, RouterPolicyConfigError, WorkerRoomInput,
 };
 pub use policy_queue::{
     PolicyQueue, PolicyQueueEntry, QueueLimitKind, QueueRejection, QueueSnapshot,

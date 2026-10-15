@@ -9,6 +9,7 @@ use serde::Deserialize;
 use thiserror::Error;
 
 use super::config::RouterQueuePolicy;
+use super::queue::DEFAULT_MAX_BATCHED_TOKENS;
 use crate::plugins::request_classifier::RawRequestClassifierConfig;
 // TODO(v1.7): Remove these compatibility re-exports; use crate::plugins instead.
 pub use crate::plugins::request_classifier::RequestClassifierConfig;
@@ -62,15 +63,31 @@ impl PolicyClassConfig {
             || self.cached_token_queue_limit_per_worker == Some(0)
     }
 
-    pub fn worker_is_busy(&self, active_tokens: usize, max_batched_tokens: u64) -> bool {
-        let absolute_busy = self
+    /// Whether a worker rank can take more work under this class's limits.
+    pub fn has_room(&self, worker: WorkerRoomInput) -> bool {
+        let tokens = worker.active_prefill_tokens;
+        let prefill_budget = worker
+            .max_num_batched_tokens
+            .unwrap_or(DEFAULT_MAX_BATCHED_TOKENS);
+        let absolute_full = self
             .prefill_busy_threshold
-            .is_some_and(|threshold| active_tokens > threshold);
-        let fractional_busy = self.prefill_busy_threshold_frac.is_some_and(|threshold| {
-            (active_tokens as f64) > threshold * (max_batched_tokens as f64)
-        });
-        absolute_busy || fractional_busy
+            .is_some_and(|threshold| tokens > threshold);
+        let fractional_full = self
+            .prefill_busy_threshold_frac
+            .is_some_and(|threshold| (tokens as f64) > threshold * (prefill_budget as f64));
+        !(absolute_full || fractional_full)
     }
+}
+
+/// Booked load and advertised capacity of one worker rank, as read by
+/// [`PolicyClassConfig::has_room`].
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct WorkerRoomInput {
+    /// Prefill tokens the router has booked on this rank and not yet seen complete.
+    pub active_prefill_tokens: usize,
+    /// The rank's advertised prefill budget per step. When absent, the fractional
+    /// limit is taken against [`DEFAULT_MAX_BATCHED_TOKENS`].
+    pub max_num_batched_tokens: Option<u64>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -939,6 +956,24 @@ models:
     }
 
     #[test]
+    fn has_room_without_limits_or_reported_budget() {
+        let mut class = PolicyProfile::synthetic(None, RouterQueuePolicy::Fcfs)
+            .default_class()
+            .clone();
+        let unreported = |active_prefill_tokens| WorkerRoomInput {
+            active_prefill_tokens,
+            max_num_batched_tokens: None,
+        };
+        assert!(class.has_room(unreported(usize::MAX)));
+
+        // An unreported budget is taken as DEFAULT_MAX_BATCHED_TOKENS.
+        class.prefill_busy_threshold_frac = Some(0.5);
+        let half_default = (DEFAULT_MAX_BATCHED_TOKENS / 2) as usize;
+        assert!(class.has_room(unreported(half_default)));
+        assert!(!class.has_room(unreported(half_default + 1)));
+    }
+
+    #[test]
     fn rootless_model_config_falls_back_for_unmatched_model() {
         let config = RouterPolicyConfig::from_yaml(
             r#"
@@ -960,9 +995,13 @@ models:
         .unwrap();
 
         let exact = config.resolve_profile(Some("exact-model"), Some(7.0), RouterQueuePolicy::Wspt);
-        assert!(exact.default_class().worker_is_busy(11, 10_000_000));
-        assert!(exact.default_class().worker_is_busy(6, 10));
-        assert!(!exact.default_class().worker_is_busy(5, 10));
+        let worker = |active_prefill_tokens, max_num_batched_tokens| WorkerRoomInput {
+            active_prefill_tokens,
+            max_num_batched_tokens: Some(max_num_batched_tokens),
+        };
+        assert!(!exact.default_class().has_room(worker(11, 10_000_000)));
+        assert!(!exact.default_class().has_room(worker(6, 10)));
+        assert!(exact.default_class().has_room(worker(5, 10)));
 
         let fallback = config.resolve_profile(Some("other"), Some(7.0), RouterQueuePolicy::Wspt);
         assert_eq!(fallback.default_class().name, SYNTHETIC_POLICY_CLASS);

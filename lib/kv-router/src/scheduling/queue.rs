@@ -21,7 +21,7 @@ use super::overlap::SelectedWorkerTierSnapshot;
 use super::overlap_refresh::{
     NoopOverlapScoresRefresh, OverlapScoresRefresh, read_overlap_refresh_after, refresh_overlap,
 };
-use super::policy_config::{PolicyClassConfig, PolicyProfile};
+use super::policy_config::{PolicyClassConfig, PolicyProfile, WorkerRoomInput};
 use super::policy_queue::{PolicyQueue, QueueMetadata, QueueSnapshot};
 use super::prefill_load::{PrefillLoadEstimator, effective_prefill_tokens};
 use super::queue_admission::WorkerPlacement;
@@ -1223,7 +1223,7 @@ impl<
                 && (self.pending.has_backlog(class_index) || {
                     let active_tokens = self.slots.active_tokens(decay_now);
                     let configs = self.workers_with_configs.borrow();
-                    Self::all_workers_prefill_busy_with(
+                    Self::all_eligible_workers_full(
                         &active_tokens,
                         &configs,
                         class,
@@ -1402,7 +1402,7 @@ impl<
                 .as_ref()
                 .and_then(|provider| provider(&queued.request));
             let configs = self.workers_with_configs.borrow();
-            !Self::all_workers_prefill_busy_with(
+            !Self::all_eligible_workers_full(
                 active_tokens,
                 &configs,
                 class,
@@ -1503,7 +1503,7 @@ impl<
                     // TODO: This preserves head-of-line blocking within each policy
                     // class. A blocked constrained head can stall later entries in
                     // that class until a bounded non-HOL policy is introduced.
-                    !Self::all_workers_prefill_busy_with(
+                    !Self::all_eligible_workers_full(
                         active_tokens,
                         &configs,
                         class,
@@ -1905,32 +1905,30 @@ impl<
         })
     }
 
-    fn all_workers_prefill_busy_with(
+    fn all_eligible_workers_full(
         active_tokens: &HashMap<crate::protocols::WorkerWithDpRank, usize>,
         configs: &HashMap<WorkerId, C>,
         class: &PolicyClassConfig,
         eligibility: RoutingEligibility<'_>,
     ) -> bool {
+        let has_room = |worker: WorkerWithDpRank, config: &C| {
+            class.has_room(WorkerRoomInput {
+                active_prefill_tokens: active_tokens.get(&worker).copied().unwrap_or(0),
+                max_num_batched_tokens: config.max_num_batched_tokens(),
+            })
+        };
+
         if let Some(worker) = eligibility.pinned_worker() {
             let Ok(config) = eligibility.validate_worker_rank(configs, worker) else {
                 return false;
             };
-
-            let max_batched = config
-                .max_num_batched_tokens()
-                .unwrap_or(DEFAULT_MAX_BATCHED_TOKENS);
-            let tokens = active_tokens.get(&worker).copied().unwrap_or(0);
-            return class.worker_is_busy(tokens, max_batched);
+            return !has_room(worker, config);
         }
 
         let mut checked_any = false;
         let has_available = eligibility.any_eligible_worker_rank(configs, |worker, config| {
             checked_any = true;
-            let max_batched = config
-                .max_num_batched_tokens()
-                .unwrap_or(DEFAULT_MAX_BATCHED_TOKENS);
-            let tokens = active_tokens.get(&worker).copied().unwrap_or(0);
-            !class.worker_is_busy(tokens, max_batched)
+            has_room(worker, config)
         });
 
         checked_any && !has_available

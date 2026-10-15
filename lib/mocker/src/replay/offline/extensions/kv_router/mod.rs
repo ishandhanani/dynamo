@@ -20,10 +20,9 @@ use dynamo_kv_router::protocols::{
     BlockHashOptions, PrefillLoadHint, RouterEvent, RoutingConstraints, WorkerConfigLike, WorkerId,
     WorkerWithDpRank, compute_block_hash_for_seq,
 };
-use dynamo_kv_router::queue::DEFAULT_MAX_BATCHED_TOKENS;
 use dynamo_kv_router::scheduling::{
     OverlapAnalysis, OverlapSignals, PolicyClassConfig, PolicyProfile, PolicyQueue, QueueSnapshot,
-    ScheduleMode, WorkerPlacement,
+    ScheduleMode, WorkerPlacement, WorkerRoomInput,
 };
 use dynamo_kv_router::sequences::topology::WorkerDpRange;
 use dynamo_kv_router::{
@@ -1175,11 +1174,10 @@ impl OfflineReplayRouter {
             let end = start.saturating_add(config.data_parallel_size());
             (start..end).all(|dp_rank| {
                 let worker = WorkerWithDpRank::new(worker_id, dp_rank);
-                let max_batched = config
-                    .max_num_batched_tokens()
-                    .unwrap_or(DEFAULT_MAX_BATCHED_TOKENS);
-                let tokens = active_tokens.get(&worker).copied().unwrap_or(0);
-                class.worker_is_busy(tokens, max_batched)
+                !class.has_room(WorkerRoomInput {
+                    active_prefill_tokens: active_tokens.get(&worker).copied().unwrap_or(0),
+                    max_num_batched_tokens: config.max_num_batched_tokens(),
+                })
             })
         })
     }
