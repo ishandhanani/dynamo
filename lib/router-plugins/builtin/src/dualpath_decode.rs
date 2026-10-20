@@ -29,6 +29,9 @@
 //! whole batch of pending requests; the router schedules one request at a time, so the batch is
 //! that request.
 //!
+//! Ties rotate by least recent assignment rather than by worker id, so an idle pool spreads work
+//! instead of stacking it on the lowest-numbered rank.
+//!
 //! Session-affinity targets are advisory and ignored; explicit request pins stay with the host.
 
 use std::sync::Arc;
@@ -93,6 +96,9 @@ struct DualPathPicker {
     parameters: Parameters,
     /// Scratch rows reused across selections.
     rows: Vec<usize>,
+    /// Selection counter at each rank's last assignment; ties go to the least recently assigned.
+    last_assigned: std::collections::HashMap<dynamo_kv_router::protocols::WorkerWithDpRank, u64>,
+    selections: u64,
 }
 
 impl DualPathPicker {
@@ -100,7 +106,16 @@ impl DualPathPicker {
         Self {
             parameters,
             rows: Vec::new(),
+            last_assigned: std::collections::HashMap::new(),
+            selections: 0,
         }
+    }
+
+    fn remember(&mut self, candidates: &[ScoredWorkerCandidate], row: usize) -> usize {
+        self.selections += 1;
+        self.last_assigned
+            .insert(candidates[row].worker(), self.selections);
+        row
     }
 
     fn select_row(
@@ -134,27 +149,35 @@ impl DualPathPicker {
                     .any(|earlier| earlier.worker().worker_id == candidate.worker().worker_id)
             });
             if several_workers && several_ranks {
-                let mut lightest: Option<(u64, f64)> = None;
+                // (worker id, total current tokens, most recent assignment in the group)
+                let mut lightest: Option<(u64, f64, u64)> = None;
                 for &row in &self.rows {
                     let worker_id = candidates[row].worker().worker_id;
-                    let total: f64 = self
+                    let (total, latest) = self
                         .rows
                         .iter()
                         .filter(|&&other| candidates[other].worker().worker_id == worker_id)
-                        .map(|&other| current(other))
-                        .sum();
+                        .fold((0.0, 0), |(total, latest), &other| {
+                            let seen = self
+                                .last_assigned
+                                .get(&candidates[other].worker())
+                                .copied()
+                                .unwrap_or(0);
+                            (total + current(other), latest.max(seen))
+                        });
                     let better = match lightest {
                         None => true,
-                        Some((best_id, best_total)) => total
+                        Some((best_id, best_total, best_latest)) => total
                             .total_cmp(&best_total)
+                            .then_with(|| latest.cmp(&best_latest))
                             .then_with(|| worker_id.cmp(&best_id))
                             .is_lt(),
                     };
                     if better {
-                        lightest = Some((worker_id, total));
+                        lightest = Some((worker_id, total, latest));
                     }
                 }
-                let (worker_id, _) = lightest?;
+                let (worker_id, _, _) = lightest?;
                 self.rows
                     .retain(|&row| candidates[row].worker().worker_id == worker_id);
             }
@@ -171,6 +194,12 @@ impl DualPathPicker {
         let threshold = self.parameters.high_token_factor * (request_tokens + total_current)
             / self.rows.len() as f64;
 
+        let last = |row: usize| {
+            self.last_assigned
+                .get(&candidates[row].worker())
+                .copied()
+                .unwrap_or(0)
+        };
         let under_threshold = self
             .rows
             .iter()
@@ -181,12 +210,13 @@ impl DualPathPicker {
                     .active_requests()
                     .cmp(&load[right].active_requests())
                     .then_with(|| current(left).total_cmp(&current(right)))
+                    .then_with(|| last(left).cmp(&last(right)))
                     .then_with(|| candidates[left].worker().cmp(&candidates[right].worker()))
             });
-        if under_threshold.is_some() {
-            return under_threshold;
+        if let Some(row) = under_threshold {
+            return Some(self.remember(candidates, row));
         }
-        self.rows.iter().copied().min_by(|&left, &right| {
+        let row = self.rows.iter().copied().min_by(|&left, &right| {
             post(left)
                 .total_cmp(&post(right))
                 .then_with(|| {
@@ -194,8 +224,10 @@ impl DualPathPicker {
                         .active_requests()
                         .cmp(&load[right].active_requests())
                 })
+                .then_with(|| last(left).cmp(&last(right)))
                 .then_with(|| candidates[left].worker().cmp(&candidates[right].worker()))
-        })
+        })?;
+        Some(self.remember(candidates, row))
     }
 }
 
@@ -432,6 +464,76 @@ mod tests {
         assert_eq!(
             select_with(Parameters::default(), 1_024, Some(20_000), &ranks),
             WorkerWithDpRank::new(2, 0)
+        );
+    }
+
+    #[test]
+    fn idle_ranks_rotate_instead_of_stacking_on_the_lowest_id() {
+        let ranks = [(1, 0, 0, 0), (1, 1, 0, 0), (2, 0, 0, 0), (2, 1, 0, 0)];
+        let mut request = SchedulingRequest {
+            mode: ScheduleMode::QueryOnly { request_id: None },
+            token_seq: None,
+            isl_tokens: 1_024,
+            lora_name: None,
+            expected_output_tokens: None,
+            affinity_target: None,
+            pinned_worker: None,
+            allowed_worker_ids: None,
+            routing_constraints: RoutingConstraints::default(),
+            router_config_override: None,
+            track_prefill_tokens: true,
+            priority_jump: 0.0,
+            strict_priority: 0,
+            policy_class: None,
+            session_context: None,
+            overlap: OverlapSignals::default(),
+            kv_transfer_candidates: None,
+            retain_kv_transfer_chain: false,
+            shared_cache_hits: None,
+            worker_loads: Default::default(),
+            resp_tx: None,
+        };
+        let mut workers = HashMap::new();
+        for &(worker_id, dp_rank, _, _) in &ranks {
+            workers.insert(worker_id, TestWorker { dp: 2 });
+            request.worker_loads.insert(
+                WorkerWithDpRank::new(worker_id, dp_rank),
+                WorkerLoadProjection {
+                    additional_active_blocks: 16,
+                    ..Default::default()
+                },
+            );
+        }
+        let policy = WorkerSelectionPolicy::new(
+            KvRouterConfig::default(),
+            "test",
+            Vec::new(),
+            Box::new(DualPathPicker::new(Parameters::default())),
+        );
+        let mut picked = Vec::new();
+        for _ in 0..4 {
+            picked.push(
+                policy
+                    .select_worker(WorkerSelectionInput::configured(
+                        &workers,
+                        &request,
+                        request.eligibility(),
+                        BLOCK_SIZE,
+                    ))
+                    .unwrap()
+                    .worker,
+            );
+        }
+        picked.sort();
+        // Both groups tie on tokens, so group selection alternates on id and each rank is used once.
+        assert_eq!(
+            picked,
+            vec![
+                WorkerWithDpRank::new(1, 0),
+                WorkerWithDpRank::new(1, 1),
+                WorkerWithDpRank::new(2, 0),
+                WorkerWithDpRank::new(2, 1),
+            ]
         );
     }
 

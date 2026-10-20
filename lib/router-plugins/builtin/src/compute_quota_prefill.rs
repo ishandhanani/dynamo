@@ -31,6 +31,9 @@
 //! The fourth level, deriving each step's chunk size from a time budget, is engine scheduling
 //! and is out of scope for a worker-selection policy.
 //!
+//! Ties on remaining quota rotate by least recent assignment rather than by worker id, so an
+//! idle pool spreads work instead of stacking it on the lowest-numbered rank.
+//!
 //! Remaining quota per rank is a leaky-bucket ledger owned by the policy: each assignment adds
 //! `cost(q, c)` and the ledger drains at `drain_rate_per_sec`. When the host reports a rank with
 //! no active prefill tokens and no active requests, that rank's ledger resets so a stale estimate
@@ -205,6 +208,8 @@ fn allocate_engines(demand: &[f64], engines: usize) -> Vec<usize> {
 struct RankLedger {
     remaining: f64,
     updated_at: Instant,
+    /// Selection counter at the last assignment; ties go to the least recently assigned rank.
+    assigned_seq: u64,
 }
 
 impl RankLedger {
@@ -243,6 +248,8 @@ struct ComputeQuotaPicker {
     engine_bucket: HashMap<u64, usize>,
     /// Sorted distinct engines seen at the last rebalance; reused to avoid reallocating.
     engines: Vec<u64>,
+    /// Monotonic selection counter for least-recently-assigned tie-breaking.
+    selections: u64,
     clock: Clock,
 }
 
@@ -276,6 +283,7 @@ impl ComputeQuotaPicker {
             round_started_at: now,
             engine_bucket: HashMap::new(),
             engines: Vec::new(),
+            selections: 0,
             clock,
         }
     }
@@ -337,6 +345,7 @@ impl ComputeQuotaPicker {
             ledgers,
             engine_bucket,
             round_demand,
+            selections,
             ..
         } = self;
         // Engines absent from the assignment (joined after the last rebalance) serve every bucket.
@@ -349,24 +358,25 @@ impl ComputeQuotaPicker {
             .iter()
             .any(|candidate| in_bucket(candidate.worker()));
 
-        let mut best: Option<(usize, f64, f64)> = None;
+        // (row, total after assignment, remaining before it, last assignment sequence)
+        let mut best: Option<(usize, f64, f64, u64)> = None;
         for (row, candidate) in candidates.iter().enumerate() {
             let worker = candidate.worker();
             if restrict && !in_bucket(worker) {
                 continue;
             }
-            let remaining = ledgers
-                .entry(worker)
-                .or_insert(RankLedger {
-                    remaining: 0.0,
-                    updated_at: now,
-                })
-                .remaining_at(
-                    now,
-                    parameters.drain_rate_per_sec,
-                    &load[row],
-                    parameters.reconcile_with_host_load,
-                );
+            let ledger = ledgers.entry(worker).or_insert(RankLedger {
+                remaining: 0.0,
+                updated_at: now,
+                assigned_seq: 0,
+            });
+            let assigned_seq = ledger.assigned_seq;
+            let remaining = ledger.remaining_at(
+                now,
+                parameters.drain_rate_per_sec,
+                &load[row],
+                parameters.reconcile_with_host_load,
+            );
             let cached_tokens = cache
                 .get(row)
                 .map(|cache| cache.accounting_cache_estimate().1)
@@ -375,23 +385,28 @@ impl ComputeQuotaPicker {
             let cost =
                 parameters.cost((prompt_tokens - cached_tokens) as f64, cached_tokens as f64);
             let total = remaining + cost;
+            // Equal totals (common when ranks are idle) rotate by least recent assignment, so
+            // the ordering of worker ids never biases an idle pool toward one rank.
             let better = match best {
                 None => true,
-                Some((best_row, best_total, best_remaining)) => total
+                Some((best_row, best_total, best_remaining, best_seq)) => total
                     .total_cmp(&best_total)
                     .then_with(|| remaining.total_cmp(&best_remaining))
+                    .then_with(|| assigned_seq.cmp(&best_seq))
                     .then_with(|| worker.cmp(&candidates[best_row].worker()))
                     .is_lt(),
             };
             if better {
-                best = Some((row, total, remaining));
+                best = Some((row, total, remaining, assigned_seq));
             }
         }
 
-        let (row, total, remaining) =
+        let (row, total, remaining, _) =
             best.ok_or_else(|| WorkerSelectionPolicyError::failed("no eligible worker"))?;
+        *selections += 1;
         if let Some(ledger) = ledgers.get_mut(&candidates[row].worker()) {
             ledger.remaining = total;
+            ledger.assigned_seq = *selections;
         }
         round_demand[bucket] += total - remaining;
         Ok(row)
@@ -660,6 +675,25 @@ mod tests {
         );
         // A fifth request lands on the rank whose ledger drained first: all equal, so lowest id.
         assert_eq!(harness.select(4096, &ranks), WorkerWithDpRank::new(1, 0));
+    }
+
+    #[test]
+    fn idle_ranks_rotate_instead_of_stacking_on_the_lowest_id() {
+        let harness = Harness::new(Parameters::default());
+        // Every rank reports idle, so each pick resets the ledgers and all totals tie.
+        let idle = [(1, 0, 0, 0, 0), (1, 1, 0, 0, 0), (2, 0, 0, 0, 0)];
+        let picked: Vec<_> = (0..6).map(|_| harness.select(4096, &idle)).collect();
+        assert_eq!(
+            picked,
+            vec![
+                WorkerWithDpRank::new(1, 0),
+                WorkerWithDpRank::new(1, 1),
+                WorkerWithDpRank::new(2, 0),
+                WorkerWithDpRank::new(1, 0),
+                WorkerWithDpRank::new(1, 1),
+                WorkerWithDpRank::new(2, 0),
+            ]
+        );
     }
 
     #[test]
