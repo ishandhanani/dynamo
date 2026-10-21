@@ -4,11 +4,14 @@
 //! Router plugins Dynamo ships.
 //!
 //! Routing hosts always link the default through `default_registry`. The optional custom
-//! catalog adds the named default, two-tier, and ThunderAgent providers through `register`. The default
+//! catalog adds the named default, two-tier, compute-quota prefill, DualPath decode, and
+//! ThunderAgent providers through `register`. The default
 //! itself uses the same public candidate inputs and scorer/picker dispatch as external policies.
 //! Sequence tracking, eligibility, and admission remain in dynamo-kv-router.
 
+mod compute_quota_prefill;
 mod default;
+mod dualpath_decode;
 mod thunderagent;
 mod two_tier_cost_fn;
 pub use default::{DefaultWorkerSelector, default_factory, default_policy};
@@ -28,6 +31,8 @@ use dynamo_kv_router::plugins::{RouterPluginRegistry, RouterPluginRegistryError}
 pub fn register(registry: &mut RouterPluginRegistry) -> Result<(), RouterPluginRegistryError> {
     default::register(registry)?;
     two_tier_cost_fn::register(registry)?;
+    compute_quota_prefill::register(registry)?;
+    dualpath_decode::register(registry)?;
     thunderagent::register(registry)?;
     Ok(())
 }
@@ -86,6 +91,37 @@ worker_selection:
             WorkerType::Prefill,
             WorkerType::Decode,
         ] {
+            factory(&config, worker_type, partition);
+        }
+    }
+
+    /// The load-balancer pair documented for disaggregated pools constructs for its stages.
+    #[test]
+    fn resolves_documented_load_balancer_yaml() {
+        let (config, resolved) = resolve(
+            r#"
+worker_selection:
+  prefill: compute-quota
+  decode: dualpath
+  instances:
+    - name: compute-quota
+      type: dynamo-compute-quota-prefill
+      parameters:
+        bucket_bounds: [16384, 65536, 262144]
+        round_ms: 2000
+        drain_rate_per_sec: 1.2e9
+    - name: dualpath
+      type: dynamo-dualpath-decode
+      parameters:
+        high_token_factor: 1.05
+        default_output_tokens: 300
+"#,
+        );
+        let factory = resolved
+            .unwrap()
+            .expect("a configured instance resolves to a factory");
+        let partition = RoutingPartitionRef::new("model", "default");
+        for worker_type in [WorkerType::Prefill, WorkerType::Decode] {
             factory(&config, worker_type, partition);
         }
     }

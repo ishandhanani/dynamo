@@ -60,6 +60,11 @@ struct SglangHicacheMooncakeConfig {
     key_prefix: Option<String>,
     #[serde(default)]
     kv_events_endpoint: Option<String>,
+    /// `hicache` (default) or `linker` for SGLang's direct external linker.
+    #[serde(default)]
+    key_layout: Option<String>,
+    #[serde(default)]
+    attn_cp_size: Option<u32>,
 }
 
 impl SglangHicacheMooncakeConfig {
@@ -74,6 +79,12 @@ impl SglangHicacheMooncakeConfig {
             && self.should_split_heads == other.should_split_heads
             && self.extra_backend_tag == other.extra_backend_tag
             && self.key_prefix == other.key_prefix
+            && self.key_layout == other.key_layout
+            && self.attn_cp_size == other.attn_cp_size
+    }
+
+    fn is_linker_layout(&self) -> bool {
+        self.key_layout.as_deref() == Some("linker")
     }
 
     /// Prefix used for both physical keys and group IDs. Older workers publish only the
@@ -577,6 +588,30 @@ fn expand_actual_query_keys(
     let logical_key = maybe_prefix_key(logical_page_hash, config.effective_key_prefix());
     let pp_size = config.pp_size.max(1);
 
+    if config.is_linker_layout() {
+        // One object per page and rank holds K and V: `{key}_[tp{r}_]cp{c}_pp{p}_k`, where
+        // rank-replicated (MLA) pools omit the TP rank.
+        let cp_size = config.attn_cp_size.unwrap_or(1).max(1);
+        let tp_ranks = if config.is_mla_model {
+            vec![None]
+        } else {
+            (0..config.tp_size.max(1)).map(Some).collect()
+        };
+        let mut query_keys = Vec::with_capacity(tp_ranks.len() * (cp_size * pp_size) as usize);
+        for tp_rank in tp_ranks {
+            for cp_rank in 0..cp_size {
+                for pp_rank in 0..pp_size {
+                    let suffix = match tp_rank {
+                        Some(tp_rank) => format!("tp{tp_rank}_cp{cp_rank}_pp{pp_rank}"),
+                        None => format!("cp{cp_rank}_pp{pp_rank}"),
+                    };
+                    query_keys.push(format!("{logical_key}_{suffix}_k"));
+                }
+            }
+        }
+        return query_keys;
+    }
+
     if config.is_mla_model {
         return if pp_size > 1 {
             (0..pp_size)
@@ -642,6 +677,8 @@ mod tests {
             extra_backend_tag: None,
             key_prefix: None,
             kv_events_endpoint: Some("tcp://127.0.0.1:5557".to_string()),
+            key_layout: None,
+            attn_cp_size: None,
         }
     }
 
@@ -712,6 +749,29 @@ mod tests {
                 "hash_1_1_k",
                 "hash_1_1_v",
             ]
+        );
+    }
+
+    #[test]
+    fn test_expand_actual_query_keys_for_linker_layout() {
+        let config = SglangHicacheMooncakeConfig {
+            tp_size: 2,
+            key_layout: Some("linker".to_string()),
+            key_prefix: Some("Org-Model".to_string()),
+            ..mooncake_config()
+        };
+        assert_eq!(
+            expand_actual_query_keys("hash", &config),
+            vec!["Org-Model_hash_tp0_cp0_pp0_k", "Org-Model_hash_tp1_cp0_pp0_k"]
+        );
+
+        let mla = SglangHicacheMooncakeConfig {
+            is_mla_model: true,
+            ..config
+        };
+        assert_eq!(
+            expand_actual_query_keys("hash", &mla),
+            vec!["Org-Model_hash_cp0_pp0_k"]
         );
     }
 
