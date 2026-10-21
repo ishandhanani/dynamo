@@ -1076,6 +1076,191 @@ fn sglang_eagle_enabled(server_info: &Value) -> bool {
         })
 }
 
+/// Runtime key the frontend's HiCache shared cache reads
+/// (`lib/llm/src/kv_router/shared_cache.rs`).
+const SGLANG_HICACHE_MOONCAKE_RUNTIME_KEY: &str = "sglang_hicache_mooncake";
+
+/// Architectures SGLang's `ModelConfig` classifies as `AttentionArch.MLA`, which is
+/// what `use_mla_backend` (the Python worker's `is_mla_model` source) reports and what
+/// makes the linker and HiCache store one rank-replicated KV object per page instead of
+/// one per TP rank. Mirrors the unconditional branches of
+/// `sglang/srt/configs/model_config.py`; the cases that also depend on hf-config fields
+/// the sidecar cannot see (`PixtralForConditionalGeneration` and
+/// `BailingMoeForCausalLMNextN` with `kv_lora_rank`) are treated as non-MLA, which is
+/// their default. DeepSeek-V4 is `MHA` there and so is not listed.
+const SGLANG_MLA_ARCHITECTURES: &[&str] = &[
+    "BailingMoeV2_5ForCausalLM",
+    "BailingMoeV3ForCausalLM",
+    "BailingMoeV3VLForConditionalGeneration",
+    "DeepseekV2ForCausalLM",
+    "DeepseekV32ForCausalLM",
+    "DeepseekV3ForCausalLM",
+    "DeepseekV3ForCausalLMNextN",
+    "DeepseekVL2ForCausalLM",
+    "Dots3NoteForCausalLM",
+    "Dots3NoteForCausalLMNextN",
+    "DotsVLMForCausalLM",
+    "Eagle3DeepseekV2ForCausalLM",
+    "GigaChat35ForCausalLM",
+    "GigaChat35ForCausalLMNextN",
+    "Glm4MoeLiteForCausalLM",
+    "Glm4MoeLiteForCausalLMNextN",
+    "Glm5NextForConditionalGeneration",
+    "Glm5NextForConditionalGenerationNextN",
+    "GlmMoeDsaForCausalLM",
+    "GlmMoeDsaForCausalLMNextN",
+    "HYV4ForCausalLM",
+    "HYV4ForCausalLMNextN",
+    "KimiK25ForConditionalGeneration",
+    "KimiK3ForConditionalGeneration",
+    "KimiK3LinearForCausalLM",
+    "KimiLinearForCausalLM",
+    "KimiVLForConditionalGeneration",
+    "LongcatFlashForCausalLM",
+    "LongcatFlashForCausalLMNextN",
+    "MiniCPM3ForCausalLM",
+    "MistralLarge3ForCausalLM",
+    "MistralLarge3ForCausalLMEagle",
+    "SarvamMLAForCausalLM",
+];
+
+/// Whether SGLang serves this model with its MLA attention architecture, from the
+/// `architectures` list `GetModelInfo` reports (neither RPC exposes the attention
+/// architecture itself).
+fn sglang_uses_mla(model_info: &Value) -> bool {
+    model_info
+        .get("architectures")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .any(|arch| SGLANG_MLA_ARCHITECTURES.contains(&arch))
+}
+
+/// Parse a storage-options argument as SGLang reports it: an object, a JSON string, or
+/// `@path` naming a JSON file. Anything else yields an empty mapping.
+fn storage_config_object(value: Option<&Value>) -> serde_json::Map<String, Value> {
+    match value {
+        Some(Value::Object(map)) => map.clone(),
+        Some(Value::String(raw)) => {
+            let text = match raw.strip_prefix('@') {
+                Some(path) => std::fs::read_to_string(path).unwrap_or_default(),
+                None => raw.clone(),
+            };
+            serde_json::from_str::<Value>(&text)
+                .ok()
+                .and_then(|value| match value {
+                    Value::Object(map) => Some(map),
+                    _ => None,
+                })
+                .unwrap_or_default()
+        }
+        _ => serde_json::Map::new(),
+    }
+}
+
+/// The Mooncake storage options. Since sgl-project/sglang#46388 the external linker
+/// reads them from `--unified-cache-external-linker-config` (a JSON object) and falls
+/// back to the deprecated `--hicache-storage-backend-extra-config` only when that is
+/// unset; the HiCache storage backend reads the latter. Mirrors
+/// `_get_mooncake_runtime_data` in `components/src/dynamo/sglang/register.py`.
+fn mooncake_storage_config(server_info: &Value, linker: bool) -> serde_json::Map<String, Value> {
+    if linker
+        && let Some(config @ Value::Object(_)) =
+            server_info.get("unified_cache_external_linker_config")
+    {
+        return storage_config_object(Some(config));
+    }
+    storage_config_object(server_info.get("hicache_storage_backend_extra_config"))
+}
+
+/// Prefix SGLang's MooncakeStore prepends to every stored key: the backend tag when present
+/// and the model name with `/` replaced by `-`, joined with `_`. Mirrors
+/// `_mooncake_key_prefix` in `components/src/dynamo/sglang/register.py`.
+fn mooncake_key_prefix(
+    extra_backend_tag: Option<&Value>,
+    model_name: Option<&str>,
+) -> Option<String> {
+    let mut parts = Vec::new();
+    match extra_backend_tag {
+        Some(Value::Null) | None => {}
+        Some(Value::String(tag)) => parts.push(tag.clone()),
+        Some(other) => parts.push(other.to_string()),
+    }
+    if let Some(name) = model_name.filter(|name| !name.is_empty()) {
+        parts.push(name.replace('/', "-"));
+    }
+    (!parts.is_empty()).then(|| parts.join("_"))
+}
+
+/// Mooncake HiCache metadata the frontend needs to match Mooncake KV events against request
+/// block hashes, for SGLang's HiCache Mooncake storage backend and for its direct external
+/// linker (which names keys after `model_path` and uses its own key layout). Mirrors
+/// `_get_mooncake_runtime_data` in `components/src/dynamo/sglang/register.py` so the native
+/// gRPC path publishes the same contract as the Python worker.
+fn sglang_mooncake_runtime_data(discovery: &Discovery) -> Option<Value> {
+    let info = &discovery.server_info;
+    let json_str = |key: &str| info.get(key).and_then(Value::as_str);
+    let linker = info
+        .get("enable_unified_cache_external_linker")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+        && json_str("unified_cache_external_linker_backend") == Some("mooncake");
+    if !linker && json_str("hicache_storage_backend") != Some("mooncake") {
+        return None;
+    }
+    let extra = mooncake_storage_config(info, linker);
+    // The engine's MOONCAKE_TENANT_ID environment and config-path tenant are not
+    // visible to the sidecar; the router defaults an absent tenant to `default`.
+    let tenant_id = extra
+        .get("tenant_id")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|tenant| !tenant.is_empty());
+    let tp_size = client::json_u32(info, "tp_size").unwrap_or(1).max(1);
+    let pp_size = client::json_u32(info, "pp_size").unwrap_or(1).max(1);
+    let is_mla_model = sglang_uses_mla(&discovery.model_info);
+    let tp_lcm_size = extra.get("tp_lcm_size").and_then(|value| {
+        value
+            .as_u64()
+            .and_then(|size| u32::try_from(size).ok())
+            .or_else(|| value.as_str().and_then(|text| text.trim().parse().ok()))
+    });
+    let should_split_heads = !is_mla_model
+        && json_str("hicache_mem_layout") == Some("page_head")
+        && tp_lcm_size.is_some_and(|lcm| lcm > tp_size && lcm % tp_size == 0);
+    let extra_backend_tag = extra
+        .get("extra_backend_tag")
+        .and_then(Value::as_str)
+        .filter(|tag| !tag.is_empty());
+    let key_model = if linker {
+        Some(discovery.model_path.as_str())
+    } else {
+        discovery
+            .served_model_name
+            .as_deref()
+            .or_else(|| json_str("served_model_name"))
+    };
+    Some(serde_json::json!({
+        "backend": "mooncake",
+        "tenant_id": tenant_id,
+        "page_size": client::json_u32(info, "page_size").unwrap_or(1).max(1),
+        "tp_size": tp_size,
+        "pp_size": pp_size,
+        "is_mla_model": is_mla_model,
+        "is_eagle": sglang_eagle_enabled(info),
+        "tp_lcm_size": tp_lcm_size,
+        "should_split_heads": should_split_heads,
+        "extra_backend_tag": extra_backend_tag,
+        "key_prefix": mooncake_key_prefix(extra.get("extra_backend_tag"), key_model),
+        "key_layout": if linker { "linker" } else { "hicache" },
+        "attn_cp_size": client::json_u32(info, "attn_cp_size").unwrap_or(1).max(1),
+        "kv_events_endpoint": std::env::var("DYN_MOONCAKE_KV_EVENTS_ENDPOINT")
+            .ok()
+            .filter(|endpoint| !endpoint.is_empty()),
+    }))
+}
+
 /// Context length minus the EAGLE draft-token reserve, which SGLang counts
 /// against the context once `max_new_tokens` is set. Adaptive speculation does
 /// not report its reserve.
@@ -1293,6 +1478,9 @@ fn build_engine_config(
             serde_json::json!({"total_tokens": total_tokens}),
         );
     }
+    if let Some(mooncake) = sglang_mooncake_runtime_data(discovery) {
+        runtime_data.insert(SGLANG_HICACHE_MOONCAKE_RUNTIME_KEY.to_string(), mooncake);
+    }
     if sglang_gates_reasoning(&discovery.server_info) {
         runtime_data.insert(
             TOOL_CALL_STRUCTURAL_TAG_REASONING_GATE_RUNTIME_KEY.to_string(),
@@ -1335,14 +1523,14 @@ mod tests {
     use clap::Parser;
     use dynamo_backend_common::{BackendError, ErrorType, ModelInput};
     use dynamo_sidecar_common::GrpcEndpoint;
-    use serde_json::json;
+    use serde_json::{Value, json};
 
     use super::{
         Args, DisaggregationMode, DiscoveredKvEventSource, Discovery, EngineConfig,
         SglangSidecarEngine, build_engine_config, combined_token_limit, discover_kv_event_sources,
         discovery_bootstrap_port, hicache_native_offloading_capacity, hint_zmq_endpoint,
         kv_event_connect_host, omitted_max_tokens_default, resolve_bootstrap_host_with_local,
-        sglang_eagle_enabled,
+        sglang_eagle_enabled, sglang_uses_mla,
     };
 
     fn discovery(server_info: serde_json::Value) -> Discovery {
@@ -2237,6 +2425,153 @@ mod tests {
 
         assert_eq!(registration.kv_cache_block_size, Some(512));
         assert_eq!(registration.total_kv_blocks, Some(16));
+    }
+
+    #[test]
+    fn publishes_mooncake_runtime_data_for_the_external_linker() {
+        let mut discovery = discovery(json!({
+            "enable_unified_cache_external_linker": true,
+            "unified_cache_external_linker_backend": "mooncake",
+            "unified_cache_external_linker_config": null,
+            "hicache_storage_backend_extra_config":
+                "{\"master_server_address\":\"127.0.0.1:25071\",\"protocol\":\"rdma\"}",
+            "page_size": 256,
+            "tp_size": 2,
+            "pp_size": 1,
+            "attn_cp_size": 1,
+        }));
+        discovery.model_path = "zai-org/GLM-5.2-NVFP4".to_string();
+        discovery.served_model_name = Some("served/name".to_string());
+        discovery.model_info = json!({
+            "model_type": "glm_moe_dsa",
+            "architectures": ["GlmMoeDsaForCausalLM"],
+        });
+        let config = build_engine_config(
+            &discovery,
+            DisaggregationMode::Prefill,
+            Some("h".into()),
+            Some(1),
+        )
+        .unwrap();
+        let data = config
+            .runtime_data
+            .get(super::SGLANG_HICACHE_MOONCAKE_RUNTIME_KEY)
+            .expect("linker mode publishes Mooncake runtime data");
+        assert_eq!(data["backend"], "mooncake");
+        assert_eq!(data["key_layout"], "linker");
+        // The linker names keys after model_path, not the served model name.
+        assert_eq!(data["key_prefix"], "zai-org-GLM-5.2-NVFP4");
+        assert_eq!(data["is_mla_model"], true);
+        assert_eq!(data["should_split_heads"], false);
+        assert_eq!(data["page_size"], 256);
+        assert_eq!(data["tp_size"], 2);
+        assert_eq!(data["attn_cp_size"], 1);
+        assert!(data["tp_lcm_size"].is_null());
+        assert!(data["extra_backend_tag"].is_null());
+        assert!(data["tenant_id"].is_null());
+    }
+
+    #[test]
+    fn is_mla_model_follows_sglang_attention_arch() {
+        for (architectures, expected) in [
+            (json!(["GlmMoeDsaForCausalLM"]), true),
+            (json!(["GlmMoeDsaForCausalLMNextN"]), true),
+            (json!(["DeepseekV3ForCausalLM"]), true),
+            (json!(["DeepseekV32ForCausalLM"]), true),
+            (json!(["KimiK25ForConditionalGeneration"]), true),
+            // SGLang classifies DeepSeek-V4 as MHA (TP-sharded KV).
+            (json!(["DeepseekV4ForCausalLM"]), false),
+            (json!(["Qwen3ForCausalLM"]), false),
+            (json!(["Glm4MoeForCausalLM"]), false),
+            (json!([]), false),
+            (Value::Null, false),
+        ] {
+            let model_info = json!({"model_type": "any", "architectures": architectures});
+            assert_eq!(sglang_uses_mla(&model_info), expected, "{model_info}");
+        }
+        assert!(!sglang_uses_mla(&json!({"model_type": "deepseek_v3"})));
+    }
+
+    #[test]
+    fn linker_storage_options_come_from_the_linker_config_flag() {
+        let server_info = json!({
+            "enable_unified_cache_external_linker": true,
+            "unified_cache_external_linker_backend": "mooncake",
+            "unified_cache_external_linker_config": {
+                "enable_group_semantics": true,
+                "extra_backend_tag": "tagL",
+                "tenant_id": "team-a",
+            },
+            "page_size": 64,
+            "tp_size": 4,
+        });
+        let mut linker = discovery(server_info.clone());
+        linker.model_path = "org/GLM-5.2-NVFP4".to_string();
+        let config =
+            build_engine_config(&linker, DisaggregationMode::Aggregated, None, None).unwrap();
+        let data = &config.runtime_data[super::SGLANG_HICACHE_MOONCAKE_RUNTIME_KEY];
+        assert_eq!(data["key_layout"], "linker");
+        assert_eq!(data["extra_backend_tag"], "tagL");
+        assert_eq!(data["key_prefix"], "tagL_org-GLM-5.2-NVFP4");
+        assert_eq!(data["tenant_id"], "team-a");
+        assert_eq!(data["tp_size"], 4);
+
+        // The new flag wins over the deprecated extra config when both are present.
+        let mut both = server_info.clone();
+        both["hicache_storage_backend_extra_config"] =
+            json!({"extra_backend_tag": "old", "tenant_id": "old"});
+        let mut linker = discovery(both);
+        linker.model_path = "org/GLM-5.2-NVFP4".to_string();
+        let config =
+            build_engine_config(&linker, DisaggregationMode::Aggregated, None, None).unwrap();
+        let data = &config.runtime_data[super::SGLANG_HICACHE_MOONCAKE_RUNTIME_KEY];
+        assert_eq!(data["key_prefix"], "tagL_org-GLM-5.2-NVFP4");
+        assert_eq!(data["tenant_id"], "team-a");
+    }
+
+    #[test]
+    fn publishes_mooncake_runtime_data_for_hicache_storage() {
+        let mut discovery = discovery(json!({
+            "hicache_storage_backend": "mooncake",
+            "hicache_storage_backend_extra_config": {
+                "extra_backend_tag": "tagA",
+                "tp_lcm_size": 4
+            },
+            // Only the linker reads this flag; HiCache storage ignores it.
+            "unified_cache_external_linker_config": {"extra_backend_tag": "ignored"},
+            "hicache_mem_layout": "page_head",
+            "page_size": 64,
+            "tp_size": 2,
+            "pp_size": 1,
+        }));
+        discovery.served_model_name = Some("org/model".to_string());
+        discovery.model_info =
+            json!({"model_type": "qwen3", "architectures": ["Qwen3ForCausalLM"]});
+        let config =
+            build_engine_config(&discovery, DisaggregationMode::Decode, None, None).unwrap();
+        let data = &config.runtime_data[super::SGLANG_HICACHE_MOONCAKE_RUNTIME_KEY];
+        assert_eq!(data["key_layout"], "hicache");
+        assert_eq!(data["key_prefix"], "tagA_org-model");
+        assert_eq!(data["extra_backend_tag"], "tagA");
+        assert_eq!(data["tp_lcm_size"], 4);
+        assert_eq!(data["is_mla_model"], false);
+        assert_eq!(data["should_split_heads"], true);
+    }
+
+    #[test]
+    fn omits_mooncake_runtime_data_without_a_mooncake_backend() {
+        let config = build_engine_config(
+            &discovery(json!({"enable_unified_cache_external_linker": true, "page_size": 16})),
+            DisaggregationMode::Decode,
+            None,
+            None,
+        )
+        .unwrap();
+        assert!(
+            !config
+                .runtime_data
+                .contains_key(super::SGLANG_HICACHE_MOONCAKE_RUNTIME_KEY)
+        );
     }
 
     #[test]
