@@ -4,8 +4,8 @@
 #![cfg(feature = "block-manager")]
 
 use super::*;
-use dynamo_llm::block_manager::block::BlockDataExt;
-use dynamo_llm::block_manager::block::BlockDataProviderMut;
+use dynamo_kvbm::block::BlockDataExt;
+use dynamo_kvbm::block::BlockDataProviderMut;
 use pyo3::{types::PyTuple, PyObject, PyResult, Python};
 use std::sync::{Arc, Mutex};
 
@@ -14,7 +14,7 @@ use std::sync::{Arc, Mutex};
 pub struct Layer {
     inner: Arc<Mutex<block::BlockType>>,
     layer_idx: usize,
-    dtype: dynamo_llm::common::dtype::DType,
+    dtype: dynamo_kvbm::DType,
     device_id: usize,
 }
 
@@ -22,7 +22,7 @@ impl Layer {
     pub fn from_rust(
         block: Arc<Mutex<block::BlockType>>,
         layer_idx: usize,
-        dtype: dynamo_llm::common::dtype::DType,
+        dtype: dynamo_kvbm::DType,
         device_id: usize,
     ) -> Self {
         Self {
@@ -76,14 +76,14 @@ impl Layer {
             let mut mutable_block = self.inner.lock().unwrap();
             ptr = match &mut *mutable_block {
                 block::BlockType::Pinned(block) => {
-                    use dynamo_llm::block_manager::block::private::PrivateToken;
+                    use dynamo_kvbm::block::private::PrivateToken;
                     let block_data = block.block_data_mut(PrivateToken);
                     let mut layer_view_mut =
                         block_data.layer_view_mut(self.layer_idx, 0).map_err(to_pyerr)?;
                     (unsafe { layer_view_mut.as_mut_ptr() }) as *mut std::ffi::c_void
                 }
                 block::BlockType::Device(block) => {
-                    use dynamo_llm::block_manager::block::private::PrivateToken;
+                    use dynamo_kvbm::block::private::PrivateToken;
                     let block_data = block.block_data_mut(PrivateToken);
                     let mut layer_view_mut =
                         block_data.layer_view_mut(self.layer_idx, 0).map_err(to_pyerr)?;

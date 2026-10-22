@@ -8,14 +8,12 @@ use std::{
     sync::Arc,
 };
 
-use dynamo_llm::{
-    block_manager::{
+use dynamo_kvbm::{
         BlockPool, NixlRegisterableStorage, Storage,
         block::{BlockMetadata, locality::LocalityProvider},
         config::should_bypass_cpu_cache,
         connector::protocol::{LeaderTransferRequest, RequestType, TransferType},
         distributed::{BlockTransferPool, BlockTransferRequest, KvbmLeader},
-    },
     tokens::{SequenceHash, TokenBlock},
 };
 use dynamo_runtime::utils::task::CriticalTaskExecutionHandle;
@@ -1931,7 +1929,7 @@ impl<S: Storage, L: LocalityProvider, M: BlockMetadata> AnyBlocks for AnyImmutab
 mod connector_tests {
     use super::*;
     use crate::block_manager::cache_stats::CacheStatsTracker;
-    use dynamo_llm::tokens::{SaltHash, SequenceHash, Tokens};
+    use dynamo_kvbm::tokens::{SaltHash, SequenceHash, Tokens};
     use std::sync::Arc;
     use tokio::sync::mpsc;
 

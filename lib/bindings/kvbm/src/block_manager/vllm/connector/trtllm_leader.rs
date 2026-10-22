@@ -13,9 +13,9 @@ use crate::block_manager::vllm::connector::leader::{
 use crate::block_manager::{distributed::KvbmLeader as PyKvbmLeader, vllm::KvbmRequest};
 use crate::get_current_tokio_handle;
 use anyhow;
-use dynamo_llm::block_manager::connector::protocol::RequestType;
-use dynamo_llm::block_manager::kv_consolidator::{EventSource, KvEventConsolidationMode};
-use dynamo_llm::block_manager::metrics_kvbm::{KvbmMetrics, KvbmMetricsRegistry};
+use dynamo_kvbm::connector::protocol::RequestType;
+use dynamo_kvbm::kv_consolidator::{EventSource, KvEventConsolidationMode};
+use dynamo_kvbm::metrics_kvbm::{KvbmMetrics, KvbmMetricsRegistry};
 use std::collections::HashSet;
 use std::sync::{Arc, OnceLock};
 use tokio::runtime::Handle;

@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright (c) 2025-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-use dynamo_llm::block_manager::{DiskStorage, PinnedStorage};
+use dynamo_kvbm::{DiskStorage, PinnedStorage};
 
 use super::*;
 
@@ -400,7 +400,7 @@ impl<L: LocalityProvider> Slot<DeviceStorage, L> {
     #[tracing::instrument(level = "debug", skip(self, block_manager), ret)]
     pub fn trigger_onboard(
         &mut self,
-        block_manager: &dynamo_llm::block_manager::KvBlockManager<L, BasicMetadata>,
+        block_manager: &dynamo_kvbm::KvBlockManager<L, BasicMetadata>,
     ) -> Result<(), SlotError> {
         if self.onboard_from_host.is_none() && self.onboard_from_disk.is_none() {
             return Ok(());
@@ -425,7 +425,7 @@ impl<L: LocalityProvider> Slot<DeviceStorage, L> {
     pub fn onboard_blocks_to_slot<T: Storage>(
         &mut self,
         offloaded_blocks: Vec<ImmutableBlock<T, L, BasicMetadata>>,
-        bm: &dynamo_llm::block_manager::KvBlockManager<L, BasicMetadata>,
+        bm: &dynamo_kvbm::KvBlockManager<L, BasicMetadata>,
     ) -> Result<(), SlotError> {
         if offloaded_blocks.len() > self.mutable.len() {
             return Err(SlotError::from_str(
@@ -465,13 +465,13 @@ impl<S: Storage, L: LocalityProvider> Drop for Slot<S, L> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use dynamo_llm::block_manager::{
+    use dynamo_kvbm::{
         block::locality::Local,
         block::{BasicMetadata, Blocks},
         pool::{BlockPool, ManagedBlockPool},
         storage::tests::{NullDeviceAllocator, NullDeviceStorage},
     };
-    use dynamo_llm::tokens::{SaltHash, Tokens};
+    use dynamo_kvbm::tokens::{SaltHash, Tokens};
 
     use std::sync::Arc;
 
@@ -486,7 +486,7 @@ mod tests {
 
     impl TestFixture {
         fn new() -> Self {
-            use dynamo_llm::block_manager::layout::{FullyContiguous, LayoutConfig};
+            use dynamo_kvbm::layout::{FullyContiguous, LayoutConfig};
 
             let config = LayoutConfig {
                 num_blocks: 10,

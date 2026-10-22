@@ -5,7 +5,7 @@ pub mod recorder;
 pub mod slot;
 
 use super::*;
-use dynamo_llm::block_manager::metrics_kvbm::{KvbmMetrics, KvbmMetricsRegistry};
+use dynamo_kvbm::metrics_kvbm::{KvbmMetrics, KvbmMetricsRegistry};
 use slot::{ConnectorSlotManager, SlotError, SlotManager, SlotState};
 
 use crate::block_manager::BlockManagerBuilder;
@@ -15,7 +15,7 @@ use crate::block_manager::{
 };
 use crate::get_current_tokio_handle;
 
-use dynamo_llm::block_manager::{
+use dynamo_kvbm::{
     BasicMetadata, DiskStorage, ImmutableBlock, PinnedStorage,
     block::{
         data::logical::distributed_leader_worker::DistributedLeaderWorkerResources,
@@ -24,7 +24,7 @@ use dynamo_llm::block_manager::{
     connector::{protocol::RequestType, *},
     kv_consolidator::{EventSource, KvEventConsolidationMode},
 };
-use dynamo_llm::tokens::{SaltHash, TokenBlockSequence, Tokens};
+use dynamo_kvbm::tokens::{SaltHash, TokenBlockSequence, Tokens};
 use dynamo_runtime::config::environment_names::kvbm as env_kvbm;
 use std::sync::{Arc, OnceLock};
 use std::{collections::HashSet, sync::Mutex};
@@ -59,7 +59,7 @@ impl From<SlotError> for PyErr {
     }
 }
 use anyhow;
-use dynamo_llm::recorder::Recorder;
+use dynamo_runtime::utils::recorder::Recorder;
 use tokio_util::sync::CancellationToken;
 
 pub trait Leader: Send + Sync + std::fmt::Debug {

@@ -4,7 +4,7 @@
 use super::*;
 
 use derive_getters::Dissolve;
-use llm_rs::block_manager::distributed::{
+use llm_rs::distributed::{
     KvbmLeader as KvbmLeaderImpl, KvbmLeaderConfig, KvbmLeaderNumBlocksConfig,
 };
 use utils::{get_leader_zmq_ack_url, get_leader_zmq_pub_url};

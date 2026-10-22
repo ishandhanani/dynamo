@@ -4,8 +4,8 @@
 #![cfg(feature = "block-manager")]
 
 use super::*;
-use dynamo_llm::block_manager::block::BlockDataExt;
-use dynamo_llm::block_manager::block::BlockDataProviderMut;
+use dynamo_kvbm::block::BlockDataExt;
+use dynamo_kvbm::block::BlockDataProviderMut;
 use pyo3::{
     types::{PyList, PyTuple},
     PyObject, PyResult, Python,
@@ -14,17 +14,17 @@ use std::sync::{Arc, Mutex};
 
 pub enum BlockType {
     Pinned(
-        dynamo_llm::block_manager::block::MutableBlock<
-            dynamo_llm::block_manager::storage::PinnedStorage,
-            dynamo_llm::block_manager::block::locality::Local,
-            dynamo_llm::block_manager::block::BasicMetadata,
+        dynamo_kvbm::block::MutableBlock<
+            dynamo_kvbm::storage::PinnedStorage,
+            dynamo_kvbm::block::locality::Local,
+            dynamo_kvbm::block::BasicMetadata,
         >,
     ),
     Device(
-        dynamo_llm::block_manager::block::MutableBlock<
-            dynamo_llm::block_manager::storage::DeviceStorage,
-            dynamo_llm::block_manager::block::locality::Local,
-            dynamo_llm::block_manager::block::BasicMetadata,
+        dynamo_kvbm::block::MutableBlock<
+            dynamo_kvbm::storage::DeviceStorage,
+            dynamo_kvbm::block::locality::Local,
+            dynamo_kvbm::block::BasicMetadata,
         >,
     ),
 }
@@ -33,7 +33,7 @@ pub enum BlockType {
 pub struct Block {
     inner: Arc<Mutex<BlockType>>,
     // TODO: Metadata should be stored in the block manager?
-    dtype: dynamo_llm::common::dtype::DType,
+    dtype: dynamo_kvbm::DType,
     device_id: usize,
     // Python iterator state
     py_itr_idx: usize,
@@ -42,7 +42,7 @@ pub struct Block {
 impl Block {
     pub fn from_rust(
         block: Arc<Mutex<BlockType>>,
-        dtype: dynamo_llm::common::dtype::DType,
+        dtype: dynamo_kvbm::DType,
         device_id: usize,
     ) -> Self {
         Self {
@@ -155,13 +155,13 @@ impl Block {
             let mut mutable_block = self.inner.lock().unwrap();
             ptr = match &mut *mutable_block {
                 BlockType::Pinned(block) => {
-                    use dynamo_llm::block_manager::block::private::PrivateToken;
+                    use dynamo_kvbm::block::private::PrivateToken;
                     let block_data = block.block_data_mut(PrivateToken);
                     let mut block_view_mut = block_data.block_view_mut().map_err(to_pyerr)?;
                     (unsafe { block_view_mut.as_mut_ptr() }) as *mut std::ffi::c_void
                 }
                 BlockType::Device(block) => {
-                    use dynamo_llm::block_manager::block::private::PrivateToken;
+                    use dynamo_kvbm::block::private::PrivateToken;
                     let block_data = block.block_data_mut(PrivateToken);
                     let mut block_view_mut = block_data.block_view_mut().map_err(to_pyerr)?;
                     (unsafe { block_view_mut.as_mut_ptr() }) as *mut std::ffi::c_void

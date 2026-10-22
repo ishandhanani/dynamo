@@ -1,10 +1,10 @@
 // SPDX-FileCopyrightText: Copyright (c) 2025-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-use dynamo_llm::block_manager::{
+use dynamo_kvbm::{
     block::BlockId, connector::protocol::WorkerTransferRequest, pool::BlockPoolError,
 };
-use dynamo_llm::tokens::SequenceHash;
+use dynamo_kvbm::tokens::SequenceHash;
 
 pub mod leader;
 pub mod trtllm_leader;

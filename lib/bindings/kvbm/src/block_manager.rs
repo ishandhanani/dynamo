@@ -3,12 +3,12 @@
 
 use super::*;
 use anyhow::Result;
-use dynamo_llm::block_manager::block::{
+use dynamo_kvbm::block::{
     data::logical::distributed_leader_worker::DistributedLeaderWorkerResources, locality::Logical,
 };
-use dynamo_llm::block_manager::kv_consolidator::{EventSource, KvEventConsolidationMode};
-use dynamo_llm::block_manager::offload::filter::FrequencyFilter;
-use dynamo_llm::block_manager::{BasicMetadata, BlockParallelismStrategy};
+use dynamo_kvbm::kv_consolidator::{EventSource, KvEventConsolidationMode};
+use dynamo_kvbm::offload::filter::FrequencyFilter;
+use dynamo_kvbm::{BasicMetadata, BlockParallelismStrategy};
 use dynamo_runtime::DistributedRuntime;
 use dynamo_runtime::config::environment_names::kvbm as env_kvbm;
 use pyo3::PyResult;
@@ -38,13 +38,13 @@ pub fn add_to_module(m: &Bound<'_, PyModule>) -> PyResult<()> {
     Ok(())
 }
 
-type VllmBlockManager = dynamo_llm::block_manager::KvBlockManager<
+type VllmBlockManager = dynamo_kvbm::KvBlockManager<
     Logical<DistributedLeaderWorkerResources>,
     BasicMetadata,
 >;
 
 type VllmController = Arc<
-    dynamo_llm::block_manager::controller::Controller<
+    dynamo_kvbm::controller::Controller<
         Logical<DistributedLeaderWorkerResources>,
         BasicMetadata,
     >,
@@ -99,15 +99,15 @@ impl BlockManager {
         disable_device_pool: bool,
     ) -> PyResult<Self> {
         let cancel_token = CancellationToken::new();
-        let mut config = dynamo_llm::block_manager::KvBlockManagerConfig::builder().runtime(
-            dynamo_llm::block_manager::KvManagerRuntimeConfig::builder()
+        let mut config = dynamo_kvbm::KvBlockManagerConfig::builder().runtime(
+            dynamo_kvbm::KvManagerRuntimeConfig::builder()
                 .worker_id(worker_id)
                 .cancellation_token(cancel_token.clone())
                 .build()
                 .map_err(to_pyerr)?,
         );
 
-        let model_config = dynamo_llm::block_manager::KvManagerModelConfig::builder()
+        let model_config = dynamo_kvbm::KvManagerModelConfig::builder()
             .num_layers(1)
             .outer_dim(1)
             .page_size(page_size)
@@ -120,7 +120,7 @@ impl BlockManager {
 
             if !disable_device_pool {
                 config = config.device_layout(
-                    dynamo_llm::block_manager::KvManagerLayoutConfig::builder()
+                    dynamo_kvbm::KvManagerLayoutConfig::builder()
                         .num_blocks(leader.num_device_blocks())
                         .logical(Some(BlockParallelismStrategy::LeaderWorkerSharded))
                         .build()
@@ -131,7 +131,7 @@ impl BlockManager {
             if leader.num_host_blocks() > 0 {
                 tracing::info!("Using {} host blocks", leader.num_host_blocks());
                 let mut host_layout_config =
-                    dynamo_llm::block_manager::KvManagerLayoutConfig::builder()
+                    dynamo_kvbm::KvManagerLayoutConfig::builder()
                         .num_blocks(leader.num_host_blocks())
                         .logical(Some(BlockParallelismStrategy::LeaderWorkerSharded));
 
@@ -149,7 +149,7 @@ impl BlockManager {
             if leader.num_disk_blocks() > 0 {
                 tracing::info!("Using {} disk blocks", leader.num_disk_blocks());
                 config = config.disk_layout(
-                    dynamo_llm::block_manager::KvManagerLayoutConfig::builder()
+                    dynamo_kvbm::KvManagerLayoutConfig::builder()
                         .num_blocks(leader.num_disk_blocks())
                         .logical(Some(BlockParallelismStrategy::LeaderWorkerSharded))
                         .build()
@@ -164,7 +164,7 @@ impl BlockManager {
             //     .expect("num_device_blocks must be provided if leader is not provided");
 
             // config = config.device_layout(
-            //     dynamo_llm::block_manager::KvManagerLayoutConfig::builder()
+            //     dynamo_kvbm::KvManagerLayoutConfig::builder()
             //         .num_blocks(num_device_blocks)
             //         .logical(Some(BlockParallelismStrategy::LeaderWorkerSharded))
             //         .build()
@@ -192,7 +192,7 @@ impl BlockManager {
                     let resources =
                         DistributedLeaderWorkerResources::new(leader, cancel_token.child_token())?;
 
-                    dynamo_llm::block_manager::KvBlockManager::<
+                    dynamo_kvbm::KvBlockManager::<
                         Logical<DistributedLeaderWorkerResources>,
                         BasicMetadata,
                     >::new(config, resources)
@@ -250,7 +250,7 @@ pub struct BlockManagerBuilder {
     leader: Option<distributed::KvbmLeader>,
     page_size: usize,
     disable_device_pool: bool,
-    kvbm_metrics: Option<dynamo_llm::block_manager::metrics_kvbm::KvbmMetrics>,
+    kvbm_metrics: Option<dynamo_kvbm::metrics_kvbm::KvbmMetrics>,
     consolidator_config: Option<(
         String,
         Option<String>,
@@ -286,7 +286,7 @@ impl BlockManagerBuilder {
 
     pub fn kvbm_metrics(
         mut self,
-        metrics: dynamo_llm::block_manager::metrics_kvbm::KvbmMetrics,
+        metrics: dynamo_kvbm::metrics_kvbm::KvbmMetrics,
     ) -> Self {
         self.kvbm_metrics = Some(metrics);
         self
@@ -316,15 +316,15 @@ impl BlockManagerBuilder {
         let cancel_token = CancellationToken::new();
 
         // Runtime & model config
-        let runtime_config = dynamo_llm::block_manager::KvManagerRuntimeConfig::builder()
+        let runtime_config = dynamo_kvbm::KvManagerRuntimeConfig::builder()
             .worker_id(worker_id)
             .cancellation_token(cancel_token.clone())
             .build()?;
 
         let mut config =
-            dynamo_llm::block_manager::KvBlockManagerConfig::builder().runtime(runtime_config);
+            dynamo_kvbm::KvBlockManagerConfig::builder().runtime(runtime_config);
 
-        let model_config = dynamo_llm::block_manager::KvManagerModelConfig::builder()
+        let model_config = dynamo_kvbm::KvManagerModelConfig::builder()
             .num_layers(1)
             .outer_dim(1)
             .page_size(self.page_size)
@@ -336,7 +336,7 @@ impl BlockManagerBuilder {
         // Layouts derived from leader’s counts
         if !self.disable_device_pool {
             config = config.device_layout(
-                dynamo_llm::block_manager::KvManagerLayoutConfig::builder()
+                dynamo_kvbm::KvManagerLayoutConfig::builder()
                     .num_blocks(leader_inner.num_device_blocks())
                     .logical(Some(BlockParallelismStrategy::LeaderWorkerSharded))
                     .build()?,
@@ -345,7 +345,7 @@ impl BlockManagerBuilder {
 
         if leader_inner.num_host_blocks() > 0 {
             let mut host_layout_config =
-                dynamo_llm::block_manager::KvManagerLayoutConfig::builder()
+                dynamo_kvbm::KvManagerLayoutConfig::builder()
                     .num_blocks(leader_inner.num_host_blocks())
                     .logical(Some(BlockParallelismStrategy::LeaderWorkerSharded));
 
@@ -361,7 +361,7 @@ impl BlockManagerBuilder {
 
         if leader_inner.num_disk_blocks() > 0 {
             config = config.disk_layout(
-                dynamo_llm::block_manager::KvManagerLayoutConfig::builder()
+                dynamo_kvbm::KvManagerLayoutConfig::builder()
                     .num_blocks(leader_inner.num_disk_blocks())
                     .logical(Some(BlockParallelismStrategy::LeaderWorkerSharded))
                     .build()?,
@@ -383,7 +383,7 @@ impl BlockManagerBuilder {
         let resources =
             DistributedLeaderWorkerResources::new(Some(leader_inner), cancel_token.child_token())?;
 
-        let inner = dynamo_llm::block_manager::KvBlockManager::<
+        let inner = dynamo_kvbm::KvBlockManager::<
             Logical<DistributedLeaderWorkerResources>,
             BasicMetadata,
         >::new(config, resources)

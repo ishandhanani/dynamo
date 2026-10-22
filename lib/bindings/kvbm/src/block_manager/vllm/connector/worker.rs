@@ -1,8 +1,8 @@
 // SPDX-FileCopyrightText: Copyright (c) 2025-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-use dynamo_llm::block_manager::connector::protocol::TransferType;
-use dynamo_llm::block_manager::connector::scheduler::{
+use dynamo_kvbm::connector::protocol::TransferType;
+use dynamo_kvbm::connector::scheduler::{
     Scheduler, TransferSchedulerClient, WorkerSchedulerClient,
 };
 
@@ -18,9 +18,9 @@ use crate::{
     extract_distributed_runtime_from_obj, get_current_cancel_token, get_current_tokio_handle,
 };
 use anyhow;
-use dynamo_llm::block_manager::distributed::{KvbmWorker, KvbmWorkerConfig};
-use dynamo_llm::block_manager::layout::LayoutType;
-use dynamo_llm::block_manager::storage::torch::TorchTensor;
+use dynamo_kvbm::distributed::{KvbmWorker, KvbmWorkerConfig};
+use dynamo_kvbm::layout::LayoutType;
+use dynamo_kvbm::storage::torch::TorchTensor;
 use dynamo_runtime::DistributedRuntime;
 use dynamo_runtime::utils::task::CriticalTaskExecutionHandle;
 

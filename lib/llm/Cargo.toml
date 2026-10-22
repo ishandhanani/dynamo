@@ -12,7 +12,7 @@ repository.workspace = true
 description = "Dynamo LLM Library"
 
 [features]
-default = ["block-manager", "text-repl", "lora-s3", "modelexpress", "swagger-ui"]
+default = ["text-repl", "lora-s3", "modelexpress", "swagger-ui"]
 # Interactive text REPL input (`dialoguer`).
 text-repl = ["dep:dialoguer"]
 # S3-backed LoRA adapter source (AWS SDK + object_store).
@@ -21,18 +21,15 @@ lora-s3 = ["dep:object_store", "dep:aws-config", "dep:aws-credential-types", "de
 modelexpress = ["dep:modelexpress-client"]
 # Swagger UI assets at /docs; /openapi.json is always served.
 swagger-ui = ["dep:utoipa-swagger-ui"]
-# todo(ops): get this working in CI as a default.
-# default = ["block-manager", "testing-full"]
-
+# Test-only NIXL/CUDA fixtures for the frontend media (RDMA) path, forwarded to dynamo-memory.
 testing-full = ["testing-cuda", "testing-nixl"]
 testing-cuda = ["dep:cudarc", "dynamo-memory/testing-cuda"]
-testing-nixl = ["dep:nixl-sys", "dynamo-memory/testing-nixl"]
-testing-etcd = []
+testing-nixl = ["dynamo-memory/testing-nixl"]
 # Forward the NVTX feature to dynamo-runtime (build with --features nvtx or dynamo-llm/nvtx)
 nvtx = ["dynamo-runtime/nvtx"]
-block-manager = ["dep:nixl-sys", "dep:cudarc", "dep:nix", "dep:aligned-vec"]
-nccl = ["dep:cudarc", "cudarc/nccl"]  # Enable NCCL collective operations
-block-manager-bench = ["block-manager", "testing-full", "dep:clap", "dep:indicatif"]
+# The KV block manager now lives in the `dynamo-kvbm` crate. Kept as a no-op so
+# existing `--features block-manager` invocations keep working.
+block-manager = []
 cuda = ["dep:cudarc"]
 integration = ["dynamo-runtime/integration"]
 media-ffmpeg = ["dep:video-rs", "dep:ffmpeg-next", "dep:memfile"]
@@ -53,11 +50,6 @@ harness = false
 [[bench]]
 name = "tokenizer_dataset"
 harness = false
-
-[[bench]]
-name = "transfer_context_v2"
-harness = false
-required-features = ["block-manager", "testing-cuda"]
 
 [[bench]]
 name = "kv_router_bench"
@@ -141,14 +133,9 @@ xxhash-rust = { workspace = true }
 modelexpress-client = { workspace = true, optional = true }
 modelexpress-common = { workspace = true }
 
-
-bitflags = { version = "2.4", features = ["serde"] }
 blake3 = { version = "1.8", features = ["mmap", "rayon"] }
 bytemuck = "1.22"
-derive-getters = "0.5"
-offset-allocator = "0.2"
 rayon = "1"
-bincode = { version = "2.0.1", features = ["serde", "derive"] }
 
 # lora
 aws-config = { version = "1.8.11", optional = true }
@@ -163,10 +150,7 @@ dialoguer = { version = "0.11", default-features = false, optional = true, featu
 ] }
 
 # block_manager
-aligned-vec = { version = "0.6.4", optional = true }
-nixl-sys = { version = "=1.3.2", optional = true }
 cudarc = { workspace = true, optional = true }
-nix = { version = "0.26", optional = true }
 
 # media (zlib compression for NIXL metadata)
 flate2 = { version = "1" }
@@ -182,7 +166,6 @@ tower-http = { workspace = true }
 tower = { workspace = true }
 utoipa = { version = "5.3", features = ["axum_extras", "rc_schema"] }
 utoipa-swagger-ui = { version = "9.0", features = ["axum"], optional = true }
-
 
 # grpc-service
 # ping version to 0.13.1 so it depends on prost 0.13.5
@@ -290,7 +273,3 @@ path = "src/bin/generate_frontend_openapi.rs"
 [build-dependencies]
 tonic-build = { version = "0.13.1" }
 
-[[bin]]
-name = "bench_local_transfer_v2"
-path = "bin/bench_local_transfer_v2.rs"
-required-features = ["block-manager-bench"]

@@ -9,8 +9,7 @@ use std::{
 use derive_getters::Dissolve;
 use pyo3::{prelude::*, wrap_pymodule};
 
-use dynamo_llm::{
-    block_manager::{
+use dynamo_kvbm::{
         BasicMetadata, DeviceStorage, Storage,
         block::{
             BlockId, ImmutableBlock, MutableBlock,
@@ -18,7 +17,6 @@ use dynamo_llm::{
             locality::{LocalityProvider, Logical},
         },
         pool::{BlockPool, BlockPoolError},
-    },
     tokens::{SaltHash, SequenceHash, TokenBlockSequence, Tokens},
 };
 

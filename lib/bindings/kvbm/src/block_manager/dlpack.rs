@@ -15,7 +15,7 @@ struct DlPackTensor {
     ptr: *mut std::ffi::c_void,
     shape: Vec<i64>,
     // TODO: Metadata should be stored in the block?
-    dtype: dynamo_llm::common::dtype::DType,
+    dtype: dynamo_kvbm::DType,
     device_id: usize,
 }
 
@@ -44,23 +44,23 @@ impl ToTensor for DlPackTensor {
     }
 
     fn dtype(&self) -> DataType {
-        // Map from dynamo_llm::common::dtype::DType to dlpark::prelude::DataType
+        // Map from dynamo_kvbm::DType to dlpark::prelude::DataType
         match self.dtype {
-            dynamo_llm::common::dtype::DType::FP8 => {
+            dynamo_kvbm::DType::FP8 => {
                 // No direct FP8 equivalent, use U8 as closest alternative
                 DataType::U8
             }
-            dynamo_llm::common::dtype::DType::FP16 => DataType::F16,
-            dynamo_llm::common::dtype::DType::BF16 => DataType::BF16,
-            dynamo_llm::common::dtype::DType::FP32 => DataType::F32,
-            dynamo_llm::common::dtype::DType::U8 => DataType::U8,
-            dynamo_llm::common::dtype::DType::U16 => DataType::U16,
-            dynamo_llm::common::dtype::DType::U32 => DataType::U32,
-            dynamo_llm::common::dtype::DType::U64 => DataType::U64,
-            dynamo_llm::common::dtype::DType::I8 => DataType::I8,
-            dynamo_llm::common::dtype::DType::I16 => DataType::I16,
-            dynamo_llm::common::dtype::DType::I32 => DataType::I32,
-            dynamo_llm::common::dtype::DType::I64 => DataType::I64,
+            dynamo_kvbm::DType::FP16 => DataType::F16,
+            dynamo_kvbm::DType::BF16 => DataType::BF16,
+            dynamo_kvbm::DType::FP32 => DataType::F32,
+            dynamo_kvbm::DType::U8 => DataType::U8,
+            dynamo_kvbm::DType::U16 => DataType::U16,
+            dynamo_kvbm::DType::U32 => DataType::U32,
+            dynamo_kvbm::DType::U64 => DataType::U64,
+            dynamo_kvbm::DType::I8 => DataType::I8,
+            dynamo_kvbm::DType::I16 => DataType::I16,
+            dynamo_kvbm::DType::I32 => DataType::I32,
+            dynamo_kvbm::DType::I64 => DataType::I64,
         }
     }
 
@@ -80,7 +80,7 @@ pub fn dlpack<'py>(
     block: Arc<Mutex<block::BlockType>>,
     ptr: *mut std::ffi::c_void,
     shape: Vec<i64>,
-    dtype: dynamo_llm::common::dtype::DType,
+    dtype: dynamo_kvbm::DType,
     device_id: usize,
 ) -> PyResult<PyObject> {
     let manager_ctx = ManagerCtx::new(DlPackTensor {

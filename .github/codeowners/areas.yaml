@@ -161,31 +161,37 @@ areas:
   - lib/kvbm-physical/src/manager/
   - lib/kvbm-physical/src/testing/
   - lib/kvbm-physical/src/transfer/
-  - lib/llm/src/block_manager.md
-  - lib/llm/src/block_manager.rs
-  - lib/llm/src/block_manager/
-  - lib/llm/src/block_manager/block.rs
-  - lib/llm/src/block_manager/block/
-  - lib/llm/src/block_manager/connector.rs
-  - lib/llm/src/block_manager/connector/
-  - lib/llm/src/block_manager/controller.rs
-  - lib/llm/src/block_manager/controller/
-  - lib/llm/src/block_manager/distributed.rs
-  - lib/llm/src/block_manager/distributed/
-  - lib/llm/src/block_manager/kv_consolidator/
-  - lib/llm/src/block_manager/layout.rs
-  - lib/llm/src/block_manager/layout/
-  - lib/llm/src/block_manager/offload.rs
-  - lib/llm/src/block_manager/offload/
-  - lib/llm/src/block_manager/pool.rs
-  - lib/llm/src/block_manager/pool/
-  - lib/llm/src/block_manager/state.rs
-  - lib/llm/src/block_manager/state/
-  - lib/llm/src/block_manager/storage.rs
-  - lib/llm/src/block_manager/storage/
-  - lib/llm/src/block_manager/v2.rs
-  - lib/llm/src/block_manager/v2/
-  - lib/llm/src/block_manager/v2/physical/transfer/nixl_agent/
+  - lib/kvbm/README.md
+  - lib/kvbm/Cargo.toml
+  - lib/kvbm/build.rs
+  - lib/kvbm/src/lib.rs
+  - lib/kvbm/src/tokens.rs
+  - lib/kvbm/bin/
+  - lib/kvbm/benches/
+  - lib/kvbm/kernels/
+  - lib/kvbm/src/
+  - lib/kvbm/src/block.rs
+  - lib/kvbm/src/block/
+  - lib/kvbm/src/connector.rs
+  - lib/kvbm/src/connector/
+  - lib/kvbm/src/controller.rs
+  - lib/kvbm/src/controller/
+  - lib/kvbm/src/distributed.rs
+  - lib/kvbm/src/distributed/
+  - lib/kvbm/src/kv_consolidator/
+  - lib/kvbm/src/layout.rs
+  - lib/kvbm/src/layout/
+  - lib/kvbm/src/offload.rs
+  - lib/kvbm/src/offload/
+  - lib/kvbm/src/pool.rs
+  - lib/kvbm/src/pool/
+  - lib/kvbm/src/state.rs
+  - lib/kvbm/src/state/
+  - lib/kvbm/src/storage.rs
+  - lib/kvbm/src/storage/
+  - lib/kvbm/src/v2.rs
+  - lib/kvbm/src/v2/
+  - lib/kvbm/src/v2/physical/transfer/nixl_agent/
   - lib/memory/
   - lib/memory/bin/
   - lib/memory/src/nixl.rs
@@ -264,11 +270,9 @@ areas:
   - lib/bindings/python/
   - lib/llm/
   - lib/llm/benches/
-  - lib/llm/bin/
   - lib/llm/examples/
   - lib/llm/src/bin/
   - lib/llm/src/discovery/
-  - lib/llm/src/kernels/
   - lib/llm/src/local_model/
   - lib/llm/src/lora/routing/
   - lib/llm/src/model_card.rs
@@ -1061,7 +1065,7 @@ shared:
   owners:
   - kv-memory
   - observability
-- glob: lib/llm/src/block_manager/metrics_kvbm.rs
+- glob: lib/kvbm/src/metrics_kvbm.rs
   owners:
   - kv-memory
   - observability

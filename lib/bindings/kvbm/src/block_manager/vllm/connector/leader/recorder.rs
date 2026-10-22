@@ -3,7 +3,7 @@
 
 use super::*;
 use anyhow;
-use dynamo_llm::block_manager::kv_consolidator::EventSource;
+use dynamo_kvbm::kv_consolidator::EventSource;
 use std::sync::atomic::{AtomicU64, Ordering};
 use tokio::task::JoinHandle;
 

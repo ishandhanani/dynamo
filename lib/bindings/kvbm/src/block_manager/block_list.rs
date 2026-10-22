@@ -11,7 +11,7 @@ use std::sync::{Arc, Mutex};
 pub struct BlockList {
     inner: Vec<Arc<Mutex<block::BlockType>>>,
     // TODO: Metadata should be stored in the block manager?
-    dtype: dynamo_llm::common::dtype::DType,
+    dtype: dynamo_kvbm::DType,
     device_id: usize,
     // Python iterator state
     py_itr_idx: usize,
@@ -20,7 +20,7 @@ pub struct BlockList {
 impl BlockList {
     pub fn from_rust(
         block_list: Vec<block::BlockType>,
-        dtype: dynamo_llm::common::dtype::DType,
+        dtype: dynamo_kvbm::DType,
         device_id: usize,
     ) -> Self {
         Self {

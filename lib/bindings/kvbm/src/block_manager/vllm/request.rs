@@ -4,7 +4,7 @@
 use super::*;
 use serde::{Deserialize, Serialize};
 
-use dynamo_llm::tokens::compute_hash_v2;
+use dynamo_kvbm::tokens::compute_hash_v2;
 
 /// Request Inputs
 #[pyclass]
