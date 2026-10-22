@@ -3,9 +3,20 @@
 
 //! Loading side of the model deployment card: discovering a checkout on disk,
 //! fetching and staging metadata files, reading `config.json`, and building
-//! tokenizers. The card itself (the wire type) lives in the parent module.
+//! tokenizers. The card itself (the wire type) lives in `dynamo_llm_protocol::model_card`.
+
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, OnceLock};
+
+use anyhow::{Context, Result};
+use dynamo_runtime::slug::Slug;
+use serde::{Deserialize, Serialize};
+use tokenizers::Tokenizer as HfTokenizer;
 
 use super::*;
+use crate::common::checked_file::CheckedFile;
+use crate::local_model::runtime_config::TokenizerBackend;
+use crate::protocols::TokenIdType;
 
 const FALLBACK_TOKENIZER_CACHE_BYTES: usize = 64 * 1024 * 1024;
 
@@ -1614,7 +1625,7 @@ fn tokenizer_with_options(
                     format!("Failed to load tiktoken tokenizer from {}", p.display())
                 })?;
             // tiktoken does not expose its ids.
-            card.tokenizer_id_bound.get_or_init(|| None);
+            card.init_tokenizer_id_bound(|| None);
 
             let specials = tokenizer.special_tokens().to_vec();
             let raw: Arc<dyn crate::tokenizers::traits::Tokenizer> = Arc::new(tokenizer);
@@ -1826,37 +1837,17 @@ fn from_repo_checkout(
     // This gets replaced when we `set_name`
     let display_name = local_path.display().to_string();
 
-    Ok(ModelDeploymentCard {
-        slug: Slug::from_string(&display_name),
-        display_name,
-        source_path: None,
-        model_info,
-        tokenizer,
-        gen_config,
-        prompt_formatter,
-        chat_template_file,
-        prompt_context: None, // TODO - auto-detect prompt context
-        architectural_max_context_length,
-        legacy_context_length: None,
-        kv_cache_block_size: 0, // set later
-        migration_limit: 0,
-        model_type: Default::default(),  // set later
-        model_input: Default::default(), // set later
-        worker_type: Default::default(), // set later
-        needs: Default::default(),       // set later
-        lora: None,
-        aliases: Vec::new(),
-        user_data: None,
-        runtime_config: ModelRuntimeConfig::default(),
-        tensor_model_config: None,
-        media_decoder: None,
-        media_fetcher: None,
-        router_config: None,
-        indexer_identity: None,
-        extra_files: Vec::new(),
-        checksum: OnceLock::new(),
-        tokenizer_id_bound: OnceLock::new(),
-    })
+    // Every field not assigned here keeps its `Default`: `kv_cache_block_size`,
+    // `migration_limit`, `model_type`, `model_input`, `worker_type`, and `needs`
+    // are set later by the caller; `prompt_context` is TODO (auto-detect).
+    let mut card = ModelDeploymentCard::with_name_only(&display_name);
+    card.model_info = model_info;
+    card.tokenizer = tokenizer;
+    card.gen_config = gen_config;
+    card.prompt_formatter = prompt_formatter;
+    card.chat_template_file = chat_template_file;
+    card.architectural_max_context_length = architectural_max_context_length;
+    Ok(card)
 }
 
 #[cfg(test)]
@@ -2296,7 +2287,7 @@ mod tests {
 
         temp_env::async_with_vars([("HOME", Some(home.path()))], async {
             let mut mdc = super::ModelDeploymentCard::load_from_disk(&snapshot, None)?;
-            let slug = mdc.slug.clone();
+            let slug = mdc.slug().clone();
             let mdcsum = mdc.mdcsum().to_string();
             mdc.download_config(None).await?;
 
@@ -2623,6 +2614,7 @@ mod ownership_tests {
     use crate::local_model::runtime_config::{
         StructuralTagConfig, StructuralTagSchemaMode, StructuralTagScope,
     };
+    use crate::model_card::tensor::TensorModelConfig;
 
     #[test]
     fn architectural_context_prefers_config_then_text_config_then_tokenizer() -> anyhow::Result<()>
@@ -3064,6 +3056,7 @@ mod worker_type_tests {
 
     use super::*;
     use crate::worker_type::WorkerType;
+    use dynamo_kv_router::identity::{ExplicitIdentityMap, IndexerIdentitySpec};
     use std::collections::BTreeMap;
 
     #[test]

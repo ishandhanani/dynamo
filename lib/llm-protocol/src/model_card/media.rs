@@ -4,7 +4,7 @@
 //! Media decoding limits and URL fetch policy as carried on the model deployment card.
 //!
 //! These types are pure configuration and part of the worker-to-frontend wire contract.
-//! The decoders and the HTTP fetcher that act on them live in `crate::preprocessor::media`
+//! The decoders and the HTTP fetcher that act on them live in `dynamo_llm::preprocessor::media`
 //! and convert from these types; they may carry process-local state that never reaches
 //! the card.
 

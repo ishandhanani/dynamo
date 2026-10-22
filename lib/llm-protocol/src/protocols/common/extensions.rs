@@ -351,7 +351,7 @@ pub const SESSION_AFFINITY_CONTEXT_KEY: &str = "dynamo.llm.session_affinity";
 pub struct SessionAffinityId(String);
 
 impl SessionAffinityId {
-    pub(crate) fn new(value: impl Into<String>) -> Self {
+    pub fn new(value: impl Into<String>) -> Self {
         Self(value.into())
     }
 
@@ -641,7 +641,7 @@ pub struct NvExtResponse {
     pub prompt_logprobs: Option<PromptLogprobs>,
 }
 
-pub(crate) fn merge_response_nvext(
+pub fn merge_response_nvext(
     target: &mut Option<serde_json::Value>,
     incoming: Option<serde_json::Value>,
 ) {
@@ -737,8 +737,8 @@ impl NvExtResponseFieldSelection {
         if (result.is_some() || finish_reason.is_some()) && !valid {
             let message =
                 "backend did not provide the requested generation_artifact delivery result";
-            return Err(dynamo_runtime::error::DynamoError::builder()
-                .error_type(dynamo_runtime::error::ErrorType::BackendProtocol)
+            return Err(dynamo_runtime_protocols::error::DynamoError::builder()
+                .error_type(dynamo_runtime_protocols::error::ErrorType::BackendProtocol)
                 .message(message)
                 .public_message(message)
                 .build()
@@ -898,7 +898,7 @@ impl NvExtResponseFieldSelection {
     }
 }
 
-pub(crate) fn validate_completion_token_ids_single_choice(
+pub fn validate_completion_token_ids_single_choice(
     total_choices: usize,
     nvext: Option<&NvExt>,
 ) -> anyhow::Result<()> {
@@ -915,7 +915,7 @@ pub(crate) fn validate_completion_token_ids_single_choice(
     Ok(())
 }
 
-pub(crate) fn validate_metadata_upload_single_choice(
+pub fn validate_metadata_upload_single_choice(
     total_choices: usize,
     nvext: Option<&NvExt>,
 ) -> anyhow::Result<()> {
@@ -931,7 +931,7 @@ pub(crate) fn validate_metadata_upload_single_choice(
     Ok(())
 }
 
-pub(crate) fn validate_metadata_upload_stop_strings(
+pub fn validate_metadata_upload_stop_strings(
     has_stop_strings: bool,
     nvext: Option<&NvExt>,
 ) -> anyhow::Result<()> {
@@ -1208,10 +1208,10 @@ mod tests {
             .unwrap_err();
         assert_eq!(
             error
-                .downcast_ref::<dynamo_runtime::error::DynamoError>()
+                .downcast_ref::<dynamo_runtime_protocols::error::DynamoError>()
                 .unwrap()
                 .class(),
-            dynamo_runtime::error::ErrorType::BackendProtocol
+            dynamo_runtime_protocols::error::ErrorType::BackendProtocol
         );
         assert!(
             selection

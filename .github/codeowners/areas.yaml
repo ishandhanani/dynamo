@@ -10,6 +10,7 @@ areas:
   - components/src/dynamo/frontend/tests/
   - examples/chat_templates/
   - lib/bindings/python/rust/parsers.rs
+  - lib/llm-protocol/
   - lib/llm/src/entrypoint.rs
   - lib/llm/src/entrypoint/
   - lib/llm/src/entrypoint/input.rs
@@ -266,7 +267,6 @@ areas:
   - lib/llm/bin/
   - lib/llm/examples/
   - lib/llm/src/bin/
-  - lib/llm/src/common/
   - lib/llm/src/discovery/
   - lib/llm/src/kernels/
   - lib/llm/src/local_model/
@@ -620,7 +620,7 @@ shared:
   owners:
   - ops
   - docs
-- glob: lib/llm/src/protocols/agents.rs
+- glob: lib/llm-protocol/src/protocols/agents.rs
   owners:
   - frontend
   - agents

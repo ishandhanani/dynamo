@@ -8,10 +8,10 @@
 //! contract and feeds its checksum.
 
 use dynamo_kv_router::config::KvRouterConfig;
-use dynamo_runtime::pipeline::RouterMode;
+use dynamo_runtime_protocols::routing::RouterMode;
 use serde::{Deserialize, Serialize};
 
-use crate::session_affinity::SessionAffinityMode;
+use dynamo_kv_router::services::selection::affinity::SessionAffinityMode;
 
 /// Configuration for worker load thresholds used in overload detection.
 ///

@@ -21,7 +21,7 @@ bitflags! {
     /// expressed as:
     ///
     /// ```rust
-    /// use dynamo_llm::model_type::ModelType;
+    /// use dynamo_llm_protocol::model_type::ModelType;
     /// let mt = ModelType::Chat | ModelType::Completions;
     /// assert!(mt.supports_chat());
     /// assert!(mt.supports_completions());
@@ -200,8 +200,8 @@ impl ModelType {
     /// Returns all endpoint types supported by this model type.
     /// This properly handles combinations like Chat | Completions.
     pub fn as_endpoint_types(&self) -> Vec<crate::endpoint_type::EndpointType> {
-        self.as_endpoint_types_with_anthropic(dynamo_runtime::config::env_is_truthy(
-            dynamo_runtime::config::environment_names::llm::DYN_ENABLE_ANTHROPIC_API,
+        self.as_endpoint_types_with_anthropic(dynamo_truthy::env_is_truthy(
+            dynamo_runtime_protocols::environment_names::llm::DYN_ENABLE_ANTHROPIC_API,
         ))
     }
 

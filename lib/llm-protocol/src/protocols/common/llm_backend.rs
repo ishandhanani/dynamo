@@ -9,8 +9,8 @@ pub use super::preprocessor::PreprocessedRequest;
 use crate::protocols::TokenIdType;
 use dynamo_protocols::types::CompletionUsage;
 use dynamo_protocols::types::StopReason;
-use dynamo_runtime::error::DynamoError;
-use dynamo_runtime::protocols::maybe_error::MaybeError;
+use dynamo_runtime_protocols::error::DynamoError;
+use dynamo_runtime_protocols::protocols::maybe_error::MaybeError;
 
 pub type TokenType = Option<String>;
 pub type LogProbs = Vec<f64>;
@@ -31,7 +31,7 @@ pub struct DecoderCheckpoint {
 
 impl DecoderCheckpoint {
     /// Captures withheld stop-filter text and token IDs buffered by incremental decoding.
-    pub(crate) fn new(jailed_text: String, pending_token_ids: Vec<TokenIdType>) -> Self {
+    pub fn new(jailed_text: String, pending_token_ids: Vec<TokenIdType>) -> Self {
         Self {
             jailed_text,
             pending_token_ids,
@@ -39,7 +39,7 @@ impl DecoderCheckpoint {
     }
 
     /// Splits the checkpoint into its stop-filter text and incremental-decoder state.
-    pub(crate) fn into_parts(self) -> (String, Vec<TokenIdType>) {
+    pub fn into_parts(self) -> (String, Vec<TokenIdType>) {
         (self.jailed_text, self.pending_token_ids)
     }
 }
@@ -429,7 +429,7 @@ impl LLMEngineOutput {
     }
 }
 
-pub(crate) fn prompt_logprobs_from_engine_data(
+pub fn prompt_logprobs_from_engine_data(
     engine_data: Option<&serde_json::Value>,
 ) -> anyhow::Result<Option<PromptLogprobs>> {
     let Some(value) = engine_data.and_then(|data| data.get("prompt_logprobs")) else {

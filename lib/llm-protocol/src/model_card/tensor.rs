@@ -4,9 +4,11 @@
 //! Tensor model configuration as carried on the model deployment card.
 //!
 //! The request and response types of the tensor protocol live in
-//! `crate::protocols::tensor`, which re-exports these.
+//! `dynamo_llm::protocols::tensor`, which re-exports these.
 
 use std::collections::HashMap;
+use std::fmt;
+use std::str::FromStr;
 
 use serde::{Deserialize, Serialize};
 use validator::Validate;
@@ -47,6 +49,51 @@ impl DataType {
             DataType::Float32 => size_of::<f32>(),
             DataType::Float64 => size_of::<f64>(),
             DataType::Bytes => 0, // variable length, return 0 as indicator
+        }
+    }
+}
+
+impl fmt::Display for DataType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match *self {
+            DataType::Bool => write!(f, "BOOL"),
+            DataType::Uint8 => write!(f, "UINT8"),
+            DataType::Uint16 => write!(f, "UINT16"),
+            DataType::Uint32 => write!(f, "UINT32"),
+            DataType::Uint64 => write!(f, "UINT64"),
+            DataType::Int8 => write!(f, "INT8"),
+            DataType::Int16 => write!(f, "INT16"),
+            DataType::Int32 => write!(f, "INT32"),
+            DataType::Int64 => write!(f, "INT64"),
+            DataType::Float16 => write!(f, "FP16"),
+            DataType::BFloat16 => write!(f, "BF16"),
+            DataType::Float32 => write!(f, "FP32"),
+            DataType::Float64 => write!(f, "FP64"),
+            DataType::Bytes => write!(f, "BYTES"),
+        }
+    }
+}
+
+impl FromStr for DataType {
+    type Err = anyhow::Error;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "BOOL" => Ok(DataType::Bool),
+            "UINT8" => Ok(DataType::Uint8),
+            "UINT16" => Ok(DataType::Uint16),
+            "UINT32" => Ok(DataType::Uint32),
+            "UINT64" => Ok(DataType::Uint64),
+            "INT8" => Ok(DataType::Int8),
+            "INT16" => Ok(DataType::Int16),
+            "INT32" => Ok(DataType::Int32),
+            "INT64" => Ok(DataType::Int64),
+            "FP16" => Ok(DataType::Float16),
+            "BF16" => Ok(DataType::BFloat16),
+            "FP32" => Ok(DataType::Float32),
+            "FP64" => Ok(DataType::Float64),
+            "BYTES" => Ok(DataType::Bytes),
+            _ => Err(anyhow::anyhow!("Invalid data type")),
         }
     }
 }

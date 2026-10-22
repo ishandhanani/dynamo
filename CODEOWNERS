@@ -66,6 +66,7 @@
 
 # === frontend  (@ai-dynamo/dynamo-frontend-codeowners) ===
 /lib/http-server/                                                                                       @ai-dynamo/dynamo-frontend-codeowners
+/lib/llm-protocol/                                                                                      @ai-dynamo/dynamo-frontend-codeowners
 /examples/chat_templates/                                                                               @ai-dynamo/dynamo-frontend-codeowners
 /components/src/dynamo/frontend/                                                                        @ai-dynamo/dynamo-frontend-codeowners
 /components/src/dynamo/frontend/tests/                                                                  @ai-dynamo/dynamo-frontend-codeowners
@@ -220,7 +221,6 @@
 /lib/llm/src/utils/                                                                                     @ai-dynamo/dynamo-runtime-codeowners
 /lib/runtime/tests/                                                                                     @ai-dynamo/dynamo-runtime-codeowners
 /lib/backend-common/                                                                                    @ai-dynamo/dynamo-runtime-codeowners
-/lib/llm/src/common/                                                                                    @ai-dynamo/dynamo-runtime-codeowners
 /lib/sidecar/common/                                                                                    @ai-dynamo/dynamo-runtime-codeowners
 /tests/dependencies/                                                                                    @ai-dynamo/dynamo-runtime-codeowners
 /tests/serve/launch/                                                                                    @ai-dynamo/dynamo-runtime-codeowners
@@ -645,7 +645,6 @@ requirements.txt                                                                
 /tests/test_kustomize_matrix.py                                                                         @ai-dynamo/dynamo-runtime-codeowners @ai-dynamo/dynamo-ops-codeowners
 /.github/workflows/fern-docs.yml                                                                        @ai-dynamo/dynamo-ops-codeowners @ai-dynamo/dynamo-docs-codeowners
 /examples/deployments/**/vllm/**                                                                        @ai-dynamo/dynamo-operator-codeowners @ai-dynamo/dynamo-backend-vllm-codeowners
-/lib/llm/src/protocols/agents.rs                                                                        @ai-dynamo/dynamo-frontend-codeowners @ai-dynamo/dynamo-agents-codeowners
 /lib/runtime/src/health_check.rs                                                                        @ai-dynamo/dynamo-runtime-codeowners @ai-dynamo/dynamo-observability-codeowners
 /.github/review-prompts/README.md                                                                       @ai-dynamo/dynamo-ops-codeowners @ai-dynamo/dynamo-frontend-codeowners @ai-dynamo/dynamo-runtime-codeowners
 /components/src/dynamo/vllm/omni/                                                                       @ai-dynamo/dynamo-backend-vllm-codeowners @ai-dynamo/dynamo-multimodal-codeowners
@@ -708,6 +707,7 @@ requirements.txt                                                                
 /deploy/operator/internal/controller/lpx/                                                               @ai-dynamo/dynamo-operator-codeowners @ai-dynamo/dynamo-lpx-codeowners
 /lib/kv-router/src/services/shared_cache/                                                               @ai-dynamo/dynamo-router-codeowners @ai-dynamo/dynamo-kv-memory-codeowners
 /lib/kv-router/src/zmq_wire/extra_keys.rs                                                               @ai-dynamo/dynamo-router-codeowners @ai-dynamo/dynamo-multimodal-codeowners
+/lib/llm-protocol/src/protocols/agents.rs                                                               @ai-dynamo/dynamo-frontend-codeowners @ai-dynamo/dynamo-agents-codeowners
 /lib/runtime/src/metrics/frontend_perf.rs                                                               @ai-dynamo/dynamo-observability-codeowners @ai-dynamo/dynamo-frontend-codeowners
 /tests/fault_tolerance/migration/utils.py                                                               @ai-dynamo/dynamo-fault-tolerance-codeowners @ai-dynamo/dynamo-observability-codeowners
 /tests/test_generate_kustomize_openapi.py                                                               @ai-dynamo/dynamo-runtime-codeowners @ai-dynamo/dynamo-ops-codeowners

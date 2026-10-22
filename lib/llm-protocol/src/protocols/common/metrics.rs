@@ -3,7 +3,7 @@
 
 use std::time::Duration;
 
-use dynamo_runtime::protocols::annotated::Annotated;
+use dynamo_runtime_protocols::protocols::annotated::Annotated;
 
 /// Omit count fields from the serialized annotation when zero.
 fn is_zero(value: &usize) -> bool {

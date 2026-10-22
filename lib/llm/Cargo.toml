@@ -82,6 +82,7 @@ required-features = ["media-ffmpeg"]
 dynamo-custom-policy-builtin = { workspace = true }
 # repo
 dynamo-kv-router = { workspace = true, features = ["metrics", "runtime-protocols", "standalone-selection"] }
+dynamo-llm-protocol = { workspace = true }
 dynamo-memory = { workspace = true }
 dynamo-mocker = { workspace = true, features = ["zmq-events"] }
 dynamo-rl = { workspace = true }
@@ -123,7 +124,6 @@ rand = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 sha2 = "0.10"
-strum = { workspace = true }
 tempfile = { workspace = true }
 thiserror = { workspace = true }
 tmq = { workspace = true }

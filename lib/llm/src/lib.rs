@@ -8,11 +8,10 @@
 
 pub mod admission_gate;
 pub mod backend;
-pub mod common;
+pub use dynamo_llm_protocol::{common, endpoint_type, model_type, worker_type};
 mod direct_zmq_fan_in;
 mod direct_zmq_sub_pool;
 pub mod discovery;
-pub mod endpoint_type;
 pub mod engines;
 pub mod entrypoint;
 pub mod first_token;
@@ -30,7 +29,6 @@ pub mod lora;
 pub mod migration;
 pub mod mocker;
 pub mod model_card;
-pub mod model_type;
 pub mod namespace;
 pub mod preprocessor;
 pub mod protocols;
@@ -45,7 +43,6 @@ pub use dynamo_tokenizers::{file_json_field, log_json_err};
 pub mod tokens;
 pub mod types;
 pub mod utils;
-pub mod worker_type;
 
 #[cfg(feature = "block-manager")]
 pub mod block_manager;

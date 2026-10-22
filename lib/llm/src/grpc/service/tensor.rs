@@ -803,8 +803,16 @@ impl TryFrom<ExtendedNvCreateTensorResponse> for inference::ModelStreamInferResp
     }
 }
 
-impl tensor::DataType {
-    pub fn to_kserve(&self) -> i32 {
+/// KServe v2 encoding of the tensor datatypes carried on the model deployment card.
+///
+/// `tensor::DataType` is a wire type owned by `dynamo-llm-protocol`, so the gRPC-side
+/// mapping onto the KServe `DataType` enum lives behind an extension trait here.
+pub trait TensorDataTypeExt {
+    fn to_kserve(&self) -> i32;
+}
+
+impl TensorDataTypeExt for tensor::DataType {
+    fn to_kserve(&self) -> i32 {
         match *self {
             tensor::DataType::Bool => DataType::TypeBool as i32,
             tensor::DataType::Uint8 => DataType::TypeUint8 as i32,
@@ -832,7 +840,7 @@ impl DataType {
     /// (`TYPE_FP32`). That is the config spelling, not the wire spelling the
     /// `datatype` field carries. Stripping the `TYPE_` prefix is not enough
     /// either: `TYPE_STRING` is `BYTES` on the wire, the same pairing
-    /// [`tensor::DataType::to_kserve`] already encodes in the other direction.
+    /// [`TensorDataTypeExt::to_kserve`] already encodes in the other direction.
     pub fn oip_name(&self) -> Option<&'static str> {
         Some(match self {
             DataType::TypeInvalid => return None,
@@ -865,51 +873,6 @@ pub fn kserve_metadata_shape(dims: &[i64], max_batch_size: i32) -> Vec<i64> {
         std::iter::once(-1).chain(dims.iter().copied()).collect()
     } else {
         dims.to_vec()
-    }
-}
-
-impl std::fmt::Display for tensor::DataType {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match *self {
-            tensor::DataType::Bool => write!(f, "BOOL"),
-            tensor::DataType::Uint8 => write!(f, "UINT8"),
-            tensor::DataType::Uint16 => write!(f, "UINT16"),
-            tensor::DataType::Uint32 => write!(f, "UINT32"),
-            tensor::DataType::Uint64 => write!(f, "UINT64"),
-            tensor::DataType::Int8 => write!(f, "INT8"),
-            tensor::DataType::Int16 => write!(f, "INT16"),
-            tensor::DataType::Int32 => write!(f, "INT32"),
-            tensor::DataType::Int64 => write!(f, "INT64"),
-            tensor::DataType::Float16 => write!(f, "FP16"),
-            tensor::DataType::BFloat16 => write!(f, "BF16"),
-            tensor::DataType::Float32 => write!(f, "FP32"),
-            tensor::DataType::Float64 => write!(f, "FP64"),
-            tensor::DataType::Bytes => write!(f, "BYTES"),
-        }
-    }
-}
-
-impl FromStr for tensor::DataType {
-    type Err = anyhow::Error;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s {
-            "BOOL" => Ok(tensor::DataType::Bool),
-            "UINT8" => Ok(tensor::DataType::Uint8),
-            "UINT16" => Ok(tensor::DataType::Uint16),
-            "UINT32" => Ok(tensor::DataType::Uint32),
-            "UINT64" => Ok(tensor::DataType::Uint64),
-            "INT8" => Ok(tensor::DataType::Int8),
-            "INT16" => Ok(tensor::DataType::Int16),
-            "INT32" => Ok(tensor::DataType::Int32),
-            "INT64" => Ok(tensor::DataType::Int64),
-            "FP16" => Ok(tensor::DataType::Float16),
-            "BF16" => Ok(tensor::DataType::BFloat16),
-            "FP32" => Ok(tensor::DataType::Float32),
-            "FP64" => Ok(tensor::DataType::Float64),
-            "BYTES" => Ok(tensor::DataType::Bytes),
-            _ => Err(anyhow::anyhow!("Invalid data type")),
-        }
     }
 }
 

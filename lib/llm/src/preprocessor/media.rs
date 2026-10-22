@@ -14,7 +14,13 @@ pub use common::EncodedMediaData;
 pub use decoders::{Decoder, ImageDecoder, MediaDecoder};
 pub use loader::{MediaFetcher, MediaLoader, max_data_url_bytes};
 
-pub use rdma::{DecodedMediaData, RdmaMediaDataDescriptor, get_nixl_agent, get_nixl_metadata};
+#[cfg(all(feature = "mm-routing", feature = "media-ffmpeg"))]
+pub(crate) use rdma::RdmaMediaDataDescriptorExt;
+pub use rdma::{
+    DecodedMediaData, RdmaMediaDataDescriptor, get_nixl_agent, get_nixl_metadata,
+    nixl_descriptor_from_wire, nixl_descriptor_to_wire, nixl_mem_type_from_wire,
+    nixl_mem_type_to_wire,
+};
 
 #[doc(hidden)]
 pub fn libjpeg_turbo_available() -> bool {

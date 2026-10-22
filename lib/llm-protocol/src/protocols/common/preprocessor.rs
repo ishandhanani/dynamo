@@ -13,7 +13,7 @@ use dynamo_kv_router::{
     protocols::{BlockExtraInfo, RoutingConstraints, WorkerId},
     scheduling::{AbortCause, RequestLifecycle},
 };
-use dynamo_runtime::error::{DynamoError, ErrorType, match_error_chain};
+use dynamo_runtime_protocols::error::{DynamoError, ErrorType, match_error_chain};
 use serde::{Deserialize, Serialize};
 
 use uuid::Uuid;
@@ -127,7 +127,7 @@ pub struct TraceLink {
 /// The selected router records a failed worker before the error is exposed;
 /// later attempts use the accumulated set as an attempt-local exclusion.
 #[derive(Debug, Clone, Default)]
-pub(crate) struct MigrationState {
+pub struct MigrationState {
     inner: Arc<OnceLock<Mutex<MigrationStateInner>>>,
 }
 
@@ -139,7 +139,7 @@ struct MigrationStateInner {
 }
 
 impl MigrationState {
-    pub(crate) fn record_failure(&self, worker_id: WorkerId, error: Option<DynamoError>) {
+    pub fn record_failure(&self, worker_id: WorkerId, error: Option<DynamoError>) {
         let mut inner = self
             .inner
             .get_or_init(Default::default)
@@ -153,7 +153,7 @@ impl MigrationState {
         }
     }
 
-    pub(crate) fn excluded_worker_ids(&self) -> Vec<WorkerId> {
+    pub fn excluded_worker_ids(&self) -> Vec<WorkerId> {
         let Some(inner) = self.inner.get() else {
             return Vec::new();
         };
@@ -164,7 +164,7 @@ impl MigrationState {
             .clone()
     }
 
-    pub(crate) fn exhausted_error(&self) -> Option<DynamoError> {
+    pub fn exhausted_error(&self) -> Option<DynamoError> {
         let inner = self.inner.get()?;
         let last_error = inner
             .lock()
@@ -194,7 +194,7 @@ impl MigrationState {
         )
     }
 
-    pub(crate) fn take_request_lifecycle(&self) -> Option<Box<RequestLifecycle>> {
+    pub fn take_request_lifecycle(&self) -> Option<Box<RequestLifecycle>> {
         self.inner
             .get()?
             .lock()
@@ -203,7 +203,7 @@ impl MigrationState {
             .take()
     }
 
-    pub(crate) fn store_request_lifecycle(&self, lifecycle: Box<RequestLifecycle>) {
+    pub fn store_request_lifecycle(&self, lifecycle: Box<RequestLifecycle>) {
         let replaced = self
             .inner
             .get_or_init(Default::default)
@@ -219,7 +219,7 @@ impl MigrationState {
         }
     }
 
-    pub(crate) fn abort_request_lifecycle(&self, error: Option<&AbortCause>) {
+    pub fn abort_request_lifecycle(&self, error: Option<&AbortCause>) {
         let Some(mut lifecycle) = self.take_request_lifecycle() else {
             return;
         };
@@ -230,7 +230,7 @@ impl MigrationState {
 /// Owned abort payload for classifier lifecycle events: the typed
 /// [`DynamoError`] from the chain when one exists, else the whole chain
 /// converted so the root cause survives.
-pub(crate) fn owned_abort_error(error: &AbortCause) -> Arc<AbortCause> {
+pub fn owned_abort_error(error: &AbortCause) -> Arc<AbortCause> {
     let mut cause: Option<&(dyn std::error::Error + 'static)> = Some(error);
     while let Some(current) = cause {
         if let Some(dynamo_error) = current.downcast_ref::<DynamoError>() {
@@ -379,7 +379,7 @@ pub struct PreprocessedRequest {
     /// to workers nor exposed as a caller-controlled routing hint.
     #[builder(default)]
     #[serde(skip)]
-    pub(crate) migration_state: Option<MigrationState>,
+    pub migration_state: Option<MigrationState>,
 
     /// Set when remote prefill has staged KV blocks that only this request's
     /// decode worker can release, so the decode leg must reach that worker even
@@ -391,7 +391,7 @@ pub struct PreprocessedRequest {
     /// feeds is made in-process before the request is serialized to a worker.
     #[builder(default)]
     #[serde(skip)]
-    pub(crate) staged_kv_cleanup: bool,
+    pub staged_kv_cleanup: bool,
 
     /// Prompt tokens shared by prefill and decode request clones.
     ///
@@ -501,7 +501,7 @@ pub struct PreprocessedRequest {
     /// a remote worker.
     #[builder(default)]
     #[serde(skip)]
-    pub(crate) jail_seed: Option<DecoderCheckpoint>,
+    pub jail_seed: Option<DecoderCheckpoint>,
 
     /// Bootstrap info for disaggregated serving
     #[builder(default)]
@@ -599,8 +599,8 @@ pub struct PreprocessedRequest {
 /// worker decodes the blob through rmp-serde's `deserialize_seq`, one token per
 /// byte, with no error.
 static TOKEN_IDS_AS_BYTES: std::sync::LazyLock<bool> = std::sync::LazyLock::new(|| {
-    dynamo_runtime::config::env_is_truthy(
-        dynamo_runtime::config::environment_names::request_plane::DYN_TOKEN_IDS_AS_BYTES,
+    dynamo_truthy::env_is_truthy(
+        dynamo_runtime_protocols::environment_names::request_plane::DYN_TOKEN_IDS_AS_BYTES,
     )
 });
 
@@ -765,7 +765,7 @@ impl PreprocessedRequest {
         (tokens, Some(mm.block_mm_infos.as_slice()))
     }
 
-    pub(crate) fn expanded_prompt_token_count(&self) -> usize {
+    pub fn expanded_prompt_token_count(&self) -> usize {
         self.mm_routing_info
             .as_ref()
             .filter(|mm| !mm.routing_token_ids.is_empty() && mm.expanded_prompt_len > 0)

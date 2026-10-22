@@ -2220,6 +2220,7 @@ dependencies = [
  "dynamo-custom-policy-builtin",
  "dynamo-http-server",
  "dynamo-kv-router",
+ "dynamo-llm-protocol",
  "dynamo-memory",
  "dynamo-mocker",
  "dynamo-parsers",
@@ -2273,7 +2274,6 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2 0.10.9",
- "strum",
  "sysinfo",
  "tempfile",
  "thiserror 2.0.18",
@@ -2298,6 +2298,38 @@ dependencies = [
  "validator",
  "video-rs",
  "xxhash-rust",
+]
+
+[[package]]
+name = "dynamo-llm-protocol"
+version = "1.6.0"
+dependencies = [
+ "anyhow",
+ "base64 0.22.1",
+ "bitflags 2.13.0",
+ "blake3",
+ "chrono",
+ "derive_builder",
+ "dynamo-kv-router",
+ "dynamo-parsers",
+ "dynamo-protocols",
+ "dynamo-renderer",
+ "dynamo-runtime-protocols",
+ "dynamo-truthy",
+ "either",
+ "http 1.4.2",
+ "image",
+ "parking_lot",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "strum",
+ "tokio",
+ "tracing",
+ "url",
+ "utoipa",
+ "uuid",
+ "validator",
 ]
 
 [[package]]

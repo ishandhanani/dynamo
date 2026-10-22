@@ -3899,6 +3899,8 @@ impl OpenAIPreprocessor {
                 } else if task.modality == "video_url" {
                     #[cfg(feature = "media-ffmpeg")]
                     {
+                        use crate::preprocessor::media::RdmaMediaDataDescriptorExt as _;
+
                         let video_entry = (|| -> Result<MmRoutingEntry> {
                             let processor =
                                 self.video_routing_processor.as_ref().ok_or_else(|| {

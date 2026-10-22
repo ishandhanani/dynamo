@@ -4,6 +4,7 @@
 [workspace]
 members = [
     "lib/llm",
+    "lib/llm-protocol",
     "lib/rl",
     "lib/runtime",
     "lib/runtime-protocols",
@@ -63,6 +64,7 @@ dynamo-http-server = { path = "lib/http-server", version = "1.6.0" }
 dynamo-runtime = { path = "lib/runtime", version = "1.6.0" }
 dynamo-runtime-protocols = { path = "lib/runtime-protocols", version = "1.6.0" }
 dynamo-llm = { path = "lib/llm", version = "1.6.0", default-features = false }
+dynamo-llm-protocol = { path = "lib/llm-protocol", version = "1.6.0" }
 dynamo-rl = { path = "lib/rl", version = "1.6.0" }
 dynamo-tokenizers = { version = "=3.1.1" }
 dynamo-renderer = { version = "=8.0.3" }

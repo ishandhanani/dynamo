@@ -10,19 +10,16 @@
 use futures::{Stream, StreamExt};
 use serde::{Deserialize, Serialize};
 
-pub mod agents;
 pub mod anthropic;
 pub mod codec;
 pub mod common;
 pub mod openai;
 pub mod providers;
-pub mod response_merge;
 pub mod sglang;
 pub mod tensor;
 pub(crate) mod unified;
 
-/// The token ID type
-pub type TokenIdType = u32;
+pub use dynamo_llm_protocol::protocols::{TokenIdType, agents, response_merge};
 pub use dynamo_runtime::engine::DataStream;
 
 // TODO: This is an awkward dependency that we need to address

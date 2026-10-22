@@ -67,6 +67,7 @@ impl GrpcTuningConfig {
 
 use crate::grpc::service::dispatch_error_status;
 use crate::grpc::service::openai::completion_response_stream;
+use crate::grpc::service::tensor::TensorDataTypeExt as _;
 use crate::grpc::service::tensor::{
     ExtendedNvCreateTensorResponse, kserve_metadata_shape, tensor_response_stream,
 };

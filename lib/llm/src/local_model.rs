@@ -25,7 +25,7 @@ use crate::reasoning_field::ReasoningField;
 use crate::request_template::RequestTemplate;
 use dynamo_parsers::tool_calling::parsers::get_available_tool_parsers;
 
-pub mod runtime_config;
+pub use dynamo_llm_protocol::local_model::runtime_config;
 
 use runtime_config::{ModelRuntimeConfig, TokenizerBackend};
 

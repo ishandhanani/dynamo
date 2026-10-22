@@ -424,41 +424,6 @@ impl TryFrom<NvCreateCompletionRequest> for common::CompletionRequest {
     }
 }
 
-impl TryFrom<common::StreamingCompletionResponse> for dynamo_protocols::types::Choice {
-    type Error = anyhow::Error;
-
-    fn try_from(response: common::StreamingCompletionResponse) -> Result<Self, Self::Error> {
-        let text = response
-            .delta
-            .text
-            .ok_or(anyhow::anyhow!("No text in response"))?;
-
-        // SAFETY: we're downcasting from u64 to u32 here but u32::MAX is 4_294_967_295
-        // so we're fairly safe knowing we won't generate that many Choices
-        let index: u32 = response
-            .delta
-            .index
-            .unwrap_or(0)
-            .try_into()
-            .expect("index exceeds u32::MAX");
-
-        // TODO handle aggregating logprobs
-        let logprobs = None;
-
-        let finish_reason: Option<dynamo_protocols::types::CompletionFinishReason> =
-            response.delta.finish_reason.map(Into::into);
-
-        let choice = dynamo_protocols::types::Choice {
-            text,
-            index,
-            logprobs,
-            finish_reason,
-        };
-
-        Ok(choice)
-    }
-}
-
 impl OpenAIOutputOptionsProvider for NvCreateCompletionRequest {
     fn get_logprobs(&self) -> Option<u32> {
         self.inner.logprobs.map(|logprobs| logprobs as u32)

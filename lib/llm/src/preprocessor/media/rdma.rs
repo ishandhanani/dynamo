@@ -28,81 +28,90 @@ pub struct DecodedMediaData {
 }
 
 /// Convert the frontend's NIXL registration into its wire form.
-impl From<nixl::MemType> for NixlMemoryType {
-    fn from(mem_type: nixl::MemType) -> Self {
-        match mem_type {
-            nixl::MemType::Dram => Self::Dram,
-            nixl::MemType::Vram => Self::Vram,
-            nixl::MemType::Block => Self::Block,
-            nixl::MemType::Object => Self::Object,
-            nixl::MemType::File => Self::File,
-            nixl::MemType::Unknown => Self::Unknown,
-        }
+///
+/// `NixlMemoryType` and `NixlMemoryDescriptor` are wire types owned by
+/// `dynamo-llm-protocol` and `nixl::MemType` / `NixlDescriptor` belong to
+/// `dynamo-memory`, so these conversions are free functions rather than `From` impls.
+pub fn nixl_mem_type_to_wire(mem_type: nixl::MemType) -> NixlMemoryType {
+    match mem_type {
+        nixl::MemType::Dram => NixlMemoryType::Dram,
+        nixl::MemType::Vram => NixlMemoryType::Vram,
+        nixl::MemType::Block => NixlMemoryType::Block,
+        nixl::MemType::Object => NixlMemoryType::Object,
+        nixl::MemType::File => NixlMemoryType::File,
+        nixl::MemType::Unknown => NixlMemoryType::Unknown,
     }
 }
 
-impl From<NixlMemoryType> for nixl::MemType {
-    fn from(mem_type: NixlMemoryType) -> Self {
-        match mem_type {
-            NixlMemoryType::Dram => Self::Dram,
-            NixlMemoryType::Vram => Self::Vram,
-            NixlMemoryType::Block => Self::Block,
-            NixlMemoryType::Object => Self::Object,
-            NixlMemoryType::File => Self::File,
-            NixlMemoryType::Unknown => Self::Unknown,
-        }
+pub fn nixl_mem_type_from_wire(mem_type: NixlMemoryType) -> nixl::MemType {
+    match mem_type {
+        NixlMemoryType::Dram => nixl::MemType::Dram,
+        NixlMemoryType::Vram => nixl::MemType::Vram,
+        NixlMemoryType::Block => nixl::MemType::Block,
+        NixlMemoryType::Object => nixl::MemType::Object,
+        NixlMemoryType::File => nixl::MemType::File,
+        NixlMemoryType::Unknown => nixl::MemType::Unknown,
     }
 }
 
-impl From<NixlDescriptor> for NixlMemoryDescriptor {
-    fn from(descriptor: NixlDescriptor) -> Self {
-        Self {
-            addr: descriptor.addr,
-            size: descriptor.size,
-            mem_type: descriptor.mem_type.into(),
-            device_id: descriptor.device_id,
-        }
+pub fn nixl_descriptor_to_wire(descriptor: NixlDescriptor) -> NixlMemoryDescriptor {
+    NixlMemoryDescriptor {
+        addr: descriptor.addr,
+        size: descriptor.size,
+        mem_type: nixl_mem_type_to_wire(descriptor.mem_type),
+        device_id: descriptor.device_id,
     }
 }
 
-impl From<NixlMemoryDescriptor> for NixlDescriptor {
-    fn from(descriptor: NixlMemoryDescriptor) -> Self {
-        Self {
-            addr: descriptor.addr,
-            size: descriptor.size,
-            mem_type: descriptor.mem_type.into(),
-            device_id: descriptor.device_id,
-        }
+pub fn nixl_descriptor_from_wire(descriptor: NixlMemoryDescriptor) -> NixlDescriptor {
+    NixlDescriptor {
+        addr: descriptor.addr,
+        size: descriptor.size,
+        mem_type: nixl_mem_type_from_wire(descriptor.mem_type),
+        device_id: descriptor.device_id,
     }
 }
 
-impl RdmaMediaDataDescriptor {
-    #[cfg(all(feature = "mm-routing", feature = "media-ffmpeg"))]
-    fn local_payload(&self) -> Option<&[u8]> {
-        use dynamo_memory::actions::Slice;
-        let registered = self
-            .source_storage
-            .as_ref()?
-            .downcast_ref::<nixl::NixlRegistered<SystemStorage>>()?;
-        let storage = registered.storage();
-        // SAFETY: the descriptor keeps the registered SystemStorage alive and
-        // request construction does not mutate it while this borrow exists.
-        unsafe { storage.as_slice().ok() }
-    }
-
+/// Process-local accessors over the decoded video payload a descriptor still
+/// owns. `RdmaMediaDataDescriptor` is a wire type owned by `dynamo-llm-protocol`,
+/// so these frontend-only helpers live behind an extension trait.
+#[cfg(all(feature = "mm-routing", feature = "media-ffmpeg"))]
+pub(crate) trait RdmaMediaDataDescriptorExt {
     /// Canonical identity for one frontend-decoded video:
     /// `(modality, shape, dtype, decoded metadata, sampled RGB bytes)`.
     /// Metadata is serialized from the typed object sent to the worker, so new
     /// model-visible fields automatically participate in the identity.
-    #[cfg(all(feature = "mm-routing", feature = "media-ffmpeg"))]
-    pub(crate) fn video_content_hash(&self) -> Result<u64> {
+    fn video_content_hash(&self) -> Result<u64>;
+
+    fn video_metadata(&self) -> Result<&super::decoders::VideoMetadata>;
+
+    /// Validate the contiguous `[T, H, W, 3]` payload and return its video
+    /// dimensions without copying or preprocessing pixels.
+    fn video_dimensions(&self) -> Result<(usize, u32, u32)>;
+}
+
+#[cfg(all(feature = "mm-routing", feature = "media-ffmpeg"))]
+fn local_payload(descriptor: &RdmaMediaDataDescriptor) -> Option<&[u8]> {
+    use dynamo_memory::actions::Slice;
+    let registered = descriptor
+        .source_storage
+        .as_ref()?
+        .downcast_ref::<nixl::NixlRegistered<SystemStorage>>()?;
+    let storage = registered.storage();
+    // SAFETY: the descriptor keeps the registered SystemStorage alive and
+    // request construction does not mutate it while this borrow exists.
+    unsafe { storage.as_slice().ok() }
+}
+
+#[cfg(all(feature = "mm-routing", feature = "media-ffmpeg"))]
+impl RdmaMediaDataDescriptorExt for RdmaMediaDataDescriptor {
+    fn video_content_hash(&self) -> Result<u64> {
         self.video_metadata()?;
         self.content_hash()
             .context("decoded video content hash is missing")
     }
 
-    #[cfg(all(feature = "mm-routing", feature = "media-ffmpeg"))]
-    pub(crate) fn video_metadata(&self) -> Result<&super::decoders::VideoMetadata> {
+    fn video_metadata(&self) -> Result<&super::decoders::VideoMetadata> {
         match self.tensor_info.metadata.as_ref() {
             Some(DecodedMediaMetadata::Video(metadata)) => Ok(metadata),
             Some(_) => anyhow::bail!("decoded media metadata is not video metadata"),
@@ -110,12 +119,8 @@ impl RdmaMediaDataDescriptor {
         }
     }
 
-    /// Validate the contiguous `[T, H, W, 3]` payload and return its video
-    /// dimensions without copying or preprocessing pixels.
-    #[cfg(all(feature = "mm-routing", feature = "media-ffmpeg"))]
-    pub(crate) fn video_dimensions(&self) -> Result<(usize, u32, u32)> {
-        let bytes = self
-            .local_payload()
+    fn video_dimensions(&self) -> Result<(usize, u32, u32)> {
+        let bytes = local_payload(self)
             .ok_or_else(|| anyhow::anyhow!("decoded video has no local payload"))?;
         video_dimensions_from_parts(&self.tensor_info, bytes)
     }
@@ -273,7 +278,7 @@ impl DecodedMediaData {
 
         Ok(RdmaMediaDataDescriptor {
             nixl_metadata,
-            nixl_descriptor: nixl_descriptor.into(),
+            nixl_descriptor: nixl_descriptor_to_wire(nixl_descriptor),
             tensor_info: self.tensor_info,
             content_hash,
             // Keep registered storage alive
@@ -405,7 +410,10 @@ mod tests {
 
     #[test]
     fn nixl_descriptor_wire_form_matches_nixl_types() {
-        use super::{NixlDescriptor, NixlMemoryDescriptor, NixlMemoryType};
+        use super::{
+            NixlDescriptor, nixl_descriptor_from_wire, nixl_descriptor_to_wire,
+            nixl_mem_type_to_wire,
+        };
         use dynamo_memory::nixl;
         for mem_type in [
             nixl::MemType::Dram,
@@ -421,17 +429,17 @@ mod tests {
                 mem_type,
                 device_id: 3,
             };
-            let wire = NixlMemoryDescriptor::from(native.clone());
+            let wire = nixl_descriptor_to_wire(native.clone());
             assert_eq!(
                 serde_json::to_value(&native).unwrap(),
                 serde_json::to_value(&wire).unwrap(),
                 "wire form must serialize identically for {mem_type:?}"
             );
-            let back: NixlDescriptor = wire.into();
+            let back: NixlDescriptor = nixl_descriptor_from_wire(wire);
             assert_eq!(back.mem_type, mem_type);
             assert_eq!(
-                NixlMemoryType::from(mem_type),
-                NixlMemoryType::from(back.mem_type)
+                nixl_mem_type_to_wire(mem_type),
+                nixl_mem_type_to_wire(back.mem_type)
             );
         }
     }

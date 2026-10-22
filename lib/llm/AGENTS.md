@@ -7,6 +7,14 @@ Identify every semantic owner and preserve the field's documented end-to-end beh
 
 # N-2 Worker / Frontend Compatibility
 
+The wire types this contract covers (preprocessed requests, engine outputs, the model
+deployment card and its runtime config, worker/model/endpoint kinds) live in the
+`dynamo-llm-protocol` crate at [`lib/llm-protocol`](../llm-protocol/AGENTS.md). This crate
+re-exports them at their historical `dynamo_llm::{protocols::common, model_card,
+local_model::runtime_config, model_type, worker_type, endpoint_type, common}` paths and owns
+the loading, frontend, and backend code around them. Edits to the wire shapes belong in
+`lib/llm-protocol` and are subject to the rules below.
+
 Assume N-2 mixed-version operation between workers and frontends during rolling
 updates. Frontends and workers from the current release and the two immediately
 previous releases may coexist in any combination and must interoperate across
