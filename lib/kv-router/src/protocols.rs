@@ -2896,3 +2896,31 @@ mod tests {
         );
     }
 }
+
+/// How a bound session treats a dispatch that landed elsewhere.
+///
+/// Carried on the model deployment card (`RouterConfig`), so it lives in the
+/// always-compiled protocol module rather than behind the standalone-selection feature.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum SessionAffinityMode {
+    /// The binding is exact: dispatching to another worker or rank is an error.
+    #[default]
+    Hard,
+    /// The binding follows the dispatch: the session rebinds to where it ran.
+    Soft,
+}
+
+impl std::str::FromStr for SessionAffinityMode {
+    type Err = String;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value {
+            "hard" => Ok(Self::Hard),
+            "soft" => Ok(Self::Soft),
+            _ => Err(format!(
+                "invalid session affinity mode {value:?}; expected 'hard' or 'soft'"
+            )),
+        }
+    }
+}

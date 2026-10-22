@@ -12,7 +12,7 @@ repository.workspace = true
 
 [dependencies]
 # repo
-dynamo-kv-router = { workspace = true, features = ["standalone-selection"] }
+dynamo-kv-router = { workspace = true }
 dynamo-parsers = { workspace = true }
 dynamo-protocols = { workspace = true, features = ["protocol-schema"] }
 dynamo-renderer = { workspace = true }

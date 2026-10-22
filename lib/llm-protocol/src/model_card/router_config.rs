@@ -11,7 +11,7 @@ use dynamo_kv_router::config::KvRouterConfig;
 use dynamo_runtime_protocols::routing::RouterMode;
 use serde::{Deserialize, Serialize};
 
-use dynamo_kv_router::services::selection::affinity::SessionAffinityMode;
+use dynamo_kv_router::protocols::SessionAffinityMode;
 
 /// Configuration for worker load thresholds used in overload detection.
 ///
