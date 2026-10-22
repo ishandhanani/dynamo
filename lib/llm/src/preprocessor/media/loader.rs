@@ -784,7 +784,12 @@ mod tests {
             "Source storage should be present"
         );
         assert!(
-            descriptor.source_storage.unwrap().is_registered(),
+            descriptor
+                .source_storage
+                .unwrap()
+                .downcast_ref::<dynamo_memory::nixl::NixlRegistered<dynamo_memory::SystemStorage>>()
+                .expect("source storage should be the NIXL-registered system buffer")
+                .is_registered(),
             "Source storage should be registered with NIXL"
         );
     }
@@ -969,7 +974,7 @@ mod tests {
         // (cloned `Arc` under the hood — same pointer).
         match (&first.source_storage, &second.source_storage) {
             (Some(a), Some(b)) => assert!(
-                Arc::ptr_eq(a, b),
+                a.ptr_eq(b),
                 "cache hit should return the same Arc'd source_storage"
             ),
             _ => panic!("source_storage missing from one of the descriptors"),

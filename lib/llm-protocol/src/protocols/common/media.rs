@@ -106,6 +106,11 @@ impl MediaStorageHandle {
     pub fn downcast_ref<T: Any + Send + Sync>(&self) -> Option<&T> {
         self.0.downcast_ref::<T>()
     }
+
+    /// Whether both handles keep the same registration alive.
+    pub fn ptr_eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.0, &other.0)
+    }
 }
 
 impl fmt::Debug for MediaStorageHandle {
