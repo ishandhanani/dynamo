@@ -271,7 +271,6 @@ areas:
   - lib/llm/src/local_model/
   - lib/llm/src/lora/routing/
   - lib/llm/src/model_card.rs
-  - lib/llm/src/perf/
   - lib/llm/src/utils/
   - lib/llm/tests/
   - lib/runtime/
