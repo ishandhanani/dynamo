@@ -6,6 +6,7 @@ use crate::engines::StreamingEngineAdapter;
 use crate::entrypoint::EngineConfig;
 use crate::entrypoint::input::common;
 use crate::http::service::metrics::Metrics;
+use crate::model_card::ModelDeploymentCardLoader;
 use crate::namespace::NamespaceFilter;
 use crate::request_template::RequestTemplate;
 use crate::types::openai::chat_completions::{

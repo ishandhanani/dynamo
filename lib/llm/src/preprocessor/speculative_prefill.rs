@@ -404,6 +404,7 @@ async fn prefill_task(
 
 #[cfg(test)]
 mod tests {
+    use crate::model_card::ModelDeploymentCardLoader;
     use std::path::PathBuf;
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use std::task::Poll;

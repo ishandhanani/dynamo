@@ -606,6 +606,7 @@ mod tests {
     //! relies on so a future upstream matcher change shows up here instead
     //! of as a silent runtime fallback to text-prefix-only routing.
     use super::*;
+    use crate::model_card::ModelDeploymentCardLoader;
     use crate::preprocessor::{
         ModelDeploymentCard, NvCreateChatCompletionRequest, OpenAIPreprocessor,
         PreprocessedRequest, RoutingImagePromptLayout,

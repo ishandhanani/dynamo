@@ -37,8 +37,11 @@ pub mod loader;
 pub mod media;
 pub mod tensor;
 
-pub use loader::ModelInfo;
 pub(crate) use loader::is_weight_file;
+pub use loader::{
+    GenerationConfigLoader, ModelDeploymentCardLoader, ModelInfo, ModelInfoTypeLoader,
+    PromptFormatterArtifactLoader, TokenizerKindLoader,
+};
 
 fn append_runtime_contract_checksum(
     bytes: &mut Vec<u8>,
@@ -683,6 +686,18 @@ impl ModelDeploymentCard {
 
     /// Is this a full model card with tokenizer?
     /// There are cases where we have a placeholder card (see `with_name_only`).
+    /// `None` until this card loads its tokenizer, then `Some` of the
+    /// tokenizer's token id bound. That bound is `None` if unknown (tiktoken).
+    pub fn tokenizer_id_bound(&self) -> Option<Option<usize>> {
+        self.tokenizer_id_bound.get().copied()
+    }
+
+    /// Record the tokenizer's token id bound the first time a tokenizer is built;
+    /// later calls keep the first value.
+    pub fn init_tokenizer_id_bound(&self, bound: impl FnOnce() -> Option<usize>) -> Option<usize> {
+        *self.tokenizer_id_bound.get_or_init(bound)
+    }
+
     pub fn has_tokenizer(&self) -> bool {
         self.tokenizer.is_some()
     }

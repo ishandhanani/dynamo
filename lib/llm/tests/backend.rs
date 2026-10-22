@@ -3,6 +3,7 @@
 
 use dynamo_llm::backend::Backend;
 use dynamo_llm::model_card::ModelDeploymentCard;
+use dynamo_llm::model_card::ModelDeploymentCardLoader;
 
 #[test]
 fn test_sequence_factory() {

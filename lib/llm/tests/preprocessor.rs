@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use anyhow::{Ok, Result};
+use dynamo_llm::model_card::ModelDeploymentCardLoader;
 use dynamo_runtime::config::environment_names::model::huggingface as env_hf;
 
 use dynamo_llm::model_card::ModelDeploymentCard;
@@ -633,6 +634,7 @@ async fn test_media_url_passthrough(#[case] media_chunks: &[(&str, usize)]) {
 }
 
 mod cached_multimodal_uuid {
+    use dynamo_llm::model_card::ModelDeploymentCardLoader;
     use std::sync::Arc;
 
     use super::Request;
@@ -821,6 +823,7 @@ mod cached_multimodal_uuid {
 /// The frontend's contract for `media_io_kwargs`: forward it to the worker untouched
 /// when the worker owns media decoding, and withhold it when the frontend decodes.
 mod media_io_kwargs_forwarding {
+    use dynamo_llm::model_card::ModelDeploymentCardLoader;
     use std::sync::Arc;
 
     use super::Request;
@@ -909,6 +912,7 @@ mod media_io_kwargs_forwarding {
 mod context_length_validation {
     use dynamo_llm::local_model::runtime_config::{TOKEN_BUDGET_RUNTIME_KEY, TokenBudget};
     use dynamo_llm::model_card::ModelDeploymentCard;
+    use dynamo_llm::model_card::ModelDeploymentCardLoader;
     use dynamo_llm::preprocessor::OpenAIPreprocessor;
     use dynamo_llm::protocols::openai::chat_completions::NvCreateChatCompletionRequest;
     use dynamo_runtime::error::{DynamoError, ErrorType};
@@ -1224,6 +1228,7 @@ mod context_length_validation {
 mod embedding_without_chat_template {
     use dynamo_llm::local_model::runtime_config::TokenizerBackend;
     use dynamo_llm::model_card::ModelDeploymentCard;
+    use dynamo_llm::model_card::ModelDeploymentCardLoader;
     use dynamo_llm::model_type::ModelType;
     use dynamo_llm::preprocessor::OpenAIPreprocessor;
     use dynamo_llm::preprocessor::prompt::prompt_formatter_from_mdc;

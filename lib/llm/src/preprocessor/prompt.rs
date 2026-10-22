@@ -14,6 +14,7 @@
 //!
 //! Everything else imports from `dynamo_renderer` directly.
 
+use crate::model_card::ModelInfoTypeLoader;
 use anyhow::{Context, Result};
 use minijinja::value::Value;
 

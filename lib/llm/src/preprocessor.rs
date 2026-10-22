@@ -19,6 +19,7 @@ pub mod speculative_prefill;
 pub(crate) mod structural_tag;
 pub(crate) mod tool_choice;
 pub mod tools;
+use crate::model_card::{ModelDeploymentCardLoader, ModelInfoTypeLoader};
 use anyhow::Context;
 use anyhow::{Result, bail};
 

@@ -369,6 +369,7 @@ fn installed_json_constraint(tool_choice: &ChatCompletionToolChoiceOption) -> Gu
 
 #[cfg(test)]
 mod tests {
+    use crate::model_card::ModelDeploymentCardLoader;
     use std::{path::PathBuf, sync::Arc};
 
     use super::*;

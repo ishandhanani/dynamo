@@ -14,6 +14,7 @@
 //! the pipeline between them, so a `map_err` anywhere in the middle that rebuilds the
 //! error with `anyhow!("{e}")` would drop the source chain and silently restore the 500.
 
+use dynamo_llm::model_card::ModelDeploymentCardLoader;
 use std::sync::Arc;
 
 use anyhow::Error;

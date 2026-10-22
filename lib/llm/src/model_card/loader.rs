@@ -751,8 +751,24 @@ pub trait ModelInfo: Send + Sync {
     fn vocab_size(&self) -> Option<usize>;
 }
 
-impl ModelInfoType {
-    pub fn get_model_info(&self) -> Result<Arc<dyn ModelInfo>> {
+/// Reading `config.json` behind a [`ModelInfoType`].
+pub trait ModelInfoTypeLoader: Sized {
+    fn from_disk(directory: &Path) -> Result<Self>;
+    fn get_model_info(&self) -> Result<Arc<dyn ModelInfo>>;
+}
+
+impl ModelInfoTypeLoader for ModelInfoType {
+    fn from_disk(directory: &Path) -> Result<Self> {
+        let f = CheckedFile::from_disk(directory.join("config.json")).with_context(|| {
+            format!(
+                "unable to extract config.json from directory {}",
+                directory.display()
+            )
+        })?;
+        Ok(Self::HfConfigJson(f))
+    }
+
+    fn get_model_info(&self) -> Result<Arc<dyn ModelInfo>> {
         match self {
             Self::HfConfigJson(checked_file) => {
                 let Some(path) = checked_file.path() else {
@@ -1067,20 +1083,13 @@ impl ModelInfo for HFConfig {
     }
 }
 
-impl ModelInfoType {
-    pub fn from_disk(directory: &Path) -> Result<Self> {
-        let f = CheckedFile::from_disk(directory.join("config.json")).with_context(|| {
-            format!(
-                "unable to extract config.json from directory {}",
-                directory.display()
-            )
-        })?;
-        Ok(Self::HfConfigJson(f))
-    }
+/// Reading `generation_config.json` into a [`GenerationConfig`].
+pub trait GenerationConfigLoader: Sized {
+    fn from_disk(directory: &Path) -> Result<Self>;
 }
 
-impl GenerationConfig {
-    pub fn from_disk(directory: &Path) -> Result<Self> {
+impl GenerationConfigLoader for GenerationConfig {
+    fn from_disk(directory: &Path) -> Result<Self> {
         let f = CheckedFile::from_disk(directory.join("generation_config.json")).with_context(
             || {
                 format!(
@@ -1093,8 +1102,14 @@ impl GenerationConfig {
     }
 }
 
-impl PromptFormatterArtifact {
-    pub fn from_disk(directory: &Path) -> Result<Option<Self>> {
+/// Discovering prompt-formatter files for a [`PromptFormatterArtifact`].
+pub trait PromptFormatterArtifactLoader: Sized {
+    fn from_disk(directory: &Path) -> Result<Option<Self>>;
+    fn chat_template_from_disk(directory: &Path) -> Result<Option<Self>>;
+}
+
+impl PromptFormatterArtifactLoader for PromptFormatterArtifact {
+    fn from_disk(directory: &Path) -> Result<Option<Self>> {
         // we should only error if we expect a prompt formatter and it's not found
         // right now, we don't know when to expect it, so we just return Ok(Some/None)
         match CheckedFile::from_disk(directory.join("tokenizer_config.json")) {
@@ -1103,7 +1118,7 @@ impl PromptFormatterArtifact {
         }
     }
 
-    pub fn chat_template_from_disk(directory: &Path) -> Result<Option<Self>> {
+    fn chat_template_from_disk(directory: &Path) -> Result<Option<Self>> {
         // Try chat_template.jinja first (raw Jinja template)
         let jinja_path = directory.join("chat_template.jinja");
         if jinja_path.exists() {
@@ -1130,14 +1145,19 @@ impl PromptFormatterArtifact {
     }
 }
 
-impl TokenizerKind {
+/// Discovering tokenizer files for a [`TokenizerKind`].
+pub trait TokenizerKindLoader: Sized {
+    fn from_disk(directory: &Path) -> Result<Option<Self>>;
+}
+
+impl TokenizerKindLoader for TokenizerKind {
     /// Try to discover a tokenizer in the given directory.
     ///
     /// Returns `Ok(Some(..))` when a supported tokenizer is found,
     /// `Ok(None)` when no tokenizer files are present (e.g. models that
     /// ship only `vocab.json` + `merges.txt`), and `Err` for ambiguous
     /// layouts or filesystem failures that should be treated as hard errors.
-    pub fn from_disk(directory: &Path) -> Result<Option<Self>> {
+    fn from_disk(directory: &Path) -> Result<Option<Self>> {
         // Helper: probe a single well-known file.  Returns Ok(None) when the
         // file simply does not exist, Ok(Some(..)) on success, and Err for
         // anything else (unreadable file, checksum failure, etc.).
@@ -1217,14 +1237,18 @@ fn check_valid_local_repo_path(path: impl AsRef<Path>) -> Result<()> {
     Ok(())
 }
 
-impl ModelDeploymentCard {
+/// Loading-side operations on a [`ModelDeploymentCard`]: discovering a checkout,
+/// fetching and staging its metadata files, and building its tokenizer.
+///
+/// These are a trait rather than inherent methods so the card itself stays a plain
+/// wire type with no filesystem, network, or tokenizer dependencies.
+#[allow(async_fn_in_trait)]
+pub trait ModelDeploymentCardLoader: Sized {
     /// Per-MDC resolve directory. After `download_config` runs, every
     /// typed slot + harvested sibling is symlinked here for
     /// `from_pretrained(local_dir)` consumers. Pure path — does not
     /// create the directory; the resolve pipeline owns that.
-    pub fn local_dir(&self) -> PathBuf {
-        mdc_local_path(&self.slug, self.mdcsum())
-    }
+    fn local_dir(&self) -> PathBuf;
 
     /// Load the tokenizer as a generic, backend-agnostic `Tokenizer` trait object.
     /// This supports both HuggingFace `tokenizer.json` and tiktoken `.model`/`.tiktoken` files.
@@ -1252,381 +1276,56 @@ impl ModelDeploymentCard {
     ///   turn of a growing multi-turn conversation hits deeper than the last, keeping
     ///   per-turn tokenization cost flat instead of growing with history. Set to `0` to
     ///   fall back to the original hit-without-insert behavior.
-    pub fn tokenizer(&self) -> anyhow::Result<crate::tokenizers::Tokenizer> {
-        self.tokenizer_with_options(Default::default(), false)
-    }
+    fn tokenizer(&self) -> anyhow::Result<crate::tokenizers::Tokenizer>;
 
-    /// `None` until this card loads its tokenizer, then `Some` of the
-    /// tokenizer's token id bound. That bound is `None` if unknown (tiktoken).
-    pub(crate) fn tokenizer_id_bound(&self) -> Option<Option<usize>> {
-        self.tokenizer_id_bound.get().copied()
-    }
-
-    pub(crate) fn embedding_tokenizer_with_options(
+    fn embedding_tokenizer_with_options(
         &self,
         options: crate::tokenizers::TokenizerOptions,
-    ) -> anyhow::Result<crate::tokenizers::Tokenizer> {
-        self.tokenizer_with_options(options, options.add_special_tokens)
-    }
-
-    fn tokenizer_with_options(
-        &self,
-        options: crate::tokenizers::TokenizerOptions,
-        force_hugging_face: bool,
-    ) -> anyhow::Result<crate::tokenizers::Tokenizer> {
-        let tokenizer_backend = if force_hugging_face {
-            TokenizerBackend::Default
-        } else {
-            self.runtime_config.effective_tokenizer_backend()
-        };
-        let is_fallback_enabled = self.runtime_config.is_tokenizer_fallback_enabled()?;
-
-        let cache_enabled =
-            tokenizer_cache_enabled(std::env::var("DYN_TOKENIZER_CACHE").ok().as_deref());
-        // Partial-hit extension is on by default; disable with DYN_TOKENIZER_CACHE_EXTEND=0.
-        let cache_extend = !matches!(
-            std::env::var("DYN_TOKENIZER_CACHE_EXTEND").ok().as_deref(),
-            Some("0")
-        );
-
-        let inner: Arc<dyn crate::tokenizers::traits::Tokenizer> = match &self.tokenizer {
-            Some(TokenizerKind::HfTokenizerJson(checked_file)) => {
-                let p = checked_file.path().ok_or_else(|| {
-                    anyhow::anyhow!("Tokenizer is URL-backed ({:?})", checked_file.url())
-                })?;
-
-                // Load HF first — needed both for fallback and (if cache is on) for
-                // extracting special-token strings. Alternate backends do not re-expose
-                // `get_added_tokens_decoder`, so capture specials from the raw HF
-                // tokenizer before any swap.
-                let mut hf = HfTokenizer::from_file(p)
-                    .inspect_err(|err| {
-                        if let Some(serde_err) = err.downcast_ref::<serde_json::Error>()
-                            && let Ok(contents) = std::fs::read_to_string(p)
-                        {
-                            crate::log_json_err(&p.display().to_string(), &contents, serde_err);
-                        }
-                    })
-                    .map_err(anyhow::Error::msg)
-                    .with_context(|| p.display().to_string())?;
-                // Apply the tokenizer_config.json special-token merge eagerly so
-                // `extract_hf_special_tokens` below sees the same specials the
-                // wrapped tokenizer will use. Without this the L1 prefix cache's
-                // boundary list would diverge from the actual tokenizer
-                // (e.g. Qwen2-VL's `<|image_pad|>` would be in the tokenizer
-                // but missing from the cache specials), letting chat prefixes
-                // straddle a special-token boundary and reducing hit rate.
-                if let Some(model_dir) = p.parent() {
-                    crate::tokenizers::hf::merge_special_tokens_from_config(&mut hf, model_dir);
-                }
-                self.tokenizer_id_bound
-                    .get_or_init(|| hf_token_id_bound(&hf));
-
-                // Disable any truncation baked into `tokenizer.json`: the HF
-                // `tokenizers` crate honors it on `encode()`, silently clipping every
-                // prompt (e.g. `stepfun-ai/Step-3.7-Flash-*` caps at 2048), unlike
-                // Python `transformers`, which resets it on load. Match that: never
-                // truncate implicitly; over-length prompts are rejected elsewhere.
-                if hf.get_truncation().is_some() {
-                    tracing::warn!(
-                        "tokenizer.json declares a truncation config; disabling it so \
-                         prompts are not silently clipped"
-                    );
-                    // Hard-fail rather than warn: if we can't clear it, the prompt
-                    // would still be silently clipped, defeating the purpose.
-                    hf.with_truncation(None)
-                        .map_err(anyhow::Error::msg)
-                        .context("failed to disable tokenizer.json truncation")?;
-                }
-
-                // Padding belongs to the batching layer, not individual online requests.
-                if hf.get_padding().is_some() {
-                    tracing::warn!(
-                        "tokenizer.json declares a padding config; disabling it for online \
-                         tokenization"
-                    );
-                    hf.with_padding(None);
-                }
-
-                // Hold onto specials before any move of `hf`.
-                let specials: Vec<String> = if cache_enabled {
-                    extract_hf_special_tokens(&hf)
-                } else {
-                    Vec::new()
-                };
-
-                // Merge already applied above; just wrap. Embedding
-                // tokenizers use the HF post-processor to apply BOS/EOS when
-                // requested; normal tokenizers keep their existing defaults.
-                let wrap_hf = |hf: HfTokenizer| {
-                    let tokenizer = crate::tokenizers::HuggingFaceTokenizer::from_tokenizer(hf);
-                    crate::tokenizers::traits::Tokenizer::with_options(tokenizer, options)
-                };
-
-                // Pick the inner backend.
-                let (raw, cache_backend): (
-                    Arc<dyn crate::tokenizers::traits::Tokenizer>,
-                    TokenizerBackend,
-                ) = match tokenizer_backend {
-                    TokenizerBackend::Default => (Arc::new(wrap_hf(hf)), TokenizerBackend::Default),
-                    TokenizerBackend::Fastokens => {
-                        if let Some(path_str) = p.to_str() {
-                            match crate::tokenizers::FastTokenizer::from_file(path_str) {
-                                Ok(fast) => {
-                                    tracing::info!("Using fastokens tokenizer backend");
-                                    (Arc::new(fast), TokenizerBackend::Fastokens)
-                                }
-                                Err(e) => {
-                                    if !is_fallback_enabled {
-                                        return Err(e).context(
-                                            "failed to load fastokens tokenizer backend and fallback is disabled",
-                                        );
-                                    }
-                                    tracing::warn!(
-                                        %e,
-                                        "Failed to load fastokens, falling back to HuggingFace"
-                                    );
-                                    (Arc::new(wrap_hf(hf)), TokenizerBackend::Default)
-                                }
-                            }
-                        } else {
-                            if !is_fallback_enabled {
-                                anyhow::bail!(
-                                    "failed to load fastokens tokenizer backend because tokenizer path contains non-UTF-8 characters and fallback is disabled: {}",
-                                    p.display()
-                                );
-                            }
-                            tracing::warn!(
-                                path = %p.display(),
-                                "Tokenizer path contains non-UTF-8 characters, skipping fastokens; falling back to HuggingFace"
-                            );
-                            (Arc::new(wrap_hf(hf)), TokenizerBackend::Default)
-                        }
-                    }
-                    TokenizerBackend::Basetenkenizer => {
-                        if let Some(path_str) = p.to_str() {
-                            match crate::tokenizers::BasetenTokenizer::from_file(path_str) {
-                                Ok(baseten) => {
-                                    tracing::info!("Using basetenkenizer tokenizer backend");
-                                    (Arc::new(baseten), TokenizerBackend::Basetenkenizer)
-                                }
-                                Err(e) => {
-                                    if !is_fallback_enabled {
-                                        return Err(e).context(
-                                            "failed to load basetenkenizer tokenizer backend and fallback is disabled",
-                                        );
-                                    }
-                                    tracing::warn!(
-                                        %e,
-                                        "Failed to load basetenkenizer, falling back to HuggingFace"
-                                    );
-                                    (Arc::new(wrap_hf(hf)), TokenizerBackend::Default)
-                                }
-                            }
-                        } else {
-                            if !is_fallback_enabled {
-                                anyhow::bail!(
-                                    "failed to load basetenkenizer tokenizer backend because tokenizer path contains non-UTF-8 characters and fallback is disabled: {}",
-                                    p.display()
-                                );
-                            }
-                            tracing::warn!(
-                                path = %p.display(),
-                                "Tokenizer path contains non-UTF-8 characters, skipping basetenkenizer; falling back to HuggingFace"
-                            );
-                            (Arc::new(wrap_hf(hf)), TokenizerBackend::Default)
-                        }
-                    }
-                };
-
-                if cache_enabled && !options.add_special_tokens {
-                    let shared_cache = shared_tokenizer_cache();
-                    let namespace =
-                        tokenizer_cache_namespace(self.mdcsum(), cache_backend.as_str());
-                    tracing::info!(
-                        cache_bytes = shared_cache.max_memory_bytes(),
-                        cache_extend,
-                        specials = specials.len(),
-                        "wrapping tokenizer in L1 prefix cache",
-                    );
-                    instrumented_tokenizer_cache(
-                        raw,
-                        specials,
-                        shared_cache,
-                        cache_extend,
-                        self.name(),
-                        &namespace,
-                    )?
-                } else {
-                    // The prefix cache encodes text in boundary-delimited
-                    // segments. Applying the HF post-processor to every segment
-                    // could add BOS/EOS more than once, so embedding special-token
-                    // mode bypasses that cache.
-                    raw
-                }
-            }
-            Some(TokenizerKind::TikTokenModel(checked_file)) => {
-                let p = checked_file.path().ok_or_else(|| {
-                    anyhow::anyhow!("Tokenizer is URL-backed ({:?})", checked_file.url())
-                })?;
-                let path_str = p.to_str().ok_or_else(|| {
-                    anyhow::anyhow!("Tokenizer path contains invalid UTF-8: {}", p.display())
-                })?;
-                let tokenizer = crate::tokenizers::TikTokenTokenizer::from_file_auto(path_str)
-                    .with_context(|| {
-                        format!("Failed to load tiktoken tokenizer from {}", p.display())
-                    })?;
-                // tiktoken does not expose its ids.
-                self.tokenizer_id_bound.get_or_init(|| None);
-
-                let specials = tokenizer.special_tokens().to_vec();
-                let raw: Arc<dyn crate::tokenizers::traits::Tokenizer> = Arc::new(tokenizer);
-                if cache_enabled {
-                    let shared_cache = shared_tokenizer_cache();
-                    let namespace = tokenizer_cache_namespace(self.mdcsum(), "tiktoken");
-                    tracing::info!(
-                        cache_bytes = shared_cache.max_memory_bytes(),
-                        cache_extend,
-                        boundaries = specials.len(),
-                        "wrapping tiktoken tokenizer in L1 prefix cache",
-                    );
-                    instrumented_tokenizer_cache(
-                        raw,
-                        specials,
-                        shared_cache,
-                        cache_extend,
-                        self.name(),
-                        &namespace,
-                    )?
-                } else {
-                    raw
-                }
-            }
-            None => {
-                anyhow::bail!(
-                    "ModelDeploymentCard for '{}' does not have a tokenizer. \
-                     Provide a supported tokenizer file (tokenizer.json, tiktoken.model, \
-                     or *.tiktoken), use --use-<framework>-tokenizer to delegate \
-                     tokenization to the backend, or use a non-Rust chat processor \
-                     (e.g. --dyn-chat-processor vllm).",
-                    self.display_name
-                );
-            }
-        };
-
-        Ok(crate::tokenizers::Tokenizer::from(inner))
-    }
+    ) -> anyhow::Result<crate::tokenizers::Tokenizer>;
 
     /// Build an in-memory ModelDeploymentCard from a folder containing config.json,
     /// tokenizer.json and tokenizer_config.json (i.e. a huggingface repo checkout).
     /// Optional custom template.
-    pub fn load_from_disk(
+    fn load_from_disk(
         config_path: impl AsRef<Path>,
         custom_template_path: Option<&Path>,
-    ) -> anyhow::Result<ModelDeploymentCard> {
-        Self::from_local_path(config_path.as_ref(), custom_template_path)
-    }
-
-    async fn resolve_metadata_files(
-        &mut self,
-        local_model_path: Option<&Path>,
-    ) -> anyhow::Result<()> {
-        let source = self.source_path().to_string();
-        let mdcsum = self.mdcsum().to_string();
-        let blobs = mdc_blobs_dir()?;
-        let local_dir = mdc_local_dir(&self.slug, &mdcsum)?;
-
-        let mut entries = Vec::new();
-        let mut ngc_snapshot = None;
-        for (cf, is_custom) in self.iter_metadata_files() {
-            let uri = match checked_file_uri(cf, &source, local_model_path, is_custom)? {
-                Some(uri) => uri,
-                None => {
-                    let snapshot = match &ngc_snapshot {
-                        Some(snapshot) => snapshot,
-                        None => ngc_snapshot.insert(
-                            crate::hub::from_hf(&source, /* ignore_weights = */ true).await?,
-                        ),
-                    };
-                    // The MDC supplies the filename and expected checksum. Retry
-                    // in the resolved directory; a still-missing file is an error.
-                    checked_file_uri(cf, &source, Some(snapshot), is_custom)?.with_context(
-                        || format!("NGC metadata file missing after fetching {source}: {cf}"),
-                    )?
-                }
-            };
-            entries.push((uri, cf.clone()));
-        }
-
-        // Pre-resolve hf:// repos once per unique repo; otherwise the
-        // resolve loop would call hub::from_hf N times for one model.
-        let mut hf_snapshots: std::collections::HashMap<String, PathBuf> =
-            std::collections::HashMap::new();
-        for (uri, _) in &entries {
-            if uri.starts_with("hf://") {
-                let (repo, _) = parse_hf_uri(uri)?;
-                if let std::collections::hash_map::Entry::Vacant(e) = hf_snapshots.entry(repo) {
-                    let repo_name = e.key().clone();
-                    let snap = crate::hub::from_hf(&repo_name, /* ignore_weights = */ true)
-                        .await
-                        .with_context(|| format!("hub::from_hf({repo_name})"))?;
-                    e.insert(snap);
-                }
-            }
-        }
-
-        let client = reqwest::Client::builder()
-            .connect_timeout(std::time::Duration::from_secs(10))
-            .timeout(std::time::Duration::from_secs(300))
-            .build()
-            .context("building http client for metadata fetch")?;
-        for (uri, expected) in &entries {
-            let filename = uri_basename(uri)?;
-            // Hash is validated at MDC deserialize; safe as a path component.
-            let blake3_hex = expected.checksum().hash();
-            let blob = blobs.join(blake3_hex);
-            tracing::debug!(filename = %filename, uri = %uri, blake3 = %blake3_hex, "resolving");
-            resolve_uri(&client, uri, expected, &blob, &hf_snapshots).await?;
-            symlink_force(&blob, &local_dir.join(&filename))?;
-        }
-        tracing::debug!(
-            display_name = %self.display_name,
-            artifact_count = entries.len(),
-            cache_root = %mdc_cache_root().display(),
-            "resolved model metadata files",
-        );
-
-        // Harvest non-weight siblings (preprocessor_config.json, …) from
-        // every snapshot dir we touched. Typed-slot basenames are passed
-        // through so the harvest never overwrites them. No-op for `http://`.
-        let typed_filenames: std::collections::HashSet<String> = entries
-            .iter()
-            .filter_map(|(uri, _)| uri_basename(uri).ok())
-            .collect();
-        let mut snapshot_dirs: std::collections::HashSet<PathBuf> =
-            hf_snapshots.values().cloned().collect();
-        for (uri, _) in &entries {
-            if let Some(parent) = file_uri_parent(uri) {
-                snapshot_dirs.insert(parent);
-            }
-        }
-        for snap in &snapshot_dirs {
-            harvest_siblings(snap, &local_dir, &typed_filenames)?;
-        }
-
-        // Pass 3: rewrite cf.path to the cache symlink so downstream
-        // tokenizer/config loaders read from a verified location.
-        for (cf, _) in self.iter_metadata_files_mut() {
-            cf.update_dir(&local_dir);
-        }
-        Ok(())
-    }
+    ) -> anyhow::Result<ModelDeploymentCard>;
 
     /// Resolve every metadata `CheckedFile` through the cache: fetch,
     /// blake3-verify, content-address. `local_model_path` (frontend's
     /// `--model-path`) supplies a fallback directory for `file://`
     /// slots whose worker-published location is unreachable.
-    pub async fn download_config(&mut self, local_model_path: Option<&Path>) -> anyhow::Result<()> {
+    async fn download_config(&mut self, local_model_path: Option<&Path>) -> anyhow::Result<()>;
+
+    /// Re-write all the local disk paths as a URL. Do this before publishing the MDC.
+    /// The opposite of `move_to_url` is `update_dir`.
+    fn move_to_url(&mut self, base_url: &str) -> anyhow::Result<()>;
+}
+
+impl ModelDeploymentCardLoader for ModelDeploymentCard {
+    fn local_dir(&self) -> PathBuf {
+        mdc_local_path(self.slug(), self.mdcsum())
+    }
+
+    fn tokenizer(&self) -> anyhow::Result<crate::tokenizers::Tokenizer> {
+        tokenizer_with_options(self, Default::default(), false)
+    }
+
+    fn embedding_tokenizer_with_options(
+        &self,
+        options: crate::tokenizers::TokenizerOptions,
+    ) -> anyhow::Result<crate::tokenizers::Tokenizer> {
+        tokenizer_with_options(self, options, options.add_special_tokens)
+    }
+
+    fn load_from_disk(
+        config_path: impl AsRef<Path>,
+        custom_template_path: Option<&Path>,
+    ) -> anyhow::Result<ModelDeploymentCard> {
+        from_local_path(config_path.as_ref(), custom_template_path)
+    }
+
+    async fn download_config(&mut self, local_model_path: Option<&Path>) -> anyhow::Result<()> {
         // TensorBased models don't use metadata files — backend handles
         // everything.
         if self.model_type.supports_tensor() {
@@ -1639,12 +1338,10 @@ impl ModelDeploymentCard {
         // Single resolve pipeline: every CheckedFile (URL or local
         // path, existing or missing) flows through resolve_uri,
         // blake3-verifies, lands in the MDC cache. No new/legacy split.
-        self.resolve_metadata_files(local_model_path).await
+        resolve_metadata_files(self, local_model_path).await
     }
 
-    /// Re-write all the local disk paths as a URL. Do this before publishing the MDC.
-    /// The opposite of `move_to_url` is `update_dir`.
-    pub fn move_to_url(&mut self, base_url: &str) -> anyhow::Result<()> {
+    fn move_to_url(&mut self, base_url: &str) -> anyhow::Result<()> {
         macro_rules! change {
             ($field:expr, $enum_variant:path) => {
                 if let Some($enum_variant(src_file)) = $field.as_mut()
@@ -1709,118 +1406,457 @@ impl ModelDeploymentCard {
         }
         Ok(())
     }
+}
 
-    /// Creates a ModelDeploymentCard from a local directory path.
-    ///
-    /// Currently HuggingFace format is supported and following files are expected:
-    /// - config.json: Model configuration in HuggingFace format
-    /// - tokenizer.json: Tokenizer configuration in HuggingFace format
-    /// - tokenizer_config.json: Optional prompt formatter configuration
-    ///
-    /// # Arguments
-    /// * `local_root_dir` - Path to the local model directory
-    ///
-    /// # Errors
-    /// Returns an error if:
-    /// - The path doesn't exist or isn't a directory
-    /// - The path contains invalid Unicode characters
-    /// - Required model files are missing or invalid
-    fn from_local_path(
-        local_path: impl AsRef<Path>,
-        custom_template_path: Option<&Path>,
-    ) -> anyhow::Result<Self> {
-        check_valid_local_repo_path(&local_path)?;
-        Self::from_repo_checkout(&local_path, custom_template_path)
-    }
+fn tokenizer_with_options(
+    card: &ModelDeploymentCard,
+    options: crate::tokenizers::TokenizerOptions,
+    force_hugging_face: bool,
+) -> anyhow::Result<crate::tokenizers::Tokenizer> {
+    let tokenizer_backend = if force_hugging_face {
+        TokenizerBackend::Default
+    } else {
+        card.runtime_config.effective_tokenizer_backend()
+    };
+    let is_fallback_enabled = card.runtime_config.is_tokenizer_fallback_enabled()?;
 
-    fn from_repo_checkout(
-        local_path: impl AsRef<Path>,
-        custom_template_path: Option<&Path>,
-    ) -> anyhow::Result<Self> {
-        let local_path = local_path.as_ref();
+    let cache_enabled =
+        tokenizer_cache_enabled(std::env::var("DYN_TOKENIZER_CACHE").ok().as_deref());
+    // Partial-hit extension is on by default; disable with DYN_TOKENIZER_CACHE_EXTEND=0.
+    let cache_extend = !matches!(
+        std::env::var("DYN_TOKENIZER_CACHE_EXTEND").ok().as_deref(),
+        Some("0")
+    );
 
-        // Prefer the model config's architectural context length. Some
-        // multimodal HF configs, including MiniMax-M3-VL, store the language
-        // model config under `text_config`; tokenizer `model_max_length` can
-        // be a much larger sentinel/default and must be a last resort.
-        let architectural_max_context_length =
-            architectural_max_context_length_from_repo(local_path)?;
-
-        let is_mistral_model = is_exclusively_mistral_model(local_path);
-
-        let (model_info, tokenizer, gen_config, prompt_formatter) = if !is_mistral_model {
-            (
-                Some(ModelInfoType::from_disk(local_path)?),
-                TokenizerKind::from_disk(local_path)?,
-                GenerationConfig::from_disk(local_path).ok(),
-                PromptFormatterArtifact::from_disk(local_path)?,
-            )
-        } else {
-            (None, None, None, None)
-        };
-
-        // Load chat template - either custom or from repo
-        let chat_template_file = if is_mistral_model {
-            None
-        } else if let Some(template_path) = custom_template_path {
-            if !template_path.exists() {
-                anyhow::bail!(
-                    "Custom template file does not exist: {}",
-                    template_path.display()
-                );
-            }
-
-            // Verify the file is readable
-            let _template_content = std::fs::read_to_string(template_path).with_context(|| {
-                format!(
-                    "Failed to read custom template file: {}",
-                    template_path.display()
-                )
+    let inner: Arc<dyn crate::tokenizers::traits::Tokenizer> = match &card.tokenizer {
+        Some(TokenizerKind::HfTokenizerJson(checked_file)) => {
+            let p = checked_file.path().ok_or_else(|| {
+                anyhow::anyhow!("Tokenizer is URL-backed ({:?})", checked_file.url())
             })?;
 
-            Some(PromptFormatterArtifact::HfChatTemplateJinja {
-                is_custom: custom_template_path.is_some(),
-                file: CheckedFile::from_disk(template_path)?,
-            })
-        } else {
-            PromptFormatterArtifact::chat_template_from_disk(local_path)?
+            // Load HF first — needed both for fallback and (if cache is on) for
+            // extracting special-token strings. Alternate backends do not re-expose
+            // `get_added_tokens_decoder`, so capture specials from the raw HF
+            // tokenizer before any swap.
+            let mut hf = HfTokenizer::from_file(p)
+                .inspect_err(|err| {
+                    if let Some(serde_err) = err.downcast_ref::<serde_json::Error>()
+                        && let Ok(contents) = std::fs::read_to_string(p)
+                    {
+                        crate::log_json_err(&p.display().to_string(), &contents, serde_err);
+                    }
+                })
+                .map_err(anyhow::Error::msg)
+                .with_context(|| p.display().to_string())?;
+            // Apply the tokenizer_config.json special-token merge eagerly so
+            // `extract_hf_special_tokens` below sees the same specials the
+            // wrapped tokenizer will use. Without this the L1 prefix cache's
+            // boundary list would diverge from the actual tokenizer
+            // (e.g. Qwen2-VL's `<|image_pad|>` would be in the tokenizer
+            // but missing from the cache specials), letting chat prefixes
+            // straddle a special-token boundary and reducing hit rate.
+            if let Some(model_dir) = p.parent() {
+                crate::tokenizers::hf::merge_special_tokens_from_config(&mut hf, model_dir);
+            }
+            card.init_tokenizer_id_bound(|| hf_token_id_bound(&hf));
+
+            // Disable any truncation baked into `tokenizer.json`: the HF
+            // `tokenizers` crate honors it on `encode()`, silently clipping every
+            // prompt (e.g. `stepfun-ai/Step-3.7-Flash-*` caps at 2048), unlike
+            // Python `transformers`, which resets it on load. Match that: never
+            // truncate implicitly; over-length prompts are rejected elsewhere.
+            if hf.get_truncation().is_some() {
+                tracing::warn!(
+                    "tokenizer.json declares a truncation config; disabling it so \
+                     prompts are not silently clipped"
+                );
+                // Hard-fail rather than warn: if we can't clear it, the prompt
+                // would still be silently clipped, defeating the purpose.
+                hf.with_truncation(None)
+                    .map_err(anyhow::Error::msg)
+                    .context("failed to disable tokenizer.json truncation")?;
+            }
+
+            // Padding belongs to the batching layer, not individual online requests.
+            if hf.get_padding().is_some() {
+                tracing::warn!(
+                    "tokenizer.json declares a padding config; disabling it for online \
+                     tokenization"
+                );
+                hf.with_padding(None);
+            }
+
+            // Hold onto specials before any move of `hf`.
+            let specials: Vec<String> = if cache_enabled {
+                extract_hf_special_tokens(&hf)
+            } else {
+                Vec::new()
+            };
+
+            // Merge already applied above; just wrap. Embedding
+            // tokenizers use the HF post-processor to apply BOS/EOS when
+            // requested; normal tokenizers keep their existing defaults.
+            let wrap_hf = |hf: HfTokenizer| {
+                let tokenizer = crate::tokenizers::HuggingFaceTokenizer::from_tokenizer(hf);
+                crate::tokenizers::traits::Tokenizer::with_options(tokenizer, options)
+            };
+
+            // Pick the inner backend.
+            let (raw, cache_backend): (
+                Arc<dyn crate::tokenizers::traits::Tokenizer>,
+                TokenizerBackend,
+            ) = match tokenizer_backend {
+                TokenizerBackend::Default => (Arc::new(wrap_hf(hf)), TokenizerBackend::Default),
+                TokenizerBackend::Fastokens => {
+                    if let Some(path_str) = p.to_str() {
+                        match crate::tokenizers::FastTokenizer::from_file(path_str) {
+                            Ok(fast) => {
+                                tracing::info!("Using fastokens tokenizer backend");
+                                (Arc::new(fast), TokenizerBackend::Fastokens)
+                            }
+                            Err(e) => {
+                                if !is_fallback_enabled {
+                                    return Err(e).context(
+                                        "failed to load fastokens tokenizer backend and fallback is disabled",
+                                    );
+                                }
+                                tracing::warn!(
+                                    %e,
+                                    "Failed to load fastokens, falling back to HuggingFace"
+                                );
+                                (Arc::new(wrap_hf(hf)), TokenizerBackend::Default)
+                            }
+                        }
+                    } else {
+                        if !is_fallback_enabled {
+                            anyhow::bail!(
+                                "failed to load fastokens tokenizer backend because tokenizer path contains non-UTF-8 characters and fallback is disabled: {}",
+                                p.display()
+                            );
+                        }
+                        tracing::warn!(
+                            path = %p.display(),
+                            "Tokenizer path contains non-UTF-8 characters, skipping fastokens; falling back to HuggingFace"
+                        );
+                        (Arc::new(wrap_hf(hf)), TokenizerBackend::Default)
+                    }
+                }
+                TokenizerBackend::Basetenkenizer => {
+                    if let Some(path_str) = p.to_str() {
+                        match crate::tokenizers::BasetenTokenizer::from_file(path_str) {
+                            Ok(baseten) => {
+                                tracing::info!("Using basetenkenizer tokenizer backend");
+                                (Arc::new(baseten), TokenizerBackend::Basetenkenizer)
+                            }
+                            Err(e) => {
+                                if !is_fallback_enabled {
+                                    return Err(e).context(
+                                        "failed to load basetenkenizer tokenizer backend and fallback is disabled",
+                                    );
+                                }
+                                tracing::warn!(
+                                    %e,
+                                    "Failed to load basetenkenizer, falling back to HuggingFace"
+                                );
+                                (Arc::new(wrap_hf(hf)), TokenizerBackend::Default)
+                            }
+                        }
+                    } else {
+                        if !is_fallback_enabled {
+                            anyhow::bail!(
+                                "failed to load basetenkenizer tokenizer backend because tokenizer path contains non-UTF-8 characters and fallback is disabled: {}",
+                                p.display()
+                            );
+                        }
+                        tracing::warn!(
+                            path = %p.display(),
+                            "Tokenizer path contains non-UTF-8 characters, skipping basetenkenizer; falling back to HuggingFace"
+                        );
+                        (Arc::new(wrap_hf(hf)), TokenizerBackend::Default)
+                    }
+                }
+            };
+
+            if cache_enabled && !options.add_special_tokens {
+                let shared_cache = shared_tokenizer_cache();
+                let namespace = tokenizer_cache_namespace(card.mdcsum(), cache_backend.as_str());
+                tracing::info!(
+                    cache_bytes = shared_cache.max_memory_bytes(),
+                    cache_extend,
+                    specials = specials.len(),
+                    "wrapping tokenizer in L1 prefix cache",
+                );
+                instrumented_tokenizer_cache(
+                    raw,
+                    specials,
+                    shared_cache,
+                    cache_extend,
+                    card.name(),
+                    &namespace,
+                )?
+            } else {
+                // The prefix cache encodes text in boundary-delimited
+                // segments. Applying the HF post-processor to every segment
+                // could add BOS/EOS more than once, so embedding special-token
+                // mode bypasses that cache.
+                raw
+            }
+        }
+        Some(TokenizerKind::TikTokenModel(checked_file)) => {
+            let p = checked_file.path().ok_or_else(|| {
+                anyhow::anyhow!("Tokenizer is URL-backed ({:?})", checked_file.url())
+            })?;
+            let path_str = p.to_str().ok_or_else(|| {
+                anyhow::anyhow!("Tokenizer path contains invalid UTF-8: {}", p.display())
+            })?;
+            let tokenizer = crate::tokenizers::TikTokenTokenizer::from_file_auto(path_str)
+                .with_context(|| {
+                    format!("Failed to load tiktoken tokenizer from {}", p.display())
+                })?;
+            // tiktoken does not expose its ids.
+            card.tokenizer_id_bound.get_or_init(|| None);
+
+            let specials = tokenizer.special_tokens().to_vec();
+            let raw: Arc<dyn crate::tokenizers::traits::Tokenizer> = Arc::new(tokenizer);
+            if cache_enabled {
+                let shared_cache = shared_tokenizer_cache();
+                let namespace = tokenizer_cache_namespace(card.mdcsum(), "tiktoken");
+                tracing::info!(
+                    cache_bytes = shared_cache.max_memory_bytes(),
+                    cache_extend,
+                    boundaries = specials.len(),
+                    "wrapping tiktoken tokenizer in L1 prefix cache",
+                );
+                instrumented_tokenizer_cache(
+                    raw,
+                    specials,
+                    shared_cache,
+                    cache_extend,
+                    card.name(),
+                    &namespace,
+                )?
+            } else {
+                raw
+            }
+        }
+        None => {
+            anyhow::bail!(
+                "ModelDeploymentCard for '{}' does not have a tokenizer. \
+                 Provide a supported tokenizer file (tokenizer.json, tiktoken.model, \
+                 or *.tiktoken), use --use-<framework>-tokenizer to delegate \
+                 tokenization to the backend, or use a non-Rust chat processor \
+                 (e.g. --dyn-chat-processor vllm).",
+                card.display_name
+            );
+        }
+    };
+
+    Ok(crate::tokenizers::Tokenizer::from(inner))
+}
+
+async fn resolve_metadata_files(
+    card: &mut ModelDeploymentCard,
+    local_model_path: Option<&Path>,
+) -> anyhow::Result<()> {
+    let source = card.source_path().to_string();
+    let mdcsum = card.mdcsum().to_string();
+    let blobs = mdc_blobs_dir()?;
+    let local_dir = mdc_local_dir(card.slug(), &mdcsum)?;
+
+    let mut entries = Vec::new();
+    let mut ngc_snapshot = None;
+    for (cf, is_custom) in card.iter_metadata_files() {
+        let uri = match checked_file_uri(cf, &source, local_model_path, is_custom)? {
+            Some(uri) => uri,
+            None => {
+                let snapshot = match &ngc_snapshot {
+                    Some(snapshot) => snapshot,
+                    None => ngc_snapshot
+                        .insert(crate::hub::from_hf(&source, /* ignore_weights = */ true).await?),
+                };
+                // The MDC supplies the filename and expected checksum. Retry
+                // in the resolved directory; a still-missing file is an error.
+                checked_file_uri(cf, &source, Some(snapshot), is_custom)?.with_context(|| {
+                    format!("NGC metadata file missing after fetching {source}: {cf}")
+                })?
+            }
         };
-
-        // This gets replaced when we `set_name`
-        let display_name = local_path.display().to_string();
-
-        Ok(Self {
-            slug: Slug::from_string(&display_name),
-            display_name,
-            source_path: None,
-            model_info,
-            tokenizer,
-            gen_config,
-            prompt_formatter,
-            chat_template_file,
-            prompt_context: None, // TODO - auto-detect prompt context
-            architectural_max_context_length,
-            legacy_context_length: None,
-            kv_cache_block_size: 0, // set later
-            migration_limit: 0,
-            model_type: Default::default(),  // set later
-            model_input: Default::default(), // set later
-            worker_type: Default::default(), // set later
-            needs: Default::default(),       // set later
-            lora: None,
-            aliases: Vec::new(),
-            user_data: None,
-            runtime_config: ModelRuntimeConfig::default(),
-            tensor_model_config: None,
-            media_decoder: None,
-            media_fetcher: None,
-            router_config: None,
-            indexer_identity: None,
-            extra_files: Vec::new(),
-            checksum: OnceLock::new(),
-            tokenizer_id_bound: OnceLock::new(),
-        })
+        entries.push((uri, cf.clone()));
     }
+
+    // Pre-resolve hf:// repos once per unique repo; otherwise the
+    // resolve loop would call hub::from_hf N times for one model.
+    let mut hf_snapshots: std::collections::HashMap<String, PathBuf> =
+        std::collections::HashMap::new();
+    for (uri, _) in &entries {
+        if uri.starts_with("hf://") {
+            let (repo, _) = parse_hf_uri(uri)?;
+            if let std::collections::hash_map::Entry::Vacant(e) = hf_snapshots.entry(repo) {
+                let repo_name = e.key().clone();
+                let snap = crate::hub::from_hf(&repo_name, /* ignore_weights = */ true)
+                    .await
+                    .with_context(|| format!("hub::from_hf({repo_name})"))?;
+                e.insert(snap);
+            }
+        }
+    }
+
+    let client = reqwest::Client::builder()
+        .connect_timeout(std::time::Duration::from_secs(10))
+        .timeout(std::time::Duration::from_secs(300))
+        .build()
+        .context("building http client for metadata fetch")?;
+    for (uri, expected) in &entries {
+        let filename = uri_basename(uri)?;
+        // Hash is validated at MDC deserialize; safe as a path component.
+        let blake3_hex = expected.checksum().hash();
+        let blob = blobs.join(blake3_hex);
+        tracing::debug!(filename = %filename, uri = %uri, blake3 = %blake3_hex, "resolving");
+        resolve_uri(&client, uri, expected, &blob, &hf_snapshots).await?;
+        symlink_force(&blob, &local_dir.join(&filename))?;
+    }
+    tracing::debug!(
+        display_name = %card.display_name,
+        artifact_count = entries.len(),
+        cache_root = %mdc_cache_root().display(),
+        "resolved model metadata files",
+    );
+
+    // Harvest non-weight siblings (preprocessor_config.json, …) from
+    // every snapshot dir we touched. Typed-slot basenames are passed
+    // through so the harvest never overwrites them. No-op for `http://`.
+    let typed_filenames: std::collections::HashSet<String> = entries
+        .iter()
+        .filter_map(|(uri, _)| uri_basename(uri).ok())
+        .collect();
+    let mut snapshot_dirs: std::collections::HashSet<PathBuf> =
+        hf_snapshots.values().cloned().collect();
+    for (uri, _) in &entries {
+        if let Some(parent) = file_uri_parent(uri) {
+            snapshot_dirs.insert(parent);
+        }
+    }
+    for snap in &snapshot_dirs {
+        harvest_siblings(snap, &local_dir, &typed_filenames)?;
+    }
+
+    // Pass 3: rewrite cf.path to the cache symlink so downstream
+    // tokenizer/config loaders read from a verified location.
+    for (cf, _) in card.iter_metadata_files_mut() {
+        cf.update_dir(&local_dir);
+    }
+    Ok(())
+}
+
+/// Creates a ModelDeploymentCard from a local directory path.
+///
+/// Currently HuggingFace format is supported and following files are expected:
+/// - config.json: Model configuration in HuggingFace format
+/// - tokenizer.json: Tokenizer configuration in HuggingFace format
+/// - tokenizer_config.json: Optional prompt formatter configuration
+///
+/// # Arguments
+/// * `local_root_dir` - Path to the local model directory
+///
+/// # Errors
+/// Returns an error if:
+/// - The path doesn't exist or isn't a directory
+/// - The path contains invalid Unicode characters
+/// - Required model files are missing or invalid
+fn from_local_path(
+    local_path: impl AsRef<Path>,
+    custom_template_path: Option<&Path>,
+) -> anyhow::Result<ModelDeploymentCard> {
+    check_valid_local_repo_path(&local_path)?;
+    from_repo_checkout(&local_path, custom_template_path)
+}
+
+fn from_repo_checkout(
+    local_path: impl AsRef<Path>,
+    custom_template_path: Option<&Path>,
+) -> anyhow::Result<ModelDeploymentCard> {
+    let local_path = local_path.as_ref();
+
+    // Prefer the model config's architectural context length. Some
+    // multimodal HF configs, including MiniMax-M3-VL, store the language
+    // model config under `text_config`; tokenizer `model_max_length` can
+    // be a much larger sentinel/default and must be a last resort.
+    let architectural_max_context_length = architectural_max_context_length_from_repo(local_path)?;
+
+    let is_mistral_model = is_exclusively_mistral_model(local_path);
+
+    let (model_info, tokenizer, gen_config, prompt_formatter) = if !is_mistral_model {
+        (
+            Some(ModelInfoType::from_disk(local_path)?),
+            TokenizerKind::from_disk(local_path)?,
+            GenerationConfig::from_disk(local_path).ok(),
+            PromptFormatterArtifact::from_disk(local_path)?,
+        )
+    } else {
+        (None, None, None, None)
+    };
+
+    // Load chat template - either custom or from repo
+    let chat_template_file = if is_mistral_model {
+        None
+    } else if let Some(template_path) = custom_template_path {
+        if !template_path.exists() {
+            anyhow::bail!(
+                "Custom template file does not exist: {}",
+                template_path.display()
+            );
+        }
+
+        // Verify the file is readable
+        let _template_content = std::fs::read_to_string(template_path).with_context(|| {
+            format!(
+                "Failed to read custom template file: {}",
+                template_path.display()
+            )
+        })?;
+
+        Some(PromptFormatterArtifact::HfChatTemplateJinja {
+            is_custom: custom_template_path.is_some(),
+            file: CheckedFile::from_disk(template_path)?,
+        })
+    } else {
+        PromptFormatterArtifact::chat_template_from_disk(local_path)?
+    };
+
+    // This gets replaced when we `set_name`
+    let display_name = local_path.display().to_string();
+
+    Ok(ModelDeploymentCard {
+        slug: Slug::from_string(&display_name),
+        display_name,
+        source_path: None,
+        model_info,
+        tokenizer,
+        gen_config,
+        prompt_formatter,
+        chat_template_file,
+        prompt_context: None, // TODO - auto-detect prompt context
+        architectural_max_context_length,
+        legacy_context_length: None,
+        kv_cache_block_size: 0, // set later
+        migration_limit: 0,
+        model_type: Default::default(),  // set later
+        model_input: Default::default(), // set later
+        worker_type: Default::default(), // set later
+        needs: Default::default(),       // set later
+        lora: None,
+        aliases: Vec::new(),
+        user_data: None,
+        runtime_config: ModelRuntimeConfig::default(),
+        tensor_model_config: None,
+        media_decoder: None,
+        media_fetcher: None,
+        router_config: None,
+        indexer_identity: None,
+        extra_files: Vec::new(),
+        checksum: OnceLock::new(),
+        tokenizer_id_bound: OnceLock::new(),
+    })
 }
 
 #[cfg(test)]

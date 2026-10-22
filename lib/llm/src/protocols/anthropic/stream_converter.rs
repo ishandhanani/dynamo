@@ -1064,6 +1064,7 @@ impl AnthropicStreamConverter {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::model_card::ModelDeploymentCardLoader;
     use dynamo_protocols::types::{
         ChatChoiceStream, ChatCompletionMessageContent, ChatCompletionMessageToolCallChunk,
         ChatCompletionStreamResponseDelta, FinishReason, FunctionCallStream, FunctionType,

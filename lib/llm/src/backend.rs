@@ -15,6 +15,7 @@
 //! Further post-processing can happen in the response stream. One example is the jailing mechanism for partial
 //! hidden stop condition matches, which can be handled in the response stream rather than the backend.
 
+use crate::model_card::ModelDeploymentCardLoader;
 use std::{
     collections::{HashMap, HashSet},
     sync::Arc,

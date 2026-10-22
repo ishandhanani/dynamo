@@ -7,6 +7,7 @@
 //! `lib/bindings/c/src/lib.rs`. Instead of crossing a C FFI boundary, the
 //! ext_proc server calls these types directly as async Rust.
 
+use dynamo_llm::model_card::ModelDeploymentCardLoader;
 use std::collections::{HashMap, HashSet};
 use std::net::{IpAddr, SocketAddr};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -1673,6 +1674,7 @@ impl EndpointPicker for Router {
 
 #[cfg(test)]
 mod tests {
+    use dynamo_llm::model_card::ModelDeploymentCardLoader;
     use std::sync::{Arc, atomic::Ordering};
 
     use super::*;

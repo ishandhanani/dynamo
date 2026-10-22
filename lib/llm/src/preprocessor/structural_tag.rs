@@ -499,6 +499,7 @@ pub(super) fn validate_runtime_config(
 
 #[cfg(test)]
 mod tests {
+    use crate::model_card::ModelDeploymentCardLoader;
     use std::{path::PathBuf, sync::Arc};
 
     use crate::{

@@ -3,6 +3,7 @@
 
 use super::*;
 use llm_rs::model_card::ModelDeploymentCard as RsModelDeploymentCard;
+use llm_rs::model_card::ModelDeploymentCardLoader;
 use pyo3::exceptions::PyValueError;
 
 #[pyclass]
