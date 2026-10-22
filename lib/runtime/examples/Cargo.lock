@@ -783,6 +783,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d0881ea181b1df73ff77ffaaf9c7544ecc11e82fba9b5f27b262a3c73a332555"
 
 [[package]]
+name = "dynamo-metrics"
+version = "1.6.0"
+dependencies = [
+ "anyhow",
+ "once_cell",
+ "prometheus",
+ "regex",
+ "tracing",
+]
+
+[[package]]
 name = "dynamo-runtime"
 version = "1.6.0"
 dependencies = [
@@ -801,6 +812,7 @@ dependencies = [
  "dashmap",
  "derive-getters",
  "derive_builder",
+ "dynamo-metrics",
  "dynamo-runtime-protocols",
  "dynamo-truthy",
  "educe",

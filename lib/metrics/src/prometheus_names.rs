@@ -1027,7 +1027,7 @@ pub(crate) fn build_metric_name(prefix: &str, metric_name: &str) -> String {
 ///
 /// # Examples
 /// ```
-/// use dynamo_runtime::metrics::prometheus_names::clamp_u64_to_i64;
+/// use dynamo_metrics::prometheus_names::clamp_u64_to_i64;
 ///
 /// assert_eq!(clamp_u64_to_i64(100), 100);
 /// assert_eq!(clamp_u64_to_i64(u64::MAX), i64::MAX);

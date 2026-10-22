@@ -316,6 +316,7 @@ areas:
   - dev/docker-observability.yml
   - dev/observability/
   - lib/llm/src/telemetry/
+  - lib/metrics/
   - lib/runtime/src/metrics.rs
   - lib/runtime/src/metrics/
 - label: fault-tolerance

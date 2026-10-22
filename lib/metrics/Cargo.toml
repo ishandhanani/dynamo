@@ -1,0 +1,27 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+[package]
+name = "dynamo-metrics"
+description = "Prometheus registry hierarchy, metric constructors, and metric name constants shared by Dynamo crates"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[features]
+# Exposes `test_helpers` (Prometheus exposition-text parsing helpers) and the serde
+# `Deserialize` impls on the `prom_typed` fixture types to other crates' tests.
+testing = ["dep:serde"]
+
+[dependencies]
+anyhow = { workspace = true }
+once_cell = { version = "1" }
+prometheus = { workspace = true }
+regex = { version = "1" }
+serde = { workspace = true, optional = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+serde = { workspace = true }
