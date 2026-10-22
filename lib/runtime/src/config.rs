@@ -14,7 +14,7 @@ use validator::Validate;
 
 #[doc(hidden)]
 pub mod env_config;
-pub mod environment_names;
+pub use dynamo_runtime_protocols::environment_names;
 
 /// Parser generation shared by startup validation and frontend routing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

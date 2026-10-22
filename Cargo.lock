@@ -2853,6 +2853,7 @@ dependencies = [
  "dashmap",
  "derive-getters",
  "derive_builder",
+ "dynamo-runtime-protocols",
  "dynamo-truthy",
  "educe",
  "either",
@@ -2918,6 +2919,18 @@ dependencies = [
  "uuid",
  "validator",
  "xxhash-rust",
+]
+
+[[package]]
+name = "dynamo-runtime-protocols"
+version = "1.6.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "futures",
+ "serde",
+ "serde_json",
+ "tokio",
 ]
 
 [[package]]

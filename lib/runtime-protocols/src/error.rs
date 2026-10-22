@@ -57,7 +57,7 @@
 //! [`DynamoError::msg`], conversion from an unclassified [`std::error::Error`], and conversion from a generic wrapper whose typed source is internal intentionally produce `Internal/runtime.unclassified`; use them as a fallback, not for failures whose meaning is known.
 //!
 //! ```rust,no_run
-//! use dynamo_runtime::error::{DynamoError, ErrorClass, ErrorReason};
+//! use dynamo_runtime_protocols::error::{DynamoError, ErrorClass, ErrorReason};
 //!
 //! let error = DynamoError::builder()
 //!     .class(ErrorClass::InvalidRequest)
@@ -74,7 +74,7 @@
 //! Structured details are preferable when the protocol renderer needs machine-readable values:
 //!
 //! ```rust,no_run
-//! use dynamo_runtime::error::{DynamoError, ErrorClass, ErrorReason, PublicDetails};
+//! use dynamo_runtime_protocols::error::{DynamoError, ErrorClass, ErrorReason, PublicDetails};
 //!
 //! let error = DynamoError::builder()
 //!     .class(ErrorClass::PayloadTooLarge)
@@ -1180,6 +1180,7 @@ mod tests {
             assert_sync::<DynamoError>();
             assert_static::<DynamoError>();
         }
+        let _ = assert_all;
     };
 
     #[test]

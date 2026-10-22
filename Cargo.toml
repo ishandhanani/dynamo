@@ -6,6 +6,7 @@ members = [
     "lib/llm",
     "lib/rl",
     "lib/runtime",
+    "lib/runtime-protocols",
     "lib/tokens",
     "lib/truthy",
     "lib/data-gen",
@@ -56,6 +57,7 @@ aisimulate-core = { version = "=0.13.0-dev.202610160000000073" }
 
 # Local crates
 dynamo-runtime = { path = "lib/runtime", version = "1.6.0" }
+dynamo-runtime-protocols = { path = "lib/runtime-protocols", version = "1.6.0" }
 dynamo-llm = { path = "lib/llm", version = "1.6.0", default-features = false }
 dynamo-rl = { path = "lib/rl", version = "1.6.0" }
 dynamo-tokenizers = { version = "=3.1.1" }

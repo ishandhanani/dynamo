@@ -283,7 +283,7 @@ areas:
   - lib/runtime/src/config/
   - lib/runtime/src/discovery/
   - lib/runtime/src/pipeline/
-  - lib/runtime/src/protocols/
+  - lib/runtime-protocols/
   - lib/runtime/src/storage/
   - lib/runtime/src/transports/
   - lib/runtime/src/utils/

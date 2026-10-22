@@ -17,8 +17,8 @@ use crate::error::DynamoError;
 /// # Example
 ///
 /// ```rust,ignore
-/// use dynamo_runtime::protocols::maybe_error::MaybeError;
-/// use dynamo_runtime::error::DynamoError;
+/// use dynamo_runtime_protocols::protocols::maybe_error::MaybeError;
+/// use dynamo_runtime_protocols::error::DynamoError;
 ///
 /// struct MyResponse {
 ///     data: Option<String>,

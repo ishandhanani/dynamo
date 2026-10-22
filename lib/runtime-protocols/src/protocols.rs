@@ -108,7 +108,7 @@ impl From<&str> for EndpointId {
     ///
     /// # Examples
     /// ```
-    /// use dynamo_runtime::protocols::EndpointId;
+    /// use dynamo_runtime_protocols::protocols::EndpointId;
     ///
     /// let endpoint = EndpointId::from("namespace/component/endpoint");
     /// assert_eq!(endpoint.namespace, "namespace");
@@ -189,7 +189,7 @@ impl FromStr for EndpointId {
     /// # Examples
     /// ```
     /// use std::str::FromStr;
-    /// use dynamo_runtime::protocols::EndpointId;
+    /// use dynamo_runtime_protocols::protocols::EndpointId;
     ///
     /// let endpoint: EndpointId = "namespace/component/endpoint".parse().unwrap();
     /// assert_eq!(endpoint.namespace, "namespace");
@@ -217,7 +217,6 @@ impl EndpointId {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::convert::TryFrom;
     use std::str::FromStr;
 
     #[test]
