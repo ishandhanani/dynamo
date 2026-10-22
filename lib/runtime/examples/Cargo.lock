@@ -783,6 +783,24 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d0881ea181b1df73ff77ffaaf9c7544ecc11e82fba9b5f27b262a3c73a332555"
 
 [[package]]
+name = "dynamo-http-server"
+version = "1.6.0"
+dependencies = [
+ "anyhow",
+ "axum",
+ "dynamo-runtime-protocols",
+ "futures",
+ "hyper-util",
+ "libc",
+ "parking_lot",
+ "tokio",
+ "tokio-rustls",
+ "tokio-util",
+ "tower",
+ "tracing",
+]
+
+[[package]]
 name = "dynamo-metrics"
 version = "1.6.0"
 dependencies = [
@@ -812,6 +830,7 @@ dependencies = [
  "dashmap",
  "derive-getters",
  "derive_builder",
+ "dynamo-http-server",
  "dynamo-metrics",
  "dynamo-runtime-protocols",
  "dynamo-truthy",
@@ -1461,13 +1480,14 @@ dependencies = [
 
 [[package]]
 name = "hyper-util"
-version = "0.1.20"
+version = "0.1.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "96547c2556ec9d12fb1578c4eaf448b04993e7fb79cbaad930a656880a6bdfa0"
+checksum = "3c6995591a8f1380fcb4ba966a252a4b29188d51d2b89e3a252f5305be65aea8"
 dependencies = [
  "base64",
  "bytes",
  "futures-channel",
+ "futures-core",
  "futures-util",
  "http",
  "http-body",

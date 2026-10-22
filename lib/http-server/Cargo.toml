@@ -16,6 +16,7 @@ axum = { workspace = true }
 dynamo-runtime-protocols = { workspace = true }
 futures = { workspace = true }
 hyper-util = { workspace = true, features = ["server-auto", "service", "tokio"] }
+libc = { workspace = true }
 parking_lot = { workspace = true }
 tokio = { workspace = true }
 tokio-rustls = { workspace = true }
@@ -26,4 +27,5 @@ tracing = { workspace = true }
 [dev-dependencies]
 rcgen = { workspace = true }
 rustls = { workspace = true }
+socket2 = { version = "0.5.8", features = ["all"] }
 tokio = { workspace = true, features = ["test-util"] }

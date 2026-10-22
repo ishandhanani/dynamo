@@ -37,7 +37,7 @@ const TLS_HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
 /// Every connection is wrapped in [`WriteTimeoutIo`], and every request on it carries the
 /// connection's [`ConnectionDeadline`].
 pub async fn serve(
-    listener: TcpListener,
+    mut listener: impl Accept,
     tls: Option<TlsAcceptor>,
     router: Router,
     write_idle_timeout: Duration,
@@ -55,7 +55,7 @@ pub async fn serve(
         let stream = tokio::select! {
             biased;
             grace_period = &mut shutdown => break grace_period,
-            stream = accept(&listener) => stream,
+            stream = listener.accept_connection() => stream,
         };
         let connection = serve_connection(
             stream,
@@ -74,24 +74,40 @@ pub async fn serve(
     let _ = tokio::time::timeout(grace_period, connections.wait()).await;
 }
 
-async fn accept(listener: &TcpListener) -> TcpStream {
-    loop {
-        match listener.accept().await {
-            Ok((stream, _)) => {
-                // Streamed tokens are small writes. With Nagle's algorithm on, one can wait
-                // for the client's delayed ACK of the previous write, 40 ms or more. Set on
-                // the TCP socket, this also covers TLS connections.
-                if let Err(error) = stream.set_nodelay(true) {
-                    tracing::debug!(%error, "Failed to set TCP_NODELAY");
+/// Where [`serve`] gets its connections from.
+///
+/// `accept_connection` cannot fail: an implementation handles its own accept errors, by
+/// retrying or rebinding, and only returns once it holds a connection. The returned stream
+/// already has `TCP_NODELAY` set, see [`set_nodelay`]. The future must be cancel-safe, since
+/// the accept loop drops it whenever shutdown wins the race.
+pub trait Accept {
+    fn accept_connection(&mut self) -> impl Future<Output = TcpStream> + Send;
+}
+
+/// Retries transient accept errors such as EMFILE after a short back-off, as axum-server did.
+impl Accept for TcpListener {
+    async fn accept_connection(&mut self) -> TcpStream {
+        loop {
+            match TcpListener::accept(self).await {
+                Ok((stream, _)) => {
+                    set_nodelay(&stream);
+                    return stream;
                 }
-                return stream;
-            }
-            // Errors such as EMFILE are transient: back off and retry, as axum-server did.
-            Err(error) => {
-                tracing::debug!(%error, "Failed to accept HTTP connection");
-                tokio::time::sleep(Duration::from_millis(50)).await;
+                Err(error) => {
+                    tracing::debug!(%error, "Failed to accept HTTP connection");
+                    tokio::time::sleep(Duration::from_millis(50)).await;
+                }
             }
         }
+    }
+}
+
+/// Streamed tokens are small writes. With Nagle's algorithm on, one can wait for the
+/// client's delayed ACK of the previous write, 40 ms or more. Set on the TCP socket, this
+/// also covers TLS connections.
+pub(crate) fn set_nodelay(stream: &TcpStream) {
+    if let Err(error) = stream.set_nodelay(true) {
+        tracing::debug!(%error, "Failed to set TCP_NODELAY");
     }
 }
 
@@ -145,9 +161,12 @@ mod tests {
 
     #[tokio::test]
     async fn accepted_connections_turn_nagle_off() {
-        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let mut listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
-        let (_client, stream) = tokio::join!(TcpStream::connect(addr), accept(&listener));
+        let (_client, stream) = tokio::join!(
+            TcpStream::connect(addr),
+            Accept::accept_connection(&mut listener)
+        );
         assert!(stream.nodelay().unwrap());
     }
 }

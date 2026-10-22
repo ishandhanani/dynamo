@@ -13,6 +13,11 @@ use crate::config::environment_names::runtime::canary as env_canary;
 use crate::config::environment_names::runtime::system as env_system;
 use crate::metrics::MetricsHierarchy;
 use crate::traits::DistributedRuntimeProvider;
+use dynamo_http_server::listener::{
+    RebindingTcpListener, get_graceful_shutdown_timeout, write_idle_timeout,
+};
+use dynamo_http_server::server::serve;
+
 use crate::utils::ip_resolver::{
     DefaultIpResolver, IpResolutionError, IpResolver, resolve_advertise_ip_for_bind,
 };
@@ -23,7 +28,6 @@ use axum::{
     http::StatusCode,
     response::{IntoResponse, Response},
     routing::{any, delete, get, post},
-    serve::Listener,
 };
 use futures::StreamExt;
 use serde::{Deserialize, Serialize};
@@ -231,14 +235,16 @@ pub async fn spawn_system_status_server(
     let observer = cancel_token.child_token();
 
     // Spawn the server in the background and return the handle
-    let handle = tokio::spawn(async move {
-        if let Err(e) = axum::serve(listener, app)
-            .with_graceful_shutdown(observer.cancelled_owned())
-            .await
-        {
-            tracing::error!("System status server error: {e}");
-        }
-    });
+    let handle = tokio::spawn(serve(
+        listener,
+        None,
+        app,
+        write_idle_timeout(),
+        async move {
+            observer.cancelled_owned().await;
+            Duration::from_secs(get_graceful_shutdown_timeout() as u64)
+        },
+    ));
 
     Ok((actual_address, handle))
 }
@@ -359,135 +365,6 @@ async fn bind_system_status_listener(
     let actual_address = listener.local_addr()?;
 
     Ok((listener, actual_address))
-}
-
-/// Axum's [`Listener::accept`] cannot return an error, so recovery must happen here.
-struct RebindingTcpListener {
-    /// Concrete address returned by the initial bind, including an assigned ephemeral port.
-    address: std::net::SocketAddr,
-    listener: Option<TcpListener>,
-    rebind_backoff: Duration,
-}
-
-impl RebindingTcpListener {
-    fn new(listener: TcpListener, address: std::net::SocketAddr, rebind_backoff: Duration) -> Self {
-        Self {
-            address,
-            listener: Some(listener),
-            rebind_backoff,
-        }
-    }
-}
-
-impl Listener for RebindingTcpListener {
-    type Io = tokio::net::TcpStream;
-    type Addr = std::net::SocketAddr;
-
-    async fn accept(&mut self) -> (Self::Io, Self::Addr) {
-        let mut next_rebind = tokio::time::Instant::now();
-        loop {
-            let Some(listener) = self.listener.as_ref() else {
-                tokio::time::sleep_until(next_rebind).await;
-                next_rebind = tokio::time::Instant::now() + self.rebind_backoff;
-                tracing::debug!(address = %self.address, "System status server rebinding");
-                match TcpListener::bind(self.address).await {
-                    Ok(listener) => {
-                        tracing::info!(address = %self.address, "System status server rebound");
-                        self.listener = Some(listener);
-                    }
-                    Err(error) => {
-                        tracing::error!(
-                            address = %self.address,
-                            %error,
-                            retry_after = ?self.rebind_backoff,
-                            "System status server failed to rebind"
-                        );
-                    }
-                }
-                continue;
-            };
-
-            match listener.accept().await {
-                Ok(accepted) => return accepted,
-                // Connection errors do not invalidate the listener.
-                Err(error) if is_connection_error(&error) => {
-                    tracing::trace!(
-                        address = %self.address,
-                        %error,
-                        "System status connection failed before accept"
-                    );
-                }
-                // Resource exhaustion does not invalidate the listener.
-                Err(error) if is_resource_exhaustion_error(&error) => {
-                    tracing::error!(
-                        address = %self.address,
-                        %error,
-                        retry_after = ?self.rebind_backoff,
-                        "System status listener lacks resources; retrying the same socket"
-                    );
-                    tokio::time::sleep(self.rebind_backoff).await;
-                }
-                Err(error) => {
-                    tracing::error!(
-                        address = %self.address,
-                        %error,
-                        "System status listener stopped accepting; rebinding"
-                    );
-                    // Drop before rebinding or the address remains in use.
-                    self.listener = None;
-                }
-            }
-        }
-    }
-
-    fn local_addr(&self) -> io::Result<Self::Addr> {
-        Ok(self.address)
-    }
-}
-
-fn is_connection_error(error: &io::Error) -> bool {
-    if matches!(
-        error.kind(),
-        io::ErrorKind::ConnectionRefused
-            | io::ErrorKind::ConnectionAborted
-            | io::ErrorKind::ConnectionReset
-    ) {
-        return true;
-    }
-
-    // Linux accept(2) also reports pending network errors for the queued connection.
-    #[cfg(target_os = "linux")]
-    if let Some(code) = error.raw_os_error() {
-        return matches!(
-            code,
-            libc::ENETDOWN
-                | libc::EPROTO
-                | libc::ENOPROTOOPT
-                | libc::EHOSTDOWN
-                | libc::ENONET
-                | libc::EHOSTUNREACH
-                | libc::EOPNOTSUPP
-                | libc::ENETUNREACH
-        );
-    }
-
-    false
-}
-
-/// EMFILE, ENFILE, and ENOBUFS require raw errno checks because Rust has no distinct kinds.
-fn is_resource_exhaustion_error(error: &io::Error) -> bool {
-    if error.kind() == io::ErrorKind::OutOfMemory {
-        return true;
-    }
-
-    #[cfg(unix)]
-    {
-        if let Some(code) = error.raw_os_error() {
-            return matches!(code, libc::ENFILE | libc::EMFILE | libc::ENOBUFS);
-        }
-    }
-
-    false
 }
 
 /// Health handler with optional active health checking
@@ -1038,254 +915,6 @@ mod tests {
             result.is_ok(),
             "HTTP server should shut down when cancel token is cancelled"
         );
-    }
-
-    #[cfg(unix)]
-    #[tokio::test]
-    async fn test_rebinding_listener_serves_again_after_listener_shutdown() {
-        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let address = listener.local_addr().unwrap();
-
-        let shutdown_result = socket2::SockRef::from(&listener).shutdown(std::net::Shutdown::Both);
-
-        let mut rebinding = RebindingTcpListener::new(listener, address, Duration::from_millis(10));
-
-        if let Err(error) = shutdown_result {
-            eprintln!("skipping: this platform refused shutdown on a listening socket: {error}");
-            return;
-        }
-
-        let accepted = tokio::spawn(async move { rebinding.accept().await });
-
-        let mut accepted = accepted;
-        let mut clients = Vec::new();
-        let peer = tokio::time::timeout(Duration::from_secs(5), async {
-            loop {
-                let Ok(stream) = tokio::net::TcpStream::connect(address).await else {
-                    tokio::time::sleep(Duration::from_millis(10)).await;
-                    continue;
-                };
-                let client_addr = stream.local_addr().unwrap();
-                clients.push((stream, client_addr));
-                tokio::select! {
-                    result = &mut accepted => {
-                        let (_io, peer) = result.expect("accept task should not panic");
-                        return peer;
-                    }
-                    _ = tokio::time::sleep(Duration::from_millis(50)) => {}
-                }
-            }
-        })
-        .await
-        .expect("listener should rebind and accept connections again");
-
-        assert!(
-            clients.iter().any(|(_, client_addr)| *client_addr == peer),
-            "accepted connection should be one we opened"
-        );
-    }
-
-    #[cfg(unix)]
-    #[tokio::test]
-    async fn test_rebinding_listener_keeps_trying_after_a_rebind_fails() {
-        let holder = TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let contested_address = holder.local_addr().unwrap();
-
-        let broken = TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let shutdown_result = socket2::SockRef::from(&broken).shutdown(std::net::Shutdown::Both);
-
-        let mut rebinding =
-            RebindingTcpListener::new(broken, contested_address, Duration::from_millis(10));
-
-        if let Err(error) = shutdown_result {
-            eprintln!("skipping: this platform refused shutdown on a listening socket: {error}");
-            return;
-        }
-
-        let accepted = tokio::spawn(async move { rebinding.accept().await });
-
-        tokio::time::sleep(Duration::from_millis(100)).await;
-        drop(holder);
-
-        let client = tokio::time::timeout(Duration::from_secs(5), async {
-            loop {
-                if let Ok(stream) = tokio::net::TcpStream::connect(contested_address).await {
-                    return stream;
-                }
-                tokio::time::sleep(Duration::from_millis(10)).await;
-            }
-        })
-        .await
-        .expect("listener should rebind once the address is free again");
-
-        let (_io, peer) = tokio::time::timeout(Duration::from_secs(5), accepted)
-            .await
-            .expect("accept should return once a later rebind succeeds")
-            .expect("accept task should not panic");
-
-        assert_eq!(
-            peer,
-            client.local_addr().unwrap(),
-            "accepted connection should be the one we opened"
-        );
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn test_resource_exhaustion_does_not_look_like_a_dead_listener() {
-        for code in [libc::ENFILE, libc::ENOBUFS] {
-            let error = io::Error::from_raw_os_error(code);
-            assert!(
-                is_resource_exhaustion_error(&error),
-                "errno {code} should be treated as a process resource shortage, got {:?}",
-                error.kind()
-            );
-            assert!(
-                !is_connection_error(&error),
-                "errno {code} is not a dead connection"
-            );
-        }
-    }
-
-    #[cfg(target_os = "linux")]
-    #[test]
-    fn test_pending_network_errors_leave_the_listener_usable() {
-        for code in [
-            libc::ENETDOWN,
-            libc::EPROTO,
-            libc::ENOPROTOOPT,
-            libc::EHOSTDOWN,
-            libc::ENONET,
-            libc::EHOSTUNREACH,
-            libc::EOPNOTSUPP,
-            libc::ENETUNREACH,
-        ] {
-            let error = io::Error::from_raw_os_error(code);
-            assert!(
-                is_connection_error(&error),
-                "errno {code} should retry accept"
-            );
-        }
-    }
-
-    #[tokio::test]
-    async fn test_rebinding_listener_shutdown_interrupts_failed_rebinds() {
-        let holder = TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let listener = RebindingTcpListener {
-            address: holder.local_addr().unwrap(),
-            listener: None,
-            rebind_backoff: Duration::from_secs(60),
-        };
-        let cancel_token = CancellationToken::new();
-        let observer = cancel_token.clone();
-        let server = tokio::spawn(async move {
-            axum::serve(listener, Router::new())
-                .with_graceful_shutdown(observer.cancelled_owned())
-                .await
-                .unwrap();
-        });
-        tokio::time::sleep(Duration::from_millis(50)).await;
-        assert!(
-            !server.is_finished(),
-            "server should keep retrying the held address"
-        );
-        cancel_token.cancel();
-        tokio::time::timeout(Duration::from_secs(1), server)
-            .await
-            .expect("shutdown should interrupt the 60-second rebind backoff")
-            .expect("server task should not panic");
-    }
-
-    #[cfg(target_os = "linux")]
-    #[tokio::test]
-    async fn test_rebinding_listener_preserves_backlog_during_resource_exhaustion() {
-        const CHILD_ENV: &str = "DYNAMO_TEST_LISTENER_EMFILE_CHILD";
-        if std::env::var_os(CHILD_ENV).is_none() {
-            // Descriptor limits are process-wide; isolate this test from sibling tests.
-            let output = tokio::time::timeout(
-                Duration::from_secs(15),
-                tokio::process::Command::new(std::env::current_exe().unwrap())
-                    .args([
-                        "--exact",
-                        "system_status_server::tests::test_rebinding_listener_preserves_backlog_during_resource_exhaustion",
-                        "--nocapture",
-                    ])
-                    .env(CHILD_ENV, "1")
-                    .kill_on_drop(true)
-                    .output(),
-            )
-            .await
-            .expect("descriptor-exhaustion child should finish promptly")
-            .expect("test child should start");
-            assert!(
-                output.status.success(),
-                "descriptor-exhaustion child failed:\n{}\n{}",
-                String::from_utf8_lossy(&output.stdout),
-                String::from_utf8_lossy(&output.stderr),
-            );
-            assert!(String::from_utf8_lossy(&output.stdout).contains("1 passed"));
-            return;
-        }
-
-        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let address = listener.local_addr().unwrap();
-        let client = tokio::net::TcpStream::connect(address).await.unwrap();
-        let peer = client.local_addr().unwrap();
-
-        let mut limit = libc::rlimit {
-            rlim_cur: 0,
-            rlim_max: 0,
-        };
-        // SAFETY: limit is writable and correctly aligned. Only this child is affected.
-        assert_eq!(
-            unsafe { libc::getrlimit(libc::RLIMIT_NOFILE, &mut limit) },
-            0
-        );
-        limit.rlim_cur = limit.rlim_cur.min(96);
-        // SAFETY: limit is initialized; the soft limit is lowered without changing the hard limit.
-        assert_eq!(unsafe { libc::setrlimit(libc::RLIMIT_NOFILE, &limit) }, 0);
-
-        let mut descriptors = Vec::new();
-        loop {
-            match std::fs::File::open("/dev/null") {
-                Ok(file) => descriptors.push(file),
-                Err(error) => {
-                    assert_eq!(error.raw_os_error(), Some(libc::EMFILE));
-                    break;
-                }
-            }
-        }
-        let error = listener.accept().await.unwrap_err();
-        assert_eq!(error.raw_os_error(), Some(libc::EMFILE));
-
-        let backoff = Duration::from_millis(200);
-        let mut rebinding = RebindingTcpListener::new(listener, address, backoff);
-        let started = tokio::time::Instant::now();
-        let accepted = rebinding.accept();
-        tokio::pin!(accepted);
-        assert!(
-            tokio::time::timeout(Duration::from_millis(50), accepted.as_mut())
-                .await
-                .is_err(),
-            "accept should wait during descriptor exhaustion"
-        );
-        drop(descriptors);
-
-        // A fresh bind rules out lingering descriptor pressure as the cause of AddrInUse.
-        let _control = TcpListener::bind("127.0.0.1:0").await.unwrap();
-        assert_eq!(
-            TcpListener::bind(address).await.unwrap_err().kind(),
-            io::ErrorKind::AddrInUse,
-            "the original listening address should remain held"
-        );
-        let (_stream, accepted_peer) = tokio::time::timeout(Duration::from_secs(2), accepted)
-            .await
-            .expect("the queued connection should survive the shortage");
-        assert!(
-            started.elapsed() >= backoff,
-            "accept should finish its resource-shortage backoff before retrying"
-        );
-        assert_eq!(accepted_peer, peer);
     }
 }
 

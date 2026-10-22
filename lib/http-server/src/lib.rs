@@ -3,8 +3,8 @@
 
 //! Production HTTP server mechanics shared by Dynamo's frontends and services.
 //!
-//! This crate owns the transport: binding a listener, the accept loop with per-connection
-//! write-stall and transfer deadlines, TLS termination, graceful shutdown bounded by a
+//! This crate owns the transport: binding a listener, rebinding one whose socket died, the
+//! accept loop with per-connection write-stall and transfer deadlines, TLS termination, graceful shutdown bounded by a
 //! grace period, the readiness/draining lifecycle with inflight accounting, and the
 //! client-disconnect monitor that cancels engine work for a vanished client. It knows
 //! nothing about routes, protocols, discovery, or the distributed runtime; the composition

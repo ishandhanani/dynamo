@@ -33,6 +33,7 @@ nvtx = ["dep:nvtx"]
 # repo
 dynamo-runtime-protocols = { workspace = true }
 dynamo-metrics = { workspace = true }
+dynamo-http-server = { workspace = true }
 dynamo-truthy = { workspace = true }
 
 # Use workspace dependencies where available
