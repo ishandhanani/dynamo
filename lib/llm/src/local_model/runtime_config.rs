@@ -21,9 +21,6 @@ use dynamo_kv_router::{
 };
 use dynamo_runtime::{config::is_truthy, protocols::EndpointId};
 
-use crate::protocols::openai::chat_completions::tool_parser_v2::unified_family_names;
-use dynamo_parsers::tool_calling::parsers::get_available_tool_parsers;
-
 /// Re-export from parsers crate so that `ModelRuntimeConfig` can use it
 /// directly without type duplication.
 pub use dynamo_parsers::tool_calling::StructuralTagSchemaMode;
@@ -661,28 +658,6 @@ fn validate_model_runtime_config(config: &ModelRuntimeConfig) -> Result<(), Vali
         .data_parallel_rank_range()
         .map_err(|error| validation_error("invalid_data_parallel_rank_range", error))?;
 
-    if let Some(parser) = config
-        .tool_call_parser
-        .as_deref()
-        .filter(|parser| !parser.is_empty())
-    {
-        let mut supported = get_available_tool_parsers();
-        // Unified parser names live outside the v1 registry; normalize the union
-        // for a stable error message.
-        supported.extend_from_slice(unified_family_names());
-        supported.sort_unstable();
-        supported.dedup();
-        if !supported.contains(&parser) {
-            return Err(validation_error(
-                "unsupported_tool_call_parser",
-                format!(
-                    "tool_call_parser '{parser}' is not supported; available parsers: {}",
-                    supported.join(", ")
-                ),
-            ));
-        }
-    }
-
     if let Some(domain) = &config.kv_transfer_domain
         && !config.topology_domains.contains_key(domain)
     {
@@ -744,6 +719,32 @@ impl ModelRuntimeConfig {
 
     pub fn validate_config(&self) -> Result<(), String> {
         self.validate().map_err(|error| error.to_string())
+    }
+
+    /// Check `tool_call_parser` against the parser names the serving process links.
+    ///
+    /// [`validate_config`](Self::validate_config) covers the structure of the config
+    /// and is independent of which parsers a process ships; the caller supplies the
+    /// supported names (see `dynamo_llm::local_model::validate_runtime_config`).
+    pub fn validate_tool_call_parser(&self, supported_parsers: &[&str]) -> Result<(), String> {
+        let Some(parser) = self
+            .tool_call_parser
+            .as_deref()
+            .filter(|parser| !parser.is_empty())
+        else {
+            return Ok(());
+        };
+        let mut supported = supported_parsers.to_vec();
+        supported.sort_unstable();
+        supported.dedup();
+        if supported.contains(&parser) {
+            Ok(())
+        } else {
+            Err(format!(
+                "tool_call_parser '{parser}' is not supported; available parsers: {}",
+                supported.join(", ")
+            ))
+        }
     }
 
     /// Return the validated global DP ranks advertised by this worker.
@@ -878,8 +879,6 @@ impl ModelRuntimeConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    use crate::protocols::openai::chat_completions::tool_parser_v2::V2_FAMILIES;
 
     #[test]
     fn structural_tag_config_accepts_future_wire_fields_and_rejects_unknown_input_fields() {
@@ -1537,26 +1536,5 @@ mod tests {
         ] {
             assert!(config.validate_config().is_err());
         }
-    }
-
-    #[test]
-    fn test_validate_config_checks_tool_call_parser() {
-        let validate = |parser: &str| {
-            ModelRuntimeConfig {
-                tool_call_parser: Some(parser.to_string()),
-                ..Default::default()
-            }
-            .validate_config()
-        };
-
-        // Every v2 or unified parser must remain valid at registration.
-        for &parser in V2_FAMILIES.iter().chain(unified_family_names()) {
-            assert!(validate(parser).is_ok(), "{parser} must be supported");
-        }
-        assert!(validate("").is_ok());
-
-        let error = validate("not_registered").unwrap_err();
-        assert!(error.contains("not_registered"));
-        assert!(error.contains("muse_glimmer"));
     }
 }

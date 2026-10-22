@@ -19,12 +19,58 @@ use crate::frontend_config::{FrontendApiConfig, MetricsConfig};
 use crate::model_card::{ModelDeploymentCard, is_weight_file};
 use crate::model_type::{ModelInput, ModelType};
 use crate::preprocessor::media::{MediaDecoder, MediaFetcher};
+use crate::protocols::openai::chat_completions::tool_parser_v2::unified_family_names;
 use crate::reasoning_field::ReasoningField;
 use crate::request_template::RequestTemplate;
+use dynamo_parsers::tool_calling::parsers::get_available_tool_parsers;
 
 pub mod runtime_config;
 
 use runtime_config::{ModelRuntimeConfig, TokenizerBackend};
+
+/// Tool-call parser names this frontend build can serve: the v1 registry plus the
+/// unified (v2) families and their Dynamo aliases.
+pub fn supported_tool_call_parsers() -> Vec<&'static str> {
+    let mut supported = get_available_tool_parsers();
+    supported.extend_from_slice(unified_family_names());
+    supported.sort_unstable();
+    supported.dedup();
+    supported
+}
+
+/// Validate a runtime config for this process: structural checks plus tool-call
+/// parser availability.
+pub fn validate_runtime_config(config: &ModelRuntimeConfig) -> Result<(), String> {
+    config.validate_config()?;
+    config.validate_tool_call_parser(&supported_tool_call_parsers())
+}
+
+#[cfg(test)]
+mod runtime_config_validation_tests {
+    use super::*;
+    use crate::protocols::openai::chat_completions::tool_parser_v2::V2_FAMILIES;
+
+    #[test]
+    fn validate_runtime_config_checks_tool_call_parser() {
+        let validate = |parser: &str| {
+            ModelRuntimeConfig {
+                tool_call_parser: Some(parser.to_string()),
+                ..Default::default()
+            }
+            .validate_tool_call_parser(&supported_tool_call_parsers())
+        };
+
+        // Every v2 or unified parser must remain valid at registration.
+        for &parser in V2_FAMILIES.iter().chain(unified_family_names()) {
+            assert!(validate(parser).is_ok(), "{parser} must be supported");
+        }
+        assert!(validate("").is_ok());
+
+        let error = validate("not_registered").unwrap_err();
+        assert!(error.contains("not_registered"));
+        assert!(error.contains("muse_glimmer"));
+    }
+}
 
 /// What we call a model if the user didn't provide a name. Usually this means the name
 /// is invisible, for example in a text chat.
@@ -340,9 +386,7 @@ impl LocalModelBuilder {
         // already supplied one or the env var is unset. Published in etcd so routing
         // layers can keep cache assignments stable across worker restarts.
         self.runtime_config.populate_stable_routing_id_from_env();
-        self.runtime_config
-            .validate_config()
-            .map_err(anyhow::Error::msg)?;
+        validate_runtime_config(&self.runtime_config).map_err(anyhow::Error::msg)?;
         self.runtime_config.add_topology_taints();
 
         let template = self
