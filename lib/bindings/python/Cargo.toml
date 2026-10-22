@@ -127,7 +127,12 @@ pythonize = "0.23"
 dynamo-llm = { path = "../../llm" }
 
 [target.'cfg(not(target_os = "linux"))'.dependencies]
-dynamo-llm = { path = "../../llm", default-features = false }
+dynamo-llm = { path = "../../llm", default-features = false, features = [
+  "text-repl",
+  "lora-s3",
+  "modelexpress",
+  "swagger-ui",
+] }
 
 [dev-dependencies]
 opentelemetry_sdk = { version = "0.31.0", features = ["trace"] }

@@ -7,11 +7,9 @@
 //! and Input::Text (interactive chat) are good places to start.
 //! The main entry point is `run_input`.
 
-use std::{
-    fmt,
-    io::{IsTerminal as _, Read as _},
-    str::FromStr,
-};
+#[cfg(feature = "text-repl")]
+use std::io::Read as _;
+use std::{fmt, io::IsTerminal as _, str::FromStr};
 
 mod common;
 pub(crate) use common::build_preprocessed_routing_with_session_affinity_mode;
@@ -19,6 +17,7 @@ pub use common::{PreprocessedRouting, build_preprocessed_routing};
 pub mod endpoint;
 pub mod grpc;
 pub mod http;
+#[cfg(feature = "text-repl")]
 pub mod text;
 
 use dynamo_runtime::protocols::ENDPOINT_SCHEME;
@@ -132,11 +131,17 @@ pub async fn run_input_with_frontend_route_extensions(
                 .await
         }
         Input::Grpc => grpc::run(drt, engine_config).await,
+        #[cfg(feature = "text-repl")]
         Input::Text => text::run(drt, None, engine_config).await,
+        #[cfg(feature = "text-repl")]
         Input::Stdin => {
             let mut prompt = String::new();
             std::io::stdin().read_to_string(&mut prompt).unwrap();
             text::run(drt, Some(prompt), engine_config).await
+        }
+        #[cfg(not(feature = "text-repl"))]
+        Input::Text | Input::Stdin => {
+            anyhow::bail!("text input requires the `text-repl` feature of dynamo-llm")
         }
         Input::Endpoint(path) => endpoint::run(drt, path, engine_config).await,
     };

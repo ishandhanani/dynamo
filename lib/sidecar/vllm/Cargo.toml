@@ -24,7 +24,7 @@ mm-routing = ["dynamo-llm/mm-routing"]
 
 [dependencies]
 dynamo-backend-common = { workspace = true }
-dynamo-llm = { workspace = true }
+dynamo-llm = { workspace = true, features = ["lora-s3"] }
 dynamo-runtime = { workspace = true }
 dynamo-sidecar-common = { workspace = true, features = ["tonic-v14"] }
 

@@ -12,7 +12,15 @@ repository.workspace = true
 description = "Dynamo LLM Library"
 
 [features]
-default = ["block-manager"]
+default = ["block-manager", "text-repl", "lora-s3", "modelexpress", "swagger-ui"]
+# Interactive text REPL input (`dialoguer`).
+text-repl = ["dep:dialoguer"]
+# S3-backed LoRA adapter source (AWS SDK + object_store).
+lora-s3 = ["dep:object_store", "dep:aws-config", "dep:aws-credential-types", "dep:aws-types"]
+# ModelExpress server client for model downloads; direct download is always available.
+modelexpress = ["dep:modelexpress-client"]
+# Swagger UI assets at /docs; /openapi.json is always served.
+swagger-ui = ["dep:utoipa-swagger-ui"]
 # todo(ops): get this working in CI as a default.
 # default = ["block-manager", "testing-full"]
 
@@ -36,7 +44,7 @@ kv-router-stress = ["dep:clap", "dep:indicatif", "bench"]
 mm-routing = ["dep:llm-multimodal", "dep:llm-tokenizer"]
 request-trace-bench = []
 # S3 destination for the request-trace sink, reusing the existing object_store client.
-request-trace-s3 = []
+request-trace-s3 = ["dep:object_store"]
 
 [[bench]]
 name = "tokenizer_simple"
@@ -128,7 +136,7 @@ validator = { workspace = true }
 url = { workspace = true }
 uuid = { workspace = true }
 xxhash-rust = { workspace = true }
-modelexpress-client = { workspace = true }
+modelexpress-client = { workspace = true, optional = true }
 modelexpress-common = { workspace = true }
 
 
@@ -141,13 +149,13 @@ rayon = "1"
 bincode = { version = "2.0.1", features = ["serde", "derive"] }
 
 # lora
-aws-config = "1.8.11"
-aws-credential-types = "1.2.12"
-aws-types = "1.3.12"
-object_store = { version = "0.12.4", features = ["aws", "gcp", "azure", "http"] }
+aws-config = { version = "1.8.11", optional = true }
+aws-credential-types = { version = "1.2.12", optional = true }
+aws-types = { version = "1.3.12", optional = true }
+object_store = { version = "0.12.4", features = ["aws", "gcp", "azure", "http"], optional = true }
 
 # input/text
-dialoguer = { version = "0.11", default-features = false, features = [
+dialoguer = { version = "0.11", default-features = false, optional = true, features = [
   "editor",
   "history",
 ] }
@@ -172,7 +180,7 @@ tokio-rustls = { workspace = true }
 tower-http = { workspace = true }
 tower = { workspace = true }
 utoipa = { version = "5.3", features = ["axum_extras", "rc_schema"] }
-utoipa-swagger-ui = { version = "9.0", features = ["axum"] }
+utoipa-swagger-ui = { version = "9.0", features = ["axum"], optional = true }
 
 
 # grpc-service

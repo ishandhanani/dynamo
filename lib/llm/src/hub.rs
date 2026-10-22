@@ -5,9 +5,9 @@ use std::env;
 use std::path::{Path, PathBuf};
 
 use hf_hub::Cache;
-use modelexpress_client::{
-    Client as MxClient, ClientConfig as MxClientConfig, ModelProvider as MxModelProvider,
-};
+#[cfg(feature = "modelexpress")]
+use modelexpress_client::{Client as MxClient, ClientConfig as MxClientConfig};
+use modelexpress_common::models::ModelProvider as MxModelProvider;
 use modelexpress_common::{cache as mx_cache, download as mx, envs as mx_envs};
 
 use dynamo_runtime::config::environment_names::model as env_model;
@@ -153,6 +153,7 @@ fn is_offline_mode() -> bool {
 /// instead of relying on a shared filesystem path. This is required when the
 /// server and worker pods do not share a filesystem (e.g. RWO PVCs, cross-namespace
 /// deployments).
+#[cfg(feature = "modelexpress")]
 fn is_no_shared_storage() -> bool {
     dynamo_runtime::config::env_is_truthy(env_model::model_express::MODEL_EXPRESS_NO_SHARED_STORAGE)
 }
@@ -182,50 +183,7 @@ pub async fn from_hf(name: impl AsRef<Path>, ignore_weights: bool) -> anyhow::Re
         );
     }
 
-    let mut config: MxClientConfig = MxClientConfig::default();
-    if provider == MxModelProvider::Ngc {
-        config.cache.local_path = get_model_express_cache_dir(provider);
-    }
-    if let Ok(endpoint) = env::var(env_model::model_express::MODEL_EXPRESS_URL) {
-        config = config.with_endpoint(endpoint);
-    }
-    if is_no_shared_storage() {
-        config.cache.shared_storage = false;
-    }
-
-    let result = match MxClient::new(config).await {
-        Ok(mut client) => {
-            tracing::info!("Successfully connected to ModelExpress server");
-            match client
-                .request_model(&model_name, provider, ignore_weights)
-                .await
-            {
-                Ok(()) => {
-                    tracing::info!("Server download succeeded for model: {model_name}");
-                    match client.get_model_path(&model_name, provider).await {
-                        Ok(path) => Ok(path),
-                        Err(e) => {
-                            tracing::warn!(
-                                "Failed to resolve local model path after server download for '{model_name}': {e}. \
-                                Falling back to direct download."
-                            );
-                            mx_download_direct(&model_name, provider, ignore_weights).await
-                        }
-                    }
-                }
-                Err(e) => {
-                    tracing::warn!(
-                        "Server download failed for model '{model_name}': {e}. Falling back to direct download."
-                    );
-                    mx_download_direct(&model_name, provider, ignore_weights).await
-                }
-            }
-        }
-        Err(e) => {
-            tracing::warn!("Cannot connect to ModelExpress server: {e}. Using direct download.");
-            mx_download_direct(&model_name, provider, ignore_weights).await
-        }
-    };
+    let result = download_via_server(&model_name, provider, ignore_weights).await;
 
     match result {
         Ok(path) => {
@@ -237,6 +195,69 @@ pub async fn from_hf(name: impl AsRef<Path>, ignore_weights: bool) -> anyhow::Re
             Err(e)
         }
     }
+}
+
+/// Ask a ModelExpress server for the model, falling back to a direct download.
+#[cfg(feature = "modelexpress")]
+async fn download_via_server(
+    model_name: &str,
+    provider: MxModelProvider,
+    ignore_weights: bool,
+) -> anyhow::Result<PathBuf> {
+    let mut config: MxClientConfig = MxClientConfig::default();
+    if provider == MxModelProvider::Ngc {
+        config.cache.local_path = get_model_express_cache_dir(provider);
+    }
+    if let Ok(endpoint) = env::var(env_model::model_express::MODEL_EXPRESS_URL) {
+        config = config.with_endpoint(endpoint);
+    }
+    if is_no_shared_storage() {
+        config.cache.shared_storage = false;
+    }
+
+    match MxClient::new(config).await {
+        Ok(mut client) => {
+            tracing::info!("Successfully connected to ModelExpress server");
+            match client
+                .request_model(model_name, provider, ignore_weights)
+                .await
+            {
+                Ok(()) => {
+                    tracing::info!("Server download succeeded for model: {model_name}");
+                    match client.get_model_path(model_name, provider).await {
+                        Ok(path) => Ok(path),
+                        Err(e) => {
+                            tracing::warn!(
+                                "Failed to resolve local model path after server download for '{model_name}': {e}. \
+                                Falling back to direct download."
+                            );
+                            mx_download_direct(model_name, provider, ignore_weights).await
+                        }
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        "Server download failed for model '{model_name}': {e}. Falling back to direct download."
+                    );
+                    mx_download_direct(model_name, provider, ignore_weights).await
+                }
+            }
+        }
+        Err(e) => {
+            tracing::warn!("Cannot connect to ModelExpress server: {e}. Using direct download.");
+            mx_download_direct(model_name, provider, ignore_weights).await
+        }
+    }
+}
+
+/// Without the `modelexpress` feature there is no server to ask; download directly.
+#[cfg(not(feature = "modelexpress"))]
+async fn download_via_server(
+    model_name: &str,
+    provider: MxModelProvider,
+    ignore_weights: bool,
+) -> anyhow::Result<PathBuf> {
+    mx_download_direct(model_name, provider, ignore_weights).await
 }
 
 async fn mx_download_direct(

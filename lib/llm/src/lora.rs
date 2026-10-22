@@ -30,7 +30,9 @@ pub use routing::{
     McfPlacementResult, McfPlacementSolver, McfSolveParams, RendezvousHasher,
     create_lora_allocator,
 };
-pub use source::{HuggingFaceLoRASource, LoRASource, LocalLoRASource, S3LoRASource};
+#[cfg(feature = "lora-s3")]
+pub use source::S3LoRASource;
+pub use source::{HuggingFaceLoRASource, LoRASource, LocalLoRASource};
 pub use state_tracker::LoraStateTracker;
 
 /// Worker runtime flag requiring an adapter registration before request routing.

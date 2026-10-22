@@ -742,10 +742,10 @@ pub fn openapi_router(
     });
     let router = documentation_router(document);
 
-    let docs = vec![
-        RouteDoc::new(axum::http::Method::GET, "/openapi.json"),
-        RouteDoc::new(axum::http::Method::GET, "/docs"),
-    ];
+    let mut docs = vec![RouteDoc::new(axum::http::Method::GET, "/openapi.json")];
+    if cfg!(feature = "swagger-ui") {
+        docs.push(RouteDoc::new(axum::http::Method::GET, "/docs"));
+    }
 
     (docs, router)
 }
@@ -813,12 +813,15 @@ impl CachedOpenApi {
 
 /// Mount the cached JSON handler and Swagger assets without eagerly generating schemas.
 fn documentation_router(document: Arc<CachedOpenApi>) -> Router {
-    use utoipa_swagger_ui::{Config, SwaggerUi};
-
-    Router::new()
+    let router = Router::new()
         .route("/openapi.json", axum::routing::get(serve_openapi))
-        .with_state(document)
-        .merge(SwaggerUi::new("/docs").config(Config::new(["/openapi.json"])))
+        .with_state(document);
+    #[cfg(feature = "swagger-ui")]
+    let router = {
+        use utoipa_swagger_ui::{Config, SwaggerUi};
+        router.merge(SwaggerUi::new("/docs").config(Config::new(["/openapi.json"])))
+    };
+    router
 }
 
 /// Serve cached JSON bytes, or a generic 500 when generation failed; never expose diagnostics.
@@ -998,13 +1001,16 @@ mod tests {
                     .len(),
                 1 + usize::from(tool)
             );
-            let initializer = client
-                .get(url.replace("openapi.json", "docs/swagger-initializer.js"))
-                .send()
-                .await
-                .unwrap();
-            assert_eq!(initializer.status(), StatusCode::OK);
-            assert!(initializer.text().await.unwrap().contains("/openapi.json"));
+            #[cfg(feature = "swagger-ui")]
+            {
+                let initializer = client
+                    .get(url.replace("openapi.json", "docs/swagger-initializer.js"))
+                    .send()
+                    .await
+                    .unwrap();
+                assert_eq!(initializer.status(), StatusCode::OK);
+                assert!(initializer.text().await.unwrap().contains("/openapi.json"));
+            }
             server.abort();
             let _ = server.await;
         }
