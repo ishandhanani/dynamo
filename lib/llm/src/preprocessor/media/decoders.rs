@@ -7,6 +7,7 @@ use utoipa::ToSchema;
 
 use super::common::EncodedMediaData;
 use super::rdma::DecodedMediaData;
+use crate::model_card::media::MediaDecoderConfig;
 pub mod image;
 #[cfg(feature = "media-ffmpeg")]
 pub mod video;
@@ -62,6 +63,24 @@ impl MediaDecoder {
     pub(crate) fn warn_if_unavailable_backends(&self) {
         if let Some(image) = &self.image {
             image.warn_if_libjpeg_unavailable();
+        }
+    }
+}
+
+/// Build the runtime decoders from the configuration carried on the model card.
+impl From<MediaDecoderConfig> for MediaDecoder {
+    fn from(config: MediaDecoderConfig) -> Self {
+        #[cfg(not(feature = "media-ffmpeg"))]
+        if config.video.is_some() {
+            tracing::warn!(
+                "model card enables video decoding, but this frontend was built without the \
+                 `media-ffmpeg` feature; videos are left to the worker"
+            );
+        }
+        Self {
+            image: config.image.map(ImageDecoder::from),
+            #[cfg(feature = "media-ffmpeg")]
+            video: config.video.map(VideoDecoder::from),
         }
     }
 }

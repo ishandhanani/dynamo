@@ -12,6 +12,10 @@ use utoipa::ToSchema;
 use super::super::common::EncodedMediaData;
 use super::super::rdma::DecodedMediaData;
 use super::{DecodedMediaMetadata, Decoder};
+#[cfg(test)]
+use crate::model_card::media::DEFAULT_IMAGE_MAX_ALLOC as DEFAULT_MAX_ALLOC;
+use crate::model_card::media::ImageDecoderConfig;
+pub use crate::model_card::media::ImageDecoderLimits;
 use backends::{
     BackendAvailability, BackendDecline, DecodedImage, ImageDecodeBackend, ImageDecodeOutcome,
     ImageDecodeRequest, image_reader_backend, turbojpeg_backend,
@@ -19,7 +23,6 @@ use backends::{
 
 mod backends;
 
-const DEFAULT_MAX_ALLOC: u64 = 128 * 1024 * 1024; // 128 MB
 const ENABLE_LIBJPEG_ENV: &str = "DYN_MM_ENABLE_LIBJPEG";
 // CI-only guard: an enabled JPEG test must exercise TurboJPEG, never its fallback.
 const REQUIRE_LIBJPEG_TURBO_TEST_ENV: &str = "DYNAMO_REQUIRE_LIBJPEG_TURBO_TEST";
@@ -34,53 +37,6 @@ fn libjpeg_enabled(value: Option<&str>) -> bool {
     value
         .and_then(dynamo_runtime::config::parse_bool_opt)
         .unwrap_or(true)
-}
-
-/// Image decoder limits - can only be set via server config, not runtime kwargs.
-#[derive(Clone, Debug, Serialize, Deserialize, ToSchema)]
-#[serde(deny_unknown_fields)]
-pub struct ImageDecoderLimits {
-    #[serde(default)]
-    pub max_image_width: Option<u32>,
-    #[serde(default)]
-    pub max_image_height: Option<u32>,
-    /// Maximum allowed total allocation of the decoder in bytes
-    #[serde(default)]
-    pub max_alloc: Option<u64>,
-}
-
-impl Default for ImageDecoderLimits {
-    fn default() -> Self {
-        Self {
-            max_image_width: None,
-            max_image_height: None,
-            max_alloc: Some(DEFAULT_MAX_ALLOC),
-        }
-    }
-}
-
-impl ImageDecoderLimits {
-    fn validate_output(&self, width: u32, height: u32, channels: usize) -> Result<usize> {
-        if self.max_image_width.is_some_and(|limit| width > limit)
-            || self.max_image_height.is_some_and(|limit| height > limit)
-        {
-            anyhow::bail!("Image dimensions exceed configured limits: {width}x{height}");
-        }
-
-        let nbytes = u64::from(width)
-            .checked_mul(u64::from(height))
-            .and_then(|pixels| pixels.checked_mul(channels as u64))
-            .ok_or_else(|| {
-                anyhow::anyhow!("Image allocation size overflow for dimensions: {width}x{height}")
-            })?;
-        if let Some(limit) = self.max_alloc
-            && nbytes > limit
-        {
-            anyhow::bail!("Image allocation {nbytes} bytes exceeds configured limit {limit} bytes");
-        }
-        usize::try_from(nbytes)
-            .map_err(|_| anyhow::anyhow!("Image allocation does not fit in usize: {nbytes} bytes"))
-    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, ToSchema)]
@@ -98,6 +54,16 @@ impl Default for ImageDecoder {
     fn default() -> Self {
         Self {
             limits: ImageDecoderLimits::default(),
+            enable_libjpeg: default_enable_libjpeg(),
+        }
+    }
+}
+
+/// The model card carries only the limits; the libjpeg backend choice is process-local.
+impl From<ImageDecoderConfig> for ImageDecoder {
+    fn from(config: ImageDecoderConfig) -> Self {
+        Self {
+            limits: config.limits,
             enable_libjpeg: default_enable_libjpeg(),
         }
     }

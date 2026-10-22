@@ -19,13 +19,12 @@ use super::common::EncodedMediaData;
 use super::decoders::{Decoder, MediaDecoder};
 use super::rdma::{DataType, RdmaMediaDataDescriptor, drain_nixl_notifications, get_nixl_agent};
 use super::require_image_url;
+use crate::model_card::media::MediaFetcherConfig;
 use lru::LruCache;
 use parking_lot::Mutex;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 
-const DEFAULT_HTTP_USER_AGENT: &str = "dynamo-ai/dynamo";
-const DEFAULT_HTTP_TIMEOUT: Duration = Duration::from_secs(30);
 const MAX_REDIRECTS: usize = 3;
 
 const IMAGE_FETCH_FAILED: &str = "Failed to fetch the image_url media";
@@ -176,18 +175,7 @@ pub struct MediaFetcher {
     pub user_agent: String,
     pub allow_direct_ip: bool,
     pub allow_direct_port: bool,
-    /// When `false` (default), reject URLs that target blocked locations:
-    /// an IP literal in the RFC-range blocklist (`BLOCKED_IP_NETWORKS`),
-    /// a hostname in the literal blocklist (`BLOCKED_HOSTS`, e.g.
-    /// `localhost` / `metadata.google.internal`), or — in
-    /// `check_if_url_allowed_with_dns` — a hostname that DNS-resolves
-    /// to a blocked IP. The name reads "IP" but semantically this is a
-    /// single "allow internal / on-prem targets" switch that covers
-    /// both IP and hostname blocklists together: real on-prem
-    /// deployments need both at once (private CIDRs *and* internal
-    /// service names), and splitting them would give no useful config
-    /// while doubling the footgun surface. **Never** set on anything
-    /// public-facing.
+    /// See [`MediaFetcherConfig::allow_private_ips`].
     pub allow_private_ips: bool,
     pub allowed_media_domains: Option<HashSet<String>>,
     pub timeout: Option<Duration>,
@@ -195,39 +183,27 @@ pub struct MediaFetcher {
 
 impl Default for MediaFetcher {
     fn default() -> Self {
+        MediaFetcherConfig::default().into()
+    }
+}
+
+impl From<MediaFetcherConfig> for MediaFetcher {
+    fn from(config: MediaFetcherConfig) -> Self {
         Self {
-            user_agent: DEFAULT_HTTP_USER_AGENT.to_string(),
-            allow_direct_ip: false,
-            allow_direct_port: false,
-            allow_private_ips: false,
-            allowed_media_domains: None,
-            timeout: Some(DEFAULT_HTTP_TIMEOUT),
+            user_agent: config.user_agent,
+            allow_direct_ip: config.allow_direct_ip,
+            allow_direct_port: config.allow_direct_port,
+            allow_private_ips: config.allow_private_ips,
+            allowed_media_domains: config.allowed_media_domains,
+            timeout: config.timeout,
         }
     }
 }
 
 impl MediaFetcher {
-    fn with_internal_access(allow_internal: bool) -> Self {
-        Self {
-            allow_direct_ip: allow_internal,
-            allow_direct_port: allow_internal,
-            allow_private_ips: allow_internal,
-            ..Self::default()
-        }
-    }
-
-    /// Build a `MediaFetcher` whose defaults respect the shared
-    /// `DYN_MM_ALLOW_INTERNAL` environment variable. Mirrors the Python
-    /// `UrlValidationPolicy.from_env()` behavior so both fetch paths
-    /// (frontend decode in Rust, backend decode in Python) honor the
-    /// same on-prem opt-in flag.
-    ///
-    /// `DYN_MM_ALLOW_INTERNAL=1` flips `allow_direct_ip`,
-    /// `allow_direct_port`, and `allow_private_ips` all to `true` at
-    /// once.
+    /// Defaults that honor `DYN_MM_ALLOW_INTERNAL`; see [`MediaFetcherConfig::from_env`].
     pub fn from_env() -> Self {
-        let allow_internal = std::env::var("DYN_MM_ALLOW_INTERNAL").ok().as_deref() == Some("1");
-        Self::with_internal_access(allow_internal)
+        MediaFetcherConfig::from_env().into()
     }
 }
 
@@ -1439,19 +1415,6 @@ mod tests_non_nixl {
         let url = url::Url::parse("https://Metadata.Google.Internal/x").unwrap();
         let error = fetcher.check_if_url_allowed(&url).unwrap_err();
         assert_invalid_argument_in_chain(error.as_ref());
-    }
-
-    #[test]
-    fn test_internal_access_defaults() {
-        let f = MediaFetcher::with_internal_access(false);
-        assert!(!f.allow_private_ips);
-        assert!(!f.allow_direct_ip);
-        assert!(!f.allow_direct_port);
-
-        let f = MediaFetcher::with_internal_access(true);
-        assert!(f.allow_private_ips);
-        assert!(f.allow_direct_ip);
-        assert!(f.allow_direct_port);
     }
 
     #[test]

@@ -19,8 +19,8 @@ use dynamo_llm::local_model::runtime_config::{
     DisaggregatedEndpoint, ModelRuntimeConfig, StructuralTagConfig, TOPOLOGY_TAINT_PREFIX,
 };
 use dynamo_llm::local_model::{LocalModel, LocalModelBuilder, update_model_taints};
+use dynamo_llm::model_card::media::{MediaDecoderConfig, MediaFetcherConfig};
 use dynamo_llm::model_type::{ModelInput, ModelType};
-use dynamo_llm::preprocessor::media::{MediaDecoder, MediaFetcher};
 use dynamo_llm::worker_type::WorkerType;
 use dynamo_runtime::config::HealthStatus;
 use dynamo_runtime::engine_routes::EngineRouteCallback;
@@ -225,8 +225,8 @@ pub struct WorkerConfig {
     pub rl_metadata: Option<crate::RlWorkerMetadata>,
     /// Optional frontend media decoding and fetch policy advertised on the
     /// model deployment card.
-    pub media_decoder: Option<MediaDecoder>,
-    pub media_fetcher: Option<MediaFetcher>,
+    pub media_decoder: Option<MediaDecoderConfig>,
+    pub media_fetcher: Option<MediaFetcherConfig>,
     /// Deployment-level default thinking mode written to runtime metadata.
     pub default_thinking_mode: Option<String>,
 }
@@ -2648,8 +2648,8 @@ mod tests {
     #[tokio::test]
     async fn build_local_model_carries_media_configuration() {
         let config = WorkerConfig {
-            media_decoder: Some(MediaDecoder::default()),
-            media_fetcher: Some(MediaFetcher::default()),
+            media_decoder: Some(MediaDecoderConfig::default()),
+            media_fetcher: Some(MediaFetcherConfig::default()),
             ..WorkerConfig::default()
         };
         let engine_config = EngineConfig {

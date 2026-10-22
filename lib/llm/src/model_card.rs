@@ -22,16 +22,18 @@ use crate::local_model::runtime_config::{
     ModelRuntimeConfig, TokenizerBackend, VLLM_NEMOTRON_VIDEO_PROCESSOR_CONTRACT_RUNTIME_KEY,
 };
 use crate::model_type::{ModelInput, ModelType};
-use crate::protocols::tensor::TensorModelConfig;
 use anyhow::{Context, Result};
 use derive_builder::Builder;
 use dynamo_kv_router::identity::{ExplicitIdentityMap, IndexerIdentitySpec};
 use dynamo_runtime::{slug::Slug, storage::kv};
 use serde::{Deserialize, Serialize};
+use crate::protocols::tensor::TensorModelConfig;
 use tokenizers::Tokenizer as HfTokenizer;
 
-use crate::preprocessor::media::{MediaDecoder, MediaFetcher};
 use crate::protocols::TokenIdType;
+use media::{MediaDecoderConfig, MediaFetcherConfig};
+
+pub mod media;
 
 const FALLBACK_TOKENIZER_CACHE_BYTES: usize = 64 * 1024 * 1024;
 const MAX_DEFAULT_TOKENIZER_CACHE_BYTES: u64 = 8 * 1024 * 1024 * 1024;
@@ -1104,11 +1106,11 @@ pub struct ModelDeploymentCard {
 
     /// Media decoding configuration
     #[serde(default)]
-    pub media_decoder: Option<MediaDecoder>,
+    pub media_decoder: Option<MediaDecoderConfig>,
 
     /// Media fetching configuration
     #[serde(default)]
-    pub media_fetcher: Option<MediaFetcher>,
+    pub media_fetcher: Option<MediaFetcherConfig>,
 
     /// Per-worker-set router configuration override.
     /// When set, the frontend watcher uses this instead of the global frontend router config.

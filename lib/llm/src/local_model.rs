@@ -16,9 +16,9 @@ use modelexpress_common::providers::{HuggingFaceProvider, ModelProviderTrait as 
 use crate::common::checked_file::CheckedFile;
 use crate::entrypoint::RouterConfig;
 use crate::frontend_config::{FrontendApiConfig, MetricsConfig};
+use crate::model_card::media::{MediaDecoderConfig, MediaFetcherConfig};
 use crate::model_card::{ModelDeploymentCard, is_weight_file};
 use crate::model_type::{ModelInput, ModelType};
-use crate::preprocessor::media::{MediaDecoder, MediaFetcher};
 use crate::protocols::openai::chat_completions::tool_parser_v2::unified_family_names;
 use crate::reasoning_field::ReasoningField;
 use crate::request_template::RequestTemplate;
@@ -127,8 +127,8 @@ pub struct LocalModelBuilder {
     custom_template_path: Option<PathBuf>,
     namespace: Option<String>,
     namespace_prefix: Option<String>,
-    media_decoder: Option<MediaDecoder>,
-    media_fetcher: Option<MediaFetcher>,
+    media_decoder: Option<MediaDecoderConfig>,
+    media_fetcher: Option<MediaFetcherConfig>,
 }
 
 impl Default for LocalModelBuilder {
@@ -355,12 +355,12 @@ impl LocalModelBuilder {
         self
     }
 
-    pub fn media_decoder(&mut self, media_decoder: Option<MediaDecoder>) -> &mut Self {
+    pub fn media_decoder(&mut self, media_decoder: Option<MediaDecoderConfig>) -> &mut Self {
         self.media_decoder = media_decoder;
         self
     }
 
-    pub fn media_fetcher(&mut self, media_fetcher: Option<MediaFetcher>) -> &mut Self {
+    pub fn media_fetcher(&mut self, media_fetcher: Option<MediaFetcherConfig>) -> &mut Self {
         self.media_fetcher = media_fetcher;
         self
     }

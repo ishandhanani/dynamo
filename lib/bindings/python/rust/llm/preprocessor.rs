@@ -4,7 +4,9 @@
 use super::*;
 use std::time::Duration;
 
-use llm_rs::preprocessor::media::{MediaDecoder as RsMediaDecoder, MediaFetcher as RsMediaFetcher};
+use llm_rs::model_card::media::{
+    MediaDecoderConfig as RsMediaDecoder, MediaFetcherConfig as RsMediaFetcher,
+};
 
 #[pyclass]
 #[derive(Clone)]

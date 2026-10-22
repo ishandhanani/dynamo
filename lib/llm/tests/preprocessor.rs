@@ -825,8 +825,8 @@ mod media_io_kwargs_forwarding {
 
     use super::Request;
     use dynamo_llm::model_card::ModelDeploymentCard;
+    use dynamo_llm::model_card::media::MediaDecoderConfig;
     use dynamo_llm::preprocessor::OpenAIPreprocessor;
-    use dynamo_llm::preprocessor::media::MediaDecoder;
     use rstest::rstest;
 
     const MODEL_PATH: &str = "tests/data/sample-models/mock-llama-3.1-8b-instruct";
@@ -845,7 +845,7 @@ mod media_io_kwargs_forwarding {
     fn make_frontend_decoding_preprocessor() -> Option<Arc<OpenAIPreprocessor>> {
         let mut mdc = ModelDeploymentCard::load_from_disk(MODEL_PATH, None).unwrap();
         mdc.set_name("test-model");
-        mdc.media_decoder = Some(MediaDecoder::default());
+        mdc.media_decoder = Some(MediaDecoderConfig::default());
         OpenAIPreprocessor::new(mdc).ok()
     }
 

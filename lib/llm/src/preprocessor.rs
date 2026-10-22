@@ -2716,7 +2716,10 @@ impl OpenAIPreprocessor {
             });
 
         let media_loader = match mdc.media_decoder {
-            Some(media_decoder) => Some(MediaLoader::new(media_decoder, mdc.media_fetcher)?),
+            Some(media_decoder) => Some(MediaLoader::new(
+                media_decoder.into(),
+                mdc.media_fetcher.map(Into::into),
+            )?),
             None => None,
         };
 

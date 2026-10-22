@@ -14,30 +14,14 @@ use utoipa::ToSchema;
 use video_rs::Time;
 
 use super::Decoder;
+use crate::model_card::media::VideoDecoderConfig;
+pub use crate::model_card::media::VideoDecoderLimits;
 use crate::preprocessor::media::{
     DecodedMediaData, EncodedMediaData, decoders::DecodedMediaMetadata,
 };
 
 /// Small time buffer (seconds) to avoid edge cases when seeking near frame boundaries
 const FRAME_TIME_BUFFER_SECS: f64 = 0.001;
-const DEFAULT_MAX_ALLOC: u64 = 512 * 1024 * 1024; // 512 MB
-
-#[derive(Clone, Debug, Serialize, Deserialize, ToSchema)]
-#[serde(deny_unknown_fields)]
-pub struct VideoDecoderLimits {
-    /// Maximum allowed total allocation of decoded frames in bytes
-    #[serde(default)]
-    pub max_alloc: Option<u64>,
-}
-
-impl Default for VideoDecoderLimits {
-    fn default() -> Self {
-        Self {
-            max_alloc: Some(DEFAULT_MAX_ALLOC),
-        }
-    }
-}
-
 #[derive(Clone, Debug, Default, Serialize, Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct VideoDecoder {
@@ -56,6 +40,18 @@ pub struct VideoDecoder {
     /// fail if some frames fail to decode
     #[serde(default)]
     pub(crate) strict: bool,
+}
+
+impl From<VideoDecoderConfig> for VideoDecoder {
+    fn from(config: VideoDecoderConfig) -> Self {
+        Self {
+            limits: config.limits,
+            fps: config.fps,
+            max_frames: config.max_frames,
+            num_frames: config.num_frames,
+            strict: config.strict,
+        }
+    }
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
