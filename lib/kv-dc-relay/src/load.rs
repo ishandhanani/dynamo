@@ -6,7 +6,7 @@ use std::collections::HashMap;
 use dynamo_kv_router::indexer::cuckoo::ProducerIdentity;
 use dynamo_kv_router::protocols::{ActiveLoad, WorkerId, WorkerWithDpRank};
 
-use crate::local_model::runtime_config::ModelRuntimeConfig;
+use dynamo_llm::local_model::runtime_config::ModelRuntimeConfig;
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 struct LoadCapacity {

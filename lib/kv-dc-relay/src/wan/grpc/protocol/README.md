@@ -10,7 +10,7 @@ The Relay publishes endpoint-local KV pool state through the transport-neutral
 bootstrapping, contiguous deltas, bounded queues, and producer-generation fencing. Transport
 adapters consume its state watches and canonical `PublicationFrame`s.
 
-`dynamo_llm::kv_dc_relay::wan::grpc::protocol` provides the Protobuf/gRPC representation of that state.
+`dynamo_kv_dc_relay::wan::grpc::protocol` provides the Protobuf/gRPC representation of that state.
 It adds generated messages, client/server interfaces, and wire validation; it does not own
 another publication hub or CKF mirror. Its Cuckoo Bucket Images v1 (CBI1) helpers re-export
 the [publisher's transport-neutral codec](../../../publication/cbi1.rs).

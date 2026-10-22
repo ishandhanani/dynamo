@@ -26,16 +26,16 @@ const DEFAULT_PUBLICATION_ENCODING_CONCURRENCY: usize = 2;
 const HUB_CONTROL_CAPACITY: usize = 1;
 
 #[derive(Clone)]
-pub(in crate::kv_dc_relay) struct PublicationHubConfig {
-    pub(in crate::kv_dc_relay) queue_capacity: usize,
-    pub(in crate::kv_dc_relay) queue_bytes: usize,
-    pub(in crate::kv_dc_relay) max_subscribers: usize,
-    pub(in crate::kv_dc_relay) max_delta_images: usize,
-    pub(in crate::kv_dc_relay) encoding_permits: Arc<Semaphore>,
+pub(crate) struct PublicationHubConfig {
+    pub(crate) queue_capacity: usize,
+    pub(crate) queue_bytes: usize,
+    pub(crate) max_subscribers: usize,
+    pub(crate) max_delta_images: usize,
+    pub(crate) encoding_permits: Arc<Semaphore>,
     #[cfg(test)]
-    pub(in crate::kv_dc_relay) initialization_gate: Option<Arc<Semaphore>>,
+    pub(crate) initialization_gate: Option<Arc<Semaphore>>,
     #[cfg(test)]
-    pub(in crate::kv_dc_relay) post_snapshot_gate: Option<Arc<Semaphore>>,
+    pub(crate) post_snapshot_gate: Option<Arc<Semaphore>>,
 }
 
 impl Default for PublicationHubConfig {
@@ -236,7 +236,7 @@ struct HubState {
     subscribers: HashMap<u64, HubSubscriber>,
 }
 
-pub(in crate::kv_dc_relay) type TerminalFailure = Arc<dyn Fn(String) + Send + Sync>;
+pub(crate) type TerminalFailure = Arc<dyn Fn(String) + Send + Sync>;
 
 enum HubControl {
     EvictIdle {
@@ -274,7 +274,7 @@ pub(crate) struct PublicationHub {
 }
 
 impl PublicationHub {
-    pub(in crate::kv_dc_relay) async fn start(
+    pub(crate) async fn start(
         actor: KvDcRelayHandle,
         lease: LaneLease,
         config: PublicationHubConfig,
@@ -923,7 +923,7 @@ fn close_subscribers(state: &mut HubState, reason: u8) {
     state.subscribers.clear();
 }
 
-pub(in crate::kv_dc_relay) fn publication_lease(identity: ProducerIdentity) -> LaneLease {
+pub(crate) fn publication_lease(identity: ProducerIdentity) -> LaneLease {
     LaneLease::new(
         ConsumerInstanceId::new(identity.producer_incarnation()),
         0,

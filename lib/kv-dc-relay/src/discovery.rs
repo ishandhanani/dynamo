@@ -13,10 +13,10 @@ use super::identity::{
     CanonicalModelId, CanonicalModelRegistration, ModelAlias, ModelTarget, WorkerRole,
 };
 use super::resolution::{ResolvedIndexerDomain, resolve_indexer_domain};
-use crate::local_model::runtime_config::ModelRuntimeConfig;
-use crate::model_card::ModelDeploymentCard;
-use crate::model_type::ModelType;
-use crate::worker_type::WorkerType;
+use dynamo_llm::local_model::runtime_config::ModelRuntimeConfig;
+use dynamo_llm::model_card::ModelDeploymentCard;
+use dynamo_llm::model_type::ModelType;
+use dynamo_llm::worker_type::WorkerType;
 
 #[cfg(test)]
 use super::{
@@ -869,7 +869,7 @@ fn decode_card(instance: DiscoveryInstance) -> Option<(ModelCardInstanceId, Stor
     };
     match instance.deserialize_model::<ModelDeploymentCard>() {
         Ok(mut card) => {
-            crate::discovery::readiness::normalize_legacy_prefill_topology(&mut card);
+            dynamo_llm::discovery::readiness::normalize_legacy_prefill_topology(&mut card);
             Some((
                 id,
                 StoredModelCard {
@@ -957,8 +957,8 @@ fn same_membership(left: &EndpointMembership, right: &EndpointMembership) -> boo
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model_card::LoraInfo;
-    use crate::worker_type::WorkerType;
+    use dynamo_llm::model_card::LoraInfo;
+    use dynamo_llm::worker_type::WorkerType;
     use dynamo_runtime::discovery::ModelTaintsUpdate;
 
     fn card(name: &str, artifact: &str, block_size: u32) -> ModelDeploymentCard {
@@ -1204,7 +1204,7 @@ mod tests {
 
     #[test]
     fn encode_role_is_preserved_for_surface_less_and_front_door_cards() {
-        use crate::model_type::ModelType;
+        use dynamo_llm::model_type::ModelType;
 
         let mut surface_less = card("vision-language", "vision-language", 16);
         surface_less.worker_type = Some(WorkerType::Encode);

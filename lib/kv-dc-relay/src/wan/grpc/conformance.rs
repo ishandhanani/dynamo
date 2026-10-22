@@ -28,20 +28,20 @@ use super::config::KvDcRelayGrpcConfig;
 use super::protocol as proto;
 use super::protocol::wire::images::{self, FilterFormat, ImagesFrame, SnapshotAssembly};
 use super::server::GrpcTransport;
-use crate::kv_dc_relay::actor::KvDcRelayHandle;
-use crate::kv_dc_relay::discovery::{
+use crate::actor::KvDcRelayHandle;
+use crate::discovery::{
     DcMembershipView, DomainWorkerTopology, EndpointMembership, KvCacheDomainKey,
 };
-use crate::kv_dc_relay::identity::{
+use crate::identity::{
     CanonicalModelId, CanonicalModelRegistration, DcRelayIdentity, KvQueryHashFormat,
     KvQuerySemantics, ModelAlias, WorkerRole,
 };
-use crate::kv_dc_relay::pool_registry::{
+use crate::pool_registry::{
     PoolActorConfig, PoolAttachRequest, PoolAttachment, PoolRegistry, PoolServingFacts,
 };
-use crate::kv_dc_relay::publication::RegistryPublicationSource;
-use crate::kv_dc_relay::topology::TopologyPublisher;
-use crate::local_model::runtime_config::ModelRuntimeConfig;
+use crate::publication::RegistryPublicationSource;
+use crate::topology::TopologyPublisher;
+use dynamo_llm::local_model::runtime_config::ModelRuntimeConfig;
 
 const IO_TIMEOUT: Duration = Duration::from_secs(5);
 const WORKER_ID: u64 = 7;
@@ -228,7 +228,7 @@ fn membership_view(endpoint: EndpointId, indexer_domain: IndexerDomainId) -> DcM
             WORKER_ID,
             DomainWorkerTopology {
                 worker_type: None,
-                model_type: crate::model_type::ModelType::Chat,
+                model_type: dynamo_llm::model_type::ModelType::Chat,
                 needs: Vec::new(),
             },
         )]),

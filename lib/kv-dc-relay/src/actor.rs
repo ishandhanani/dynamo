@@ -32,8 +32,8 @@ use parking_lot::Mutex;
 use tokio::sync::{OwnedSemaphorePermit, Semaphore, broadcast, mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
 
-use crate::discovery::PublisherId;
-use crate::kv_router::indexer::{RecoveryResetReason, RecoveryTarget};
+use dynamo_llm::discovery::PublisherId;
+use dynamo_llm::kv_router::indexer::{RecoveryResetReason, RecoveryTarget};
 
 use super::host::KvDcRelayError;
 
@@ -1478,10 +1478,10 @@ mod tests {
     use tokio::sync::watch;
 
     use super::*;
-    use crate::discovery::{
+    use dynamo_llm::discovery::{
         KvEventSource, KvSourceMembershipView, KvSourceStatus, KvStateEndpointResolution,
     };
-    use crate::kv_router::indexer::{WorkerQueryClient, WorkerQueryTransport};
+    use dynamo_llm::kv_router::indexer::{WorkerQueryClient, WorkerQueryTransport};
 
     struct UnusedWorkerQueryTransport;
 

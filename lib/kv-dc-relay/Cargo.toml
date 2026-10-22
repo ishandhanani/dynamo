@@ -1,0 +1,59 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+[package]
+name = "dynamo-kv-dc-relay"
+description = "Dynamo KV DC relay: DC-scoped KV-cache relay with endpoint-local CKF pools, topology publication, and the gRPC WAN adapter"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[features]
+default = []
+# Pull-only CKF Relay stats and snapshots. Forwards to the indexer's diagnostic
+# hooks in `dynamo-llm`; keep it off in normal builds so the hot path stays lean.
+ckf-diagnostics = ["dynamo-llm/ckf-diagnostics"]
+
+[dependencies]
+# repo
+dynamo-kv-router = { workspace = true }
+dynamo-llm = { workspace = true }
+dynamo-runtime = { workspace = true }
+
+# workspace
+anyhow = { workspace = true }
+async-stream = { workspace = true }
+async-trait = { workspace = true }
+blake3 = { workspace = true }
+bytes = { workspace = true }
+futures = { workspace = true }
+futures-util = { workspace = true }
+parking_lot = { workspace = true }
+prost = { workspace = true }
+rand = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+sha2 = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+tokio-stream = { workspace = true }
+tokio-util = { workspace = true }
+tonic = { workspace = true, features = ["zstd"] }
+tonic-health = { workspace = true }
+tracing = { workspace = true }
+xxhash-rust = { workspace = true }
+
+# pinned alongside dynamo-llm
+arc-swap = "1.9.1"
+# gRPC server reflection for the relay WAN service.
+tonic-reflection = { version = "0.13.1" }
+
+[dev-dependencies]
+dynamo-llm = { workspace = true, features = ["testing"] }
+tempfile = { workspace = true }
+tokio = { workspace = true, features = ["test-util"] }
+
+[build-dependencies]
+tonic-build = { workspace = true }

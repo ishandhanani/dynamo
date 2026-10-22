@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use super::{NamespaceScope, NamespaceSelection, NamespaceSource, NamespaceUpdates};
-use crate::kv_dc_relay::discovery::DcDiscoveryFilter;
+use crate::discovery::DcDiscoveryFilter;
 #[cfg(test)]
 use dynamo_runtime::discovery::DiscoveryQuery;
 use std::collections::HashSet;

@@ -87,14 +87,14 @@ impl KvSourceMembershipWatch {
     }
 }
 
-pub(crate) struct KvSourceMembershipCoordinator {
+pub struct KvSourceMembershipCoordinator {
     sender: watch::Sender<KvSourceMembershipView>,
     anchor: watch::Receiver<KvSourceMembershipView>,
     cancel: CancellationToken,
 }
 
 impl KvSourceMembershipCoordinator {
-    pub(crate) fn start(
+    pub fn start(
         serving_endpoint: EndpointId,
         runtime_configs: RuntimeConfigWatch,
         discovery: Arc<dyn Discovery>,
@@ -118,7 +118,7 @@ impl KvSourceMembershipCoordinator {
         coordinator
     }
 
-    pub(crate) fn subscribe(self: &Arc<Self>) -> KvSourceMembershipWatch {
+    pub fn subscribe(self: &Arc<Self>) -> KvSourceMembershipWatch {
         KvSourceMembershipWatch {
             coordinator: self.clone(),
             receiver: self.anchor.clone(),

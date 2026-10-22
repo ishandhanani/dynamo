@@ -565,18 +565,18 @@ pub async fn start_subscriber(
     })
 }
 
-pub(crate) struct RecoverySupervisor<T: RecoveryTarget> {
+pub struct RecoverySupervisor<T: RecoveryTarget> {
     client: Arc<WorkerQueryClient<T>>,
     cancel: CancellationToken,
     task: JoinHandle<()>,
 }
 
 impl<T: RecoveryTarget> RecoverySupervisor<T> {
-    pub(crate) fn client(&self) -> &Arc<WorkerQueryClient<T>> {
+    pub fn client(&self) -> &Arc<WorkerQueryClient<T>> {
         &self.client
     }
 
-    pub(crate) async fn shutdown(self) {
+    pub async fn shutdown(self) {
         self.cancel.cancel();
         self.client.shutdown().await;
         if let Err(error) = self.task.await
@@ -588,7 +588,7 @@ impl<T: RecoveryTarget> RecoverySupervisor<T> {
 }
 
 #[allow(clippy::too_many_arguments)]
-pub(crate) async fn start_target_subscriber<T: RecoveryTarget>(
+pub async fn start_target_subscriber<T: RecoveryTarget>(
     component: Component,
     serving_endpoint: EndpointId,
     target: T,

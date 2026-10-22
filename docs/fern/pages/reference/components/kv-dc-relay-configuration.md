@@ -136,7 +136,7 @@ hold a maximum CBI1 frame plus its required overhead.
 A complete snapshot chunk contains 4 MiB of bucket words plus framing. Configure clients and
 sidecars to accept the server's message size; tonic's default 4 MiB receive limit is insufficient
 for a maximum chunk. Resource exhaustion and snapshot progress deadlines are described in the
-[gRPC contract](https://github.com/ai-dynamo/dynamo/blob/main/lib/llm/src/kv_dc_relay/docs/grpc-contract.md).
+[gRPC contract](https://github.com/ai-dynamo/dynamo/blob/main/lib/kv-dc-relay/src/docs/grpc-contract.md).
 
 ## Diagnostic Endpoints
 
@@ -158,5 +158,5 @@ separately. Terminal host or transport failures stop the component with a nonzer
 ## Sources
 
 - [Python argument parsing](https://github.com/ai-dynamo/dynamo/blob/main/components/src/dynamo/kv_dc_relay/cli.py)
-- [Producer defaults](https://github.com/ai-dynamo/dynamo/blob/main/lib/llm/src/kv_dc_relay/host.rs)
-- [gRPC adapter defaults and validation](https://github.com/ai-dynamo/dynamo/blob/main/lib/llm/src/kv_dc_relay/wan/grpc/config.rs)
+- [Producer defaults](https://github.com/ai-dynamo/dynamo/blob/main/lib/kv-dc-relay/src/host.rs)
+- [gRPC adapter defaults and validation](https://github.com/ai-dynamo/dynamo/blob/main/lib/kv-dc-relay/src/wan/grpc/config.rs)

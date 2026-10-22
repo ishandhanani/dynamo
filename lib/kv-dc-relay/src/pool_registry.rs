@@ -26,7 +26,7 @@ use super::publication::{
     PublicationHub, PublicationHubConfig, PublicationHubError, PublicationHubSubscription,
     TerminalFailure, publication_lease,
 };
-use crate::local_model::runtime_config::ModelRuntimeConfig;
+use dynamo_llm::local_model::runtime_config::ModelRuntimeConfig;
 
 const DEFAULT_CKF_ALLOCATION_CONCURRENCY: usize = 2;
 const DEFAULT_INITIALIZED_POOL_HUBS: usize = 64;
@@ -1511,13 +1511,13 @@ mod tests {
     use tokio_util::sync::CancellationToken;
 
     use super::*;
-    use crate::kv_dc_relay::discovery::DcMembershipView;
-    use crate::kv_dc_relay::identity::{KvQueryHashFormat, ModelTarget};
-    use crate::kv_dc_relay::publication::{
+    use crate::discovery::DcMembershipView;
+    use crate::identity::{KvQueryHashFormat, ModelTarget};
+    use crate::publication::{
         PublicationErrorKind, PublicationFrameKind, RegistryPublicationSource,
         RelayPublicationSource,
     };
-    use crate::kv_dc_relay::topology::TopologyPublisher;
+    use crate::topology::TopologyPublisher;
 
     type TestCkfBuilder =
         Box<dyn FnOnce(CkfConfig) -> Result<DcCkfState, CkfBuildError> + Send + 'static>;

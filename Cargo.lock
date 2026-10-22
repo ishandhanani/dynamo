@@ -2498,6 +2498,40 @@ dependencies = [
 ]
 
 [[package]]
+name = "dynamo-kv-dc-relay"
+version = "1.6.0"
+dependencies = [
+ "anyhow",
+ "arc-swap",
+ "async-stream",
+ "async-trait",
+ "blake3",
+ "bytes",
+ "dynamo-kv-router",
+ "dynamo-llm",
+ "dynamo-runtime",
+ "futures",
+ "futures-util",
+ "parking_lot",
+ "prost 0.13.5",
+ "rand 0.9.4",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tokio",
+ "tokio-stream",
+ "tokio-util",
+ "tonic 0.13.1",
+ "tonic-build 0.13.1",
+ "tonic-health 0.13.1",
+ "tonic-reflection",
+ "tracing",
+ "xxhash-rust",
+]
+
+[[package]]
 name = "dynamo-kv-hashing"
 version = "1.6.0"
 dependencies = [
@@ -2656,7 +2690,6 @@ dependencies = [
  "ffmpeg-next",
  "flate2",
  "futures",
- "futures-util",
  "galil-seiferas",
  "half",
  "hf-hub 0.4.3",
@@ -2715,8 +2748,6 @@ dependencies = [
  "tokio-util",
  "tonic 0.13.1",
  "tonic-build 0.13.1",
- "tonic-health 0.13.1",
- "tonic-reflection",
  "tower 0.5.3",
  "tower-http",
  "tracing",

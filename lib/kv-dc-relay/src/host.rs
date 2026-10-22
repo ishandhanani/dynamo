@@ -60,17 +60,17 @@ use super::publication::{
 use super::resolution::stable_dc_id;
 use super::topology::{TopologyPublisher, TopologySnapshot};
 use super::wan::grpc::{GrpcTransport, KvDcRelayGrpcConfig};
-use crate::discovery::{
+use dynamo_llm::discovery::{
     KvSourceMembershipCoordinator, KvSourceMembershipView, KvSourceMembershipWatch,
 };
 #[cfg(feature = "ckf-diagnostics")]
-use crate::kv_router::indexer::WorkerQueryHealthSnapshot;
-use crate::kv_router::indexer::{
+use dynamo_llm::kv_router::indexer::WorkerQueryHealthSnapshot;
+use dynamo_llm::kv_router::indexer::{
     DEFAULT_RECOVERY_ATTEMPT_TIMEOUT, RecoverySupervisor, TargetFaultDisposition,
     start_target_subscriber,
 };
-use crate::kv_router::metrics_subscriber::KvMetricsSubscriber;
-use crate::local_model::runtime_config::ModelRuntimeConfig;
+use dynamo_llm::kv_router::metrics_subscriber::KvMetricsSubscriber;
+use dynamo_llm::local_model::runtime_config::ModelRuntimeConfig;
 
 pub const DEFAULT_EXPECTED_UNIQUE_BLOCKS: usize = 1_048_576;
 const DEFAULT_RECOVERY_FETCH_CONCURRENCY: usize = 16;
@@ -2571,7 +2571,7 @@ mod tests {
 
     use super::super::actor::ActorFaultCategory;
     use super::*;
-    use crate::discovery::{KvEventSource, KvSourceMembership};
+    use dynamo_llm::discovery::{KvEventSource, KvSourceMembership};
 
     #[test]
     fn publication_capacity_rejects_ckf_larger_than_cbi1() {
@@ -2701,7 +2701,7 @@ mod tests {
         )
         .await
         .unwrap();
-        let source = crate::discovery::KvEventSource {
+        let source = dynamo_llm::discovery::KvEventSource {
             kv_state_endpoint: endpoint.clone(),
             worker,
             publisher_id: publisher.publisher_id(),
@@ -2748,7 +2748,7 @@ mod tests {
         model: &str,
         artifact: &str,
         kv_state_endpoint: EndpointId,
-        worker_type: crate::worker_type::WorkerType,
+        worker_type: dynamo_llm::worker_type::WorkerType,
     ) -> EndpointMembership {
         projected_membership_with_metadata(
             endpoint,
@@ -2769,11 +2769,11 @@ mod tests {
         model: &str,
         artifact: &str,
         kv_state_endpoint: EndpointId,
-        worker_type: Option<crate::worker_type::WorkerType>,
+        worker_type: Option<dynamo_llm::worker_type::WorkerType>,
         aliases: Vec<String>,
         context_length: Option<u32>,
     ) -> EndpointMembership {
-        let mut card = crate::model_card::ModelDeploymentCard::with_name_only(model);
+        let mut card = dynamo_llm::model_card::ModelDeploymentCard::with_name_only(model);
         card.source_path = Some(artifact.to_string());
         card.kv_cache_block_size = 64;
         card.worker_type = worker_type;
@@ -3708,7 +3708,7 @@ mod tests {
             "llama",
             "meta/llama",
             prefill_kv_endpoint,
-            crate::worker_type::WorkerType::Prefill,
+            dynamo_llm::worker_type::WorkerType::Prefill,
         );
         let decode_membership = projected_membership_with_role(
             &decode_endpoint,
@@ -3716,7 +3716,7 @@ mod tests {
             "llama",
             "meta/llama",
             decode_kv_endpoint,
-            crate::worker_type::WorkerType::Decode,
+            dynamo_llm::worker_type::WorkerType::Decode,
         );
         let prefill_endpoint_id = prefill_membership.endpoint.clone();
         let decode_endpoint_id = decode_membership.endpoint.clone();

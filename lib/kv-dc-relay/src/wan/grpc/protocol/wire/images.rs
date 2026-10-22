@@ -2,4 +2,4 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! CBI1 wire primitives shared with the universal publication source.
-pub use crate::kv_dc_relay::publication::cbi1::*;
+pub use crate::publication::cbi1::*;

@@ -49,7 +49,7 @@ snapshot. `RelayIdentity` identifies the runtime and Relay incarnation. Descript
 does not extend the subscription key; `serving_endpoint` names the owner, not an inference ingress.
 
 Exact key fields and compatibility rules belong to the
-[gRPC contract](https://github.com/ai-dynamo/dynamo/blob/main/lib/llm/src/kv_dc_relay/docs/grpc-contract.md#producer-identity-key).
+[gRPC contract](https://github.com/ai-dynamo/dynamo/blob/main/lib/kv-dc-relay/src/docs/grpc-contract.md#producer-identity-key).
 
 ## Canonical Models and LoRA
 
@@ -76,7 +76,7 @@ streams, plus a Relay identity query. It forwards universal publication state wi
 CKF mirror or publication pipeline.
 
 RPC schemas, message validation, versioning, errors, and reconnect rules are specified in the
-[gRPC contract](https://github.com/ai-dynamo/dynamo/blob/main/lib/llm/src/kv_dc_relay/docs/grpc-contract.md).
+[gRPC contract](https://github.com/ai-dynamo/dynamo/blob/main/lib/kv-dc-relay/src/docs/grpc-contract.md).
 The adapter does not provide an overlap RPC or request-routing policy.
 
 ## CKF Publication
@@ -110,9 +110,9 @@ Worker recovery is rank-local; fencing withdraws one producer generation. Catalo
 readiness, and load have independent revisions and recovery, not one atomic transaction.
 
 For producer invariants, see the
-[implementation guide](https://github.com/ai-dynamo/dynamo/blob/main/lib/llm/src/kv_dc_relay/docs/architecture.md).
+[implementation guide](https://github.com/ai-dynamo/dynamo/blob/main/lib/kv-dc-relay/src/docs/architecture.md).
 For consumer actions, see the
-[contract lifecycle rules](https://github.com/ai-dynamo/dynamo/blob/main/lib/llm/src/kv_dc_relay/docs/grpc-contract.md#consumer-lifecycle-rules).
+[contract lifecycle rules](https://github.com/ai-dynamo/dynamo/blob/main/lib/kv-dc-relay/src/docs/grpc-contract.md#consumer-lifecycle-rules).
 
 ## Transport
 

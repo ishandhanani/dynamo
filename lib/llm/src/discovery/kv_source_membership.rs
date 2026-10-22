@@ -184,7 +184,7 @@ impl<S> KvSourceMembershipView<S> {
     ///
     /// Metadata-only runtime changes do not require waiting for another source-membership
     /// publication. Endpoint mapping and the logical worker/rank set do.
-    pub(crate) fn matches_binding_inputs(
+    pub fn matches_binding_inputs(
         &self,
         runtime_configs: &HashMap<WorkerId, ModelRuntimeConfig>,
     ) -> bool {

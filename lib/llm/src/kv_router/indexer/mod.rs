@@ -41,17 +41,17 @@ pub use self::embedding_cache::{
 use self::remote::RemoteIndexer;
 pub use self::remote::{ServedIndexerHandle, ServedIndexerMode, ensure_served_indexer_service};
 #[cfg(feature = "ckf-diagnostics")]
-pub(crate) use recovery::WorkerQueryHealthSnapshot;
-pub(crate) use recovery::{
-    DEFAULT_RECOVERY_ATTEMPT_TIMEOUT, KvEventSubscriptionHandle, RecoveryResetReason,
-    RecoverySupervisor, RecoveryTarget, TargetFaultDisposition, start_target_subscriber,
+pub use recovery::WorkerQueryHealthSnapshot;
+pub use recovery::{
+    DEFAULT_RECOVERY_ATTEMPT_TIMEOUT, RecoveryResetReason, RecoverySupervisor, RecoveryTarget,
+    TargetFaultDisposition, start_target_subscriber,
 };
 pub(crate) use recovery::{
-    KvStateAgentStatusCell, start_subscriber, start_worker_kv_query_endpoint,
-    start_worker_kv_query_endpoint_with_status,
+    KvEventSubscriptionHandle, KvStateAgentStatusCell, start_subscriber,
+    start_worker_kv_query_endpoint, start_worker_kv_query_endpoint_with_status,
 };
-#[cfg(test)]
-pub(crate) use recovery::{WorkerQueryClient, WorkerQueryTransport};
+#[cfg(any(test, feature = "testing"))]
+pub use recovery::{WorkerQueryClient, WorkerQueryTransport};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ResolvedApproximatePrimaryPolicy {

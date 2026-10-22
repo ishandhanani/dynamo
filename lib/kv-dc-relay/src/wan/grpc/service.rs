@@ -19,12 +19,12 @@ use super::identity::{
 use super::load::LoadUpdateHub;
 use super::protocol as proto;
 use super::source::GrpcPublicationSource;
-use crate::kv_dc_relay::identity::{DcPoolCatalog, DcRelayIdentity};
-use crate::kv_dc_relay::publication::{
+use crate::identity::{DcPoolCatalog, DcRelayIdentity};
+use crate::publication::{
     PoolPublicationStream, PublicationError, PublicationErrorKind, PublicationFrame,
     PublicationFrameKind,
 };
-use crate::kv_dc_relay::topology::{TopologyReadinessState, TopologySnapshot};
+use crate::topology::{TopologyReadinessState, TopologySnapshot};
 use proto::RelayErrorReason;
 
 type CatalogStream =

@@ -8,15 +8,14 @@ use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
 use tokio::sync::OnceCell;
 
-use super::*;
 use crate::{Endpoint, to_pyerr};
 
 #[pyclass]
 pub struct KvDcRelay {
     endpoint: dynamo_runtime::component::Endpoint,
     dc_id: String,
-    config: llm_rs::kv_dc_relay::KvDcRelayConfig,
-    inner: Arc<OnceCell<Arc<llm_rs::kv_dc_relay::KvDcRelay>>>,
+    config: dynamo_kv_dc_relay::KvDcRelayConfig,
+    inner: Arc<OnceCell<Arc<dynamo_kv_dc_relay::KvDcRelay>>>,
 }
 
 #[pymethods]
@@ -82,7 +81,7 @@ impl KvDcRelay {
         }
         let sources_file = match sources_file {
             Some(path) if !path.trim().is_empty() => {
-                Some(llm_rs::kv_dc_relay::KvDcRelaySourcesFile {
+                Some(dynamo_kv_dc_relay::KvDcRelaySourcesFile {
                     path: path.into(),
                     connection_revision,
                 })
@@ -114,7 +113,7 @@ impl KvDcRelay {
             ));
         }
 
-        let mut producer = llm_rs::kv_dc_relay::KvDcRelayProducerConfig {
+        let mut producer = dynamo_kv_dc_relay::KvDcRelayProducerConfig {
             publication_threshold,
             publication_delay_ms,
             recovery_attempt_timeout_ms,
@@ -126,7 +125,7 @@ impl KvDcRelay {
                 let bind = bind.parse().map_err(|error| {
                     PyValueError::new_err(format!("invalid KV DC Relay bind address: {error}"))
                 })?;
-                Some(llm_rs::kv_dc_relay::wan::grpc::KvDcRelayGrpcConfig::new(
+                Some(dynamo_kv_dc_relay::wan::grpc::KvDcRelayGrpcConfig::new(
                     bind,
                 ))
             }
@@ -215,11 +214,11 @@ impl KvDcRelay {
         Ok(Self {
             endpoint: endpoint.inner,
             dc_id,
-            config: llm_rs::kv_dc_relay::KvDcRelayConfig {
+            config: dynamo_kv_dc_relay::KvDcRelayConfig {
                 sources: match sources_file {
-                    Some(file) => llm_rs::kv_dc_relay::KvDcRelaySources::File(file),
-                    None => llm_rs::kv_dc_relay::KvDcRelaySources::Discovery(
-                        llm_rs::kv_dc_relay::KvDcRelayDiscoveryConfig {
+                    Some(file) => dynamo_kv_dc_relay::KvDcRelaySources::File(file),
+                    None => dynamo_kv_dc_relay::KvDcRelaySources::Discovery(
+                        dynamo_kv_dc_relay::KvDcRelayDiscoveryConfig {
                             namespaces,
                             endpoint_prefixes,
                             watch_all,
@@ -242,8 +241,8 @@ impl KvDcRelay {
             inner
                 .get_or_try_init(|| async move {
                     let (mode, connection_revision) = match &config.sources {
-                        llm_rs::kv_dc_relay::KvDcRelaySources::Discovery(_) => ("discovery", None),
-                        llm_rs::kv_dc_relay::KvDcRelaySources::File(file) => {
+                        dynamo_kv_dc_relay::KvDcRelaySources::Discovery(_) => ("discovery", None),
+                        dynamo_kv_dc_relay::KvDcRelaySources::File(file) => {
                             ("from-file", file.connection_revision.clone())
                         }
                     };
@@ -255,7 +254,7 @@ impl KvDcRelay {
                         "operator-managed Relay requires the system HTTP server"
                     );
                     let relay = Arc::new(
-                        llm_rs::kv_dc_relay::KvDcRelay::start(
+                        dynamo_kv_dc_relay::KvDcRelay::start(
                             endpoint.component().clone(),
                             dc_id,
                             config,
@@ -364,7 +363,7 @@ impl KvDcRelay {
 }
 
 impl KvDcRelay {
-    fn started(&self) -> PyResult<Arc<llm_rs::kv_dc_relay::KvDcRelay>> {
+    fn started(&self) -> PyResult<Arc<dynamo_kv_dc_relay::KvDcRelay>> {
         self.inner
             .get()
             .cloned()

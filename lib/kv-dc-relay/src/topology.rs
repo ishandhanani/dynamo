@@ -17,9 +17,9 @@ use super::identity::{
     CanonicalModelId, CanonicalModelRegistration, DcPoolCatalog, KvQuerySemantics, ModelTarget,
     WorkerRole,
 };
-use crate::discovery::readiness::{ReadinessUnit, evaluate_readiness};
-use crate::model_type::ModelType;
-use crate::worker_type::WorkerType;
+use dynamo_llm::discovery::readiness::{ReadinessUnit, evaluate_readiness};
+use dynamo_llm::model_type::ModelType;
+use dynamo_llm::worker_type::WorkerType;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TopologyReadinessState {
@@ -507,7 +507,7 @@ mod tests {
     };
     use super::super::resolution::resolve_indexer_domain;
     use super::*;
-    use crate::model_card::ModelDeploymentCard;
+    use dynamo_llm::model_card::ModelDeploymentCard;
 
     fn model(value: &str) -> CanonicalModelId {
         CanonicalModelId::new(value).unwrap()

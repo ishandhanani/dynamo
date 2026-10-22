@@ -11,6 +11,7 @@ members = [
     "lib/metrics",
     "lib/http-server",
     "lib/kvbm",
+    "lib/kv-dc-relay",
     "lib/tokens",
     "lib/truthy",
     "lib/data-gen",
@@ -63,6 +64,7 @@ aisimulate-core = { version = "=0.13.0-dev.202610160000000073" }
 dynamo-metrics = { path = "lib/metrics", version = "1.6.0" }
 dynamo-http-server = { path = "lib/http-server", version = "1.6.0" }
 dynamo-kvbm = { path = "lib/kvbm", version = "1.6.0" }
+dynamo-kv-dc-relay = { path = "lib/kv-dc-relay", version = "1.6.0" }
 dynamo-runtime = { path = "lib/runtime", version = "1.6.0" }
 dynamo-runtime-protocols = { path = "lib/runtime-protocols", version = "1.6.0" }
 dynamo-llm = { path = "lib/llm", version = "1.6.0", default-features = false }

@@ -20,7 +20,7 @@ use tokio::sync::{Mutex, Semaphore, watch};
 use tokio_util::sync::CancellationToken;
 
 use super::recovery_lane::{RECOVERY_CONCURRENCY_LIMIT, RecoveryLane};
-use super::target::{IndexerRecoveryTarget, RecoveryResetReason, RecoveryTarget};
+use super::target::{RecoveryResetReason, RecoveryTarget};
 use super::worker_query_state::{LiveEventAction, RankState, RecoveryKey};
 use super::worker_query_transport::{RuntimeWorkerQueryTransport, WorkerQueryTransport};
 use crate::discovery::{
@@ -30,7 +30,7 @@ use crate::discovery::{
 
 const RECOVERY_MAX_RETRIES: u32 = 8;
 const RECOVERY_INITIAL_BACKOFF_MS: u64 = 200;
-pub(crate) const DEFAULT_RECOVERY_ATTEMPT_TIMEOUT: Duration = Duration::from_secs(30);
+pub const DEFAULT_RECOVERY_ATTEMPT_TIMEOUT: Duration = Duration::from_secs(30);
 #[cfg(test)]
 const KV_EVENT_TOPIC: &str = dynamo_kv_router::protocols::KV_EVENT_SUBJECT;
 
@@ -70,7 +70,7 @@ struct SourceSlot {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum TargetFaultDisposition {
+pub enum TargetFaultDisposition {
     Recovering,
     ResetLiveOnly,
     Fenced,
@@ -79,12 +79,12 @@ pub(crate) enum TargetFaultDisposition {
 
 #[cfg(feature = "ckf-diagnostics")]
 #[derive(Debug, Clone, Copy, Default)]
-pub(crate) struct WorkerQueryHealthSnapshot {
-    pub(crate) worker_count: usize,
-    pub(crate) rank_count: usize,
-    pub(crate) recovering_rank_count: usize,
-    pub(crate) pending_live_event_count: usize,
-    pub(crate) discovered_endpoint_count: usize,
+pub struct WorkerQueryHealthSnapshot {
+    pub worker_count: usize,
+    pub rank_count: usize,
+    pub recovering_rank_count: usize,
+    pub pending_live_event_count: usize,
+    pub discovered_endpoint_count: usize,
 }
 
 impl SourceSlot {
@@ -99,7 +99,7 @@ impl SourceSlot {
 /// The discovery advertisement is the sole authority for the relationship between a logical
 /// rank, its event publisher incarnation, and its optional callable recovery target. Runtime
 /// configs only constrain which logical ranks are currently expected by the serving endpoint.
-pub(crate) struct WorkerQueryClient<T = IndexerRecoveryTarget> {
+pub struct WorkerQueryClient<T> {
     transport: Arc<dyn WorkerQueryTransport>,
     target: T,
     membership_rx: watch::Receiver<KvSourceMembershipView>,
@@ -157,8 +157,8 @@ impl<T: RecoveryTarget> WorkerQueryClient<T> {
         Ok(client)
     }
 
-    #[cfg(test)]
-    pub(crate) fn new_target_for_test(
+    #[cfg(any(test, feature = "testing"))]
+    pub fn new_target_for_test(
         target: T,
         membership_rx: watch::Receiver<KvSourceMembershipView>,
         transport: Arc<dyn WorkerQueryTransport>,
@@ -172,7 +172,7 @@ impl<T: RecoveryTarget> WorkerQueryClient<T> {
         )
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "testing"))]
     fn new_target_for_test_with_recovery(
         target: T,
         membership_rx: watch::Receiver<KvSourceMembershipView>,
@@ -197,7 +197,7 @@ impl<T: RecoveryTarget> WorkerQueryClient<T> {
     /// Apply the latest shared membership snapshot before the event subscriber consumes its
     /// corresponding scope. Re-reading after acquiring the lock prevents a delayed reconciler
     /// from applying an older watch value after a newer one.
-    pub(crate) async fn sync_membership(self: &Arc<Self>) -> KvSourceMembershipView {
+    pub async fn sync_membership(self: &Arc<Self>) -> KvSourceMembershipView {
         let _sync = self.membership_sync.lock().await;
         let view = self.membership_rx.borrow().clone();
         self.reconcile_view(view.clone()).await;
@@ -411,7 +411,7 @@ impl<T: RecoveryTarget> WorkerQueryClient<T> {
     }
 
     #[cfg(feature = "ckf-diagnostics")]
-    pub(crate) async fn health_snapshot(&self) -> WorkerQueryHealthSnapshot {
+    pub async fn health_snapshot(&self) -> WorkerQueryHealthSnapshot {
         let slots: Vec<_> = self.slots.iter().map(|entry| entry.clone()).collect();
         let mut workers = std::collections::HashSet::new();
         let mut recovering_rank_count = 0;
@@ -437,7 +437,7 @@ impl<T: RecoveryTarget> WorkerQueryClient<T> {
         }
     }
 
-    pub(crate) async fn handle_target_fault(
+    pub async fn handle_target_fault(
         self: &Arc<Self>,
         worker_id: u64,
         dp_rank: u32,
@@ -483,7 +483,7 @@ impl<T: RecoveryTarget> WorkerQueryClient<T> {
         TargetFaultDisposition::ResetLiveOnly
     }
 
-    pub(crate) async fn reject_source(
+    pub async fn reject_source(
         &self,
         worker_id: u64,
         dp_rank: u32,
@@ -568,7 +568,7 @@ impl<T: RecoveryTarget> WorkerQueryClient<T> {
     }
 
     /// Handle one event envelope after a single immutable publisher lookup.
-    pub(crate) async fn handle_live_batch(
+    pub async fn handle_live_batch(
         self: &Arc<Self>,
         publisher_id: PublisherId,
         events: Vec<RouterEvent>,
@@ -1054,6 +1054,9 @@ impl<T: RecoveryTarget> WorkerQueryClient<T> {
         Err(error)
     }
 }
+
+#[cfg(test)]
+use super::target::IndexerRecoveryTarget;
 
 #[cfg(test)]
 impl WorkerQueryClient<IndexerRecoveryTarget> {

@@ -10,10 +10,10 @@ use tokio_util::sync::CancellationToken;
 use tonic::Status;
 
 use super::protocol::RelayErrorReason;
-use crate::kv_dc_relay::identity::{DcPoolCatalog, DcRelayIdentity};
-use crate::kv_dc_relay::load::PoolLoadSnapshot;
-use crate::kv_dc_relay::publication::{PoolPublicationStream, RelayPublicationSource};
-use crate::kv_dc_relay::topology::TopologySnapshot;
+use crate::identity::{DcPoolCatalog, DcRelayIdentity};
+use crate::load::PoolLoadSnapshot;
+use crate::publication::{PoolPublicationStream, RelayPublicationSource};
+use crate::topology::TopologySnapshot;
 
 /// Private gRPC driver facade over the transport-neutral publisher.
 /// The lifecycle token is supplied by the host, separately from the read-only source.

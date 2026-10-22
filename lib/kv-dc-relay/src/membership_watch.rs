@@ -359,11 +359,9 @@ impl DcMembershipWatch {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::kv_dc_relay::namespace_source::discovery::KvDcRelayDiscoveryConfig;
-    use crate::kv_dc_relay::namespace_source::file::{
-        KvDcRelaySourcesFile, RelaySource, SourcesDocument,
-    };
-    use crate::{model_card::ModelDeploymentCard, worker_type::WorkerType};
+    use crate::namespace_source::discovery::KvDcRelayDiscoveryConfig;
+    use crate::namespace_source::file::{KvDcRelaySourcesFile, RelaySource, SourcesDocument};
+    use dynamo_llm::{model_card::ModelDeploymentCard, worker_type::WorkerType};
     use dynamo_runtime::discovery::{DiscoverySpec, MockDiscovery, SharedMockRegistry};
     use dynamo_runtime::protocols::EndpointId;
 
@@ -726,7 +724,7 @@ mod tests {
         });
         let membership = DcMembershipWatch::start_sources(
             discovery,
-            crate::kv_dc_relay::host::KvDcRelaySources::Discovery(KvDcRelayDiscoveryConfig {
+            crate::host::KvDcRelaySources::Discovery(KvDcRelayDiscoveryConfig {
                 namespaces: vec!["a".into()],
                 ..Default::default()
             }),
@@ -744,7 +742,7 @@ mod tests {
             Arc::new(MockDiscovery::new(Some(1), SharedMockRegistry::new()));
         let membership = DcMembershipWatch::start_sources(
             discovery.clone(),
-            crate::kv_dc_relay::host::KvDcRelaySources::Discovery(KvDcRelayDiscoveryConfig {
+            crate::host::KvDcRelaySources::Discovery(KvDcRelayDiscoveryConfig {
                 watch_all: true,
                 endpoint_prefixes: vec!["a.worker".into()],
                 ..Default::default()

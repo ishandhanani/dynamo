@@ -90,6 +90,7 @@
 /components/src/dynamo/thunderagent_router/                                                             @ai-dynamo/dynamo-router-codeowners
 
 # === global-router  (@ai-dynamo/dynamo-global-router-codeowners) ===
+/lib/kv-dc-relay/                                                                                       @ai-dynamo/dynamo-global-router-codeowners
 /components/src/dynamo/kv_dc_relay/                                                                     @ai-dynamo/dynamo-global-router-codeowners
 
 # === backend-vllm  (@ai-dynamo/dynamo-backend-vllm-codeowners) ===
@@ -515,7 +516,6 @@ requirements.txt                                                                
 /lib/llm/src/entrypoint/                                                                                @ai-dynamo/dynamo-frontend-codeowners
 /tests/kvbm_integration/                                                                                @ai-dynamo/dynamo-kv-memory-codeowners
 /lib/llm/src/grpc/protos/                                                                               @ai-dynamo/dynamo-frontend-codeowners
-/lib/llm/src/kv_dc_relay/                                                                               @ai-dynamo/dynamo-global-router-codeowners
 /lib/llm/src/kv_router.rs                                                                               @ai-dynamo/dynamo-router-codeowners
 /lib/llm/src/protocols.rs                                                                               @ai-dynamo/dynamo-frontend-codeowners
 /lib/runtime/src/metrics/                                                                               @ai-dynamo/dynamo-observability-codeowners
@@ -525,7 +525,6 @@ requirements.txt                                                                
 /lib/llm/src/lora/routing/                                                                              @ai-dynamo/dynamo-runtime-codeowners
 /lib/llm/src/preprocessor/                                                                              @ai-dynamo/dynamo-frontend-codeowners
 /tests/gpu_memory_service/                                                                              @ai-dynamo/dynamo-gms-codeowners
-/lib/llm/src/kv_dc_relay.rs                                                                             @ai-dynamo/dynamo-global-router-codeowners
 /lib/mocker/servers/sglang/                                                                             @ai-dynamo/dynamo-backend-sglang-codeowners
 /lib/mocker/servers/trtllm/                                                                             @ai-dynamo/dynamo-backend-trtllm-codeowners
 /lib/runtime/src/metrics.rs                                                                             @ai-dynamo/dynamo-observability-codeowners
@@ -589,7 +588,6 @@ requirements.txt                                                                
 /components/src/dynamo/vllm/multimodal_handlers/                                                        @ai-dynamo/dynamo-multimodal-codeowners
 /components/src/dynamo/common/tests/test_snapshot*                                                      @ai-dynamo/dynamo-gms-codeowners
 /container/templates/sglang_xpu_framework.Dockerfile                                                    @ai-dynamo/dynamo-xpu-codeowners
-/lib/llm/tests/fixtures/relay-sources-canonical.json                                                    @ai-dynamo/dynamo-global-router-codeowners
 /components/src/dynamo/trtllm/request_handlers/diffusion/                                               @ai-dynamo/dynamo-diffusion-codeowners
 /docs/fern/pages/kubernetes/kv-aware-routing/kv-dc-relay.md                                             @ai-dynamo/dynamo-global-router-codeowners
 /components/src/dynamo/sglang/request_handlers/image_diffusion/                                         @ai-dynamo/dynamo-diffusion-codeowners

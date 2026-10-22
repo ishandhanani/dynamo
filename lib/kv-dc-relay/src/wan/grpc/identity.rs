@@ -10,7 +10,7 @@ use dynamo_kv_router::indexer::cuckoo::{DcCkfFormatIdentity, ProducerIdentity};
 use dynamo_runtime::protocols::EndpointId;
 
 use super::protocol as proto;
-use crate::kv_dc_relay::identity::{
+use crate::identity::{
     CanonicalModelRegistration, DcPoolDescriptor, DcRelayIdentity, KvQueryHashFormat,
     KvQuerySemantics, ModelTarget, WorkerRole,
 };

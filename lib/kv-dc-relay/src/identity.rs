@@ -10,7 +10,7 @@ use dynamo_kv_router::indexer::cuckoo::ProducerIdentity;
 use dynamo_runtime::protocols::EndpointId;
 use serde::{Deserialize, Deserializer, Serialize};
 
-use crate::worker_type::WorkerType;
+use dynamo_llm::worker_type::WorkerType;
 
 fn validate_identity_text<E>(
     value: impl Into<String>,

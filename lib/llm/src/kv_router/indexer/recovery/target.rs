@@ -8,7 +8,7 @@ use crate::discovery::PublisherId;
 use crate::kv_router::Indexer;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum RecoveryResetReason {
+pub enum RecoveryResetReason {
     Lifecycle,
     TreeDumpFailed,
     TargetFault,
@@ -19,7 +19,7 @@ pub(crate) enum RecoveryResetReason {
 /// Ordinary events complete when the destination queue accepts them. Exact-rank
 /// reset and replacement are completion barriers. Targets never provide recovery
 /// state themselves; the source remains the worker's exact local indexer.
-pub(crate) trait RecoveryTarget: Send + Sync + 'static {
+pub trait RecoveryTarget: Send + Sync + 'static {
     fn admit_event(
         &self,
         publisher_id: PublisherId,

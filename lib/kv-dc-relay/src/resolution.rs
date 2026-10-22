@@ -12,7 +12,7 @@ use dynamo_kv_router::indexer::cuckoo::{CKF_LANE_COUNT, GlobalCkfIndexer};
 use dynamo_runtime::protocols::EndpointId;
 
 use super::identity::{KvQueryHashFormat, KvQuerySemantics, KvQuerySemanticsError};
-use crate::model_card::ModelDeploymentCard;
+use dynamo_llm::model_card::ModelDeploymentCard;
 
 #[derive(Debug, Clone)]
 pub(crate) struct ResolvedIndexerDomain {

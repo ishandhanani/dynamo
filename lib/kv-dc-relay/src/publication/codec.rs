@@ -221,7 +221,7 @@ mod tests {
     };
 
     use super::*;
-    use crate::kv_dc_relay::identity::{
+    use crate::identity::{
         CanonicalModelId, CanonicalModelRegistration, KvQueryHashFormat, KvQuerySemantics,
         ModelAlias, ModelTarget,
     };

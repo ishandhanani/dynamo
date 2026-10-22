@@ -147,7 +147,7 @@ mod tests {
             revision: String,
         }
         let fixtures: Vec<Fixture> = serde_json::from_str(include_str!(
-            "../../../tests/fixtures/relay-sources-canonical.json"
+            "../../tests/fixtures/relay-sources-canonical.json"
         ))
         .unwrap();
         for fixture in fixtures {
@@ -194,7 +194,7 @@ mod tests {
     }
     #[test]
     fn file_namespaces_accept_discovery_names_and_reject_surrounding_whitespace() {
-        use crate::kv_dc_relay::KvDcRelayDiscoveryConfig;
+        use crate::KvDcRelayDiscoveryConfig;
 
         for namespace in [
             "model.a",

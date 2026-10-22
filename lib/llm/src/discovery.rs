@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 mod model;
-pub(crate) mod readiness;
+pub mod readiness;
 pub(crate) use model::GenerateEngineSelection;
 pub use model::Model;
 
@@ -14,7 +14,7 @@ pub use kv_source_membership::{
 };
 
 mod kv_source_watch;
-pub(crate) use kv_source_watch::KvSourceMembershipCoordinator;
+pub use kv_source_watch::KvSourceMembershipCoordinator;
 pub use kv_source_watch::KvSourceMembershipWatch;
 
 pub mod kv_state_agent;

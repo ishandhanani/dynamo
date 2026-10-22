@@ -35,7 +35,7 @@ media-ffmpeg = ["dynamo-llm/media-ffmpeg"]
 kv-indexer = ["dep:clap", "dep:tracing-subscriber", "dynamo-kv-router/standalone-indexer"]
 kv-indexer-metrics = ["kv-indexer", "dynamo-kv-router/metrics"]
 # Exposes the optional Relay stats/snapshot methods to Python diagnostic builds.
-ckf-diagnostics = ["dynamo-llm/ckf-diagnostics"]
+ckf-diagnostics = ["dynamo-llm/ckf-diagnostics", "dynamo-kv-dc-relay/ckf-diagnostics"]
 slot-tracker = ["dep:clap", "dep:tracing-subscriber", "dynamo-kv-router/standalone-slot-tracker"]
 select-service = ["dep:clap", "dep:tracing-subscriber", "dynamo-kv-router/standalone-selection"]
 # Stable request identities and deterministic replay tie-breaking for parity builds.
@@ -97,6 +97,7 @@ uuid = { version = "1.18.1" }
 
 # kv-indexer / slot-tracker / shared kv-router types
 dynamo-kv-router = { path = "../../kv-router" }
+dynamo-kv-dc-relay = { path = "../../kv-dc-relay" }
 dynamo-custom-policy-builtin = { path = "../../router-plugins/builtin" }
 dynamo-worker-selection-policy-catalog = { path = "../../router-plugins/catalog", optional = true }
 clap = { version = "4.5", features = ["derive"], optional = true }

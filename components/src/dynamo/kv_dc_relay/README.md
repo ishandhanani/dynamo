@@ -38,9 +38,9 @@ optional TLS/mTLS sidecar across trust boundaries, and do not expose the plainte
 - [Architecture and concepts](https://github.com/ai-dynamo/dynamo/blob/main/docs/fern/pages/developer-guide/knowledge-base/modular-components/router/multi-dc-kv-routing.md)
 - [Kubernetes deployment](https://github.com/ai-dynamo/dynamo/blob/main/docs/fern/pages/kubernetes/kv-aware-routing/kv-dc-relay.md)
 - [CLI, environment variables, and diagnostics](https://github.com/ai-dynamo/dynamo/blob/main/docs/fern/pages/reference/components/kv-dc-relay-configuration.md)
-- [Rust implementation](https://github.com/ai-dynamo/dynamo/blob/main/lib/llm/src/kv_dc_relay/docs/architecture.md)
-- [gRPC contract](https://github.com/ai-dynamo/dynamo/blob/main/lib/llm/src/kv_dc_relay/docs/grpc-contract.md)
-- [Protocol helpers and CBI1](https://github.com/ai-dynamo/dynamo/blob/main/lib/llm/src/kv_dc_relay/wan/grpc/protocol/README.md)
+- [Rust implementation](https://github.com/ai-dynamo/dynamo/blob/main/lib/kv-dc-relay/src/docs/architecture.md)
+- [gRPC contract](https://github.com/ai-dynamo/dynamo/blob/main/lib/kv-dc-relay/src/docs/grpc-contract.md)
+- [Protocol helpers and CBI1](https://github.com/ai-dynamo/dynamo/blob/main/lib/kv-dc-relay/src/wan/grpc/protocol/README.md)
 
 ## File mode and state
 

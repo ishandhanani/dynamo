@@ -19,10 +19,9 @@ use super::super::topology::{TopologyPublisher, TopologySnapshot};
 use super::hub::PublicationHubError;
 use super::stream::{self, PoolPublicationStream, TerminalPublicationFailure};
 
-pub(in crate::kv_dc_relay) const DEFAULT_SNAPSHOT_PROGRESS_TIMEOUT: Duration =
-    Duration::from_secs(60);
-pub(in crate::kv_dc_relay) const DEFAULT_SNAPSHOT_ENCODING_CONCURRENCY: usize = 2;
-pub(in crate::kv_dc_relay) const DEFAULT_ACTIVE_POOL_STREAMS: usize = 64;
+pub(crate) const DEFAULT_SNAPSHOT_PROGRESS_TIMEOUT: Duration = Duration::from_secs(60);
+pub(crate) const DEFAULT_SNAPSHOT_ENCODING_CONCURRENCY: usize = 2;
+pub(crate) const DEFAULT_ACTIVE_POOL_STREAMS: usize = 64;
 
 mod private {
     pub trait Sealed {}
@@ -314,8 +313,8 @@ mod tests {
     use dynamo_kv_router::indexer::cuckoo::{CkfConfig, DcCkfState};
 
     use super::*;
-    use crate::kv_dc_relay::discovery::DcMembershipView;
-    use crate::kv_dc_relay::pool_registry::{PoolActorConfig, PoolPublicationConfig};
+    use crate::discovery::DcMembershipView;
+    use crate::pool_registry::{PoolActorConfig, PoolPublicationConfig};
 
     fn producer() -> ProducerIdentity {
         let format = DcCkfState::new(CkfConfig::new(32))

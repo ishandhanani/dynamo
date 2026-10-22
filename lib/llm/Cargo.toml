@@ -37,6 +37,8 @@ bench = ["dynamo-kv-router/bench"]
 # Pull-only CKF Relay stats and snapshots. Keep this separate from `metrics`, which
 # is enabled by normal `dynamo-llm` builds and must not retain diagnostic hot-path work.
 ckf-diagnostics = []
+# Test-only hooks consumed by dependent crates' tests; never enable in release.
+testing = []
 kv-router-stress = ["dep:clap", "dep:indicatif", "bench"]
 mm-routing = ["dep:llm-multimodal", "dep:llm-tokenizer"]
 request-trace-bench = []
@@ -99,7 +101,6 @@ dashmap = { workspace = true }
 derive_builder = { workspace = true }
 either = { workspace = true }
 futures = { workspace = true }
-futures-util = { workspace = true }
 half = { version = "2", features = ["serde", "num-traits"] }
 hf-hub = { workspace = true, features = ["tokio", "rustls-tls", "ureq"] }
 http = { workspace = true }
@@ -171,8 +172,6 @@ utoipa-swagger-ui = { version = "9.0", features = ["axum"], optional = true }
 # ping version to 0.13.1 so it depends on prost 0.13.5
 # which is used across other libraries
 tonic = { version = "0.13.1", features = ["zstd"] }
-tonic-health = { workspace = true }
-tonic-reflection = { version = "0.13.1" }
 # Request prost specifically so tonic-build properly compiles protobuf message
 prost = { version = "0.13.5" }
 

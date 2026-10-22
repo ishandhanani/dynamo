@@ -11,8 +11,8 @@ use tokio_util::sync::CancellationToken;
 use super::identity::{producer_to_wire, relay_identity_to_wire, unix_timestamp};
 use super::protocol as proto;
 use super::source::GrpcPublicationSource;
-use crate::kv_dc_relay::identity::DcRelayIdentity;
-use crate::kv_dc_relay::load::PoolLoadSnapshot;
+use crate::identity::DcRelayIdentity;
+use crate::load::PoolLoadSnapshot;
 
 #[derive(Clone)]
 pub(super) struct LoadUpdateHub {
