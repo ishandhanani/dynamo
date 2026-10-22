@@ -454,22 +454,6 @@ impl MaybeError for LLMEngineOutput {
     }
 }
 
-/// What an engine output carries for the worker's backend admission gate, by
-/// the native backend contract: its `token_ids` are the tokens it generated,
-/// and a `finish_reason` marks the one terminal output that completes the
-/// request — a prefill or encode handoff's included, which may carry no token.
-/// A token-less output without one, such as a disaggregation bootstrap
-/// announcement, is interim. Usage is not a completion marker: an engine may
-/// report it early.
-impl crate::admission_gate::AdmissionResponse for LLMEngineOutput {
-    fn admission_output(&self) -> crate::admission_gate::ResponseOutput {
-        crate::admission_gate::ResponseOutput {
-            generated_token: !self.token_ids.is_empty(),
-            completion: self.finish_reason.is_some(),
-        }
-    }
-}
-
 /// Raw output from embedding engines containing base64-encoded float32 vectors.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct EmbeddingsEngineOutput {

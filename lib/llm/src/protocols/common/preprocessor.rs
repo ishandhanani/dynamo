@@ -773,14 +773,6 @@ impl PreprocessedRequest {
     }
 }
 
-/// The worker's backend admission gate admits a request under `routing.dp_rank`:
-/// the rank routing selected for this dispatch, which the backend serves it on.
-impl crate::admission_gate::AdmissionRequest for PreprocessedRequest {
-    fn dp_rank(&self) -> Option<u32> {
-        self.routing.as_ref().and_then(|routing| routing.dp_rank)
-    }
-}
-
 /// [`PreprocessedEmbeddingRequest`] is the internal representation of an embedding request
 /// after preprocessing. Contains tokenized input ready for embedding engines.
 #[derive(Serialize, Deserialize, Debug, Clone, Builder)]

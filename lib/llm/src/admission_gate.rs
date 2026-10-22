@@ -158,6 +158,8 @@ use parking_lot::Mutex;
 use tokio::sync::oneshot;
 
 use crate::model_card::ModelDeploymentCard;
+use crate::protocols::common::llm_backend::LLMEngineOutput;
+use crate::protocols::common::preprocessor::PreprocessedRequest;
 
 mod metrics;
 
@@ -578,6 +580,30 @@ impl<T: AdmissionResponse> AdmissionResponse for Annotated<T> {
         match &self.data {
             Some(data) if !self.is_error() => data.admission_output(),
             _ => ResponseOutput::INTERIM,
+        }
+    }
+}
+
+/// The worker's backend admission gate admits a request under `routing.dp_rank`:
+/// the rank routing selected for this dispatch, which the backend serves it on.
+impl AdmissionRequest for PreprocessedRequest {
+    fn dp_rank(&self) -> Option<u32> {
+        self.routing.as_ref().and_then(|routing| routing.dp_rank)
+    }
+}
+
+/// What an engine output carries for the worker's backend admission gate, by
+/// the native backend contract: its `token_ids` are the tokens it generated,
+/// and a `finish_reason` marks the one terminal output that completes the
+/// request — a prefill or encode handoff's included, which may carry no token.
+/// A token-less output without one, such as a disaggregation bootstrap
+/// announcement, is interim. Usage is not a completion marker: an engine may
+/// report it early.
+impl AdmissionResponse for LLMEngineOutput {
+    fn admission_output(&self) -> ResponseOutput {
+        ResponseOutput {
+            generated_token: !self.token_ids.is_empty(),
+            completion: self.finish_reason.is_some(),
         }
     }
 }
