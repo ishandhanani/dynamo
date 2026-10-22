@@ -27,13 +27,14 @@ use derive_builder::Builder;
 use dynamo_kv_router::identity::{ExplicitIdentityMap, IndexerIdentitySpec};
 use dynamo_runtime::{slug::Slug, storage::kv};
 use serde::{Deserialize, Serialize};
-use crate::protocols::tensor::TensorModelConfig;
+use tensor::TensorModelConfig;
 use tokenizers::Tokenizer as HfTokenizer;
 
 use crate::protocols::TokenIdType;
 use media::{MediaDecoderConfig, MediaFetcherConfig};
 
 pub mod media;
+pub mod tensor;
 
 const FALLBACK_TOKENIZER_CACHE_BYTES: usize = 64 * 1024 * 1024;
 const MAX_DEFAULT_TOKENIZER_CACHE_BYTES: u64 = 8 * 1024 * 1024 * 1024;
