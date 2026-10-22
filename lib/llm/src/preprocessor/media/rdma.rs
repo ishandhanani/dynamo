@@ -11,24 +11,13 @@ use dynamo_runtime::config::{
 };
 use flate2::{Compression, write::ZlibEncoder};
 use ndarray::{ArrayBase, Dimension, OwnedRepr};
-use serde::{Deserialize, Serialize};
 use std::io::Write;
 use std::sync::{Arc, LazyLock};
 
-use super::decoders::DecodedMediaMetadata;
-
-#[derive(Debug, PartialEq, Eq, Clone, Copy, Serialize, Deserialize)]
-pub enum DataType {
-    UINT8,
-}
-
-// Common tensor metadata shared between decoded and RDMA descriptors
-#[derive(Serialize, Deserialize, Clone, Debug)]
-pub struct MediaTensorInfo {
-    pub(crate) shape: Vec<usize>,
-    pub(crate) dtype: DataType,
-    pub(crate) metadata: Option<DecodedMediaMetadata>,
-}
+pub use crate::protocols::common::media::{
+    DataType, DecodedMediaMetadata, MediaStorageHandle, MediaTensorInfo, NixlMemoryDescriptor,
+    NixlMemoryType, RdmaMediaDataDescriptor,
+};
 
 // Decoded media data (image RGB, video frames pixels, ...)
 #[derive(Debug)]
@@ -38,51 +27,67 @@ pub struct DecodedMediaData {
     pub(crate) content_hash: Option<u64>,
 }
 
-// Decoded media data NIXL descriptor (sent to the next step in the pipeline / NATS)
+/// Convert the frontend's NIXL registration into its wire form.
+impl From<nixl::MemType> for NixlMemoryType {
+    fn from(mem_type: nixl::MemType) -> Self {
+        match mem_type {
+            nixl::MemType::Dram => Self::Dram,
+            nixl::MemType::Vram => Self::Vram,
+            nixl::MemType::Block => Self::Block,
+            nixl::MemType::Object => Self::Object,
+            nixl::MemType::File => Self::File,
+            nixl::MemType::Unknown => Self::Unknown,
+        }
+    }
+}
 
-#[derive(Serialize, Deserialize, Clone, Debug)]
-pub struct RdmaMediaDataDescriptor {
-    // b64 agent metadata
-    pub(crate) nixl_metadata: String,
-    // tensor descriptor
-    pub(crate) nixl_descriptor: NixlDescriptor,
+impl From<NixlMemoryType> for nixl::MemType {
+    fn from(mem_type: NixlMemoryType) -> Self {
+        match mem_type {
+            NixlMemoryType::Dram => Self::Dram,
+            NixlMemoryType::Vram => Self::Vram,
+            NixlMemoryType::Block => Self::Block,
+            NixlMemoryType::Object => Self::Object,
+            NixlMemoryType::File => Self::File,
+            NixlMemoryType::Unknown => Self::Unknown,
+        }
+    }
+}
 
-    #[serde(flatten)]
-    pub(crate) tensor_info: MediaTensorInfo,
+impl From<NixlDescriptor> for NixlMemoryDescriptor {
+    fn from(descriptor: NixlDescriptor) -> Self {
+        Self {
+            addr: descriptor.addr,
+            size: descriptor.size,
+            mem_type: descriptor.mem_type.into(),
+            device_id: descriptor.device_id,
+        }
+    }
+}
 
-    /// Canonical xxh3-64 key for decoded media. Image identity covers shape,
-    /// dtype, and RGB bytes; video identity additionally covers decoded
-    /// metadata that affects the model-visible token sequence.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(crate) content_hash: Option<String>,
-
-    // reference to the actual data, kept alive while the rdma descriptor is alive
-    #[serde(skip, default)]
-    #[allow(dead_code)]
-    pub(crate) source_storage: Option<Arc<nixl::NixlRegistered<SystemStorage>>>,
+impl From<NixlMemoryDescriptor> for NixlDescriptor {
+    fn from(descriptor: NixlMemoryDescriptor) -> Self {
+        Self {
+            addr: descriptor.addr,
+            size: descriptor.size,
+            mem_type: descriptor.mem_type.into(),
+            device_id: descriptor.device_id,
+        }
+    }
 }
 
 impl RdmaMediaDataDescriptor {
     #[cfg(all(feature = "mm-routing", feature = "media-ffmpeg"))]
     fn local_payload(&self) -> Option<&[u8]> {
         use dynamo_memory::actions::Slice;
-        let registered = self.source_storage.as_ref()?;
+        let registered = self
+            .source_storage
+            .as_ref()?
+            .downcast_ref::<nixl::NixlRegistered<SystemStorage>>()?;
         let storage = registered.storage();
         // SAFETY: the descriptor keeps the registered SystemStorage alive and
         // request construction does not mutate it while this borrow exists.
         unsafe { storage.as_slice().ok() }
-    }
-
-    /// Canonical cache/routing key serialized on the descriptor.
-    pub(crate) fn content_hash_key(&self) -> Option<&str> {
-        self.content_hash.as_deref()
-    }
-
-    /// Numeric form used by MM-aware KV routing.
-    #[cfg(feature = "mm-routing")]
-    pub(crate) fn content_hash(&self) -> Option<u64> {
-        self.content_hash_key()
-            .and_then(|key| u64::from_str_radix(key, 16).ok())
     }
 
     /// Canonical identity for one frontend-decoded video:
@@ -232,20 +237,19 @@ fn content_hash_for_storage(
             tensor_info.dtype,
             bytes,
         )),
-        #[cfg(all(feature = "mm-routing", feature = "media-ffmpeg"))]
-        Some(DecodedMediaMetadata::Video(_)) if _hash_video => {
-            match hash_video_content(tensor_info, bytes) {
-                Ok(hash) => Some(hash),
-                Err(error) => {
-                    tracing::debug!(%error, "Skipping exact routing hash for decoded video");
-                    None
-                }
+        Some(DecodedMediaMetadata::Video(_)) => {
+            #[cfg(all(feature = "mm-routing", feature = "media-ffmpeg"))]
+            if _hash_video {
+                return match hash_video_content(tensor_info, bytes) {
+                    Ok(hash) => Some(hash),
+                    Err(error) => {
+                        tracing::debug!(%error, "Skipping exact routing hash for decoded video");
+                        None
+                    }
+                };
             }
+            None
         }
-        #[cfg(all(feature = "mm-routing", feature = "media-ffmpeg"))]
-        Some(DecodedMediaMetadata::Video(_)) => None,
-        #[cfg(all(not(feature = "mm-routing"), feature = "media-ffmpeg"))]
-        Some(DecodedMediaMetadata::Video(_)) => None,
         None => None,
     }
 }
@@ -269,11 +273,11 @@ impl DecodedMediaData {
 
         Ok(RdmaMediaDataDescriptor {
             nixl_metadata,
-            nixl_descriptor,
+            nixl_descriptor: nixl_descriptor.into(),
             tensor_info: self.tensor_info,
             content_hash,
             // Keep registered storage alive
-            source_storage: Some(Arc::new(registered)),
+            source_storage: Some(MediaStorageHandle::new(Arc::new(registered))),
         })
     }
 }
@@ -397,6 +401,39 @@ mod tests {
             progress_thread_delay_or_default(MAX_PROGRESS_THREAD_DELAY_US + 1),
             DEFAULT_PROGRESS_THREAD_DELAY_US
         );
+    }
+
+    #[test]
+    fn nixl_descriptor_wire_form_matches_nixl_types() {
+        use super::{NixlDescriptor, NixlMemoryDescriptor, NixlMemoryType};
+        use dynamo_memory::nixl;
+        for mem_type in [
+            nixl::MemType::Dram,
+            nixl::MemType::Vram,
+            nixl::MemType::Block,
+            nixl::MemType::Object,
+            nixl::MemType::File,
+            nixl::MemType::Unknown,
+        ] {
+            let native = NixlDescriptor {
+                addr: 0x1000,
+                size: 4096,
+                mem_type,
+                device_id: 3,
+            };
+            let wire = NixlMemoryDescriptor::from(native.clone());
+            assert_eq!(
+                serde_json::to_value(&native).unwrap(),
+                serde_json::to_value(&wire).unwrap(),
+                "wire form must serialize identically for {mem_type:?}"
+            );
+            let back: NixlDescriptor = wire.into();
+            assert_eq!(back.mem_type, mem_type);
+            assert_eq!(
+                NixlMemoryType::from(mem_type),
+                NixlMemoryType::from(back.mem_type)
+            );
+        }
     }
 
     #[test]

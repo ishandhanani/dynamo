@@ -4,6 +4,7 @@
 use std::sync::Once;
 
 use anyhow::Result;
+#[cfg(test)]
 use image::{ColorType, ImageFormat};
 use ndarray::Array3;
 use serde::{Deserialize, Serialize};
@@ -69,18 +70,7 @@ impl From<ImageDecoderConfig> for ImageDecoder {
     }
 }
 
-#[allow(clippy::upper_case_acronyms)]
-#[derive(Serialize, Deserialize, Clone, Copy, Debug)]
-pub enum ImageLayout {
-    HWC,
-}
-
-#[derive(Serialize, Deserialize, Clone, Copy, Debug)]
-pub struct ImageMetadata {
-    pub(crate) format: Option<ImageFormat>,
-    pub(crate) color_type: ColorType,
-    pub(crate) layout: ImageLayout,
-}
+pub use crate::protocols::common::media::{ImageLayout, ImageMetadata};
 
 impl Decoder for ImageDecoder {
     fn with_runtime(&self, runtime: Option<&Self>) -> Self {

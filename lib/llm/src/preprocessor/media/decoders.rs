@@ -2,7 +2,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use anyhow::Result;
-use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
 use super::common::EncodedMediaData;
@@ -12,7 +11,7 @@ pub mod image;
 #[cfg(feature = "media-ffmpeg")]
 pub mod video;
 
-pub use image::{ImageDecoder, ImageMetadata};
+pub use image::ImageDecoder;
 #[cfg(feature = "media-ffmpeg")]
 pub use video::{VideoDecoder, VideoMetadata};
 
@@ -85,9 +84,4 @@ impl From<MediaDecoderConfig> for MediaDecoder {
     }
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug)]
-pub enum DecodedMediaMetadata {
-    Image(ImageMetadata),
-    #[cfg(feature = "media-ffmpeg")]
-    Video(VideoMetadata),
-}
+pub use crate::protocols::common::media::DecodedMediaMetadata;

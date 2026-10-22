@@ -54,12 +54,7 @@ impl From<VideoDecoderConfig> for VideoDecoder {
     }
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug)]
-pub struct VideoMetadata {
-    pub(crate) source_fps: f64,
-    pub(crate) source_duration: f64,
-    pub(crate) sampled_timestamps: Vec<f64>,
-}
+pub use crate::protocols::common::media::VideoMetadata;
 
 struct SourceVideoTiming {
     start_time_secs: f64,

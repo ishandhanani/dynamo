@@ -20,9 +20,9 @@ use uuid::Uuid;
 
 use super::extensions::{AgentContext, RouterParams};
 use super::llm_backend::DecoderCheckpoint;
+use super::media::RdmaMediaDataDescriptor;
 use super::timing::{RequestPhase, RequestTracker};
 use super::{OutputOptions, SamplingOptions, StopConditions};
-use crate::preprocessor::media::RdmaMediaDataDescriptor;
 use crate::protocols::TokenIdType;
 
 /// Routing hints for directing requests to specific workers.
