@@ -17,6 +17,7 @@ use axum::{
     Router as AxumRouter, http::StatusCode, http::header::CONTENT_TYPE, response::IntoResponse,
     routing::get,
 };
+use dynamo_http_server::listener::{bind_listener, listen_socket_addr, write_idle_timeout};
 use dynamo_llm::http::service::metrics::generate_log_buckets;
 use prometheus::{Encoder, HistogramOpts, HistogramVec, Registry, TEXT_FORMAT, TextEncoder};
 
@@ -89,12 +90,19 @@ pub fn observe_cached_tokens(cached_tokens: u64) {
         .observe(cached_tokens as f64);
 }
 
-/// Serve `/metrics` until the process exits.
+/// Serve `/metrics` until the process exits, on the shared Dynamo HTTP server.
 pub async fn serve(port: u16) -> anyhow::Result<()> {
     let app = AxumRouter::new().route("/metrics", get(render));
-    let listener = tokio::net::TcpListener::bind(("0.0.0.0", port)).await?;
+    let listener = bind_listener(listen_socket_addr("0.0.0.0", port)?)?;
     tracing::info!(port, "Serving Prometheus metrics on /metrics");
-    axum::serve(listener, app).await?;
+    dynamo_http_server::server::serve(
+        listener,
+        None,
+        app,
+        write_idle_timeout(),
+        std::future::pending(),
+    )
+    .await;
     Ok(())
 }
 

@@ -17,6 +17,7 @@ path = "src/bin/dynamo-ext-proc.rs"
 
 [dependencies]
 dynamo-custom-policy-builtin = { workspace = true }
+dynamo-http-server = { workspace = true }
 async-trait = { workspace = true }
 dynamo-kv-router = { workspace = true, features = [
     "metrics",
