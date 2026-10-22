@@ -879,6 +879,7 @@ version = "1.6.0"
 dependencies = [
  "anyhow",
  "async-trait",
+ "blake3",
  "futures",
  "serde",
  "serde_json",

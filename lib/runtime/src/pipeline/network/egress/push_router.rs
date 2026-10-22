@@ -252,19 +252,7 @@ where
     _phantom: PhantomData<(T, U)>,
 }
 
-#[derive(Default, Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum RouterMode {
-    #[default]
-    RoundRobin,
-    Random,
-    PowerOfTwoChoices,
-    KV,
-    Direct,
-    LeastLoaded,
-    /// Device-aware weighted routing for heterogeneous workers.
-    DeviceAwareWeighted,
-}
+pub use dynamo_runtime_protocols::routing::RouterMode;
 
 #[derive(Clone, Copy)]
 enum TransportFallback<'a> {
@@ -328,44 +316,15 @@ impl DeviceAwareSelection {
     }
 }
 
-impl RouterMode {
-    pub const fn telemetry_label(self) -> &'static str {
-        match self {
-            Self::RoundRobin => "round-robin",
-            Self::Random => "random",
-            Self::PowerOfTwoChoices => "power-of-two-choices",
-            Self::KV => "kv",
-            Self::Direct => "direct",
-            Self::LeastLoaded => "least-loaded",
-            Self::DeviceAwareWeighted => "device-aware-weighted",
-        }
-    }
-
-    pub fn is_kv_routing(&self) -> bool {
-        *self == RouterMode::KV
-    }
-
-    pub fn is_direct_routing(&self) -> bool {
-        *self == RouterMode::Direct
-    }
-
-    /// Whether this mode admits requests against host-owned occupancy counters.
-    pub const fn requires_occupancy(self) -> bool {
-        matches!(
-            self,
-            Self::PowerOfTwoChoices | Self::LeastLoaded | Self::DeviceAwareWeighted
-        )
-    }
-
-    fn route_policy(self) -> Option<RoutePolicy> {
-        match self {
-            Self::RoundRobin => Some(RoutePolicy::RoundRobin),
-            Self::Random => Some(RoutePolicy::Random),
-            Self::PowerOfTwoChoices => Some(RoutePolicy::PowerOfTwoChoices),
-            Self::LeastLoaded => Some(RoutePolicy::LeastLoaded),
-            Self::DeviceAwareWeighted => Some(RoutePolicy::DeviceAwareWeighted),
-            Self::KV | Self::Direct => None,
-        }
+/// The load-balancing policy a non-KV, non-direct mode routes with.
+fn route_policy(mode: RouterMode) -> Option<RoutePolicy> {
+    match mode {
+        RouterMode::RoundRobin => Some(RoutePolicy::RoundRobin),
+        RouterMode::Random => Some(RoutePolicy::Random),
+        RouterMode::PowerOfTwoChoices => Some(RoutePolicy::PowerOfTwoChoices),
+        RouterMode::LeastLoaded => Some(RoutePolicy::LeastLoaded),
+        RouterMode::DeviceAwareWeighted => Some(RoutePolicy::DeviceAwareWeighted),
+        RouterMode::KV | RouterMode::Direct => None,
     }
 }
 
@@ -377,7 +336,7 @@ fn route_pickers(
     let configured = match router_mode {
         RouterMode::RoundRobin => Some(round_robin.clone()),
         RouterMode::Random => Some(random.clone()),
-        mode => mode.route_policy().map(RoutePicker::new).map(Arc::new),
+        mode => route_policy(mode).map(RoutePicker::new).map(Arc::new),
     };
     (round_robin, random, configured)
 }

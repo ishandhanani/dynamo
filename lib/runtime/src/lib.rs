@@ -44,7 +44,7 @@ mod routing_policy;
 pub mod runnable;
 pub mod runtime;
 pub mod service;
-pub mod slug;
+pub use dynamo_runtime_protocols::slug;
 pub mod storage;
 pub mod system_health;
 pub mod telemetry;
