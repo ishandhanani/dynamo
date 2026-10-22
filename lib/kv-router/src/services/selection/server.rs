@@ -10,7 +10,6 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{delete, get, patch, post};
 use axum::{Json, Router};
 use serde::Deserialize;
-use tokio::net::TcpListener;
 
 use crate::protocols::WorkerId;
 use crate::services::common::http::{json_error, json_ok, json_rejection};
@@ -279,19 +278,17 @@ pub(crate) fn create_router(state: Arc<AppState>) -> Router {
 /// Serve a caller-built selection service until shutdown.
 pub async fn run_server(port: u16, service: SelectionService) -> anyhow::Result<()> {
     tracing::info!(port, "Starting Dynamo selection service");
-    let listener = TcpListener::bind(("0.0.0.0", port)).await?;
     let service = Arc::new(service);
     let app = create_router(Arc::new(AppState {
         service: Arc::clone(&service),
     }));
     let shutdown_service = Arc::clone(&service);
-    let result = axum::serve(listener, app)
-        .with_graceful_shutdown(async move {
-            tokio::signal::ctrl_c().await.ok();
-            tracing::info!("received shutdown signal");
-            shutdown_service.shutdown().await;
-        })
-        .await;
+    let result = crate::services::common::server::serve_until(port, app, async move {
+        tokio::signal::ctrl_c().await.ok();
+        tracing::info!("received shutdown signal");
+        shutdown_service.shutdown().await;
+    })
+    .await;
     service.shutdown().await;
     result?;
     Ok(())

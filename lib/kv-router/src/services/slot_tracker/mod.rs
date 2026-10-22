@@ -12,7 +12,6 @@ pub mod server;
 
 use std::sync::Arc;
 
-use tokio::net::TcpListener;
 use tokio_util::sync::CancellationToken;
 
 use crate::services::common::replica_sync::{PeerManager, setup_replica_sync};
@@ -80,14 +79,12 @@ pub async fn run_server(config: SlotTrackerConfig) -> anyhow::Result<()> {
             .as_ref()
             .map(|(_, peer_manager)| Arc::clone(peer_manager)),
     );
-    let listener = TcpListener::bind(("0.0.0.0", config.port)).await?;
-    tracing::info!("HTTP server listening on 0.0.0.0:{}", config.port);
-    let result = axum::serve(listener, app)
-        .with_graceful_shutdown(async move {
-            cancel_token.cancelled().await;
-            tracing::info!("Received shutdown signal, stopping HTTP server");
-        })
-        .await;
+    let result = crate::services::common::server::serve_until(
+        config.port,
+        app,
+        cancel_token.cancelled_owned(),
+    )
+    .await;
     if let Some((replica_runtime, peer_manager)) = &replica {
         tokio::join!(peer_manager.shutdown(), replica_runtime.shutdown());
     }

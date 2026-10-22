@@ -2111,6 +2111,7 @@ dependencies = [
  "crossbeam-utils",
  "dashmap",
  "derive_builder",
+ "dynamo-http-server",
  "dynamo-kv-hashing",
  "dynamo-runtime",
  "dynamo-tokens",

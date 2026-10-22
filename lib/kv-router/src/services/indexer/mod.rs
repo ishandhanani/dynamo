@@ -45,7 +45,6 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
-use tokio::net::TcpListener;
 use tokio_util::sync::CancellationToken;
 
 use crate::config::min_initial_workers_from_env;
@@ -242,13 +241,7 @@ async fn run_common(
     registry.signal_ready();
 
     let app = create_router(state);
-    let listener = TcpListener::bind(("0.0.0.0", config.port)).await?;
-    tracing::info!("HTTP server listening on 0.0.0.0:{}", config.port);
-    axum::serve(listener, app)
-        .with_graceful_shutdown(async move {
-            cancel_token.cancelled().await;
-            tracing::info!("Received shutdown signal, stopping HTTP server");
-        })
+    crate::services::common::server::serve_until(config.port, app, cancel_token.cancelled_owned())
         .await?;
 
     Ok(())

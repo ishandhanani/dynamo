@@ -11,7 +11,6 @@ pub mod server;
 
 use std::sync::Arc;
 
-use tokio::net::TcpListener;
 use tokio_util::sync::CancellationToken;
 
 use server::{AppState, SharedCacheStore, create_router};
@@ -38,13 +37,7 @@ pub async fn run_server(config: SharedCacheConfig) -> anyhow::Result<()> {
     let state = Arc::new(AppState { store });
 
     let app = create_router(state);
-    let listener = TcpListener::bind(("0.0.0.0", config.port)).await?;
-    tracing::info!("HTTP server listening on 0.0.0.0:{}", config.port);
-    axum::serve(listener, app)
-        .with_graceful_shutdown(async move {
-            cancel_token.cancelled().await;
-            tracing::info!("Received shutdown signal, stopping HTTP server");
-        })
+    crate::services::common::server::serve_until(config.port, app, cancel_token.cancelled_owned())
         .await?;
 
     Ok(())

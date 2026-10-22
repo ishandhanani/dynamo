@@ -8,6 +8,13 @@
 ))]
 pub(crate) mod zmq;
 
+#[cfg(any(
+    feature = "standalone-indexer",
+    feature = "standalone-slot-tracker",
+    feature = "standalone-selection"
+))]
+pub(crate) mod server;
+
 #[cfg(any(feature = "standalone-slot-tracker", feature = "standalone-selection"))]
 pub(crate) mod http;
 
