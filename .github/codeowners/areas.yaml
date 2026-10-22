@@ -23,6 +23,7 @@ areas:
   - lib/llm/src/http/
   - lib/llm/src/http/service.rs
   - lib/llm/src/http/service/
+  - lib/http-server/
   - lib/llm/src/lora.rs
   - lib/llm/src/lora/
   - lib/llm/src/preprocessor.rs

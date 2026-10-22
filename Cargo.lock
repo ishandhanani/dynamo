@@ -2476,6 +2476,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "dynamo-http-server"
+version = "1.6.0"
+dependencies = [
+ "anyhow",
+ "axum 0.8.4",
+ "dynamo-runtime-protocols",
+ "futures",
+ "hyper-util",
+ "parking_lot",
+ "rcgen",
+ "rustls",
+ "tokio",
+ "tokio-rustls",
+ "tokio-util",
+ "tower 0.5.3",
+ "tracing",
+]
+
+[[package]]
 name = "dynamo-kv-hashing"
 version = "1.6.0"
 dependencies = [
@@ -2571,6 +2590,7 @@ dependencies = [
  "dialoguer",
  "dynamo-bench",
  "dynamo-custom-policy-builtin",
+ "dynamo-http-server",
  "dynamo-kv-router",
  "dynamo-memory",
  "dynamo-mocker",
@@ -2592,7 +2612,6 @@ dependencies = [
  "hf-hub 0.4.3",
  "http 1.4.1",
  "http-body-util",
- "hyper-util",
  "image",
  "indicatif 0.18.4",
  "insta",

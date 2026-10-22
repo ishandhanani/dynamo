@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-//! The frontend's HTTP(S) accept loop, with graceful shutdown bounded by a grace period.
+//! The HTTP(S) accept loop, with graceful shutdown bounded by a grace period.
 //!
 //! A connection task is polled on every wakeup, i.e. for every streamed response chunk, and
 //! each poll also polls its shutdown signals. Every connection waits on its own child
@@ -22,7 +22,7 @@ use tokio_rustls::TlsAcceptor;
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
 
-use super::write_timeout::{ConnectionDeadline, ConnectionService, WriteTimeoutIo};
+use crate::write_timeout::{ConnectionDeadline, ConnectionService, WriteTimeoutIo};
 
 /// The handshake timeout of axum-server's rustls acceptor, which served the frontend before.
 const TLS_HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
@@ -36,7 +36,7 @@ const TLS_HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
 ///
 /// Every connection is wrapped in [`WriteTimeoutIo`], and every request on it carries the
 /// connection's [`ConnectionDeadline`].
-pub(super) async fn serve(
+pub async fn serve(
     listener: TcpListener,
     tls: Option<TlsAcceptor>,
     router: Router,
