@@ -153,6 +153,7 @@ tower = { version = "0.5", features = ["util"] }
 tower-http = { version = "0.6", features = ["trace"] }
 axum = { version = "=0.8.4", features = ["macros", "ws"] }
 axum-core = { version = "0.5.2" }
+http = "1"
 hyper = { version = "=1.7.0" }
 hyper-util = { version = "=0.1.17" }
 mio = { version = "=1.2.2" }

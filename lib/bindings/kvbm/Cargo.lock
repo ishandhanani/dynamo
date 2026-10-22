@@ -2171,6 +2171,7 @@ dependencies = [
  "galil-seiferas",
  "half",
  "hf-hub",
+ "http 1.4.1",
  "http-body-util",
  "hyper-util",
  "image",

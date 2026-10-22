@@ -293,8 +293,8 @@ impl PresignedHttpPutDestination {
         let mut names = HashSet::new();
         if self.required_headers.len() > 64
             || self.required_headers.iter().any(|(name, value)| {
-                axum::http::header::HeaderName::from_bytes(name.as_bytes()).is_err()
-                    || axum::http::header::HeaderValue::from_str(value).is_err()
+                http::header::HeaderName::from_bytes(name.as_bytes()).is_err()
+                    || http::header::HeaderValue::from_str(value).is_err()
                     || value.len() > 8192
                     || !names.insert(name.to_ascii_lowercase())
             })

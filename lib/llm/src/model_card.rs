@@ -24,7 +24,7 @@ use crate::model_type::{ModelInput, ModelType};
 use anyhow::{Context, Result};
 use derive_builder::Builder;
 use dynamo_kv_router::identity::{ExplicitIdentityMap, IndexerIdentitySpec};
-use dynamo_runtime::{slug::Slug, storage::kv};
+use dynamo_runtime::slug::Slug;
 use router_config::RouterConfig;
 use serde::{Deserialize, Serialize};
 use tensor::TensorModelConfig;
@@ -797,14 +797,6 @@ impl PartialEq for ModelDeploymentCard {
 
 /// Model-card registration is create-only. The discovery taint API owns the
 /// narrow exception for updating runtime_config.taints on an existing record.
-impl kv::Versioned for ModelDeploymentCard {
-    fn revision(&self) -> u64 {
-        0
-    }
-
-    fn set_revision(&mut self, _revision: u64) {}
-}
-
 impl fmt::Display for ModelDeploymentCard {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}", self.slug())

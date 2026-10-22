@@ -4,9 +4,9 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
 
-use axum::http::HeaderMap;
 use derive_builder::Builder;
 use dynamo_protocols::types::StopReason;
+use http::HeaderMap;
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
@@ -1509,7 +1509,7 @@ mod tests {
 
     #[test]
     fn agent_context_from_headers_derives_agent_context_table() {
-        use axum::http::{HeaderMap, HeaderName};
+        use http::{HeaderMap, HeaderName};
 
         let cases = [
             (HEADER_CLAUDE_CODE_SESSION_ID, "claude-run-1", None, None),
@@ -1796,7 +1796,7 @@ mod tests {
 
     #[test]
     fn apply_header_routing_overrides_ignores_session_identity_headers() {
-        use axum::http::{HeaderMap, HeaderName};
+        use http::{HeaderMap, HeaderName};
 
         for header_name in [
             HEADER_DYNAMO_SESSION_ID,

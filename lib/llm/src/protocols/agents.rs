@@ -6,7 +6,7 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use axum::http::HeaderMap;
+use http::HeaderMap;
 
 pub(crate) const HEADER_CLAUDE_CODE_SESSION_ID: &str = "x-claude-code-session-id";
 pub(crate) const HEADER_CLAUDE_CODE_AGENT_ID: &str = "x-claude-code-agent-id";
@@ -182,7 +182,7 @@ fn header_bool(headers: &HeaderMap, header_name: &str) -> Option<bool> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use axum::http::{HeaderName, HeaderValue};
+    use http::{HeaderName, HeaderValue};
 
     #[test]
     fn captures_open_families_and_repeated_values_verbatim() {
