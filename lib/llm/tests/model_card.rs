@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright (c) 2024-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-use dynamo_llm::common::checked_file::CheckedFile;
+use dynamo_llm::common::checked_file::{CheckedFile, Checksum};
 use dynamo_llm::local_model::runtime_config::TokenizerBackend;
 use dynamo_llm::model_card::ModelDeploymentCardLoader;
 use dynamo_llm::model_card::ModelInfoTypeLoader;
@@ -410,4 +410,21 @@ async fn test_chat_template_json_fallback() {
         }
         other => panic!("Expected HfChatTemplateJson, got {:?}", other),
     }
+}
+
+/// `CheckedFile::from_disk` hashes and sizes a real file. Lives here rather than
+/// next to `CheckedFile` because the TinyLlama fixture belongs to `dynamo-llm`.
+#[test]
+fn test_checked_file_from_disk() {
+    let root = env!("CARGO_MANIFEST_DIR"); // ${WORKSPACE}/lib/llm
+    let full_path = format!("{root}/{HF_PATH}/config.json");
+    let cf = CheckedFile::from_disk(full_path).unwrap();
+    let expected =
+        Checksum::blake3("62bc124be974d3a25db05bedc99422660c26715e5bbda0b37d14bd84a0c65ab2");
+    assert_eq!(expected, *cf.checksum());
+    assert_eq!(Some(560), cf.size(), "TinyLlama config.json is 560 bytes");
+    assert_eq!(
+        "62bc124be974d3a25db05bedc99422660c26715e5bbda0b37d14bd84a0c65ab2",
+        cf.checksum().hash()
+    );
 }

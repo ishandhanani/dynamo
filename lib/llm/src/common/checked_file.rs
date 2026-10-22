@@ -411,21 +411,6 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_checked_file_from_disk() {
-        let root = env!("CARGO_MANIFEST_DIR"); // ${WORKSPACE}/lib/llm
-        let full_path = format!("{root}/tests/data/sample-models/TinyLlama_v1.1/config.json");
-        let cf = CheckedFile::from_disk(full_path).unwrap();
-        let expected =
-            Checksum::blake3("62bc124be974d3a25db05bedc99422660c26715e5bbda0b37d14bd84a0c65ab2");
-        assert_eq!(expected, *cf.checksum());
-        assert_eq!(Some(560), cf.size(), "TinyLlama config.json is 560 bytes");
-        assert_eq!(
-            "62bc124be974d3a25db05bedc99422660c26715e5bbda0b37d14bd84a0c65ab2",
-            cf.checksum().hash()
-        );
-    }
-
     /// Old MDC bytes (no `size` field) deserialize cleanly with
     /// `size = None`, preserving cross-version compat between a
     /// pre-size worker and a post-size frontend.
