@@ -5416,4 +5416,106 @@ mod tests {
         assert_eq!((rejections(&one), rejections(&two)), (1, 0));
         assert_eq!((published(&one), published(&two)), ((1, 1, 0), (0, 0, 0)));
     }
+
+    /// A token, a terminal and a token-less handoff announcement each carry
+    /// what they say, independently; early usage completes nothing.
+    #[test]
+    fn engine_outputs_classify_their_tokens_and_completion_independently() {
+        use crate::protocols::TokenIdType;
+        use crate::protocols::common::{FinishReason, llm_backend::LLMEngineOutput};
+        use dynamo_protocols::types::CompletionUsage;
+
+        let output =
+            |token_ids: Vec<TokenIdType>, finish_reason: Option<FinishReason>| LLMEngineOutput {
+                token_ids,
+                finish_reason,
+                ..LLMEngineOutput::stop()
+            };
+        let classified = |generated_token, completion| ResponseOutput {
+            generated_token,
+            completion,
+        };
+
+        let bootstrap = LLMEngineOutput {
+            disaggregated_params: Some(serde_json::json!({"bootstrap_room": 7})),
+            ..output(vec![], None)
+        };
+        assert_eq!(bootstrap.admission_output(), ResponseOutput::INTERIM);
+        let early_usage = LLMEngineOutput {
+            completion_usage: Some(CompletionUsage {
+                prompt_tokens: 3,
+                completion_tokens: 1,
+                total_tokens: 4,
+                prompt_tokens_details: None,
+                completion_tokens_details: None,
+            }),
+            disaggregated_params: Some(serde_json::json!("dummy")),
+            ..output(vec![42], None)
+        };
+        assert_eq!(early_usage.admission_output(), classified(true, false));
+        assert_eq!(
+            output(vec![], Some(FinishReason::Length)).admission_output(),
+            classified(false, true),
+            "a token-less terminal handoff completes the request"
+        );
+        assert_eq!(
+            output(vec![42], Some(FinishReason::Stop)).admission_output(),
+            classified(true, true)
+        );
+        assert_eq!(
+            Annotated::from_data(output(vec![42], None)).admission_output(),
+            classified(true, false)
+        );
+        assert_eq!(
+            Annotated::<LLMEngineOutput>::from_error("engine failed").admission_output(),
+            ResponseOutput::INTERIM
+        );
+    }
+
+    /// A native worker's ingress reads the rank from the body as sent, under
+    /// either request-plane codec: `routing.dp_rank` when it is set, and no rank
+    /// when it, or `routing`, is missing or null.
+    #[tokio::test]
+    async fn worker_ingress_reads_routing_dp_rank_from_the_body() {
+        use dynamo_runtime::pipeline::network::{
+            IngressRequestDecoder, RequestPlanePayloadCodec, SerdeIngressPayloadAdapter,
+        };
+        use serde_json::{Value, json};
+
+        let body = |routing: Option<Value>| {
+            let mut body = json!({
+                "model": "m",
+                "token_ids": [1, 2, 3],
+                "stop_conditions": {},
+                "sampling_options": {},
+                "output_options": {},
+            });
+            if let Some(routing) = routing {
+                body["routing"] = routing;
+            }
+            body
+        };
+        let cases = [
+            (
+                body(Some(json!({"dp_rank": 5, "prefill_dp_rank": 3}))),
+                Some(5),
+            ),
+            (body(Some(json!({"dp_rank": null}))), None),
+            (body(Some(json!({"backend_instance_id": 7}))), None),
+            (body(Some(Value::Null)), None),
+            (body(None), None),
+        ];
+        for (body, expected) in cases {
+            for codec in [
+                RequestPlanePayloadCodec::Json,
+                RequestPlanePayloadCodec::Msgpack,
+            ] {
+                let request: PreprocessedRequest = SerdeIngressPayloadAdapter
+                    .decode_request(codec, codec.encode(&body).unwrap().into())
+                    .await
+                    .unwrap();
+                assert_eq!(request.dp_rank(), expected, "{body}");
+            }
+        }
+    }
 }

@@ -1527,4 +1527,89 @@ mod tests {
         let ok_fields = HashMap::from([("stop_token_ids".to_string(), json!(at_max))]);
         validate_no_unsupported_fields(&ok_fields).unwrap();
     }
+
+    #[test]
+    fn metadata_upload_single_choice_admission_covers_both_endpoints() {
+        use crate::engines::ValidateRequest;
+        use crate::protocols::common::extensions::{NvExt, validate_metadata_upload_single_choice};
+        use crate::protocols::openai::chat_completions::NvCreateChatCompletionRequest;
+        use crate::protocols::openai::completions::NvCreateCompletionRequest;
+        let artifact = serde_json::json!({"metadata_upload": {"kind": "generation_artifact", "contents": [], "mode": "inline_base64"}});
+        let chat: NvCreateChatCompletionRequest = serde_json::from_value(serde_json::json!({"model": "test", "messages": [{"role": "user", "content": "hello"}], "n": 2, "nvext": artifact})).unwrap();
+        assert!(chat.validate().is_err());
+        for (prompt, n, best_of) in [
+            (serde_json::json!("hello"), 1, 2),
+            (serde_json::json!(["hello", "world"]), 1, 1),
+        ] {
+            let request: NvCreateCompletionRequest = serde_json::from_value(serde_json::json!({"model": "test", "prompt": prompt, "n": n, "best_of": best_of, "nvext": artifact})).unwrap();
+            assert!(request.validate().is_err());
+        }
+        let legacy: NvExt = serde_json::from_value(
+            serde_json::json!({"metadata_upload": {"url": "s3://bucket/prefix"}}),
+        )
+        .unwrap();
+        assert!(validate_metadata_upload_single_choice(2, Some(&legacy)).is_ok());
+    }
+
+    #[test]
+    fn artifact_upload_rejects_frontend_string_stop_before_generation() {
+        use crate::engines::ValidateRequest;
+        use crate::protocols::openai::chat_completions::NvCreateChatCompletionRequest;
+        use crate::protocols::openai::completions::NvCreateCompletionRequest;
+
+        let artifact = serde_json::json!({"metadata_upload": {"kind": "generation_artifact", "contents": [], "mode": "inline_base64"}});
+        for stop in [serde_json::json!("END"), serde_json::json!(["END"])] {
+            let chat: NvCreateChatCompletionRequest = serde_json::from_value(serde_json::json!({"model": "test", "messages": [{"role": "user", "content": "hello"}], "stop": stop, "nvext": artifact})).unwrap();
+            assert!(chat.validate().unwrap_err().to_string().contains("stop"));
+            let completion: NvCreateCompletionRequest = serde_json::from_value(serde_json::json!({"model": "test", "prompt": "hello", "stop": stop, "nvext": artifact})).unwrap();
+            assert!(
+                completion
+                    .validate()
+                    .unwrap_err()
+                    .to_string()
+                    .contains("stop")
+            );
+        }
+
+        let chat: NvCreateChatCompletionRequest = serde_json::from_value(serde_json::json!({"model": "test", "messages": [{"role": "user", "content": "hello"}], "stop_token_ids": [42], "nvext": artifact})).unwrap();
+        assert!(chat.validate().is_ok());
+        let completion: NvCreateCompletionRequest = serde_json::from_value(serde_json::json!({"model": "test", "prompt": "hello", "stop_token_ids": [42], "nvext": artifact})).unwrap();
+        assert!(completion.validate().is_ok());
+        let chat: NvCreateChatCompletionRequest = serde_json::from_value(serde_json::json!({"model": "test", "messages": [{"role": "user", "content": "hello"}], "stop": [42], "nvext": artifact})).unwrap();
+        assert!(chat.validate().is_ok());
+        let completion: NvCreateCompletionRequest = serde_json::from_value(serde_json::json!({"model": "test", "prompt": "hello", "stop": [42], "nvext": artifact})).unwrap();
+        assert!(completion.validate().is_ok());
+
+        let legacy: NvCreateChatCompletionRequest = serde_json::from_value(serde_json::json!({"model": "test", "messages": [{"role": "user", "content": "hello"}], "stop": "END", "nvext": {"metadata_upload": {"url": "s3://bucket/prefix"}}})).unwrap();
+        assert!(legacy.validate().is_ok());
+        let legacy: NvCreateCompletionRequest = serde_json::from_value(serde_json::json!({"model": "test", "prompt": "hello", "stop": "END", "nvext": {"metadata_upload": {"url": "s3://bucket/prefix"}}})).unwrap();
+        assert!(legacy.validate().is_ok());
+    }
+
+    #[test]
+    fn rejects_duplicate_upload_fields_in_raw_openai_requests() {
+        use crate::protocols::openai::chat_completions::NvCreateChatCompletionRequest;
+        use crate::protocols::openai::completions::NvCreateCompletionRequest;
+
+        let chat = r#"{"model":"test","messages":[{"role":"user","content":"hello"}],"nvext":{"metadata_upload":{"url":"s3://a","url":"s3://b"}}}"#;
+        let error = serde_json::from_str::<NvCreateChatCompletionRequest>(chat).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("duplicate metadata_upload field")
+        );
+
+        let completion = r#"{"model":"test","prompt":"hello","nvext":{"metadata_upload":{"kind":"generation_artifact","contents":[],"mode":"inline_base64","mode":"inline_base64"}}}"#;
+        let error = serde_json::from_str::<NvCreateCompletionRequest>(completion).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("duplicate metadata_upload field")
+        );
+
+        let valid_chat = r#"{"model":"test","messages":[{"role":"user","content":"hello"}],"nvext":{"metadata_upload":{"url":"s3://a"}}}"#;
+        assert!(serde_json::from_str::<NvCreateChatCompletionRequest>(valid_chat).is_ok());
+        let valid_completion = r#"{"model":"test","prompt":"hello","nvext":{"metadata_upload":{"kind":"generation_artifact","contents":[],"mode":"inline_base64"}}}"#;
+        assert!(serde_json::from_str::<NvCreateCompletionRequest>(valid_completion).is_ok());
+    }
 }

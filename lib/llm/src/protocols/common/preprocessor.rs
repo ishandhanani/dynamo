@@ -990,54 +990,6 @@ mod tests {
         ids.iter().flat_map(|id| id.to_le_bytes()).collect()
     }
 
-    /// A native worker's ingress reads the rank from the body as sent, under
-    /// either request-plane codec: `routing.dp_rank` when it is set, and no rank
-    /// when it, or `routing`, is missing or null.
-    #[tokio::test]
-    async fn worker_ingress_reads_routing_dp_rank_from_the_body() {
-        use crate::admission_gate::AdmissionRequest;
-        use dynamo_runtime::pipeline::network::{
-            IngressRequestDecoder, RequestPlanePayloadCodec, SerdeIngressPayloadAdapter,
-        };
-        use serde_json::{Value, json};
-
-        let body = |routing: Option<Value>| {
-            let mut body = json!({
-                "model": "m",
-                "token_ids": [1, 2, 3],
-                "stop_conditions": {},
-                "sampling_options": {},
-                "output_options": {},
-            });
-            if let Some(routing) = routing {
-                body["routing"] = routing;
-            }
-            body
-        };
-        let cases = [
-            (
-                body(Some(json!({"dp_rank": 5, "prefill_dp_rank": 3}))),
-                Some(5),
-            ),
-            (body(Some(json!({"dp_rank": null}))), None),
-            (body(Some(json!({"backend_instance_id": 7}))), None),
-            (body(Some(Value::Null)), None),
-            (body(None), None),
-        ];
-        for (body, expected) in cases {
-            for codec in [
-                RequestPlanePayloadCodec::Json,
-                RequestPlanePayloadCodec::Msgpack,
-            ] {
-                let request: PreprocessedRequest = SerdeIngressPayloadAdapter
-                    .decode_request(codec, codec.encode(&body).unwrap().into())
-                    .await
-                    .unwrap();
-                assert_eq!(request.dp_rank(), expected, "{body}");
-            }
-        }
-    }
-
     #[test]
     fn packed_token_ids_deserialize_from_msgpack_bytes() {
         let ids = vec![0u32, 1, 128_000, i32::MAX as u32];
