@@ -7,6 +7,7 @@
 //! with automatic label injection and hierarchical naming support. It has no dependency on
 //! the Dynamo runtime; `dynamo_runtime::metrics` re-exports everything here.
 
+pub mod buckets;
 pub mod prom_typed;
 pub mod prometheus_names;
 #[cfg(any(test, feature = "testing"))]

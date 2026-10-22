@@ -2231,6 +2231,7 @@ dependencies = [
  "dynamo-kv-router",
  "dynamo-llm-protocol",
  "dynamo-memory",
+ "dynamo-metrics",
  "dynamo-mocker",
  "dynamo-parsers",
  "dynamo-parsers-v2",
