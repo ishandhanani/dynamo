@@ -49,6 +49,9 @@ use llm_rs::discovery::LoadThresholdConfig as RsLoadThresholdConfig;
 use llm_rs::kv_router::RoutingHost;
 type RsRoutingHost = RoutingHost;
 type RsManagedKvRouter = llm_rs::kv_router::ManagedKvRouter;
+use llm_rs::http::service::metrics::{
+    observe_worker_finish_gauges, observe_worker_first_token_gauges,
+};
 use llm_rs::kv_router::publisher::{KvEventSourceConfig, create_stored_blocks};
 use llm_rs::protocols::common::timing::RequestTracker;
 use llm_rs::protocols::common::{OutputOptions, SamplingOptions, StopConditions};
@@ -2148,7 +2151,7 @@ impl KvRouter {
                             .unwrap_or(false);
                         if has_tokens {
                             if let Some(ref tracker) = tracker {
-                                tracker.observe_first_token_gauges();
+                                observe_worker_first_token_gauges(&tracker);
                             }
                             first_token_gauges_observed = true;
                         }
@@ -2180,7 +2183,7 @@ impl KvRouter {
                 }
 
                 if let Some(ref tracker) = tracker {
-                    tracker.observe_finish_gauges();
+                    observe_worker_finish_gauges(&tracker);
                 }
             });
 

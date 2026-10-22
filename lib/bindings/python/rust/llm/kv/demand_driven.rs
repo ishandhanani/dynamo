@@ -3,6 +3,9 @@
 
 use super::*;
 use futures::Stream;
+use llm_rs::http::service::metrics::{
+    observe_worker_finish_gauges, observe_worker_first_token_gauges,
+};
 use llm_rs::protocols::common::llm_backend::LLMEngineOutput;
 use std::pin::Pin;
 use std::task::{Context, Poll};
@@ -21,7 +24,7 @@ impl TrackerFinishGuard {
 
     fn observe(&mut self) {
         if let Some(tracker) = self.tracker.take() {
-            tracker.observe_finish_gauges();
+            observe_worker_finish_gauges(&tracker);
         }
     }
 }
@@ -75,7 +78,7 @@ impl KvDemandStream {
                 .unwrap_or(false);
             if has_tokens {
                 if let Some(ref tracker) = self.tracker {
-                    tracker.observe_first_token_gauges();
+                    observe_worker_first_token_gauges(&tracker);
                 }
                 self.first_token_gauges_observed = true;
             }
