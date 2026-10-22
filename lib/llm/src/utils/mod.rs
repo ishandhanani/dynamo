@@ -2,6 +2,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 pub mod lora;
-pub mod zmq;
+pub use dynamo_runtime::transports::zmq::sockets as zmq;
 
 pub use lora::lora_name_to_id;

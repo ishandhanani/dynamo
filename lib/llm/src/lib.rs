@@ -35,7 +35,7 @@ pub mod namespace;
 pub mod preprocessor;
 pub mod protocols;
 pub mod reasoning_field;
-pub mod recorder;
+pub use dynamo_runtime::utils::recorder;
 pub mod request_template;
 pub mod request_trace;
 pub mod session_affinity;
