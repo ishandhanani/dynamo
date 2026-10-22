@@ -64,19 +64,9 @@ pub mod postprocessor;
 pub mod preprocessor;
 pub mod timing;
 
-/// SamplingOptionsProvider is a trait that allows the caller to extract the sampling options from
-/// the object that implements it. This will mutate the object.
-pub trait SamplingOptionsProvider {
-    fn extract_sampling_options(&self) -> Result<SamplingOptions>;
-}
-
-pub trait StopConditionsProvider {
-    fn extract_stop_conditions(&self) -> Result<StopConditions>;
-}
-
-pub trait OutputOptionsProvider {
-    fn extract_output_options(&self) -> Result<OutputOptions>;
-}
+pub use super::providers::{
+    OutputOptionsProvider, SamplingOptionsProvider, StopConditionsProvider,
+};
 
 /// Why an engine stopped producing tokens for a request.
 ///
