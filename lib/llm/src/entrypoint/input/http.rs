@@ -479,7 +479,8 @@ mod tests {
 
     #[tokio::test]
     async fn configured_classifier_requires_installed_plugin() {
-        use crate::{entrypoint::RouterMode, local_model::LocalModelBuilder};
+        use crate::local_model::LocalModelBuilder;
+        use dynamo_runtime::pipeline::RouterMode;
         use dynamo_runtime::{Runtime, distributed::DistributedConfig};
 
         let policy_file = tempfile::NamedTempFile::new().unwrap();

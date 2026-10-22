@@ -10,7 +10,6 @@ use tokio_util::sync::CancellationToken;
 use dashmap::DashMap;
 use dynamo_kv_router::protocols::ActiveLoad;
 use dynamo_kv_router::sequences::SchedulerLoadSnapshot;
-use serde::{Deserialize, Serialize};
 
 use crate::http::service::metrics::{
     WORKER_LAST_INPUT_SEQUENCE_TOKENS_GAUGE, WORKER_LAST_INTER_TOKEN_LATENCY_GAUGE,
@@ -24,6 +23,8 @@ use dynamo_runtime::component::Client;
 use dynamo_runtime::pipeline::{WorkerLoadMonitor, async_trait};
 
 use super::runtime_config_watch;
+
+pub use crate::model_card::router_config::LoadThresholdConfig;
 
 // Re-export worker type constants from timing.rs (single source of truth)
 pub use crate::protocols::common::timing::{WORKER_TYPE_DECODE, WORKER_TYPE_PREFILL};
@@ -85,59 +86,6 @@ fn publish_overloaded_instances_if_needed(
 
     publish_overloaded_instances(client, &overloaded_tracker.ids());
     true
-}
-
-/// Configuration for worker load thresholds used in overload detection.
-///
-/// All thresholds are opt-in. An unset (`None`) field means the corresponding
-/// check is skipped entirely — it never contributes to a worker being marked
-/// overloaded. If all three are `None`, overload-based rejection is fully disabled.
-#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
-pub struct LoadThresholdConfig {
-    /// KV cache block utilization threshold (0.0-1.0).
-    /// Worker is overloaded when `active_decode_blocks / total_blocks > threshold`.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub active_decode_blocks_threshold: Option<f64>,
-
-    /// Absolute prefill token count threshold.
-    /// Worker is overloaded when `active_prefill_tokens > threshold`.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub active_prefill_tokens_threshold: Option<u64>,
-
-    /// Fraction of max_num_batched_tokens.
-    /// Worker is overloaded when `active_prefill_tokens > frac * max_num_batched_tokens`.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub active_prefill_tokens_threshold_frac: Option<f64>,
-}
-
-impl LoadThresholdConfig {
-    /// Returns true if any threshold is configured.
-    pub fn is_configured(&self) -> bool {
-        self.active_decode_blocks_threshold.is_some()
-            || self.active_prefill_tokens_threshold.is_some()
-            || self.active_prefill_tokens_threshold_frac.is_some()
-    }
-
-    /// Validate threshold values shared by startup and dynamic configuration.
-    pub fn validate(&self) -> Result<(), String> {
-        if let Some(threshold) = self.active_decode_blocks_threshold
-            && (!threshold.is_finite() || !(0.0..=1.0).contains(&threshold))
-        {
-            return Err(format!(
-                "active_decode_blocks_threshold must be between 0.0 and 1.0, got {threshold}"
-            ));
-        }
-
-        if let Some(threshold) = self.active_prefill_tokens_threshold_frac
-            && (!threshold.is_finite() || threshold < 0.0)
-        {
-            return Err(format!(
-                "active_prefill_tokens_threshold_frac must be a finite value greater than or equal to 0.0, got {threshold}"
-            ));
-        }
-
-        Ok(())
-    }
 }
 
 /// Shared threshold configuration for independently owned routing load contexts.

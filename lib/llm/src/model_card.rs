@@ -17,7 +17,6 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock};
 
 use crate::common::checked_file::CheckedFile;
-use crate::entrypoint::RouterConfig;
 use crate::local_model::runtime_config::{
     ModelRuntimeConfig, TokenizerBackend, VLLM_NEMOTRON_VIDEO_PROCESSOR_CONTRACT_RUNTIME_KEY,
 };
@@ -26,6 +25,7 @@ use anyhow::{Context, Result};
 use derive_builder::Builder;
 use dynamo_kv_router::identity::{ExplicitIdentityMap, IndexerIdentitySpec};
 use dynamo_runtime::{slug::Slug, storage::kv};
+use router_config::RouterConfig;
 use serde::{Deserialize, Serialize};
 use tensor::TensorModelConfig;
 use tokenizers::Tokenizer as HfTokenizer;
@@ -35,6 +35,7 @@ use media::{MediaDecoderConfig, MediaFetcherConfig};
 
 pub mod loader;
 pub mod media;
+pub mod router_config;
 pub mod tensor;
 
 pub(crate) use loader::is_weight_file;
