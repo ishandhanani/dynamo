@@ -496,5 +496,5 @@ This is useful for automated benchmarking pipelines where you want to capture me
 - [Metrics and Dashboards](../../../../../cli/operations/observability.mdx#view-metrics-and-dashboards) - Visualization walkthrough
 - Dynamo runtime metrics (prefixed with `dynamo_*`) are available at the same `/metrics` endpoint alongside SGLang metrics
   - Implementation: `lib/runtime/src/metrics.rs` (Rust runtime metrics)
-  - Metric names: `lib/runtime/src/metrics/prometheus_names.rs` (metric name constants)
+  - Metric names: `lib/metrics/src/prometheus_names.rs` (metric name constants)
   - Integration code: `components/src/dynamo/common/utils/prometheus.py` - Prometheus utilities and callback registration

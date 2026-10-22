@@ -16,7 +16,7 @@ TokenIdType = int
 # ============================================================================
 # Standard LLM Protocol Types
 # ============================================================================
-# derived from lib/llm/src/protocols/common/preprocessor.rs
+# derived from lib/llm-protocol/src/protocols/common/preprocessor.rs
 class StopConditions(BaseModel):
     max_tokens: Optional[int] = None
     stop: Optional[List[str]] = None

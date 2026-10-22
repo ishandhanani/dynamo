@@ -158,7 +158,7 @@ func (e *EPPDefaults) GetBaseContainer(context ComponentContext) (corev1.Contain
 		})
 
 		// Mount the model-config cache under the pinned HOME. The Rust EPP
-		// resolves its MDC cache root from $HOME (lib/llm/src/model_card.rs), so
+		// resolves its MDC cache root from $HOME (lib/llm/src/model_card/loader.rs), so
 		// a mount that does not match is silently inert and the blobs grow on
 		// the container's writable layer instead.
 		//
