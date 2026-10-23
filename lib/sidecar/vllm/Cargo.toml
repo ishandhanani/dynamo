@@ -33,6 +33,7 @@ async-stream = { workspace = true }
 async-trait = { workspace = true }
 base64 = "0.22"
 clap = { version = "4", features = ["derive", "env"] }
+dashmap = { workspace = true }
 futures = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! Direct mode: the frontend dials mocker gRPC servers itself, with no
-//! sidecar process and no discovery registration.
+//! sidecar process and no discovery registration, for SGLang and vLLM.
 
 use std::path::PathBuf;
 use std::time::Duration;
@@ -33,7 +33,7 @@ mod process;
 mod support;
 
 use process::Environment;
-use support::{FixtureConfig, HandoffFixture, ProcessFixture, sglang};
+use support::{FixtureConfig, HandoffFixture, ProcessFixture, sglang, vllm};
 
 /// A mocker fixture plus the direct backend that dials it.
 trait DirectFixture: ProcessFixture + HandoffFixture {
@@ -45,6 +45,13 @@ impl DirectFixture for sglang::Fixture {
     type Backend = dynamo_sglang_sidecar::direct::SglangDirectDispatch;
     fn backend() -> std::sync::Arc<Self::Backend> {
         dynamo_sglang_sidecar::direct::SglangDirectDispatch::new(GrpcTransportConfig::default())
+    }
+}
+
+impl DirectFixture for vllm::Fixture {
+    type Backend = dynamo_vllm_sidecar::direct::VllmDirectDispatch;
+    fn backend() -> std::sync::Arc<Self::Backend> {
+        dynamo_vllm_sidecar::direct::VllmDirectDispatch::new(GrpcTransportConfig::default())
     }
 }
 
@@ -243,7 +250,7 @@ async fn prefill_decode<F: DirectFixture>() {
     ] {
         // With a bootstrap rendezvous (SGLang) decode is dispatched as soon
         // as prefill hands off its tuple, while prefill is still held open;
-        // otherwise prefill completes first and decode follows.
+        // otherwise (vLLM) prefill completes first and decode follows.
         let observed_prefill = prefill_control.request(
             id,
             RequestPlan {
@@ -324,3 +331,4 @@ macro_rules! direct_tests {
 }
 
 direct_tests!(sglang_direct, sglang::Fixture);
+direct_tests!(vllm_direct, vllm::Fixture);

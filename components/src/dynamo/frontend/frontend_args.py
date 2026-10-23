@@ -691,10 +691,10 @@ class FrontendArgGroup(ArgGroup):
             flag_name="--direct-backend",
             env_var="DYN_DIRECT_BACKEND",
             default="sglang",
-            choices=["sglang"],
+            choices=["sglang", "vllm"],
             help=(
                 "Engine family behind --engine-url in --direct mode: SGLang's native gRPC "
-                "server (--grpc-port)."
+                "server (--grpc-port) or vLLM's (vllm-rs serve --grpc-port)."
             ),
         )
         add_argument(
@@ -720,8 +720,9 @@ class FrontendArgGroup(ArgGroup):
             action="append",
             help=(
                 "Engine gRPC endpoint that runs the prefill leg in --direct mode. May be "
-                "repeated. SGLang engines must report a prefill role that agrees with "
-                "this list. DYN_PREFILL_ENGINE_URLS accepts whitespace-separated values."
+                "repeated. SGLang engines must report a prefill role; vLLM engines take "
+                "the role from this list. DYN_PREFILL_ENGINE_URLS accepts "
+                "whitespace-separated values."
             ),
         )
         add_argument(
@@ -731,7 +732,9 @@ class FrontendArgGroup(ArgGroup):
             default=None,
             help=(
                 "Dynamo tool-call parser for the model served in --direct mode, as the "
-                "sidecar's flag of the same name. Overrides the parser the engine reports."
+                "sidecar's flag of the same name. Overrides the parser an SGLang engine "
+                "reports. vLLM names its parsers differently, so its engines report none "
+                "and tool calls stay unparsed until this is set."
             ),
         )
         add_argument(
@@ -741,7 +744,8 @@ class FrontendArgGroup(ArgGroup):
             default=None,
             help=(
                 "Dynamo reasoning parser for the model served in --direct mode, as the "
-                "sidecar's flag of the same name. Overrides the parser the engine reports."
+                "sidecar's flag of the same name. Overrides the parser an SGLang engine "
+                "reports; vLLM engines report none."
             ),
         )
 

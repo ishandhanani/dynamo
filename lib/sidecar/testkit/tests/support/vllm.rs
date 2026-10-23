@@ -71,6 +71,7 @@ impl SidecarFixture for Fixture {
 
     async fn start(control: Controller<Adapter>, config: FixtureConfig) -> Self {
         let mut args = fast_engine_args(EngineType::Vllm);
+        args.runtime.zmq_kv_events_port = config.kv_events_port;
         args.speedup_ratio = config.speedup_ratio;
         let service = VllmMockerService::new(
             MockerServerConfig {

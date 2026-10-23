@@ -837,53 +837,17 @@ impl LLMEngine for VllmSidecarEngine {
         request: dynamo_backend_common::PreprocessedRequest,
         ctx: GenerateContext,
     ) -> Result<BoxStream<'static, Result<LLMEngineOutput, DynamoError>>, DynamoError> {
-        if request_has_multimodal_input(&request) && !self.model.supports_multimodal {
-            return Err(client::invalid_argument(format!(
-                "model `{}` does not advertise multimodal support",
-                self.model.served_name
-            )));
-        }
+        let request_id = ctx.id().to_string();
+        let prepared = prepare_generate(&self.model, self.mode, request, &request_id)?;
         let client = self
             .client
             .get()
             .ok_or_else(|| client::engine_shutdown("vLLM sidecar is not started"))?;
-        let request_id = ctx.id().to_string();
-        let mut request = normalize_response_options(request)?;
-        if !self.model.reports_proto_0_6()
-            && consume_reasoning_parser_args(&mut request.extra_args)
-            && let Some(parser) = self.model.reasoning_parser()
-        {
-            // Without the settings, vLLM's parser guesses from the prompt where
-            // reasoning ends. Nothing reads them when vLLM runs no parser.
-            return Err(client::invalid_argument(format!(
-                "vLLM runs reasoning parser `{parser}`, but its gRPC server predates vllm-proto 0.6.0 and cannot receive this request's reasoning settings; start vllm-rs with `--reasoning-parser none` or upgrade vLLM"
-            )));
-        }
-        // Fail on the prefill leg too, before it computes KV that decode would
-        // reject. Encode never samples.
-        let checks_controls = !self.mode.is_encode();
-        if checks_controls
-            && request.stop_conditions.max_thinking_tokens.is_some()
-            && self.model.reports_proto_0_6()
-            && self.model.reasoning_parser().is_none()
-        {
-            // The native gRPC path skips vLLM's frontend check and would
-            // otherwise ignore the budget.
-            return Err(client::invalid_argument(
-                "max_thinking_tokens requires vLLM to run a reasoning parser",
-            ));
-        }
-        let mut state = ResponseState::new(&request, self.mode);
-        let data_parallel_rank = data_parallel_rank(&request, self.mode);
-        let mut proto_request = build_generate_request(request, request_id, self.mode)?;
-        if checks_controls && !self.model.reports_proto_0_6() {
-            require_proto_0_6_controls(&proto_request, self.model.proto_version())?;
-        }
-        proto_request.model.clone_from(&self.model.served_name);
-        if self.model.is_base_model_name(&proto_request.lora_name) {
-            // Routers may address the base model by name through the adapter field.
-            proto_request.lora_name.clear();
-        }
+        let PreparedGenerate {
+            request: proto_request,
+            data_parallel_rank,
+            state,
+        } = prepared;
         let submit = async {
             let _admission = if proto_request.lora_name.is_empty() {
                 None
@@ -894,121 +858,18 @@ impl LLMEngine for VllmSidecarEngine {
                 .generate_stream(proto_request, data_parallel_rank)
                 .await
         };
-        let defer_request_cancellation = self.mode.is_decode();
         let stopped_ctx = ctx.inner_arc();
-        let shutdown = self.cancel.child_token();
-        let mut request_cancellation = Box::pin(async move { stopped_ctx.stopped().await });
-        let mut shutdown_cancellation = Box::pin(async move { shutdown.cancelled().await });
-        let stream = tokio::select! {
-            biased;
-            _ = shutdown_cancellation.as_mut() => None,
-            // Decode must reach vLLM so NIXL can release transferred KV.
-            _ = request_cancellation.as_mut(), if !defer_request_cancellation => None,
-            result = submit => Some(result?),
-        };
-        let Some(mut stream) = stream else {
-            let output = cancelled(&state);
-            return Ok(Box::pin(futures::stream::once(async move { Ok(output) })));
-        };
-
-        Ok(Box::pin(async_stream::stream! {
-            let mut request_cancelled = false;
-            let mut first_token_observed = false;
-            loop {
-                let message = if request_cancelled {
-                    tokio::select! {
-                        biased;
-                        _ = shutdown_cancellation.as_mut() => None,
-                        message = stream.message() => Some(message),
-                    }
-                } else {
-                    tokio::select! {
-                        biased;
-                        _ = shutdown_cancellation.as_mut() => None,
-                        _ = request_cancellation.as_mut() => {
-                            if defer_request_cancellation && !first_token_observed {
-                                request_cancelled = true;
-                                continue;
-                            }
-                            None
-                        }
-                        message = stream.message() => Some(message),
-                    }
-                };
-
-                let Some(message) = message else {
-                    yield Ok(cancelled(&state));
-                    break;
-                };
-                match message {
-                    Ok(Some(response)) => {
-                        let response_has_token = response
-                            .outputs
-                            .as_ref()
-                            .is_some_and(|output| output.num_tokens > 0);
-                        let transfer_completed = response.outputs.as_ref().is_some_and(|output| {
-                            output.num_tokens > 0 || output.finish_info.is_some()
-                        });
-                        match state.convert(response) {
-                            Ok(Some(output)) => {
-                                first_token_observed |= response_has_token;
-                                if request_cancelled && transfer_completed {
-                                    // Dropping this stream aborts only this request.
-                                    if first_token_observed {
-                                        ctx.notify_first_token();
-                                    }
-                                    yield Ok(cancelled(&state));
-                                    break;
-                                }
-                                let terminal = output.finish_reason.is_some();
-                                yield Ok(output);
-                                if terminal {
-                                    break;
-                                }
-                            }
-                            Ok(None) => {}
-                            Err(error) if request_cancelled => {
-                                tracing::warn!(
-                                    %error,
-                                    "vLLM response conversion failed after request cancellation"
-                                );
-                                yield Ok(cancelled(&state));
-                                break;
-                            }
-                            Err(error) => {
-                                yield Err(error);
-                                break;
-                            }
-                        }
-                    }
-                    Ok(None) if request_cancelled => {
-                        tracing::warn!(
-                            "vLLM GenerateStream ended before transfer completion after request cancellation"
-                        );
-                        yield Ok(cancelled(&state));
-                        break;
-                    }
-                    Ok(None) => {
-                        yield Err(client::protocol_error(
-                            "GenerateStream ended before a terminal response",
-                        ));
-                        break;
-                    }
-                    Err(status) if request_cancelled => {
-                        tracing::warn!(
-                            %status,
-                            "vLLM GenerateStream failed before transfer completion after request cancellation"
-                        );
-                        yield Ok(cancelled(&state));
-                        break;
-                    }
-                    Err(status) => {
-                        yield Err(client::status_to_dynamo("GenerateStream", status));
-                        break;
-                    }
-                }
-            }
-        }))
+        // The backend-common adapter owns the Abort RPC on cancellation here.
+        open_and_consume(
+            submit,
+            state,
+            stopped_ctx,
+            self.cancel.child_token(),
+            self.mode.is_decode(),
+            move || ctx.notify_first_token(),
+            None,
+        )
+        .await
     }
 
     async fn abort(&self, ctx: Arc<dyn AsyncEngineContext>) {
@@ -1374,7 +1235,7 @@ mod mm_routing_tests {
     }
 }
 
-fn zmq_connect_endpoint(endpoint: &str, grpc_endpoint: &GrpcEndpoint) -> String {
+pub(crate) fn zmq_connect_endpoint(endpoint: &str, grpc_endpoint: &GrpcEndpoint) -> String {
     let port = endpoint
         .strip_prefix("tcp://*:")
         .or_else(|| endpoint.strip_prefix("tcp://0.0.0.0:"))
@@ -1536,6 +1397,225 @@ async fn bootstrap_discover(
 
 fn is_hot_swap_requested() -> bool {
     dynamo_runtime::config::env_is_truthy("DYN_LORA_HOTSWAP_ENABLED")
+}
+
+/// A request translated for vLLM's `Inference.GenerateStream`.
+pub(crate) struct PreparedGenerate {
+    pub request: pb::GenerateRequest,
+    pub data_parallel_rank: Option<u32>,
+    pub state: ResponseState,
+}
+
+/// Validate and translate a Dynamo request for `model` serving in `mode`.
+///
+/// Shared by the sidecar's `LLMEngine::generate` and the frontend's direct
+/// dispatcher so both speak the same wire contract.
+pub(crate) fn prepare_generate(
+    model: &DiscoveredModel,
+    mode: DisaggregationMode,
+    request: dynamo_backend_common::PreprocessedRequest,
+    request_id: &str,
+) -> Result<PreparedGenerate, DynamoError> {
+    if request_has_multimodal_input(&request) && !model.supports_multimodal {
+        return Err(client::invalid_argument(format!(
+            "model `{}` does not advertise multimodal support",
+            model.served_name
+        )));
+    }
+    let mut request = normalize_response_options(request)?;
+    if !model.reports_proto_0_6()
+        && consume_reasoning_parser_args(&mut request.extra_args)
+        && let Some(parser) = model.reasoning_parser()
+    {
+        // Without the settings, vLLM's parser guesses from the prompt where
+        // reasoning ends. Nothing reads them when vLLM runs no parser.
+        return Err(client::invalid_argument(format!(
+            "vLLM runs reasoning parser `{parser}`, but its gRPC server predates vllm-proto 0.6.0 and cannot receive this request's reasoning settings; start vllm-rs with `--reasoning-parser none` or upgrade vLLM"
+        )));
+    }
+    // Fail on the prefill leg too, before it computes KV that decode would
+    // reject. Encode never samples.
+    let checks_controls = !mode.is_encode();
+    if checks_controls
+        && request.stop_conditions.max_thinking_tokens.is_some()
+        && model.reports_proto_0_6()
+        && model.reasoning_parser().is_none()
+    {
+        // The native gRPC path skips vLLM's frontend check and would
+        // otherwise ignore the budget.
+        return Err(client::invalid_argument(
+            "max_thinking_tokens requires vLLM to run a reasoning parser",
+        ));
+    }
+    let state = ResponseState::new(&request, mode);
+    let data_parallel_rank = data_parallel_rank(&request, mode);
+    let mut proto_request = build_generate_request(request, request_id.to_string(), mode)?;
+    if checks_controls && !model.reports_proto_0_6() {
+        require_proto_0_6_controls(&proto_request, model.proto_version())?;
+    }
+    proto_request.model.clone_from(&model.served_name);
+    if model.is_base_model_name(&proto_request.lora_name) {
+        // Routers may address the base model by name through the adapter field.
+        proto_request.lora_name.clear();
+    }
+    Ok(PreparedGenerate {
+        request: proto_request,
+        data_parallel_rank,
+        state,
+    })
+}
+
+/// Open the `GenerateStream` through `submit` and translate it into Dynamo
+/// engine output.
+///
+/// `abort` names the client and request id to send `Control.Abort` with when
+/// the request is cancelled; the sidecar leaves that to the backend-common
+/// adapter, the direct dispatcher has no adapter. A decode request cancelled
+/// before its first token keeps reading until the KV transfer completes so
+/// NIXL can release the prefill side.
+pub(crate) async fn open_and_consume<S>(
+    submit: S,
+    mut state: ResponseState,
+    ctx: Arc<dyn AsyncEngineContext>,
+    shutdown: CancellationToken,
+    defer_request_cancellation: bool,
+    on_first_token: impl Fn() + Send + 'static,
+    abort: Option<(Arc<VllmClient>, String)>,
+) -> Result<BoxStream<'static, Result<LLMEngineOutput, DynamoError>>, DynamoError>
+where
+    S: std::future::Future<Output = Result<tonic::Streaming<pb::GenerateResponse>, DynamoError>>,
+{
+    let stopped_ctx = ctx.clone();
+    let mut request_cancellation = Box::pin(async move { stopped_ctx.stopped().await });
+    let mut shutdown_cancellation = Box::pin(async move { shutdown.cancelled().await });
+    let stream = tokio::select! {
+        biased;
+        _ = shutdown_cancellation.as_mut() => None,
+        // Decode must reach vLLM so NIXL can release transferred KV.
+        _ = request_cancellation.as_mut(), if !defer_request_cancellation => {
+            send_abort(abort.as_ref()).await;
+            None
+        }
+        result = submit => Some(result?),
+    };
+    let Some(mut stream) = stream else {
+        let output = cancelled(&state);
+        return Ok(Box::pin(futures::stream::once(async move { Ok(output) })));
+    };
+
+    Ok(Box::pin(async_stream::stream! {
+        let mut request_cancelled = false;
+        let mut first_token_observed = false;
+        loop {
+            let message = if request_cancelled {
+                tokio::select! {
+                    biased;
+                    _ = shutdown_cancellation.as_mut() => None,
+                    message = stream.message() => Some(message),
+                }
+            } else {
+                tokio::select! {
+                    biased;
+                    _ = shutdown_cancellation.as_mut() => None,
+                    _ = request_cancellation.as_mut() => {
+                        if defer_request_cancellation && !first_token_observed {
+                            request_cancelled = true;
+                            continue;
+                        }
+                        send_abort(abort.as_ref()).await;
+                        None
+                    }
+                    message = stream.message() => Some(message),
+                }
+            };
+
+            let Some(message) = message else {
+                yield Ok(cancelled(&state));
+                break;
+            };
+            match message {
+                Ok(Some(response)) => {
+                    let response_has_token = response
+                        .outputs
+                        .as_ref()
+                        .is_some_and(|output| output.num_tokens > 0);
+                    let transfer_completed = response.outputs.as_ref().is_some_and(|output| {
+                        output.num_tokens > 0 || output.finish_info.is_some()
+                    });
+                    match state.convert(response) {
+                        Ok(Some(output)) => {
+                            first_token_observed |= response_has_token;
+                            if request_cancelled && transfer_completed {
+                                // Dropping this stream aborts only this request.
+                                if first_token_observed {
+                                    on_first_token();
+                                }
+                                send_abort(abort.as_ref()).await;
+                                yield Ok(cancelled(&state));
+                                break;
+                            }
+                            let terminal = output.finish_reason.is_some();
+                            yield Ok(output);
+                            if terminal {
+                                break;
+                            }
+                        }
+                        Ok(None) => {}
+                        Err(error) if request_cancelled => {
+                            tracing::warn!(
+                                %error,
+                                "vLLM response conversion failed after request cancellation"
+                            );
+                            yield Ok(cancelled(&state));
+                            break;
+                        }
+                        Err(error) => {
+                            yield Err(error);
+                            break;
+                        }
+                    }
+                }
+                Ok(None) if request_cancelled => {
+                    tracing::warn!(
+                        "vLLM GenerateStream ended before transfer completion after request cancellation"
+                    );
+                    yield Ok(cancelled(&state));
+                    break;
+                }
+                Ok(None) => {
+                    yield Err(client::protocol_error(
+                        "GenerateStream ended before a terminal response",
+                    ));
+                    break;
+                }
+                Err(status) if request_cancelled => {
+                    tracing::warn!(
+                        %status,
+                        "vLLM GenerateStream failed before transfer completion after request cancellation"
+                    );
+                    yield Ok(cancelled(&state));
+                    break;
+                }
+                Err(status) => {
+                    yield Err(client::status_to_dynamo("GenerateStream", status));
+                    break;
+                }
+            }
+        }
+    }))
+}
+
+async fn send_abort(abort: Option<&(Arc<VllmClient>, String)>) {
+    let Some((client, request_id)) = abort else {
+        return;
+    };
+    if let Err(error) = client.abort(request_id.clone()).await {
+        tracing::debug!(
+            request_id,
+            error = %error.to_string().escape_debug(),
+            "vLLM Control.Abort failed"
+        );
+    }
 }
 
 #[cfg(test)]

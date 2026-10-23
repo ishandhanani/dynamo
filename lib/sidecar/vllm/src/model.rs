@@ -119,6 +119,10 @@ impl DiscoveredModel {
         Ok(())
     }
 
+    pub(crate) fn tool_call_parser(&self) -> Option<&str> {
+        self.identity.tool_call_parser.as_deref()
+    }
+
     pub(crate) fn reasoning_parser(&self) -> Option<&str> {
         self.identity.reasoning_parser.as_deref()
     }
