@@ -272,14 +272,25 @@ pub(crate) async fn build_preprocessed_routing_with_session_affinity_mode(
             as MultimodalCacheKeyExtractor<PreprocessedRequest>
     });
 
-    let router = LlmPushRouter::from_client_with_state(
-        router_client,
-        router_mode,
-        None,
-        embedding_cache_indexer,
-        cache_key_extractor,
-    )
-    .await?;
+    let router = match model_manager.direct_dispatch() {
+        Some(dispatch) => {
+            anyhow::ensure!(
+                embedding_cache_indexer.is_none(),
+                "multimodal cache routing is not supported with direct engines"
+            );
+            LlmPushRouter::from_client_with_dispatch(router_client, router_mode, dispatch).await?
+        }
+        None => {
+            LlmPushRouter::from_client_with_state(
+                router_client,
+                router_mode,
+                None,
+                embedding_cache_indexer,
+                cache_key_extractor,
+            )
+            .await?
+        }
+    };
 
     // Eagerly register router request metrics so they appear as zeros before
     // RoutingHost is constructed. The host repeats this idempotently so the
@@ -411,6 +422,9 @@ pub async fn prepare_engine(
                 inspect_template: false,
                 request_template: model.request_template(),
             })
+        }
+        EngineConfig::Direct { .. } => {
+            anyhow::bail!("direct engines are only served by the HTTP frontend");
         }
         EngineConfig::InProcessTokens {
             engine: inner_engine,

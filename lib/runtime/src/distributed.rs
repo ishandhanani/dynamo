@@ -40,6 +40,8 @@ use tokio_util::sync::CancellationToken;
 
 type EndpointDiscoverySourceMap = HashMap<Endpoint, Weak<EndpointDiscoverySource>>;
 type RoutingOccupancyMap = HashMap<Endpoint, Weak<RoutingOccupancyState>>;
+/// Endpoints whose instances are configured statically instead of discovered.
+type StaticEndpointInstanceMap = HashMap<Endpoint, Receiver<Vec<Instance>>>;
 
 fn parse_tcp_response_stream_port(value: Option<&str>) -> Result<u16, PipelineError> {
     let Some(port) = value.map(str::trim).filter(|value| !value.is_empty()) else {
@@ -166,6 +168,7 @@ pub struct DistributedRuntime {
 
     endpoint_discovery_sources: Arc<tokio::sync::Mutex<EndpointDiscoverySourceMap>>,
     routing_occupancy_states: Arc<tokio::sync::Mutex<RoutingOccupancyMap>>,
+    static_endpoint_instances: Arc<parking_lot::Mutex<StaticEndpointInstanceMap>>,
 
     // Health Status
     system_health: Arc<parking_lot::Mutex<SystemHealth>>,
@@ -335,6 +338,7 @@ impl DistributedRuntime {
             component_registry,
             endpoint_discovery_sources: Arc::new(Mutex::new(HashMap::new())),
             routing_occupancy_states: Arc::new(Mutex::new(HashMap::new())),
+            static_endpoint_instances: Arc::new(parking_lot::Mutex::new(HashMap::new())),
             metrics_registry: crate::MetricsRegistry::new(),
             system_health,
             request_plane,
@@ -695,6 +699,29 @@ impl DistributedRuntime {
 
     pub(crate) fn endpoint_discovery_sources(&self) -> Arc<Mutex<EndpointDiscoverySourceMap>> {
         self.endpoint_discovery_sources.clone()
+    }
+
+    /// Serve `endpoint` from a caller-owned instance list instead of discovery.
+    ///
+    /// Every [`Client`](crate::component::Client) created for `endpoint` after this call reads
+    /// its membership from `instances`; discovery is never consulted for it. The frontend's
+    /// direct-engine mode uses this for engines it probed itself. Registering the same endpoint
+    /// twice replaces the list for clients created afterwards only.
+    pub fn register_static_endpoint_instances(
+        &self,
+        endpoint: &Endpoint,
+        instances: Receiver<Vec<Instance>>,
+    ) {
+        self.static_endpoint_instances
+            .lock()
+            .insert(endpoint.clone(), instances);
+    }
+
+    pub(crate) fn static_endpoint_instances(
+        &self,
+        endpoint: &Endpoint,
+    ) -> Option<Receiver<Vec<Instance>>> {
+        self.static_endpoint_instances.lock().get(endpoint).cloned()
     }
 
     /// Register an external long-running shutdown task with this runtime's

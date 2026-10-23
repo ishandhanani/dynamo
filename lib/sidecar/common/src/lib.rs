@@ -4,6 +4,7 @@
 //! Shared infrastructure for Rust sidecars.
 
 mod args;
+pub mod direct;
 mod endpoint;
 mod error;
 mod json;
