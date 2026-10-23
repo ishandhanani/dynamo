@@ -36,6 +36,7 @@ from dynamo.llm import (
     EngineType,
     EntrypointArgs,
     FrontendRoute,
+    ModelRuntimeConfig,
     make_engine,
     run_input,
 )
@@ -485,7 +486,19 @@ async def async_main():
     if config.router_prefill_load_model == "ais":
         kwargs["ais_perf_config"] = AisPerfConfig(**config.ais_perf_kwargs())
 
-    e = EntrypointArgs(EngineType.Dynamic, **kwargs)
+    engine_type = EngineType.Dynamic
+    if config.direct:
+        engine_type = EngineType.Direct
+        kwargs["engine_urls"] = list(config.engine_urls)
+        kwargs["prefill_engine_urls"] = list(config.prefill_engine_urls)
+        kwargs["direct_backend"] = config.direct_backend
+        if config.dyn_tool_call_parser or config.dyn_reasoning_parser:
+            runtime_config = ModelRuntimeConfig()
+            runtime_config.tool_call_parser = config.dyn_tool_call_parser
+            runtime_config.reasoning_parser = config.dyn_reasoning_parser
+            kwargs["runtime_config"] = runtime_config
+
+    e = EntrypointArgs(engine_type, **kwargs)
     engine = await make_engine(runtime, e)
     frontend_route_extensions = load_frontend_route_extensions(
         config.frontend_route_extensions
