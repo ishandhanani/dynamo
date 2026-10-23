@@ -206,6 +206,12 @@ class FrontendConfig(RouterConfigBase, KvRouterConfigBase, AisPerfConfigBase):
 
     discovery_backend: str
     request_plane: str
+    direct: bool
+    direct_backend: str
+    engine_urls: list[str]
+    prefill_engine_urls: list[str]
+    dyn_tool_call_parser: Optional[str]
+    dyn_reasoning_parser: Optional[str]
     response_plane: str = "tcp"
     event_plane: Optional[str] = None
     chat_processor: str
@@ -267,6 +273,24 @@ class FrontendConfig(RouterConfigBase, KvRouterConfigBase, AisPerfConfigBase):
         if self.migration_limit < 0 or self.migration_limit > _U32_MAX:
             raise ValueError(
                 f"--migration-limit must be between 0 and {_U32_MAX} (0=disabled)"
+            )
+        if self.direct:
+            if not self.engine_urls:
+                raise ValueError("--direct requires at least one --engine-url")
+            if self.interactive or self.kserve_grpc_server:
+                mode_flag = (
+                    "--interactive" if self.interactive else "--kserve-grpc-server"
+                )
+                raise ValueError(
+                    f"--direct is only supported by the HTTP frontend, "
+                    f"so it cannot be combined with {mode_flag}"
+                )
+        elif self.engine_urls or self.prefill_engine_urls:
+            raise ValueError("--engine-url and --prefill-engine-url require --direct")
+        if not self.direct and (self.dyn_tool_call_parser or self.dyn_reasoning_parser):
+            raise ValueError(
+                "--dyn-tool-call-parser and --dyn-reasoning-parser require --direct; "
+                "sidecar workers carry their own parser settings"
             )
         if self.migration_max_seq_len is not None and (
             self.migration_max_seq_len < 1 or self.migration_max_seq_len > _U32_MAX
@@ -647,6 +671,77 @@ class FrontendArgGroup(ArgGroup):
                 "'dynamo.frontend.routes' entry-point group, or a 'module:function' "
                 "path. May be repeated. DYN_FRONTEND_ROUTE_EXTENSIONS accepts "
                 "whitespace-separated values."
+            ),
+        )
+
+        add_negatable_bool_argument(
+            g,
+            flag_name="--direct",
+            env_var="DYN_DIRECT",
+            default=False,
+            help=(
+                "Dial inference engines directly over their native gRPC API instead of "
+                "discovering Dynamo workers. Requires --engine-url. The engines run "
+                "without a Dynamo sidecar; the router, KV indexer, prefill/decode "
+                "orchestration and migration run in this frontend."
+            ),
+        )
+        add_argument(
+            g,
+            flag_name="--direct-backend",
+            env_var="DYN_DIRECT_BACKEND",
+            default="sglang",
+            choices=["sglang"],
+            help=(
+                "Engine family behind --engine-url in --direct mode: SGLang's native gRPC "
+                "server (--grpc-port)."
+            ),
+        )
+        add_argument(
+            g,
+            flag_name="--engine-url",
+            env_var="DYN_ENGINE_URLS",
+            default=[],
+            dest="engine_urls",
+            action="append",
+            help=(
+                "Engine gRPC endpoint to route to in --direct mode, e.g. "
+                "http://host:30001. May be repeated. Aggregated engines, or the decode "
+                "engines when --prefill-engine-url is also given. "
+                "DYN_ENGINE_URLS accepts whitespace-separated values."
+            ),
+        )
+        add_argument(
+            g,
+            flag_name="--prefill-engine-url",
+            env_var="DYN_PREFILL_ENGINE_URLS",
+            default=[],
+            dest="prefill_engine_urls",
+            action="append",
+            help=(
+                "Engine gRPC endpoint that runs the prefill leg in --direct mode. May be "
+                "repeated. SGLang engines must report a prefill role that agrees with "
+                "this list. DYN_PREFILL_ENGINE_URLS accepts whitespace-separated values."
+            ),
+        )
+        add_argument(
+            g,
+            flag_name="--dyn-tool-call-parser",
+            env_var="DYN_TOOL_CALL_PARSER",
+            default=None,
+            help=(
+                "Dynamo tool-call parser for the model served in --direct mode, as the "
+                "sidecar's flag of the same name. Overrides the parser the engine reports."
+            ),
+        )
+        add_argument(
+            g,
+            flag_name="--dyn-reasoning-parser",
+            env_var="DYN_REASONING_PARSER",
+            default=None,
+            help=(
+                "Dynamo reasoning parser for the model served in --direct mode, as the "
+                "sidecar's flag of the same name. Overrides the parser the engine reports."
             ),
         )
 

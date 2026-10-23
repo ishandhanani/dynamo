@@ -84,6 +84,7 @@ impl SidecarFixture for Fixture {
     async fn start(control: Controller<Adapter>, config: FixtureConfig) -> Self {
         let mut args = fast_engine_args(EngineType::Sglang);
         args.speedup_ratio = config.speedup_ratio;
+        args.runtime.zmq_kv_events_port = config.kv_events_port;
         let service = SglangMockerService::new(
             MockerServerConfig {
                 model: config.model.clone(),

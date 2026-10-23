@@ -56,10 +56,10 @@ struct StartedState {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-struct DiscoveredKvEventSource {
-    endpoint: String,
-    topic: String,
-    dp_rank: u32,
+pub(crate) struct DiscoveredKvEventSource {
+    pub(crate) endpoint: String,
+    pub(crate) topic: String,
+    pub(crate) dp_rank: u32,
 }
 
 impl SglangSidecarEngine {
@@ -221,47 +221,13 @@ impl SglangSidecarEngine {
     }
 
     async fn await_ready(&self, client: &mut Client, deadline: Instant) -> Result<(), DynamoError> {
-        let started = Instant::now();
-        let mut attempt = 0_u64;
-        let mut last_logged_at: Option<Instant> = None;
-        loop {
-            attempt += 1;
-            let retry_message = match client::health_check(client, deadline).await {
-                Ok(healthy) => {
-                    if healthy {
-                        return Ok(());
-                    }
-                    "SGLang reported unhealthy".to_string()
-                }
-                Err(error) => format!("HealthCheck RPC failed: {error}"),
-            };
-            if Instant::now() >= deadline {
-                return Err(client::engine_shutdown(format!(
-                    "SGLang did not become healthy within {:?}: {retry_message}",
-                    self.transport.startup_deadline
-                )));
-            }
-            let now = Instant::now();
-            if last_logged_at.is_none_or(|last| now.duration_since(last) >= RETRY_LOG_INTERVAL) {
-                // WARN, not silent: this loop previously logged nothing at all on a
-                // failed attempt, so a SGLang engine that's slow (or never becomes)
-                // healthy produced zero visible output anywhere for up to
-                // startup_deadline (default 300s) -- indistinguishable from a hang.
-                // Rate-limited like GrpcChannelPool::connect_until_ready: a normal
-                // slow startup retries every retry_interval (default 1s) and would
-                // otherwise spam hundreds of lines.
-                tracing::warn!(
-                    attempt,
-                    elapsed = ?started.elapsed(),
-                    remaining = ?deadline.saturating_duration_since(now),
-                    retry_interval = ?self.transport.retry_interval,
-                    reason = %retry_message,
-                    "SGLang not healthy yet; retrying"
-                );
-                last_logged_at = Some(now);
-            }
-            tokio::time::sleep_until((now + self.transport.retry_interval).min(deadline)).await;
-        }
+        await_engine_ready(
+            client,
+            deadline,
+            self.transport.startup_deadline,
+            self.transport.retry_interval,
+        )
+        .await
     }
 }
 
@@ -347,7 +313,7 @@ impl LLMEngine for SglangSidecarEngine {
 
     async fn generate(
         &self,
-        mut request: PreprocessedRequest,
+        request: PreprocessedRequest,
         ctx: GenerateContext,
     ) -> Result<BoxStream<'static, Result<LLMEngineOutput, DynamoError>>, DynamoError> {
         let state = self
@@ -368,199 +334,20 @@ impl LLMEngine for SglangSidecarEngine {
             })?;
             return Ok(native_http.generate(native_request, ctx, self.cancel.child_token()));
         }
-        if request.stop_conditions.max_tokens.is_none() {
-            request.stop_conditions.max_tokens = omitted_max_tokens_default(
-                state.combined_token_limit,
-                request.token_ids.len(),
-                request.stop_conditions.min_tokens,
-            );
-        }
-        let mut grpc_client = state.pool.stream_client();
-
-        let prompt_tokens = request.token_ids.len() as u32;
-        let return_tokens_as_ids = request
-            .output_options
-            .return_tokens_as_token_ids
-            .unwrap_or(false);
-        let grpc_request = build_generate_request(
-            &request,
-            ctx.id(),
-            self.disaggregation_mode,
-            self.bootstrap_host.as_deref(),
-            self.bootstrap_port,
-        )?;
-        let mut prefill_handoff = if self.disaggregation_mode.is_prefill() {
-            grpc_request
-                .disaggregated_params
-                .as_ref()
-                .map(disaggregated_params_to_json)
-        } else {
-            None
-        };
-        let cancel = self.cancel.child_token();
-        let is_prefill = self.disaggregation_mode.is_prefill();
-        let stop_conditions = request.stop_conditions;
-
-        Ok(Box::pin(async_stream::stream! {
-            if ctx.is_stopped() || cancel.is_cancelled() {
-                yield Ok(LLMEngineOutput::cancelled().with_usage(usage(prompt_tokens, 0)));
-                return;
-            }
-            let stopped_ctx = ctx.inner_arc();
-            let mut request_cancellation = Box::pin(async move { stopped_ctx.stopped().await });
-            let mut shutdown_cancellation = Box::pin(async move { cancel.cancelled().await });
-
-            tracing::debug!(request_id = %ctx.id(), "sending request to SGLang gRPC");
-            let opened = tokio::select! {
-                biased;
-                _ = &mut request_cancellation => None,
-                _ = &mut shutdown_cancellation => None,
-                response = grpc_client.generate(grpc_request) => Some(response),
-            };
-            let Some(opened) = opened else {
-                yield Ok(LLMEngineOutput::cancelled().with_usage(usage(prompt_tokens, 0)));
-                return;
-            };
-            let mut stream = match opened {
-                Ok(response) => response.into_inner(),
-                Err(status) => {
-                    yield Err(client::status_to_dynamo("Generate", status));
-                    return;
-                }
-            };
-            if is_prefill {
-                let Some(handoff) = prefill_handoff.take() else {
-                    yield Err(client::protocol_error(
-                        "SGLang gRPC prefill request is missing disaggregated params",
-                    ));
-                    return;
-                };
-                // Publish the handoff only after the gRPC transport opens the
-                // response stream so decode can rendezvous while prefill runs.
-                yield Ok(LLMEngineOutput {
-                    disaggregated_params: Some(handoff),
-                    ..Default::default()
-                });
-            }
-
-            let mut generated = 0_u32;
-            let mut observed_prompt_tokens = prompt_tokens;
-            loop {
-                tokio::select! {
-                    biased;
-                    _ = &mut request_cancellation => {
-                        yield Ok(LLMEngineOutput::cancelled()
-                            .with_usage(usage(observed_prompt_tokens, generated)));
-                        break;
-                    }
-                    _ = &mut shutdown_cancellation => {
-                        yield Ok(LLMEngineOutput::cancelled()
-                            .with_usage(usage(observed_prompt_tokens, generated)));
-                        break;
-                    }
-                    message = stream.message() => {
-                        let response = match message {
-                            Ok(Some(response)) => response,
-                            Ok(None) => {
-                                yield Err(client::engine_shutdown(
-                                    "SGLang closed Generate before a finished response",
-                                ));
-                                break;
-                            }
-                            Err(status) => {
-                                yield Err(client::status_to_dynamo("Generate", status));
-                                break;
-                            }
-                        };
-
-                        if let Some(value) = meta_u32(&response.meta_info, "prompt_tokens") {
-                            observed_prompt_tokens = value;
-                        }
-                        let token_ids = match output_ids_to_u32(&response.output_ids) {
-                            Ok(ids) => ids,
-                            Err(err) => {
-                                yield Err(err);
-                                break;
-                            }
-                        };
-                        let (log_probs, top_logprobs) =
-                            match extract_logprobs(&response.meta_info, return_tokens_as_ids) {
-                                Ok(values) => values,
-                                Err(err) => {
-                                    yield Err(err);
-                                    break;
-                                }
-                            };
-
-                        if is_prefill {
-                            if response.finished {
-                                let terminal = match terminal_from_meta(
-                                    &response.meta_info,
-                                    observed_prompt_tokens,
-                                    0,
-                                    &stop_conditions,
-                                ) {
-                                    Ok(terminal) => terminal,
-                                    Err(error) => {
-                                        yield Err(error);
-                                        break;
-                                    }
-                                };
-                                yield Ok(terminal);
-                                break;
-                            }
-                            continue;
-                        }
-
-                        generated = generated.saturating_add(token_ids.len() as u32);
-                        if response.finished {
-                            let mut terminal = match terminal_from_meta(
-                                &response.meta_info,
-                                observed_prompt_tokens,
-                                generated,
-                                &stop_conditions,
-                            ) {
-                                Ok(terminal) => terminal,
-                                Err(error) => {
-                                    yield Err(error);
-                                    break;
-                                }
-                            };
-                            let engine_data = match engine_data_from_meta(&response.meta_info, true) {
-                                Ok(engine_data) => engine_data,
-                                Err(error) => {
-                                    yield Err(error);
-                                    break;
-                                }
-                            };
-                            terminal.token_ids = token_ids;
-                            terminal.log_probs = log_probs;
-                            terminal.top_logprobs = top_logprobs;
-                            terminal.engine_data = engine_data;
-                            yield Ok(terminal);
-                            break;
-                        }
-
-                        if !token_ids.is_empty() {
-                            let engine_data = match engine_data_from_meta(&response.meta_info, false) {
-                                Ok(engine_data) => engine_data,
-                                Err(error) => {
-                                    yield Err(error);
-                                    break;
-                                }
-                            };
-                            yield Ok(LLMEngineOutput {
-                                token_ids,
-                                log_probs,
-                                top_logprobs,
-                                engine_data,
-                                ..Default::default()
-                            });
-                        }
-                    }
-                }
-            }
-        }))
+        // The backend-common adapter owns the Abort RPC on cancellation here.
+        grpc_generate_stream(
+            GrpcGenerateTarget {
+                pool: &state.pool,
+                mode: self.disaggregation_mode,
+                bootstrap_host: self.bootstrap_host.as_deref(),
+                bootstrap_port: self.bootstrap_port,
+                combined_token_limit: state.combined_token_limit,
+                abort_on_cancel: None,
+            },
+            request,
+            ctx.inner_arc(),
+            self.cancel.child_token(),
+        )
     }
 
     async fn abort(&self, ctx: Arc<dyn AsyncEngineContext>) {
@@ -625,7 +412,7 @@ impl LLMEngine for SglangSidecarEngine {
     }
 }
 
-async fn bootstrap_discover(
+pub(crate) async fn bootstrap_discover(
     endpoint: &GrpcEndpoint,
     transport: &GrpcTransportConfig,
     bootstrap: bool,
@@ -638,7 +425,7 @@ async fn bootstrap_discover(
     }
 }
 
-fn discovery_string(value: &Value, key: &str) -> Option<String> {
+pub(crate) fn discovery_string(value: &Value, key: &str) -> Option<String> {
     value
         .get(key)
         .and_then(Value::as_str)
@@ -646,7 +433,7 @@ fn discovery_string(value: &Value, key: &str) -> Option<String> {
         .map(str::to_string)
 }
 
-fn discovery_bootstrap_port(discovery: &Discovery) -> Result<Option<u16>, DynamoError> {
+pub(crate) fn discovery_bootstrap_port(discovery: &Discovery) -> Result<Option<u16>, DynamoError> {
     client::json_u64(&discovery.server_info, "disaggregation_bootstrap_port")
         .map(|port| {
             u16::try_from(port).map_err(|_| {
@@ -668,7 +455,7 @@ fn discovery_bootstrap_port(discovery: &Discovery) -> Result<Option<u16>, Dynamo
         })
 }
 
-fn resolve_bootstrap_host(
+pub(crate) fn resolve_bootstrap_host(
     explicit: Option<&str>,
     endpoint: &str,
     discovery: &Discovery,
@@ -777,7 +564,7 @@ async fn local_kv_event_sources(
         .collect())
 }
 
-async fn discover_kv_event_sources(
+pub(crate) async fn discover_kv_event_sources(
     discovery: &Discovery,
     engine_config: &mut EngineConfig,
     grpc_endpoint: &GrpcEndpoint,
@@ -960,7 +747,7 @@ fn sglang_eagle_enabled(server_info: &Value) -> bool {
 /// Context length minus the EAGLE draft-token reserve, which SGLang counts
 /// against the context once `max_new_tokens` is set. Adaptive speculation does
 /// not report its reserve.
-fn combined_token_limit(discovery: &Discovery) -> Option<u32> {
+pub(crate) fn combined_token_limit(discovery: &Discovery) -> Option<u32> {
     let server_info = &discovery.server_info;
     let reserved = if !sglang_eagle_enabled(server_info) {
         0
@@ -1099,7 +886,7 @@ fn hicache_native_offloading_capacity(server_info: &Value, model_info: &Value) -
     }
 }
 
-fn build_engine_config(
+pub(crate) fn build_engine_config(
     discovery: &Discovery,
     mode: DisaggregationMode,
     bootstrap_host: Option<String>,
@@ -1206,6 +993,302 @@ fn build_engine_config(
             bootstrap_port: mode.is_prefill().then_some(bootstrap_port).flatten(),
         }),
     })
+}
+
+/// One SGLang gRPC `Generate` target: the engine's channel pool plus the role
+/// facts discovery established for it.
+pub(crate) struct GrpcGenerateTarget<'a> {
+    pub pool: &'a Pool,
+    pub mode: DisaggregationMode,
+    pub bootstrap_host: Option<&'a str>,
+    pub bootstrap_port: Option<u16>,
+    pub combined_token_limit: Option<u32>,
+    /// Send SGLang `Abort` from inside the stream when the request is cancelled,
+    /// bounded by this timeout. The sidecar leaves aborts to the backend-common
+    /// adapter; the direct dispatcher has no adapter.
+    pub abort_on_cancel: Option<Duration>,
+}
+
+/// Open a `Generate` stream and translate it into Dynamo engine output.
+///
+/// Shared by the sidecar's `LLMEngine::generate` and the frontend's direct
+/// dispatcher so both speak the same wire contract.
+pub(crate) fn grpc_generate_stream(
+    target: GrpcGenerateTarget<'_>,
+    mut request: PreprocessedRequest,
+    ctx: Arc<dyn AsyncEngineContext>,
+    cancel: CancellationToken,
+) -> Result<BoxStream<'static, Result<LLMEngineOutput, DynamoError>>, DynamoError> {
+    if request.stop_conditions.max_tokens.is_none() {
+        request.stop_conditions.max_tokens = omitted_max_tokens_default(
+            target.combined_token_limit,
+            request.token_ids.len(),
+            request.stop_conditions.min_tokens,
+        );
+    }
+    let mut grpc_client = target.pool.stream_client();
+    let abort_client = target
+        .abort_on_cancel
+        .map(|timeout| (target.pool.control_client(), timeout));
+
+    let prompt_tokens = request.token_ids.len() as u32;
+    let return_tokens_as_ids = request
+        .output_options
+        .return_tokens_as_token_ids
+        .unwrap_or(false);
+    let grpc_request = build_generate_request(
+        &request,
+        ctx.id(),
+        target.mode,
+        target.bootstrap_host,
+        target.bootstrap_port,
+    )?;
+    let mut prefill_handoff = if target.mode.is_prefill() {
+        grpc_request
+            .disaggregated_params
+            .as_ref()
+            .map(disaggregated_params_to_json)
+    } else {
+        None
+    };
+    let is_prefill = target.mode.is_prefill();
+    let is_decode = target.mode.is_decode();
+    let stop_conditions = request.stop_conditions;
+    let request_id = ctx.id().to_string();
+
+    Ok(Box::pin(async_stream::stream! {
+        if ctx.is_stopped() || cancel.is_cancelled() {
+            yield Ok(LLMEngineOutput::cancelled().with_usage(usage(prompt_tokens, 0)));
+            return;
+        }
+        let stopped_ctx = ctx.clone();
+        let mut request_cancellation: std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>> =
+            Box::pin(async move { stopped_ctx.stopped().await });
+        let mut shutdown_cancellation = Box::pin(async move { cancel.cancelled().await });
+        let mut abort_client = abort_client;
+        // A decode request cancelled before its first token keeps reading until
+        // that token arrives, so the prefill peer's KV transfer is not orphaned;
+        // the backend-common adapter defers its abort the same way.
+        let mut pending_abort = false;
+
+        tracing::debug!(request_id = %request_id, "sending request to SGLang gRPC");
+        let opened = tokio::select! {
+            biased;
+            _ = &mut request_cancellation => None,
+            _ = &mut shutdown_cancellation => None,
+            response = grpc_client.generate(grpc_request) => Some(response),
+        };
+        let Some(opened) = opened else {
+            yield Ok(LLMEngineOutput::cancelled().with_usage(usage(prompt_tokens, 0)));
+            return;
+        };
+        let mut stream = match opened {
+            Ok(response) => response.into_inner(),
+            Err(status) => {
+                yield Err(client::status_to_dynamo("Generate", status));
+                return;
+            }
+        };
+        if is_prefill {
+            let Some(handoff) = prefill_handoff.take() else {
+                yield Err(client::protocol_error(
+                    "SGLang gRPC prefill request is missing disaggregated params",
+                ));
+                return;
+            };
+            // Publish the handoff only after the gRPC transport opens the
+            // response stream so decode can rendezvous while prefill runs.
+            yield Ok(LLMEngineOutput {
+                disaggregated_params: Some(handoff),
+                ..Default::default()
+            });
+        }
+
+        let mut generated = 0_u32;
+        let mut observed_prompt_tokens = prompt_tokens;
+        loop {
+            tokio::select! {
+                biased;
+                _ = &mut request_cancellation => {
+                    request_cancellation = Box::pin(std::future::pending());
+                    if is_decode && generated == 0 && abort_client.is_some() {
+                        pending_abort = true;
+                        continue;
+                    }
+                    if let Some((mut control, timeout)) = abort_client.take() {
+                        send_abort(&mut control, &request_id, timeout).await;
+                    }
+                    yield Ok(LLMEngineOutput::cancelled()
+                        .with_usage(usage(observed_prompt_tokens, generated)));
+                    break;
+                }
+                _ = &mut shutdown_cancellation => {
+                    yield Ok(LLMEngineOutput::cancelled()
+                        .with_usage(usage(observed_prompt_tokens, generated)));
+                    break;
+                }
+                message = stream.message() => {
+                    let response = match message {
+                        Ok(Some(response)) => response,
+                        Ok(None) => {
+                            yield Err(client::engine_shutdown(
+                                "SGLang closed Generate before a finished response",
+                            ));
+                            break;
+                        }
+                        Err(status) => {
+                            yield Err(client::status_to_dynamo("Generate", status));
+                            break;
+                        }
+                    };
+
+                    if let Some(value) = meta_u32(&response.meta_info, "prompt_tokens") {
+                        observed_prompt_tokens = value;
+                    }
+                    let token_ids = match output_ids_to_u32(&response.output_ids) {
+                        Ok(ids) => ids,
+                        Err(err) => {
+                            yield Err(err);
+                            break;
+                        }
+                    };
+                    let (log_probs, top_logprobs) =
+                        match extract_logprobs(&response.meta_info, return_tokens_as_ids) {
+                            Ok(values) => values,
+                            Err(err) => {
+                                yield Err(err);
+                                break;
+                            }
+                        };
+
+                    if is_prefill {
+                        if response.finished {
+                            let terminal = match terminal_from_meta(
+                                &response.meta_info,
+                                observed_prompt_tokens,
+                                0,
+                                &stop_conditions,
+                            ) {
+                                Ok(terminal) => terminal,
+                                Err(error) => {
+                                    yield Err(error);
+                                    break;
+                                }
+                            };
+                            yield Ok(terminal);
+                            break;
+                        }
+                        continue;
+                    }
+
+                    generated = generated.saturating_add(token_ids.len() as u32);
+                    if pending_abort && (!token_ids.is_empty() || response.finished) {
+                        if let Some((mut control, timeout)) = abort_client.take() {
+                            send_abort(&mut control, &request_id, timeout).await;
+                        }
+                        yield Ok(LLMEngineOutput::cancelled()
+                            .with_usage(usage(observed_prompt_tokens, generated)));
+                        break;
+                    }
+                    if response.finished {
+                        let mut terminal = match terminal_from_meta(
+                            &response.meta_info,
+                            observed_prompt_tokens,
+                            generated,
+                            &stop_conditions,
+                        ) {
+                            Ok(terminal) => terminal,
+                            Err(error) => {
+                                yield Err(error);
+                                break;
+                            }
+                        };
+                        let engine_data = match engine_data_from_meta(&response.meta_info, true) {
+                            Ok(engine_data) => engine_data,
+                            Err(error) => {
+                                yield Err(error);
+                                break;
+                            }
+                        };
+                        terminal.token_ids = token_ids;
+                        terminal.log_probs = log_probs;
+                        terminal.top_logprobs = top_logprobs;
+                        terminal.engine_data = engine_data;
+                        yield Ok(terminal);
+                        break;
+                    }
+
+                    if !token_ids.is_empty() {
+                        let engine_data = match engine_data_from_meta(&response.meta_info, false) {
+                            Ok(engine_data) => engine_data,
+                            Err(error) => {
+                                yield Err(error);
+                                break;
+                            }
+                        };
+                        yield Ok(LLMEngineOutput {
+                            token_ids,
+                            log_probs,
+                            top_logprobs,
+                            engine_data,
+                            ..Default::default()
+                        });
+                    }
+                }
+            }
+        }
+    }))
+}
+
+async fn send_abort(control: &mut Client, request_id: &str, timeout: Duration) {
+    let request = pb::AbortRequest {
+        rid: request_id.to_string(),
+        abort_all: false,
+    };
+    if let Err(error) = client::abort(control, request, timeout).await {
+        tracing::debug!(request_id, %error, "SGLang Abort RPC failed");
+    }
+}
+
+/// Wait until the engine reports healthy or `deadline` passes.
+pub(crate) async fn await_engine_ready(
+    client: &mut Client,
+    deadline: Instant,
+    startup_deadline: Duration,
+    retry_interval: Duration,
+) -> Result<(), DynamoError> {
+    let started = Instant::now();
+    let mut attempt = 0_u64;
+    let mut last_logged_at: Option<Instant> = None;
+    loop {
+        attempt += 1;
+        let retry_message = match client::health_check(client, deadline).await {
+            Ok(healthy) => {
+                if healthy {
+                    return Ok(());
+                }
+                "SGLang reported unhealthy".to_string()
+            }
+            Err(error) => format!("HealthCheck RPC failed: {error}"),
+        };
+        if Instant::now() >= deadline {
+            return Err(client::engine_shutdown(format!(
+                "SGLang did not become healthy within {:?}: {retry_message}",
+                startup_deadline
+            )));
+        }
+        let should_log =
+            last_logged_at.is_none_or(|logged_at| logged_at.elapsed() >= RETRY_LOG_INTERVAL);
+        if should_log {
+            tracing::info!(
+                attempt,
+                waited_secs = started.elapsed().as_secs(),
+                "waiting for SGLang readiness: {retry_message}"
+            );
+            last_logged_at = Some(Instant::now());
+        }
+        tokio::time::sleep(retry_interval).await;
+    }
 }
 
 #[cfg(test)]

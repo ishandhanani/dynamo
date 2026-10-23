@@ -2951,6 +2951,7 @@ dependencies = [
  "async-stream",
  "async-trait",
  "clap",
+ "dashmap",
  "dynamo-backend-common",
  "dynamo-kv-router",
  "dynamo-llm",

@@ -21,6 +21,9 @@ pub struct FixtureConfig {
     pub connections: usize,
     pub speedup_ratio: f64,
     pub disaggregation_mode: DisaggregationMode,
+    /// Publish KV events on this ZMQ port and advertise it through discovery
+    /// (SGLang fixture only). `None` disables KV events.
+    pub kv_events_port: Option<u16>,
 }
 
 impl Default for FixtureConfig {
@@ -30,6 +33,7 @@ impl Default for FixtureConfig {
             connections: 1,
             speedup_ratio: 0.0,
             disaggregation_mode: DisaggregationMode::Aggregated,
+            kv_events_port: None,
         }
     }
 }

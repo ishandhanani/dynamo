@@ -23,6 +23,7 @@ use headless::HeadlessSidecar;
 
 pub mod args;
 pub mod client;
+pub mod direct;
 pub mod engine;
 mod headless;
 mod native_http;

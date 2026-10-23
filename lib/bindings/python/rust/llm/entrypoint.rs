@@ -73,6 +73,8 @@ pub enum EngineType {
     Echo = 1,
     Dynamic = 2,
     Mocker = 3,
+    /// Engines the frontend probes and dials itself over their native gRPC API.
+    Direct = 4,
 }
 
 #[pyclass]
@@ -487,13 +489,39 @@ pub(crate) struct EntrypointArgs {
     migration_max_seq_len: Option<u32>,
     chat_engine_factory: Option<PyEngineFactory>,
     ais_perf_config: Option<AisPerfConfig>,
+    /// `EngineType::Direct` only: engine gRPC endpoints to probe and route to.
+    engine_urls: Vec<String>,
+    /// `EngineType::Direct` only: engines that run the prefill leg.
+    prefill_engine_urls: Vec<String>,
+    /// `EngineType::Direct` only: which engine family the URLs speak.
+    direct_backend: DirectBackendKind,
+}
+
+/// Engine families the frontend can dial directly.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum DirectBackendKind {
+    #[default]
+    Sglang,
+}
+
+impl std::str::FromStr for DirectBackendKind {
+    type Err = String;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "sglang" => Ok(Self::Sglang),
+            other => Err(format!(
+                "unsupported --direct-backend `{other}`; expected `sglang`"
+            )),
+        }
+    }
 }
 
 #[pymethods]
 impl EntrypointArgs {
     #[allow(clippy::too_many_arguments)]
     #[new]
-    #[pyo3(signature = (engine_type, model_path=None, model_name=None, endpoint_id=None, template_file=None, router_config=None, kv_cache_block_size=None, http_host=None, http_port=None, http_metrics_port=None, tls_cert_path=None, tls_key_path=None, extra_engine_args=None, mocker_engine_args=None, runtime_config=None, namespace=None, namespace_prefix=None, is_prefill=false, is_decode=false, migration_limit=0, migration_max_seq_len=None, chat_engine_factory=None, ais_perf_config=None, *, tls_client_ca_cert_path=None, metrics_prefix=None, enable_anthropic_api=None, strip_anthropic_preamble=None, enable_streaming_tool_dispatch=None, enable_streaming_reasoning_dispatch=None, reasoning_field_name=None, tokenizer_backend=None, tokenizer_fallback=None, batch_gateway_url=None))]
+    #[pyo3(signature = (engine_type, model_path=None, model_name=None, endpoint_id=None, template_file=None, router_config=None, kv_cache_block_size=None, http_host=None, http_port=None, http_metrics_port=None, tls_cert_path=None, tls_key_path=None, extra_engine_args=None, mocker_engine_args=None, runtime_config=None, namespace=None, namespace_prefix=None, is_prefill=false, is_decode=false, migration_limit=0, migration_max_seq_len=None, chat_engine_factory=None, ais_perf_config=None, *, tls_client_ca_cert_path=None, metrics_prefix=None, enable_anthropic_api=None, strip_anthropic_preamble=None, enable_streaming_tool_dispatch=None, enable_streaming_reasoning_dispatch=None, reasoning_field_name=None, tokenizer_backend=None, tokenizer_fallback=None, batch_gateway_url=None, engine_urls=None, prefill_engine_urls=None, direct_backend=None))]
     pub fn new(
         py: Python<'_>,
         engine_type: EngineType,
@@ -529,6 +557,9 @@ impl EntrypointArgs {
         tokenizer_backend: Option<String>,
         tokenizer_fallback: Option<bool>,
         batch_gateway_url: Option<String>,
+        engine_urls: Option<Vec<String>>,
+        prefill_engine_urls: Option<Vec<String>>,
+        direct_backend: Option<String>,
     ) -> PyResult<Self> {
         let endpoint_id_obj: Option<EndpointId> = endpoint_id.as_deref().map(EndpointId::from);
         if (tls_cert_path.is_some() && tls_key_path.is_none())
@@ -624,6 +655,14 @@ impl EntrypointArgs {
             migration_max_seq_len,
             chat_engine_factory,
             ais_perf_config,
+            engine_urls: engine_urls.unwrap_or_default(),
+            prefill_engine_urls: prefill_engine_urls.unwrap_or_default(),
+            direct_backend: direct_backend
+                .as_deref()
+                .map(str::parse)
+                .transpose()
+                .map_err(PyValueError::new_err)?
+                .unwrap_or_default(),
         })
     }
 }
@@ -676,6 +715,49 @@ pub fn make_engine<'p>(
         .namespace(args.namespace.clone())
         .namespace_prefix(args.namespace_prefix.clone());
     crate::future_into_py(py, async move {
+        let mut args = args;
+        // Direct engines are probed first so the model path, KV block size and
+        // runtime config can come from the engines themselves.
+        let direct_fleet = if matches!(args.engine_type, EngineType::Direct) {
+            let fleet = DirectFleetKind::probe(
+                args.direct_backend,
+                &args.engine_urls,
+                &args.prefill_engine_urls,
+            )
+            .await
+            .map_err(to_pyerr)?;
+            let primary = fleet.primary();
+            if args.model_path.is_none() {
+                args.model_path = Some(PathBuf::from(&primary.model_path));
+            }
+            // Serve under the engine's own name, not the path the files came from.
+            if args.model_name.is_none() {
+                args.model_name = Some(
+                    primary
+                        .served_model_name
+                        .clone()
+                        .unwrap_or_else(|| primary.model_path.clone()),
+                );
+                builder.model_name(args.model_name.clone());
+            }
+            if args.kv_cache_block_size.is_none() {
+                builder.kv_cache_block_size(primary.kv_cache_block_size);
+            }
+            // The engines fill the card's runtime config. The operator's Dynamo
+            // parser names win over anything an engine reported, as the
+            // sidecar's --dyn-* flags do.
+            let mut runtime_config = primary.runtime_config.clone();
+            if let Some(parser) = args.runtime_config.inner.tool_call_parser.clone() {
+                runtime_config.tool_call_parser = Some(parser);
+            }
+            if let Some(parser) = args.runtime_config.inner.reasoning_parser.clone() {
+                runtime_config.reasoning_parser = Some(parser);
+            }
+            builder.runtime_config(runtime_config);
+            Some(fleet)
+        } else {
+            None
+        };
         if let Some(model_path) = args.model_path.clone() {
             let local_path = if model_path.exists() {
                 model_path
@@ -695,11 +777,52 @@ pub fn make_engine<'p>(
         }
 
         let local_model = builder.build().await.map_err(to_pyerr)?;
-        let inner = select_engine(distributed_runtime, args, local_model)
-            .await
-            .map_err(to_pyerr)?;
+        let inner = match direct_fleet {
+            Some(fleet) => fleet.into_engine_config(local_model),
+            None => select_engine(distributed_runtime, args, local_model)
+                .await
+                .map_err(to_pyerr)?,
+        };
         Ok(EngineConfig { inner })
     })
+}
+
+/// A probed direct fleet of one supported engine family.
+enum DirectFleetKind {
+    Sglang(dynamo_sidecar_common::direct::DirectFleet<dynamo_sglang_sidecar::direct::SglangDirectDispatch>),
+}
+
+impl DirectFleetKind {
+    async fn probe(
+        backend: DirectBackendKind,
+        urls: &[String],
+        prefill_urls: &[String],
+    ) -> Result<Self, dynamo_runtime::error::DynamoError> {
+        use dynamo_sidecar_common::direct::DirectFleet;
+        let transport = dynamo_sidecar_common::GrpcTransportConfig::default();
+        Ok(match backend {
+            DirectBackendKind::Sglang => Self::Sglang(
+                DirectFleet::probe(
+                    dynamo_sglang_sidecar::direct::SglangDirectDispatch::new(transport),
+                    urls,
+                    prefill_urls,
+                )
+                .await?,
+            ),
+        })
+    }
+
+    fn primary(&self) -> &dynamo_sidecar_common::direct::DirectEngineFacts {
+        match self {
+            Self::Sglang(fleet) => fleet.primary(),
+        }
+    }
+
+    fn into_engine_config(self, model: LocalModel) -> RsEngineConfig {
+        match self {
+            Self::Sglang(fleet) => fleet.into_engine_config(model),
+        }
+    }
 }
 
 /// Convert a PyEngineFactory to a Rust ChatEngineFactoryCallback
@@ -791,6 +914,9 @@ async fn select_engine(
                 chat_engine_factory,
                 prefill_load_estimator,
             }
+        }
+        EngineType::Direct => {
+            anyhow::bail!("direct engines are built by make_engine before engine selection");
         }
         EngineType::Mocker => {
             let mut mocker_args = if let Some(mocker_engine_args) = args.mocker_engine_args {
