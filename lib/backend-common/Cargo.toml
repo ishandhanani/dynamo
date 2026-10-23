@@ -23,10 +23,9 @@ integration = ["dynamo-runtime/integration"]
 
 [dependencies]
 dynamo-kv-router = { workspace = true }
-# Only for local_model::{LocalModel, LocalModelBuilder, update_model_taints} in worker.rs.
-dynamo-llm = { workspace = true }
 dynamo-llm-protocol = { workspace = true }
 dynamo-llm-worker = { workspace = true }
+dynamo-local-model = { workspace = true }
 dynamo-protocols = { workspace = true }
 dynamo-runtime = { workspace = true }
 dynamo-rl = { workspace = true }

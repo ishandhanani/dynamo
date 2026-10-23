@@ -24,7 +24,13 @@ mm-routing = ["dynamo-llm/mm-routing"]
 
 [dependencies]
 dynamo-backend-common = { workspace = true }
+# Only for lora::{LoRADownloader, LoRACache, the LoRA sources, lora_serving_enabled}
+# in lora.rs and engine.rs (lora-s3 selects S3LoRASource), and for
+# preprocessor::mm_routing behind `mm-routing`; everything else comes from the
+# protocol, worker, and local-model crates.
 dynamo-llm = { workspace = true, features = ["lora-s3"] }
+dynamo-llm-protocol = { workspace = true }
+dynamo-local-model = { workspace = true }
 dynamo-runtime = { workspace = true }
 dynamo-sidecar-common = { workspace = true, features = ["tonic-v14"] }
 

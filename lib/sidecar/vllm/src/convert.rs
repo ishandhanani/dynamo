@@ -9,7 +9,9 @@ use dynamo_backend_common::{
     MultimodalData, PrefillResult, PreprocessedRequest, PromptTokensDetails, StopReason,
     TopLogprob, usage,
 };
-use dynamo_llm::protocols::common::{preprocessed_mm_identifier, preprocessed_mm_routing_hash};
+use dynamo_llm_protocol::protocols::common::{
+    preprocessed_mm_identifier, preprocessed_mm_routing_hash,
+};
 use serde::{Deserialize, de::DeserializeOwned};
 
 use crate::client;

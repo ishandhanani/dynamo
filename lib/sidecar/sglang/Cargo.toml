@@ -21,8 +21,6 @@ path = "src/main.rs"
 
 [dependencies]
 dynamo-backend-common = { workspace = true }
-# Only for discovery::{RuntimeConfigWatch, runtime_config_watch} in headless.rs.
-dynamo-llm = { workspace = true }
 dynamo-llm-protocol = { workspace = true }
 dynamo-llm-worker = { workspace = true }
 dynamo-runtime = { workspace = true }

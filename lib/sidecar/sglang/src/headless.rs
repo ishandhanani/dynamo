@@ -9,9 +9,9 @@ use std::time::Duration;
 
 use anyhow::{Context, Result, bail, ensure};
 use dynamo_backend_common::{CommonArgs, DisaggregationMode, DynamoError};
-use dynamo_llm::discovery::{RuntimeConfigWatch, runtime_config_watch};
 use dynamo_llm_protocol::local_model::runtime_config::ModelRuntimeConfig;
 use dynamo_llm_worker::publisher::{KvEventPublisher, KvEventSourceConfig};
+use dynamo_llm_worker::runtime_configs::{RuntimeConfigWatch, runtime_config_watch};
 use dynamo_runtime::component::Endpoint;
 use dynamo_runtime::config::HealthStatus;
 use dynamo_runtime::distributed::DistributedRuntime;

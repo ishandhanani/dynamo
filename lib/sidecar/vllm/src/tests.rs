@@ -16,7 +16,7 @@ use dynamo_backend_common::{
     MultimodalData, OutputOptions, PrefillResult, PreprocessedRequest, RlAdminBaseUrl,
     RlWorkerMetadata,
 };
-use dynamo_llm::model_card::ModelDeploymentCard;
+use dynamo_llm_protocol::model_card::ModelDeploymentCard;
 use dynamo_runtime::discovery::{DiscoveryInstance, DiscoveryQuery, DiscoverySpec};
 use dynamo_runtime::distributed::DistributedConfig;
 use dynamo_runtime::traits::DistributedRuntimeProvider;
@@ -1262,7 +1262,7 @@ async fn excludes_reasoning_policy_follows_engine_gating() {
         let config = engine.start(0).await.expect("start");
         assert_eq!(
             config.runtime_data.get(
-                dynamo_llm::local_model::runtime_config::TOOL_CALL_STRUCTURAL_TAG_EXCLUDES_REASONING_RUNTIME_KEY
+                dynamo_llm_protocol::local_model::runtime_config::TOOL_CALL_STRUCTURAL_TAG_EXCLUDES_REASONING_RUNTIME_KEY
             ),
             published.then_some(&json!(true))
         );
@@ -2015,7 +2015,7 @@ async fn lora_enablement_and_rl_coexistence() {
 
 #[tokio::test]
 async fn lora_lifecycle_preserves_identity_and_routing_metadata() {
-    use dynamo_llm::worker_type::WorkerType;
+    use dynamo_llm_protocol::worker_type::WorkerType;
     let (server, engine, endpoint) =
         started_lora_engine(FakeVllm::default(), "lora_lifecycle").await;
     for card in endpoint
