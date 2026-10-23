@@ -820,7 +820,6 @@ mod test_event_processing {
 #[cfg(test)]
 mod tests_startup_helpers {
     use super::*;
-    use crate::utils::zmq::{bind_pub_socket, send_multipart};
     use bytes::Bytes;
     use dynamo_kv_router::indexer::{
         GetWorkersRequest, KvIndexer, KvIndexerInterface, WorkerKvQueryResponse,
@@ -829,6 +828,7 @@ mod tests_startup_helpers {
     use dynamo_runtime::discovery::{
         Discovery, DiscoveryQuery, EventSourceQuery, MockDiscovery, SharedMockRegistry,
     };
+    use dynamo_runtime::transports::zmq::sockets::{bind_pub_socket, send_multipart};
     use std::sync::{Arc, Mutex};
     use tokio::sync::oneshot;
 
@@ -2243,7 +2243,7 @@ mod worker_metrics_tests {
 #[cfg(all(test, feature = "integration"))]
 mod test_integration_publisher {
     use super::*;
-    use crate::kv_router::KV_METRICS_SUBJECT;
+    use crate::KV_METRICS_SUBJECT;
     use dynamo_kv_router::protocols::ActiveLoad;
     use dynamo_runtime::distributed_test_utils::create_test_drt_async;
     use dynamo_runtime::transports::event_plane::{EventPublisher, EventSubscriber};

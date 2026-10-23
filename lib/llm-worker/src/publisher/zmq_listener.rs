@@ -12,8 +12,8 @@ use tokio_util::sync::CancellationToken;
 use dynamo_kv_router::protocols::*;
 use dynamo_kv_router::zmq_wire::*;
 
-use crate::kv_router::metrics::kv_publisher_metrics;
-use crate::utils::zmq::{connect_sub_socket, multipart_message};
+use crate::publisher::metrics::kv_publisher_metrics;
+use dynamo_runtime::transports::zmq::sockets::{connect_sub_socket, multipart_message};
 
 pub(super) struct DecodedZmqKvBatch {
     pub(super) source_cursor: u64,
@@ -24,7 +24,7 @@ pub(super) struct DecodedZmqKvBatch {
 ///
 /// Callers retain their own malformed-input and protocol-version policies.
 pub(super) fn decode_zmq_kv_batch(
-    mut frames: crate::utils::zmq::MultipartMessage,
+    mut frames: dynamo_runtime::transports::zmq::sockets::MultipartMessage,
 ) -> Result<DecodedZmqKvBatch> {
     if frames.len() != 3 {
         anyhow::bail!("expected three ZMQ frames, received {}", frames.len());

@@ -12,8 +12,8 @@ use dynamo_runtime::{
 };
 use tokio::sync::watch;
 
-use crate::kv_router::sequence::ActiveSequenceEventPublisher;
-use crate::worker_type::WorkerType;
+use crate::sequence::ActiveSequenceEventPublisher;
+use dynamo_llm_protocol::worker_type::WorkerType;
 
 const COMPLETION_CHANNEL_CAPACITY: usize = 4096;
 
@@ -80,8 +80,8 @@ impl FirstTokenSource {
         Self::from_publisher_result_with_metrics(worker_id, publisher, metrics)
     }
 
-    #[cfg(test)]
-    pub(crate) fn from_publisher(
+    #[cfg(any(test, feature = "testing"))]
+    pub fn from_publisher(
         publisher: ActiveSequenceEventPublisher,
         worker_id: u64,
         worker_type: WorkerType,

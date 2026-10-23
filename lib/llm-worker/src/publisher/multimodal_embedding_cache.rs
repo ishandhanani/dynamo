@@ -12,7 +12,7 @@ use dynamo_runtime::component::Endpoint;
 use dynamo_runtime::traits::DistributedRuntimeProvider;
 use dynamo_runtime::transports::event_plane::EventPublisher;
 
-use crate::kv_router::MULTIMODAL_EMBEDDING_CACHE_SUBJECT;
+use crate::MULTIMODAL_EMBEDDING_CACHE_SUBJECT;
 
 // Cache deltas are routing hints. Bound the queue so a slow event plane cannot
 // grow memory without limit; if it fills, routing cache state may become stale.

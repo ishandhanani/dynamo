@@ -2232,6 +2232,7 @@ dependencies = [
  "dynamo-http-server",
  "dynamo-kv-router",
  "dynamo-llm-protocol",
+ "dynamo-llm-worker",
  "dynamo-memory",
  "dynamo-metrics",
  "dynamo-mocker",
@@ -2336,6 +2337,33 @@ dependencies = [
  "utoipa",
  "uuid",
  "validator",
+]
+
+[[package]]
+name = "dynamo-llm-worker"
+version = "1.6.0"
+dependencies = [
+ "anyhow",
+ "arc-swap",
+ "async-trait",
+ "blake3",
+ "bytes",
+ "dynamo-kv-router",
+ "dynamo-llm-protocol",
+ "dynamo-runtime",
+ "futures",
+ "parking_lot",
+ "prometheus",
+ "rand 0.9.4",
+ "rmp-serde",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tmq",
+ "tokio",
+ "tokio-util",
+ "tracing",
+ "uuid",
 ]
 
 [[package]]

@@ -39,21 +39,21 @@ const MAX_CONCURRENT_TREE_DUMP_RESPONSES: usize = 8;
 /// Lifecycle changes swap the snapshot. The outbound cursor advances once per
 /// ingress chunk, so it lives in an atomic instead: every `ArcSwap::store`
 /// walks all threads' debt lists, which is costly at one store per chunk.
-pub(crate) struct KvStateAgentStatusCell {
+pub struct KvStateAgentStatusCell {
     snapshot: ArcSwap<KvStateAgentStatus>,
     /// Supersedes the snapshot's `outbound_cursor`, which `load` always overwrites.
     outbound_cursor: AtomicU64,
 }
 
 impl KvStateAgentStatusCell {
-    pub(crate) fn new(status: KvStateAgentStatus) -> Self {
+    pub fn new(status: KvStateAgentStatus) -> Self {
         Self {
             outbound_cursor: AtomicU64::new(status.outbound_cursor),
             snapshot: ArcSwap::from_pointee(status),
         }
     }
 
-    pub(crate) fn load(&self) -> KvStateAgentStatus {
+    pub fn load(&self) -> KvStateAgentStatus {
         let mut status = KvStateAgentStatus::clone(&self.snapshot.load());
         // Read after the snapshot: `store` advances the cursor before swapping,
         // so this never trails the cursor of the snapshot just read.
@@ -61,13 +61,13 @@ impl KvStateAgentStatusCell {
         status
     }
 
-    pub(crate) fn store(&self, status: KvStateAgentStatus) {
+    pub fn store(&self, status: KvStateAgentStatus) {
         self.outbound_cursor
             .store(status.outbound_cursor, Ordering::Release);
         self.snapshot.store(Arc::new(status));
     }
 
-    pub(crate) fn store_outbound_cursor(&self, cursor: u64) {
+    pub fn store_outbound_cursor(&self, cursor: u64) {
         self.outbound_cursor.store(cursor, Ordering::Release);
     }
 
@@ -81,7 +81,7 @@ impl KvStateAgentStatusCell {
 // Compatibility with v1.2 Worker-only publishers during v1.4 rolling upgrades.
 // TODO(v1.5): Remove after v1.2 leaves N-2 and every caller supplies an
 // explicit state-agent status surface.
-pub(crate) async fn start_worker_kv_query_endpoint(
+pub async fn start_worker_kv_query_endpoint(
     component: Component,
     publisher_id: u64,
     worker_id: u64,
@@ -99,7 +99,7 @@ pub(crate) async fn start_worker_kv_query_endpoint(
     .await
 }
 
-pub(crate) async fn start_worker_kv_query_endpoint_with_status(
+pub async fn start_worker_kv_query_endpoint_with_status(
     component: Component,
     publisher_id: u64,
     worker_id: u64,

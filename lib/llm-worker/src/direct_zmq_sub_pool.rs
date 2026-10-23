@@ -21,15 +21,15 @@ use tokio::{
 };
 use tokio_util::sync::CancellationToken;
 
-use crate::utils::zmq::multipart_message;
+use dynamo_runtime::transports::zmq::sockets::multipart_message;
 
 const GROUP_JOIN_TIMEOUT: Duration = Duration::from_secs(5);
 
-pub(crate) const ENDPOINTS_PER_SUB_ENV: &str = "DYN_ROUTER_ZMQ_ENDPOINTS_PER_SUB";
-pub(crate) const DEFAULT_ENDPOINTS_PER_SUB: usize = 1;
-pub(crate) const KV_ZMQ_RCVHWM: i32 = 100_000;
+pub const ENDPOINTS_PER_SUB_ENV: &str = "DYN_ROUTER_ZMQ_ENDPOINTS_PER_SUB";
+pub const DEFAULT_ENDPOINTS_PER_SUB: usize = 1;
+pub const KV_ZMQ_RCVHWM: i32 = 100_000;
 
-pub(crate) fn endpoints_per_sub_from_env() -> Result<usize> {
+pub fn endpoints_per_sub_from_env() -> Result<usize> {
     endpoints_per_sub_from_lookup(|key| std::env::var_os(key))
 }
 
@@ -53,14 +53,14 @@ fn parse_endpoints_per_sub(raw: &OsStr) -> Result<usize> {
 }
 
 #[derive(Debug)]
-pub(crate) enum DirectZmqSubItem {
+pub enum DirectZmqSubItem {
     Envelope(ValidatedEnvelope),
     EnvelopeDecodeError,
     IdentityMismatch,
 }
 
 /// Undecoded multipart frames from a pool that routes by raw topic frame.
-pub(crate) type RawZmqFrames = Vec<Vec<u8>>;
+pub type RawZmqFrames = Vec<Vec<u8>>;
 
 enum RouteSender {
     Envelope(mpsc::Sender<DirectZmqSubItem>),
@@ -147,7 +147,7 @@ impl PoolInner {
 }
 
 #[derive(Clone)]
-pub(crate) struct DirectZmqSubPool {
+pub struct DirectZmqSubPool {
     inner: Arc<Mutex<PoolInner>>,
     topic: Arc<str>,
     endpoints_per_sub: usize,
@@ -157,10 +157,10 @@ pub(crate) struct DirectZmqSubPool {
     cancellation_token: CancellationToken,
 }
 
-pub(crate) struct DirectZmqSubRegistration<T = DirectZmqSubItem> {
-    pub(crate) group_id: u64,
-    pub(crate) receiver: mpsc::Receiver<T>,
-    pub(crate) disconnected: CancellationToken,
+pub struct DirectZmqSubRegistration<T = DirectZmqSubItem> {
+    pub group_id: u64,
+    pub receiver: mpsc::Receiver<T>,
+    pub disconnected: CancellationToken,
     pool: DirectZmqSubPool,
     publisher_id: u64,
     endpoint: String,
@@ -169,7 +169,7 @@ pub(crate) struct DirectZmqSubRegistration<T = DirectZmqSubItem> {
     armed: bool,
 }
 
-pub(crate) enum DirectZmqSubConnection {
+pub enum DirectZmqSubConnection {
     Dedicated(ValidatedZmqSource),
     Grouped(DirectZmqSubRegistration),
 }
@@ -199,7 +199,7 @@ impl<T> DirectZmqSubRegistration<T> {
         )
     }
 
-    pub(crate) async fn close(mut self) {
+    pub async fn close(mut self) {
         if let Some(group) = self.release() {
             stop_group(group).await;
         }
@@ -207,21 +207,21 @@ impl<T> DirectZmqSubRegistration<T> {
 }
 
 impl DirectZmqSubConnection {
-    pub(crate) fn group_id(&self) -> Option<u64> {
+    pub fn group_id(&self) -> Option<u64> {
         match self {
             Self::Dedicated(_) => None,
             Self::Grouped(registration) => Some(registration.group_id),
         }
     }
 
-    pub(crate) fn disconnected(&self) -> Option<CancellationToken> {
+    pub fn disconnected(&self) -> Option<CancellationToken> {
         match self {
             Self::Dedicated(_) => None,
             Self::Grouped(registration) => Some(registration.disconnected.clone()),
         }
     }
 
-    pub(crate) async fn close(self) {
+    pub async fn close(self) {
         if let Self::Grouped(registration) = self {
             registration.close().await;
         }
@@ -237,7 +237,7 @@ impl<T> Drop for DirectZmqSubRegistration<T> {
 }
 
 impl DirectZmqSubPool {
-    pub(crate) fn new(
+    pub fn new(
         topic: impl Into<Arc<str>>,
         endpoints_per_sub: usize,
         rcvhwm: i32,
@@ -264,7 +264,7 @@ impl DirectZmqSubPool {
     /// A pool for raw publishers, such as vLLM KV event streams, whose frames
     /// carry no publisher ID. Each route subscribes to its own topic and receives
     /// the frames whose topic frame matches it exactly, undecoded.
-    pub(crate) fn new_raw(
+    pub fn new_raw(
         endpoints_per_sub: usize,
         rcvhwm: i32,
         cancellation_token: CancellationToken,
@@ -278,7 +278,7 @@ impl DirectZmqSubPool {
     /// multiplexes its slots. Every source then joins a group, so each endpoint is
     /// connected once and routed by publisher ID; a dedicated socket would receive
     /// every co-located publisher's traffic.
-    pub(crate) fn with_shared_endpoints(mut self) -> Self {
+    pub fn with_shared_endpoints(mut self) -> Self {
         self.shared_endpoints = true;
         self
     }
@@ -286,7 +286,7 @@ impl DirectZmqSubPool {
     /// Record a publisher discovered behind `endpoint`, before it registers. A
     /// shared endpoint is placed by every publisher it carries, since all of them
     /// will join the group that connects it.
-    pub(crate) fn expect_publisher(&self, endpoint: &str) {
+    pub fn expect_publisher(&self, endpoint: &str) {
         if self.shared_endpoints {
             *self
                 .inner
@@ -298,13 +298,13 @@ impl DirectZmqSubPool {
     }
 
     /// Undo [`Self::expect_publisher`] once the publisher is no longer discovered.
-    pub(crate) fn forget_publisher(&self, endpoint: &str) {
+    pub fn forget_publisher(&self, endpoint: &str) {
         if self.shared_endpoints {
             release_endpoint(&mut self.inner.lock().discovered, endpoint);
         }
     }
 
-    pub(crate) async fn connect(
+    pub async fn connect(
         &self,
         publisher_id: u64,
         endpoint: &str,
@@ -350,7 +350,7 @@ impl DirectZmqSubPool {
     /// Route the frames `endpoint` publishes on exactly `topic` to `route_id`.
     /// Topics must be non-empty, and a group holds each topic once: subscriptions
     /// are prefix filters, so frames are routed only by an exact topic match.
-    pub(crate) async fn register_raw(
+    pub async fn register_raw(
         &self,
         route_id: u64,
         endpoint: &str,
@@ -553,7 +553,7 @@ impl DirectZmqSubPool {
         None
     }
 
-    pub(crate) async fn shutdown(&self) {
+    pub async fn shutdown(&self) {
         let groups = {
             let mut inner = self.inner.lock();
             inner.closed = true;
@@ -571,7 +571,7 @@ impl DirectZmqSubPool {
     }
 
     #[cfg(test)]
-    pub(crate) fn group_count(&self) -> usize {
+    pub fn group_count(&self) -> usize {
         self.inner.lock().groups.len()
     }
 
@@ -1385,12 +1385,11 @@ mod tests {
 
     #[tokio::test]
     async fn raw_topics_route_exact_frames_and_separate_duplicates() {
+        use dynamo_runtime::transports::zmq::sockets::{bind_pub_socket, send_multipart};
         use tmq::AsZmqSocket;
 
         let pool = DirectZmqSubPool::new_raw(4, 128, CancellationToken::new()).unwrap();
-        let publisher = crate::utils::zmq::bind_pub_socket("tcp://127.0.0.1:*")
-            .await
-            .unwrap();
+        let publisher = bind_pub_socket("tcp://127.0.0.1:*").await.unwrap();
         let endpoint = publisher
             .lock()
             .await
@@ -1430,10 +1429,10 @@ mod tests {
         let received = tokio::time::timeout(Duration::from_secs(5), async {
             loop {
                 // Passes the "slot-0001" filter but is not that route's topic.
-                crate::utils::zmq::send_multipart(&publisher, frames("slot-00010", 0))
+                send_multipart(&publisher, frames("slot-00010", 0))
                     .await
                     .unwrap();
-                crate::utils::zmq::send_multipart(&publisher, frames("slot-0001", 1))
+                send_multipart(&publisher, frames("slot-0001", 1))
                     .await
                     .unwrap();
                 if let Ok(Some(frames)) =

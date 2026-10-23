@@ -18,16 +18,15 @@ use dynamo_runtime::discovery::{DiscoverySpec, EventScope};
 use dynamo_runtime::protocols::EndpointId;
 use dynamo_runtime::traits::DistributedRuntimeProvider;
 
-use crate::discovery::KvEventSource as DiscoveredKvEventSource;
-use crate::kv_router::{
-    KV_EVENT_SUBJECT, WORKER_KV_INDEXER_BUFFER_SIZE, indexer::start_worker_kv_query_endpoint,
-    metrics::KvPublisherMetrics,
-};
+use crate::kv_source_membership::KvEventSource as DiscoveredKvEventSource;
+use crate::{WORKER_KV_INDEXER_BUFFER_SIZE, worker_query_endpoint::start_worker_kv_query_endpoint};
+use metrics::KvPublisherMetrics;
 
 mod attachment_owner;
 mod batching;
 mod dedup;
 mod event_processor;
+pub mod metrics;
 mod multimodal_embedding_cache;
 mod sinks;
 mod state_agent;
@@ -39,7 +38,7 @@ mod zmq_listener;
 
 pub use attachment_owner::{KvStateAttachmentDescriptor, KvStateAttachmentOwner};
 
-pub use crate::discovery::kv_state_agent::KvStateIngressProtocol;
+pub use crate::kv_state::KvStateIngressProtocol;
 #[cfg(test)]
 use dedup::{EventDedupFilter, EventDedupPolicy};
 #[cfg(test)]

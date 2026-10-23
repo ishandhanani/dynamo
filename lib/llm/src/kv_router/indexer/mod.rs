@@ -46,10 +46,7 @@ pub use recovery::{
     DEFAULT_RECOVERY_ATTEMPT_TIMEOUT, RecoveryResetReason, RecoverySupervisor, RecoveryTarget,
     TargetFaultDisposition, start_target_subscriber,
 };
-pub(crate) use recovery::{
-    KvEventSubscriptionHandle, KvStateAgentStatusCell, start_subscriber,
-    start_worker_kv_query_endpoint, start_worker_kv_query_endpoint_with_status,
-};
+pub(crate) use recovery::{KvEventSubscriptionHandle, start_subscriber};
 #[cfg(any(test, feature = "testing"))]
 pub use recovery::{WorkerQueryClient, WorkerQueryTransport};
 

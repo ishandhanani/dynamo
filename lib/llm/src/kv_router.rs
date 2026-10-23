@@ -20,7 +20,6 @@ use dynamo_kv_router::{
         ApproximateLruIncarnation, ApproximateLruStats, KvRouterError, RoutingDecisionHashes,
     },
     kv_hints::KvHint,
-    protocols::KV_EVENT_SUBJECT,
     protocols::{
         BlockExtraInfo, BlockHashOptions, PrefillLoadHint, RouterEvent, RouterRequest,
         RouterResponse, RoutingConstraints, TokensWithHashes, WorkerConfigLike, WorkerId,
@@ -63,11 +62,11 @@ pub mod metrics;
 pub mod metrics_subscriber;
 pub mod plugins;
 pub mod prefill_router;
-pub mod publisher;
+pub use dynamo_llm_worker::publisher;
 mod request_lease;
 mod routing_host;
 pub(crate) mod routing_load;
-pub mod sequence;
+pub use dynamo_llm_worker::sequence;
 pub mod shared_cache;
 
 pub use dynamo_kv_router::scheduling::OverlapScoresResponse;
@@ -520,15 +519,12 @@ fn cache_hit_for_worker(
     }
 }
 
-// for metric publishing (push-based)
-pub const KV_METRICS_SUBJECT: &str = "kv_metrics";
-pub const MULTIMODAL_EMBEDDING_CACHE_SUBJECT: &str = "multimodal_embedding_cache";
-
-// for inter-router comms
-pub const ACTIVE_SEQUENCES_SUBJECT: &str = "active_sequences_events";
-
-// for worker-local kvindexer query
-pub const WORKER_KV_INDEXER_BUFFER_SIZE: usize = 1024; // store 1024 most recent events in worker buffer
+// Event-plane subjects and the worker-local indexer buffer size live with the
+// worker-side publishers in `dynamo-llm-worker`.
+pub use dynamo_llm_worker::{
+    ACTIVE_SEQUENCES_SUBJECT, KV_METRICS_SUBJECT, MULTIMODAL_EMBEDDING_CACHE_SUBJECT,
+    WORKER_KV_INDEXER_BUFFER_SIZE,
+};
 
 fn map_scheduler_error(error: scheduling::KvSchedulerError) -> anyhow::Error {
     // Keep the two overload cases apart. A single overloaded worker can be

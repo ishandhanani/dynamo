@@ -121,7 +121,7 @@ class TestVllmKvEventsApi:
             f"Required follow-up:\n"
             f"  - Update lib/kv-router/src/zmq_wire.rs to match the new BlockStored wire format.\n"
             f"  - Update this test's expected_fields and msgpack shape checks.\n"
-            f"  - If needed, add or update a regression test in lib/llm/src/kv_router/publisher.rs."
+            f"  - If needed, add or update a regression test in lib/llm-worker/src/publisher/."
         )
 
     def test_block_removed_fields(self):

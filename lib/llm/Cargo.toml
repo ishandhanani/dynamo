@@ -77,6 +77,7 @@ dynamo-custom-policy-builtin = { workspace = true }
 # repo
 dynamo-kv-router = { workspace = true, features = ["metrics", "runtime-protocols", "standalone-selection"] }
 dynamo-llm-protocol = { workspace = true }
+dynamo-llm-worker = { workspace = true }
 dynamo-metrics = { workspace = true }
 dynamo-memory = { workspace = true }
 dynamo-mocker = { workspace = true, features = ["zmq-events"] }
@@ -231,6 +232,7 @@ sysinfo = { workspace = true }
 
 [dev-dependencies]
 dynamo-kv-router = { workspace = true, features = ["testing"] }
+dynamo-llm-worker = { workspace = true, features = ["testing"] }
 dynamo-runtime = { workspace = true, features = ["testing"] }
 tokio = { workspace = true, features = ["test-util"] }
 approx = "0.5"

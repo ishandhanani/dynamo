@@ -96,7 +96,7 @@ class DynamoRuntimeConfig(ConfigBase):
     # rank. None leaves the gate on its environment settings and automatic
     # value; validate() exports a set value, which the gate reads from the
     # process environment when it is created (see
-    # lib/llm/src/admission_gate.rs).
+    # lib/llm-worker/src/admission_gate.rs).
     engine_request_limit: Optional[int] = None
     tcp_tls_cert_path: Optional[str] = None
     tcp_tls_key_path: Optional[str] = None

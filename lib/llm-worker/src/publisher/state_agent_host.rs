@@ -30,7 +30,7 @@ use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
 
 use crate::direct_zmq_sub_pool::{DirectZmqSubPool, KV_ZMQ_RCVHWM};
-use crate::discovery::kv_state_agent::{
+use crate::kv_state::{
     KV_STATE_ATTACHMENT_INTENT_TOPIC_V2, KV_STATE_EVENT_TOPIC_V2, KV_STATE_HOST_TOPIC_V2,
     KvStateAttachmentIntent, KvStateHostAdvertisement, KvStateHostControlRequest,
     KvStateHostStatus, KvStateIngressProtocol,

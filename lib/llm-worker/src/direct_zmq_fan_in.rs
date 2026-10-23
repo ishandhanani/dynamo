@@ -27,13 +27,13 @@ const MAX_BACKOFF: Duration = Duration::from_secs(5);
 const SOURCE_JOIN_TIMEOUT: Duration = Duration::from_secs(5);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum ContinuityMode {
+pub enum ContinuityMode {
     Disabled,
     TrackFromZero,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum FanInEvent {
+pub enum FanInEvent {
     SourceStarted,
     SourceStopped,
     Disconnected,
@@ -48,7 +48,7 @@ pub(crate) enum FanInEvent {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct FanInObservation {
+pub struct FanInObservation {
     pub publisher_id: u64,
     pub generation: u64,
     pub event: FanInEvent,
@@ -112,7 +112,7 @@ impl SequenceCursor {
 }
 
 #[allow(clippy::too_many_arguments)]
-pub(crate) async fn start_direct_zmq_fan_in<H, O>(
+pub async fn start_direct_zmq_fan_in<H, O>(
     endpoint: Endpoint,
     topic: &'static str,
     rcvhwm: i32,
@@ -141,7 +141,7 @@ where
 }
 
 #[allow(clippy::too_many_arguments)]
-pub(crate) async fn start_direct_zmq_fan_in_for_endpoint_id<H, O>(
+pub async fn start_direct_zmq_fan_in_for_endpoint_id<H, O>(
     component: Component,
     endpoint_id: EndpointId,
     topic: &'static str,
@@ -177,7 +177,7 @@ where
 /// concurrently. `shared_endpoints` expects several publishers behind one PUB
 /// endpoint (see [`DirectZmqSubPool::with_shared_endpoints`]).
 #[allow(clippy::too_many_arguments)]
-pub(crate) async fn start_direct_zmq_fan_in_async<H, F, O>(
+pub async fn start_direct_zmq_fan_in_async<H, F, O>(
     component: Component,
     endpoint_id: EndpointId,
     topic: &'static str,

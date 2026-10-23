@@ -10,7 +10,7 @@ use tokio_util::sync::CancellationToken;
 use dynamo_kv_router::indexer::LocalKvIndexer;
 use dynamo_kv_router::protocols::*;
 
-use crate::kv_router::metrics::kv_publisher_metrics;
+use crate::publisher::metrics::kv_publisher_metrics;
 
 use super::DEFAULT_MAX_BATCH_BLOCKS;
 use super::batching::BatchingState;

@@ -8,6 +8,7 @@
 //! to the configured event transport and Prometheus metrics.
 
 mod direct_zmq;
+mod metrics;
 
 pub use dynamo_kv_router::multi_worker_sequence::{
     ActiveSequencesMultiWorker, ReplicaRequestLeaseObserver, SchedulerLoadSnapshot, SequenceError,
@@ -32,7 +33,7 @@ use tokio::sync::mpsc;
 use tokio::time::Instant;
 use tokio_util::sync::CancellationToken;
 
-use crate::kv_router::ACTIVE_SEQUENCES_SUBJECT;
+use crate::ACTIVE_SEQUENCES_SUBJECT;
 #[cfg(test)]
 use dynamo_runtime::transports::event_plane::MsgpackCodec;
 
@@ -64,7 +65,7 @@ pub struct ActiveSequenceEventPublisher {
 }
 
 impl ActiveSequenceEventPublisher {
-    pub(crate) fn channel(
+    pub fn channel(
         capacity: usize,
         cancellation_token: CancellationToken,
     ) -> (Self, mpsc::Receiver<ActiveSequenceEvent>) {
@@ -273,7 +274,7 @@ pub struct RuntimeSequenceSubscriber {
 }
 
 impl RuntimeSequenceSubscriber {
-    pub(crate) async fn for_endpoint(endpoint: &Endpoint) -> Result<Self> {
+    pub async fn for_endpoint(endpoint: &Endpoint) -> Result<Self> {
         let transport_kind = endpoint.drt().default_event_transport_kind();
         let subscriber = EventSubscriber::for_endpoint_with_transport(
             endpoint,
@@ -350,7 +351,7 @@ impl SequenceSubscriber for RuntimeSequenceSubscriber {
 /// forwarded; outbound events are published only when `publishes_outbound` is
 /// set. The inbound leg runs when the returned [`ReplicaIngress`] is started,
 /// so the caller can install every consumer of lifecycle events first.
-pub(crate) async fn host_replica_channels(
+pub async fn host_replica_channels(
     endpoint: &Endpoint,
     router_id: u64,
     publishes_outbound: bool,
@@ -411,14 +412,14 @@ pub(crate) async fn host_replica_channels(
 /// The inbound leg of [`host_replica_channels`]: peer replica events and
 /// worker-origin completion marks feed `inbound_tx` from the direct-ZMQ
 /// fan-in or the runtime subscriber, whichever the transport selects.
-pub(crate) struct ReplicaIngress {
+pub struct ReplicaIngress {
     endpoint: Endpoint,
     inbound_tx: mpsc::Sender<ActiveSequenceEvent>,
     cancellation_token: CancellationToken,
 }
 
 impl ReplicaIngress {
-    pub(crate) async fn start(self) {
+    pub async fn start(self) {
         let transport_kind = self.endpoint.drt().default_event_transport_kind();
         let direct = direct_zmq::DirectZmqSequenceConfig::from_env();
         let ingress_result = if direct.should_use_direct(transport_kind) {

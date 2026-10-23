@@ -54,19 +54,20 @@ use futures::StreamExt;
 use tokio::sync::{Mutex, mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
 
+use dynamo_runtime::transports::zmq::sockets::{
+    MultipartMessage, SubSocket, connect_sub_socket, multipart_message,
+};
+
 use crate::{
+    WORKER_KV_INDEXER_BUFFER_SIZE,
     direct_zmq_sub_pool::{DirectZmqSubPool, DirectZmqSubRegistration, RawZmqFrames},
-    discovery::kv_state_agent::{
+    kv_state::{
         KV_STATE_ATTACHMENT_TOPIC_V2, KV_STATE_EVENT_TOPIC_V2, KV_STATE_SOURCE_TOPIC_V2,
         KvStateAttachmentAdvertisement, KvStateIngressProtocol, KvStateSourceAdvertisement,
         attachment_record_id,
     },
-    kv_router::{
-        WORKER_KV_INDEXER_BUFFER_SIZE,
-        indexer::{KvStateAgentStatusCell, start_worker_kv_query_endpoint_with_status},
-        metrics::kv_publisher_metrics,
-    },
-    utils::zmq::{MultipartMessage, SubSocket, connect_sub_socket, multipart_message},
+    publisher::metrics::kv_publisher_metrics,
+    worker_query_endpoint::{KvStateAgentStatusCell, start_worker_kv_query_endpoint_with_status},
 };
 
 use super::{
