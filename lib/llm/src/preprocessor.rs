@@ -13,7 +13,9 @@
 
 pub mod media;
 #[cfg(feature = "mm-routing")]
-pub mod mm_routing;
+pub use dynamo_local_model::mm_routing;
+#[cfg(all(test, feature = "mm-routing"))]
+mod mm_routing_tests;
 pub mod prompt;
 pub mod speculative_prefill;
 pub(crate) mod structural_tag;

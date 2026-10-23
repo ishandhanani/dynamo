@@ -1,16 +1,13 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-//! Lightweight model-visible media token expansion for MM-aware routing.
-
-// The video facade is instantiated only when FFmpeg-backed frontend decoding
-// is enabled. Image-only model helpers and unit tests remain available without
-// FFmpeg.
-#![cfg_attr(not(feature = "media-ffmpeg"), allow(dead_code))]
+//! Lightweight model-visible media token expansion for MM-aware routing: the
+//! per-model image and video placeholder layouts that both the frontend
+//! preprocessor and the worker sidecars resolve from a model directory.
 
 mod config;
 pub mod image;
-pub(super) mod nemotron;
+pub mod nemotron;
 mod qwen3;
 
 use std::{path::Path, sync::Arc};
@@ -18,12 +15,13 @@ use std::{path::Path, sync::Arc};
 use anyhow::{Context, Result};
 use serde::Deserialize;
 
-use crate::{protocols::TokenIdType, tokenizers::traits::Tokenizer};
+use dynamo_llm_protocol::protocols::TokenIdType;
+use dynamo_tokenizers::traits::Tokenizer;
 
 /// Which token sequence the running vLLM Qwen3 processor replaces for video.
 #[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
-pub(crate) enum QwenVideoPlaceholderTarget {
+pub enum QwenVideoPlaceholderTarget {
     BareVideoToken,
     VisionWrappedVideoToken,
 }
@@ -31,7 +29,7 @@ pub(crate) enum QwenVideoPlaceholderTarget {
 /// Temporal rounding used by the running Transformers video processor.
 #[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
-pub(crate) enum QwenVideoResizeMode {
+pub enum QwenVideoResizeMode {
     LegacyCeil,
     RoundTiesEven,
 }
@@ -41,14 +39,14 @@ pub(crate) enum QwenVideoResizeMode {
 /// boundary blocks; SGLang emits only the block's token IDs.
 #[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
-pub(crate) enum QwenVideoRunlessBoundaryHash {
+pub enum QwenVideoRunlessBoundaryHash {
     MmMetadata,
     TokensOnly,
 }
 
 /// Engine-independent Qwen video prompt-expansion behavior used internally.
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub(crate) struct QwenVideoProcessorContract {
+pub struct QwenVideoProcessorContract {
     pub placeholder_target: QwenVideoPlaceholderTarget,
     pub resize_mode: QwenVideoResizeMode,
     pub runless_boundary_hash: QwenVideoRunlessBoundaryHash,
@@ -57,7 +55,7 @@ pub(crate) struct QwenVideoProcessorContract {
 
 /// Qwen video contract accepted only under the vLLM runtime key.
 #[derive(Debug, Clone, Copy, Deserialize, PartialEq)]
-pub(crate) struct VllmQwenVideoProcessorContract {
+pub struct VllmQwenVideoProcessorContract {
     pub placeholder_target: QwenVideoPlaceholderTarget,
     pub resize_mode: QwenVideoResizeMode,
     #[serde(default)]
@@ -92,7 +90,7 @@ impl TryFrom<VllmQwenVideoProcessorContract> for QwenVideoProcessorContract {
 
 /// Qwen video contract accepted only under the SGLang runtime key.
 #[derive(Debug, Clone, Copy, Deserialize, PartialEq)]
-pub(crate) struct SglangQwenVideoProcessorContract {
+pub struct SglangQwenVideoProcessorContract {
     pub placeholder_target: QwenVideoPlaceholderTarget,
     pub resize_mode: QwenVideoResizeMode,
     pub runless_boundary_hash: QwenVideoRunlessBoundaryHash,
@@ -118,7 +116,7 @@ impl TryFrom<SglangQwenVideoProcessorContract> for QwenVideoProcessorContract {
 
 /// SGLang's Qwen video preprocessing stage before Transformers runs.
 #[derive(Debug, Clone, Copy, Deserialize, PartialEq)]
-pub(crate) struct SglangQwenVideoPreprocessContract {
+pub struct SglangQwenVideoPreprocessContract {
     pub image_factor: usize,
     pub video_min_pixels: usize,
     pub video_max_pixels: usize,
@@ -131,19 +129,19 @@ pub(crate) struct SglangQwenVideoPreprocessContract {
 
 /// Worker-reported Nemotron video prompt-expansion behavior.
 #[derive(Debug, Clone, Copy, Deserialize, PartialEq)]
-pub(crate) struct NemotronVideoProcessorContract {
+pub struct NemotronVideoProcessorContract {
     pub video_pruning_rate: f64,
 }
 
 #[derive(Debug, Clone, Copy, Default)]
-pub(crate) struct VideoProcessorContracts {
+pub struct VideoProcessorContracts {
     pub qwen: Option<QwenVideoProcessorContract>,
     pub nemotron: Option<NemotronVideoProcessorContract>,
 }
 
 /// How a worker represents multimodal identity in published KV-event blocks.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum KvEventMmIdentity {
+pub enum KvEventMmIdentity {
     /// Ambiguous blocks retain worker token IDs and carry media hashes as
     /// separate block metadata.
     MmMetadata,
@@ -153,7 +151,7 @@ pub(crate) enum KvEventMmIdentity {
 }
 
 /// Geometry and temporal metadata visible to a model's video processor.
-pub(crate) struct VideoRoutingInput<'a> {
+pub struct VideoRoutingInput<'a> {
     pub frame_count: usize,
     pub width: u32,
     pub height: u32,
@@ -161,7 +159,7 @@ pub(crate) struct VideoRoutingInput<'a> {
     pub sampled_timestamps: &'a [f64],
 }
 
-pub(crate) struct VideoRoutingReplacement {
+pub struct VideoRoutingReplacement {
     pub placeholder_token_id: TokenIdType,
     /// Token ID passed to the worker KV-event normalizer for video runs.
     /// Nemotron uses the image placeholder for both modalities, so it keeps
@@ -175,23 +173,24 @@ pub(crate) struct VideoRoutingReplacement {
 enum SupportedVideoModel {
     Qwen3(qwen3::Qwen3VideoRoutingSpec),
     Nemotron(nemotron::NemotronVideoRoutingSpec),
-    #[cfg(test)]
+    #[cfg(any(test, feature = "testing"))]
     TestStub,
 }
 
-pub(crate) struct VideoRoutingProcessor {
+pub struct VideoRoutingProcessor {
     model: SupportedVideoModel,
 }
 
 impl VideoRoutingProcessor {
-    #[cfg(test)]
-    pub(crate) fn test_stub() -> Self {
+    /// Test hook: a processor whose replacements always fail.
+    #[cfg(any(test, feature = "testing"))]
+    pub fn test_stub() -> Self {
         Self {
             model: SupportedVideoModel::TestStub,
         }
     }
 
-    pub(crate) fn try_new(
+    pub fn try_new(
         model_id: &str,
         model_type: &str,
         model_dir: &Path,
@@ -225,23 +224,23 @@ impl VideoRoutingProcessor {
         Ok(Some(Self { model }))
     }
 
-    pub(crate) fn build_replacement(
+    pub fn build_replacement(
         &self,
         input: &VideoRoutingInput<'_>,
     ) -> Result<VideoRoutingReplacement> {
         match &self.model {
             SupportedVideoModel::Qwen3(spec) => spec.build_replacement(input),
             SupportedVideoModel::Nemotron(spec) => spec.build_replacement(input),
-            #[cfg(test)]
+            #[cfg(any(test, feature = "testing"))]
             SupportedVideoModel::TestStub => anyhow::bail!("test video routing processor stub"),
         }
     }
 
-    pub(crate) fn kv_event_mm_identity(&self) -> KvEventMmIdentity {
+    pub fn kv_event_mm_identity(&self) -> KvEventMmIdentity {
         match &self.model {
             SupportedVideoModel::Qwen3(spec) => spec.kv_event_mm_identity(),
             SupportedVideoModel::Nemotron(_) => KvEventMmIdentity::MmMetadata,
-            #[cfg(test)]
+            #[cfg(any(test, feature = "testing"))]
             SupportedVideoModel::TestStub => KvEventMmIdentity::MmMetadata,
         }
     }

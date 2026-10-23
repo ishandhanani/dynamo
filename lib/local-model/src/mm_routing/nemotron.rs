@@ -13,12 +13,13 @@ use super::{
     config::read_model_config,
     image::{ImagePromptKind, ImageRoutingBackend, ImageRoutingRuntime},
 };
-use crate::{protocols::TokenIdType, tokenizers::traits::Tokenizer};
+use dynamo_llm_protocol::protocols::TokenIdType;
+use dynamo_tokenizers::traits::Tokenizer;
 
-pub(in crate::preprocessor) const MODEL_TYPE: &str = "NemotronH_Nano_Omni_Reasoning_V3";
-pub(in crate::preprocessor) const IMAGE_START: &str = "<img>";
-pub(in crate::preprocessor) const IMAGE_END: &str = "</img>";
-pub(in crate::preprocessor) const IMAGE_CONTEXT: &str = "<image>";
+pub const MODEL_TYPE: &str = "NemotronH_Nano_Omni_Reasoning_V3";
+pub const IMAGE_START: &str = "<img>";
+pub const IMAGE_END: &str = "</img>";
+pub const IMAGE_CONTEXT: &str = "<image>";
 const VIDEO_CONTEXT: &str = "<video>";
 // Transformers' multimodal chat normalization emits each media marker followed
 // by a newline. `<video>` is not an atomic Nemotron token, so that boundary
@@ -30,14 +31,14 @@ const VIDEO_TRAILING_SEPARATOR: &str = "\n";
 ///
 /// It performs geometry and token accounting only. Pixel resize and
 /// normalization remain worker-owned.
-pub(in crate::preprocessor) struct NemotronImageTokenCounter {
+pub struct NemotronImageTokenCounter {
     patch_size: usize,
     min_num_patches: usize,
     max_num_patches: usize,
 }
 
 impl NemotronImageTokenCounter {
-    pub(in crate::preprocessor) fn try_from_configs(
+    pub fn try_from_configs(
         processor_config: &PreProcessorConfig,
         model_config: &serde_json::Value,
     ) -> Result<Self> {
@@ -112,14 +113,14 @@ impl NemotronImageTokenCounter {
     /// Count one image without a request context constraint. This supports
     /// per-image diagnostics; exact routing and aggregate metrics use
     /// [`Self::count_tokens_for_images`].
-    pub(in crate::preprocessor) fn count_tokens(&self, width: u32, height: u32) -> usize {
+    pub fn count_tokens(&self, width: u32, height: u32) -> usize {
         self.process_image(width, height, self.max_num_patches)
             .map(|(_, embeddings)| embeddings)
             .unwrap_or(0)
     }
 
     /// Match vLLM's request-wide dynamic-resolution budget.
-    pub(in crate::preprocessor) fn count_tokens_for_images(
+    pub fn count_tokens_for_images(
         &self,
         dimensions: &[(u32, u32)],
         max_model_len: usize,
@@ -607,11 +608,11 @@ fn frame_separator(
     format!("{prefix}{}: ", parts.join(" and "))
 }
 
-pub(in crate::preprocessor) fn supports_model_type(model_type: Option<&str>) -> bool {
+pub fn supports_model_type(model_type: Option<&str>) -> bool {
     model_type.is_some_and(|value| value.eq_ignore_ascii_case(MODEL_TYPE))
 }
 
-pub(in crate::preprocessor) fn is_nemotron_config(config: &serde_json::Value) -> bool {
+pub fn is_nemotron_config(config: &serde_json::Value) -> bool {
     supports_model_type(config.get("model_type").and_then(serde_json::Value::as_str))
         || config
             .get("architectures")
@@ -626,7 +627,7 @@ pub(in crate::preprocessor) fn is_nemotron_config(config: &serde_json::Value) ->
 }
 
 /// Validate the static prompt replacement contract used by vLLM.
-pub(in crate::preprocessor) fn image_context_token_id(config: &serde_json::Value) -> Result<u32> {
+pub fn image_context_token_id(config: &serde_json::Value) -> Result<u32> {
     ensure!(
         is_nemotron_config(config),
         "not a Nemotron Nano Omni config"
@@ -684,13 +685,13 @@ fn json_usize(config: &serde_json::Value, path: &[&str]) -> Option<usize> {
 
 #[cfg(test)]
 mod tests {
-    use crate::tokenizers::{Encoding, traits::DecodeResult};
+    use dynamo_tokenizers::{Encoding, traits::DecodeResult};
 
     use super::*;
 
     struct VideoTokenizer;
 
-    impl crate::tokenizers::traits::Encoder for VideoTokenizer {
+    impl dynamo_tokenizers::traits::Encoder for VideoTokenizer {
         fn encode(&self, input: &str) -> anyhow::Result<Encoding> {
             let ids = match input {
                 VIDEO_CONTEXT_WITH_SEPARATOR => vec![1060, 24073, 1561],
@@ -712,7 +713,7 @@ mod tests {
         }
     }
 
-    impl crate::tokenizers::traits::Decoder for VideoTokenizer {
+    impl dynamo_tokenizers::traits::Decoder for VideoTokenizer {
         fn decode(
             &self,
             _token_ids: &[TokenIdType],

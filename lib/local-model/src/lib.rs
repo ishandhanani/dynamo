@@ -16,6 +16,8 @@
 pub mod frontend_config;
 pub mod hub;
 pub mod lora;
+#[cfg(feature = "mm-routing")]
+pub mod mm_routing;
 pub mod model_card;
 pub mod reasoning_field;
 pub mod request_template;

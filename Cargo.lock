@@ -2850,6 +2850,8 @@ dependencies = [
  "hf-hub 0.4.3",
  "json-five",
  "libc",
+ "llm-multimodal",
+ "llm-tokenizer",
  "mockito",
  "modelexpress-client",
  "modelexpress-common",

@@ -2381,6 +2381,8 @@ dependencies = [
  "hf-hub 0.4.3",
  "json-five",
  "libc",
+ "llm-multimodal",
+ "llm-tokenizer",
  "modelexpress-client",
  "modelexpress-common",
  "object_store 0.12.5",

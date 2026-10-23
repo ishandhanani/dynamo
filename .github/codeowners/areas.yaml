@@ -1079,11 +1079,12 @@ shared:
   owners:
   - router
   - kv-memory
-- glob: lib/llm/src/preprocessor/mm_routing/
+- glob: lib/local-model/src/mm_routing/
   owners:
   - frontend
   - multimodal
   - router
+  - runtime
 - glob: lib/llm/src/preprocessor/media/rdma.rs
   owners:
   - multimodal

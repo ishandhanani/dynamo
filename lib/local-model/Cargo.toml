@@ -16,6 +16,10 @@ default = []
 modelexpress = ["dep:modelexpress-client"]
 # S3 as a LoRA adapter source.
 lora-s3 = ["dep:object_store", "dep:aws-config", "dep:aws-credential-types", "dep:aws-types"]
+# Per-model multimodal routing specs (image/video placeholder token layouts).
+mm-routing = ["dep:llm-multimodal", "dep:llm-tokenizer"]
+# Test-only hooks consumed by dependent crates' tests; never enable in release.
+testing = []
 
 [dependencies]
 # repo
@@ -44,6 +48,8 @@ url = { workspace = true }
 uuid = { workspace = true }
 
 # pinned alongside dynamo-llm
+llm-multimodal = { version = "=1.9.0", optional = true }
+llm-tokenizer = { version = "=1.6.0", optional = true }
 aws-config = { version = "1.8.11", optional = true }
 aws-credential-types = { version = "1.2.12", optional = true }
 aws-types = { version = "1.3.12", optional = true }

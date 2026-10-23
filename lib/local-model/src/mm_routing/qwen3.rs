@@ -12,7 +12,8 @@ use super::{
     VideoRoutingReplacement,
     config::{read_json, read_model_config, required_token_id, required_usize},
 };
-use crate::{protocols::TokenIdType, tokenizers::traits::Tokenizer};
+use dynamo_llm_protocol::protocols::TokenIdType;
+use dynamo_tokenizers::traits::Tokenizer;
 
 const SUPPORTED_MODEL_TYPES: &[&str] = &["qwen3_vl", "qwen3_vl_moe", "qwen3_5", "qwen3_5_moe"];
 
@@ -554,13 +555,13 @@ fn sglang_smart_resize(
 
 #[cfg(test)]
 mod tests {
-    use crate::tokenizers::{Encoding, traits::DecodeResult};
+    use dynamo_tokenizers::{Encoding, traits::DecodeResult};
 
     use super::*;
 
     struct TimestampTokenizer;
 
-    impl crate::tokenizers::traits::Encoder for TimestampTokenizer {
+    impl dynamo_tokenizers::traits::Encoder for TimestampTokenizer {
         fn encode(&self, input: &str) -> anyhow::Result<Encoding> {
             let ids = match input {
                 "<0.5 seconds>" => vec![10, 11, 12, 13],
@@ -576,7 +577,7 @@ mod tests {
         }
     }
 
-    impl crate::tokenizers::traits::Decoder for TimestampTokenizer {
+    impl dynamo_tokenizers::traits::Decoder for TimestampTokenizer {
         fn decode(
             &self,
             _token_ids: &[TokenIdType],
@@ -900,7 +901,7 @@ mod tests {
         seconds_token_id: TokenIdType,
     }
 
-    impl crate::tokenizers::traits::Encoder for CheckpointTimestampTokenizer {
+    impl dynamo_tokenizers::traits::Encoder for CheckpointTimestampTokenizer {
         fn encode(&self, input: &str) -> anyhow::Result<Encoding> {
             anyhow::ensure!(input == "<0.5 seconds>", "unexpected timestamp {input:?}");
             Ok(Encoding::Sp(vec![
@@ -918,7 +919,7 @@ mod tests {
         }
     }
 
-    impl crate::tokenizers::traits::Decoder for CheckpointTimestampTokenizer {
+    impl dynamo_tokenizers::traits::Decoder for CheckpointTimestampTokenizer {
         fn decode(
             &self,
             _token_ids: &[TokenIdType],
@@ -986,7 +987,7 @@ mod tests {
     #[test]
     fn temporal_padding_repeats_the_last_sampled_frame() {
         struct PaddingTokenizer;
-        impl crate::tokenizers::traits::Encoder for PaddingTokenizer {
+        impl dynamo_tokenizers::traits::Encoder for PaddingTokenizer {
             fn encode(&self, input: &str) -> anyhow::Result<Encoding> {
                 let id = match input {
                     "<0.5 seconds>" => 1,
@@ -1000,7 +1001,7 @@ mod tests {
                 inputs.iter().map(|input| self.encode(input)).collect()
             }
         }
-        impl crate::tokenizers::traits::Decoder for PaddingTokenizer {
+        impl dynamo_tokenizers::traits::Decoder for PaddingTokenizer {
             fn decode(
                 &self,
                 _token_ids: &[TokenIdType],

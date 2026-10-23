@@ -6,7 +6,7 @@ use std::path::Path;
 use anyhow::{Context, Result};
 use serde_json::Value;
 
-use crate::protocols::TokenIdType;
+use dynamo_llm_protocol::protocols::TokenIdType;
 
 pub(super) fn read_model_config(
     model_id: &str,
