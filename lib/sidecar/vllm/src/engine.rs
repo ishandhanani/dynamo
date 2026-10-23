@@ -11,7 +11,7 @@ use dynamo_backend_common::{
     AsyncEngineContext, DisaggregationMode, DynamoError, GenerateContext, KvEventSource, LLMEngine,
     LLMEngineOutput, LLMEngineOutputExt, RlAdminBaseUrl, RuntimeConfig, WorkerConfig,
 };
-use dynamo_llm::lora::{LoRADownloader, lora_serving_enabled};
+use dynamo_local_model::lora::{LoRADownloader, lora_serving_enabled};
 use dynamo_runtime::component::Endpoint;
 use dynamo_sidecar_common::{
     EngineBootstrapResult, GrpcEndpoint, GrpcTransportConfig, SidecarStartupError,

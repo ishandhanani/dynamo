@@ -6,11 +6,11 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use dynamo_backend_common::DynamoError;
-use dynamo_llm::lora::{
-    HuggingFaceLoRASource, LoRACache, LoRADownloader, LoRASource, LocalLoRASource, S3LoRASource,
-};
 use dynamo_llm_protocol::model_card::{LoraInfo, ModelDeploymentCard};
 use dynamo_local_model::derive_lora_suffix;
+use dynamo_local_model::lora::{
+    HuggingFaceLoRASource, LoRACache, LoRADownloader, LoRASource, LocalLoRASource, S3LoRASource,
+};
 use dynamo_runtime::component::Endpoint;
 use dynamo_runtime::discovery::{DiscoveryInstance, DiscoveryQuery, DiscoverySpec};
 use dynamo_runtime::traits::DistributedRuntimeProvider;
