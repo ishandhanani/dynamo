@@ -502,6 +502,7 @@ pub(crate) struct EntrypointArgs {
 enum DirectBackendKind {
     #[default]
     Sglang,
+    Vllm,
 }
 
 impl std::str::FromStr for DirectBackendKind {
@@ -510,8 +511,9 @@ impl std::str::FromStr for DirectBackendKind {
     fn from_str(value: &str) -> Result<Self, Self::Err> {
         match value.trim().to_ascii_lowercase().as_str() {
             "sglang" => Ok(Self::Sglang),
+            "vllm" => Ok(Self::Vllm),
             other => Err(format!(
-                "unsupported --direct-backend `{other}`; expected `sglang`"
+                "unsupported --direct-backend `{other}`; expected `sglang` or `vllm`"
             )),
         }
     }
@@ -745,7 +747,7 @@ pub fn make_engine<'p>(
             }
             // The engines fill the card's runtime config. The operator's Dynamo
             // parser names win over anything an engine reported, as the
-            // sidecar's --dyn-* flags do.
+            // sidecar's --dyn-* flags do; vLLM engines report none.
             let mut runtime_config = primary.runtime_config.clone();
             if let Some(parser) = args.runtime_config.inner.tool_call_parser.clone() {
                 runtime_config.tool_call_parser = Some(parser);
@@ -787,9 +789,10 @@ pub fn make_engine<'p>(
     })
 }
 
-/// A probed direct fleet of one supported engine family.
+/// A probed direct fleet of either supported engine family.
 enum DirectFleetKind {
     Sglang(dynamo_sidecar_common::direct::DirectFleet<dynamo_sglang_sidecar::direct::SglangDirectDispatch>),
+    Vllm(dynamo_sidecar_common::direct::DirectFleet<dynamo_vllm_sidecar::direct::VllmDirectDispatch>),
 }
 
 impl DirectFleetKind {
@@ -809,18 +812,28 @@ impl DirectFleetKind {
                 )
                 .await?,
             ),
+            DirectBackendKind::Vllm => Self::Vllm(
+                DirectFleet::probe(
+                    dynamo_vllm_sidecar::direct::VllmDirectDispatch::new(transport),
+                    urls,
+                    prefill_urls,
+                )
+                .await?,
+            ),
         })
     }
 
     fn primary(&self) -> &dynamo_sidecar_common::direct::DirectEngineFacts {
         match self {
             Self::Sglang(fleet) => fleet.primary(),
+            Self::Vllm(fleet) => fleet.primary(),
         }
     }
 
     fn into_engine_config(self, model: LocalModel) -> RsEngineConfig {
         match self {
             Self::Sglang(fleet) => fleet.into_engine_config(model),
+            Self::Vllm(fleet) => fleet.into_engine_config(model),
         }
     }
 }

@@ -31,12 +31,12 @@ def parse_frontend_config(args: list[str]) -> FrontendConfig:
     return config
 
 
-def test_direct_with_prefill_and_dynamo_parsers() -> None:
+def test_direct_vllm_with_prefill_and_dynamo_parsers() -> None:
     config = parse_frontend_config(
         [
             "--direct",
             "--direct-backend",
-            "sglang",
+            "vllm",
             "--prefill-engine-url",
             "http://127.0.0.1:18701",
             "--engine-url",
@@ -51,7 +51,7 @@ def test_direct_with_prefill_and_dynamo_parsers() -> None:
     )
 
     assert config.direct is True
-    assert config.direct_backend == "sglang"
+    assert config.direct_backend == "vllm"
     assert config.prefill_engine_urls == ["http://127.0.0.1:18701"]
     assert config.engine_urls == ["http://127.0.0.1:18711", "http://127.0.0.1:18721"]
     assert config.dyn_tool_call_parser == "hermes"
