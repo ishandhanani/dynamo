@@ -999,9 +999,7 @@ mod tests {
     ) -> Result<()> {
         let block_data = block.block_data();
 
-        let mut value = start_value;
-
-        for layer_idx in 0..block_data.num_layers() {
+        for (value, layer_idx) in (start_value..).zip(0..block_data.num_layers()) {
             for outer_idx in 0..block_data.num_outer_dims() {
                 let layer_view = block_data.layer_view(layer_idx, outer_idx)?;
                 match block_data.storage_type() {
@@ -1030,8 +1028,6 @@ mod tests {
                     _ => panic!(),
                 }
             }
-
-            value += 1;
         }
 
         Ok(())
@@ -1098,15 +1094,14 @@ mod tests {
 
         assert_eq!(contents1.len(), contents2.len());
 
-        let mut value = start_value;
-
-        for (layer1_vec, layer2_vec) in contents1.iter().zip(contents2.iter()) {
+        for (value, (layer1_vec, layer2_vec)) in
+            (start_value..).zip(contents1.iter().zip(contents2.iter()))
+        {
             for (c1_value, c2_value) in layer1_vec.iter().zip(layer2_vec.iter()) {
                 if c1_value != c2_value || c1_value != &value {
                     panic!("{} != {} != {}", c1_value, c2_value, value);
                 }
             }
-            value += 1;
         }
         Ok(())
     }
@@ -2012,18 +2007,20 @@ mod tests {
 
         // Helper functions for improved disk testing
 
+        type MixedLayoutPools = (
+            Arc<OffloadManager<Local, BasicMetadata>>,
+            DevicePool,
+            HostPool,
+            DiskPool,
+        );
+
         /// Build pools with mixed layout types for testing compatibility
         fn build_pools_mixed_layouts(
             num_blocks: usize,
             host_config: Option<(usize, LayoutType)>,
             device_config: Option<(usize, LayoutType)>,
             disk_config: Option<(usize, LayoutType)>,
-        ) -> Result<(
-            Arc<OffloadManager<Local, BasicMetadata>>,
-            DevicePool,
-            HostPool,
-            DiskPool,
-        )> {
+        ) -> Result<MixedLayoutPools> {
             // This would need to be implemented to support different layout types per pool
             // For now, fall back to standard build with the most complex layout
             build_pools_with_layout(

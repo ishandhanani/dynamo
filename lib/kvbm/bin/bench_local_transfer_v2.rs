@@ -161,7 +161,7 @@ async fn benchmark(args: &Args) -> Result<()> {
     );
     let blocks = (0..args.blocks_per_batch).collect::<Vec<_>>();
 
-    for (src, dst, name) in vec![
+    for (src, dst, name) in [
         (disk_layout.clone(), device_layout.clone(), "disk_to_device"),
         (device_layout, disk_layout, "device_to_disk"),
     ] {
