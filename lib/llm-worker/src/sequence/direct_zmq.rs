@@ -17,11 +17,11 @@ use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
-use crate::{
-    ACTIVE_SEQUENCES_SUBJECT,
-    direct_zmq_fan_in::{ContinuityMode, FanInEvent, start_direct_zmq_fan_in},
-    sequence::metrics::ActiveSequenceZmqIngressMetrics,
+use dynamo_runtime::transports::zmq::direct_fan_in::{
+    ContinuityMode, FanInEvent, FanInObservation, start_direct_zmq_fan_in,
 };
+
+use crate::{ACTIVE_SEQUENCES_SUBJECT, sequence::metrics::ActiveSequenceZmqIngressMetrics};
 
 const DIRECT_ZMQ_ENV: &str = "DYN_ROUTER_ACTIVE_SEQUENCE_DIRECT_ZMQ";
 const RCVHWM_ENV: &str = "DYN_ROUTER_ACTIVE_SEQUENCE_ZMQ_RCVHWM";
@@ -122,19 +122,18 @@ pub(super) async fn start(
         }
         Ok(())
     };
-    let observer =
-        move |observation: crate::direct_zmq_fan_in::FanInObservation| match observation.event {
-            FanInEvent::SourceStarted => metrics.source_started(),
-            FanInEvent::SourceStopped => metrics.source_stopped(),
-            FanInEvent::Disconnected | FanInEvent::DiscoveryReset => {}
-            FanInEvent::Reconnect => metrics.record_reconnect(),
-            FanInEvent::Replacement => metrics.record_replacement(),
-            FanInEvent::EnvelopeDecodeError => metrics.record_envelope_decode_error(),
-            FanInEvent::IdentityMismatch => metrics.record_identity_error(),
-            FanInEvent::SequenceGap { missing } => metrics.record_gap(missing),
-            FanInEvent::OutOfOrder => metrics.record_out_of_order(),
-            FanInEvent::ForcedAbort => metrics.record_forced_abort(),
-        };
+    let observer = move |observation: FanInObservation| match observation.event {
+        FanInEvent::SourceStarted => metrics.source_started(),
+        FanInEvent::SourceStopped => metrics.source_stopped(),
+        FanInEvent::Disconnected | FanInEvent::DiscoveryReset => {}
+        FanInEvent::Reconnect => metrics.record_reconnect(),
+        FanInEvent::Replacement => metrics.record_replacement(),
+        FanInEvent::EnvelopeDecodeError => metrics.record_envelope_decode_error(),
+        FanInEvent::IdentityMismatch => metrics.record_identity_error(),
+        FanInEvent::SequenceGap { missing } => metrics.record_gap(missing),
+        FanInEvent::OutOfOrder => metrics.record_out_of_order(),
+        FanInEvent::ForcedAbort => metrics.record_forced_abort(),
+    };
 
     start_direct_zmq_fan_in(
         endpoint,

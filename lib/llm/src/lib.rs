@@ -9,8 +9,9 @@
 pub use dynamo_llm_worker::admission_gate;
 pub mod backend;
 pub use dynamo_llm_protocol::{common, endpoint_type, model_type, worker_type};
-pub(crate) use dynamo_llm_worker::direct_zmq_fan_in;
-pub(crate) use dynamo_llm_worker::direct_zmq_sub_pool;
+pub(crate) use dynamo_runtime::transports::zmq::{
+    direct_fan_in as direct_zmq_fan_in, direct_sub_pool as direct_zmq_sub_pool,
+};
 pub mod discovery;
 pub mod engines;
 pub mod entrypoint;

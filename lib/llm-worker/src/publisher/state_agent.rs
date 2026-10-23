@@ -58,9 +58,12 @@ use dynamo_runtime::transports::zmq::sockets::{
     MultipartMessage, SubSocket, connect_sub_socket, multipart_message,
 };
 
+use dynamo_runtime::transports::zmq::direct_sub_pool::{
+    DirectZmqSubPool, DirectZmqSubRegistration, RawZmqFrames,
+};
+
 use crate::{
     WORKER_KV_INDEXER_BUFFER_SIZE,
-    direct_zmq_sub_pool::{DirectZmqSubPool, DirectZmqSubRegistration, RawZmqFrames},
     kv_state::{
         KV_STATE_ATTACHMENT_TOPIC_V2, KV_STATE_EVENT_TOPIC_V2, KV_STATE_SOURCE_TOPIC_V2,
         KvStateAttachmentAdvertisement, KvStateIngressProtocol, KvStateSourceAdvertisement,

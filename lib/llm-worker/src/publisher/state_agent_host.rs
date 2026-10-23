@@ -29,12 +29,12 @@ use prometheus::{IntCounter, IntGaugeVec};
 use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
 
-use crate::direct_zmq_sub_pool::{DirectZmqSubPool, KV_ZMQ_RCVHWM};
 use crate::kv_state::{
     KV_STATE_ATTACHMENT_INTENT_TOPIC_V2, KV_STATE_EVENT_TOPIC_V2, KV_STATE_HOST_TOPIC_V2,
     KvStateAttachmentIntent, KvStateHostAdvertisement, KvStateHostControlRequest,
     KvStateHostStatus, KvStateIngressProtocol,
 };
+use dynamo_runtime::transports::zmq::direct_sub_pool::{DirectZmqSubPool, KV_ZMQ_RCVHWM};
 
 use super::state_agent::{
     KvStateAgent, KvStateAgentAttachmentConfig, KvStateAgentConfig, KvStateAgentSlotConfig,

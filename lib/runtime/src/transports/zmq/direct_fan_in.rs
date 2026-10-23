@@ -3,8 +3,7 @@
 
 use std::{collections::HashMap, future::Future, time::Duration};
 
-use anyhow::Result;
-use dynamo_runtime::{
+use crate::{
     component::{Component, Endpoint},
     discovery::{
         DiscoveryEvent, DiscoveryInstance, DiscoveryInstanceId, DiscoveryQuery,
@@ -14,11 +13,12 @@ use dynamo_runtime::{
     traits::DistributedRuntimeProvider,
     transports::event_plane::{ValidatedEnvelope, ValidatedZmqSource, ValidatedZmqSourceError},
 };
+use anyhow::Result;
 use futures::{FutureExt, StreamExt};
 use tokio::{sync::mpsc, task::JoinHandle};
 use tokio_util::sync::CancellationToken;
 
-use crate::direct_zmq_sub_pool::{
+use super::direct_sub_pool::{
     DirectZmqSubConnection, DirectZmqSubItem, DirectZmqSubPool, endpoints_per_sub_from_env,
 };
 
@@ -242,10 +242,7 @@ async fn run_supervisor<H, F, O>(
     cancellation_token: CancellationToken,
     handler: H,
     observer: O,
-    mut next_watch: Option<(
-        dynamo_runtime::discovery::DiscoveryStream,
-        CancellationToken,
-    )>,
+    mut next_watch: Option<(crate::discovery::DiscoveryStream, CancellationToken)>,
 ) where
     H: Fn(ValidatedEnvelope) -> F + Clone + Send + Sync + 'static,
     F: Future<Output = Result<()>> + Send + 'static,
@@ -796,7 +793,7 @@ mod tests {
         },
     };
 
-    use dynamo_runtime::{
+    use crate::{
         DistributedRuntime, Runtime,
         distributed::DistributedConfig,
         transports::event_plane::{EventPublisher, EventTransportKind, SharedZmqPublisherSocket},

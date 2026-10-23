@@ -16,6 +16,8 @@
 //! equivalent of a connection pool per upstream service at the cost of needing an extra internal
 //! routing step per service endpoint.
 
+pub mod direct_fan_in;
+pub mod direct_sub_pool;
 pub mod sockets;
 
 use anyhow::{Context, Result, anyhow};

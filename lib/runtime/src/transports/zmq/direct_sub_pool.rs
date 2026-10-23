@@ -10,10 +10,10 @@ use std::{
     time::Duration,
 };
 
-use anyhow::Result;
-use dynamo_runtime::transports::event_plane::{
+use crate::transports::event_plane::{
     Codec, DynamicZmqSubSocket, ValidatedEnvelope, ValidatedZmqSource, ZmqWireMessage,
 };
+use anyhow::Result;
 use parking_lot::Mutex;
 use tokio::{
     sync::{mpsc, oneshot},
@@ -21,7 +21,7 @@ use tokio::{
 };
 use tokio_util::sync::CancellationToken;
 
-use dynamo_runtime::transports::zmq::sockets::multipart_message;
+use crate::transports::zmq::sockets::multipart_message;
 
 const GROUP_JOIN_TIMEOUT: Duration = Duration::from_secs(5);
 
@@ -1385,7 +1385,7 @@ mod tests {
 
     #[tokio::test]
     async fn raw_topics_route_exact_frames_and_separate_duplicates() {
-        use dynamo_runtime::transports::zmq::sockets::{bind_pub_socket, send_multipart};
+        use crate::transports::zmq::sockets::{bind_pub_socket, send_multipart};
         use tmq::AsZmqSocket;
 
         let pool = DirectZmqSubPool::new_raw(4, 128, CancellationToken::new()).unwrap();

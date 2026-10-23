@@ -6,7 +6,7 @@
 //! Worker-side runtime glue shared by the Rust backends and sidecars: the KV
 //! event publisher and state agent, the worker admission gate, the first-token
 //! notifier, active-sequence publication, KV source membership, the per-worker
-//! runtime-config watch, and the direct-ZMQ subscription pool and fan-in. It depends on `dynamo-runtime`,
+//! runtime-config watch. It depends on `dynamo-runtime`,
 //! `dynamo-kv-router`, and `dynamo-llm-protocol` only; `dynamo-llm` re-exports
 //! every module here at its historical path, so existing
 //! `dynamo_llm::{first_token, admission_gate, kv_router::{publisher, sequence},
@@ -14,8 +14,6 @@
 //! discovery::runtime_config_watch}` imports keep working.
 
 pub mod admission_gate;
-pub mod direct_zmq_fan_in;
-pub mod direct_zmq_sub_pool;
 pub mod first_token;
 pub mod kv_source_membership;
 pub mod kv_state;
@@ -23,6 +21,12 @@ pub mod publisher;
 pub mod runtime_configs;
 pub mod sequence;
 pub mod worker_query_endpoint;
+
+// The direct-ZMQ subscription pool and fan-in live with the runtime's zmq
+// transport; keep the historical module names resolving here.
+pub use dynamo_runtime::transports::zmq::{
+    direct_fan_in as direct_zmq_fan_in, direct_sub_pool as direct_zmq_sub_pool,
+};
 
 // for metric publishing (push-based)
 pub const KV_METRICS_SUBJECT: &str = "kv_metrics";
