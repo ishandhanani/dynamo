@@ -39,6 +39,9 @@ pub async fn run(
     }
 
     let grpc_service = match engine_config {
+        EngineConfig::Direct { .. } => {
+            anyhow::bail!("direct engines are only served by the HTTP frontend");
+        }
         EngineConfig::Dynamic {
             ref model,
             ref prefill_load_estimator,

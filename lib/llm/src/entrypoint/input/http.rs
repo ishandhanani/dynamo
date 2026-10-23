@@ -272,6 +272,24 @@ async fn run_with_router_plugins(
             .await?;
             http_service
         }
+        EngineConfig::Direct {
+            model,
+            workers,
+            dispatch,
+        } => {
+            let http_service = http_service_builder.build()?;
+            super::direct::register_direct_model(
+                &distributed_runtime,
+                http_service.state().manager_clone(),
+                http_service.state().metrics_clone(),
+                &model,
+                workers,
+                dispatch,
+            )
+            .await?;
+            enable_in_process_model_endpoints(&http_service)?;
+            http_service
+        }
         EngineConfig::InProcessText { engine, model, .. } => {
             let http_service = http_service_builder.build()?;
             let engine = Arc::new(StreamingEngineAdapter::new(engine));

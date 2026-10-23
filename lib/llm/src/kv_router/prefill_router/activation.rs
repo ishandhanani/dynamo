@@ -12,7 +12,7 @@ use dynamo_kv_router::{
     config::KvRouterConfig,
 };
 use dynamo_runtime::{
-    component::Endpoint,
+    component::{Client, Endpoint},
     discovery::DiscoveryQuery,
     pipeline::{PushRouter, RouterMode},
     prelude::DistributedRuntimeProvider,
@@ -60,6 +60,19 @@ struct PrefillAdvertisement {
 /// A prefill worker that declares its own `router_config` governs this hop;
 /// one that declares nothing inherits `decode_router_mode`. That is what lets a
 /// deployment run KV-routed prefill in front of round-robin decode.
+/// The prefill hop's transport: the request plane, or the frontend's direct
+/// dispatcher when it dials engines itself.
+async fn prefill_push_router(
+    context: &PrefillBuildContext,
+    client: Client,
+    mode: RouterMode,
+) -> Result<PushRouter<PreprocessedRequest, Annotated<LLMEngineOutput>>> {
+    match context.model_manager.direct_dispatch() {
+        Some(dispatch) => PushRouter::from_client_with_dispatch(client, mode, dispatch).await,
+        None => PushRouter::from_client_with_monitor(client, mode, None).await,
+    }
+}
+
 fn resolve_advertisement_from_cards(
     cards: &[ModelDeploymentCard],
     decode_router_mode: RouterMode,
@@ -392,12 +405,7 @@ impl PrefillRouter {
             .await?;
 
             // Build the PushRouter for prefill with KV mode using the shared client
-            let push_router = PushRouter::<PreprocessedRequest, Annotated<LLMEngineOutput>>::from_client_with_monitor(
-                client,
-                RouterMode::KV,
-                None, // worker_monitor
-            )
-            .await?;
+            let push_router = prefill_push_router(context, client, RouterMode::KV).await?;
 
             Arc::new(RoutingHost::new_with_load_context_and_coordinator(
                 push_router,
@@ -416,12 +424,7 @@ impl PrefillRouter {
             // Create the transport and discovery layer for the builtin policy.
             // Note: Per-worker metrics (active_prefill_tokens, active_decode_blocks) are only
             // available in KV routing mode where the router has actual bookkeeping.
-            let push_router = PushRouter::<PreprocessedRequest, Annotated<LLMEngineOutput>>::from_client_with_monitor(
-                client,
-                prefill_router_mode,
-                None, // worker_monitor
-            )
-            .await?;
+            let push_router = prefill_push_router(context, client, prefill_router_mode).await?;
 
             Arc::new(RoutingHost::new_builtin_with_coordinator(
                 push_router,

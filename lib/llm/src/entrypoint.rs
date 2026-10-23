@@ -115,6 +115,23 @@ pub enum EngineConfig {
         /// serving it, through this config or a clone, admits through it.
         admission_gate: WorkerAdmissionGate,
     },
+
+    /// Engines the frontend probed itself and dials over their native API
+    /// (`--direct`). The full routed pipeline runs in-process; discovery is
+    /// never consulted for these workers.
+    Direct {
+        model: Box<LocalModel>,
+        workers: Vec<DirectWorker>,
+        dispatch: crate::kv_router::LlmDispatch,
+    },
+}
+
+/// One directly dialed engine: its routable identity plus what it advertised.
+#[derive(Clone, Debug)]
+pub struct DirectWorker {
+    pub instance: dynamo_runtime::component::Instance,
+    pub runtime_config: crate::local_model::runtime_config::ModelRuntimeConfig,
+    pub worker_type: crate::worker_type::WorkerType,
 }
 
 impl EngineConfig {
@@ -124,6 +141,7 @@ impl EngineConfig {
             Dynamic { model, .. } => model,
             InProcessText { model, .. } => model,
             InProcessTokens { model, .. } => model,
+            Direct { model, .. } => model,
         }
     }
 

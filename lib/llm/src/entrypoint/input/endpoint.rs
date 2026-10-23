@@ -180,6 +180,9 @@ pub async fn run(
         EngineConfig::Dynamic { .. } => {
             unreachable!("An endpoint input will never have a Dynamic engine");
         }
+        EngineConfig::Direct { .. } => {
+            anyhow::bail!("direct engines are only served by the HTTP frontend");
+        }
     };
 
     // Capture the actual error from rt_fut when it completes

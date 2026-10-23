@@ -34,6 +34,16 @@ pub const TOPOLOGY_TAINT_PREFIX: &str = "dynamo.topology/";
 /// Runtime-data key for an engine-published token-overflow contract.
 pub const TOKEN_BUDGET_RUNTIME_KEY: &str = "token_budget";
 
+/// `runtime_data` key under which a directly dialed engine (`--direct`) lists its
+/// ZMQ KV-event publisher endpoints by data-parallel rank, as
+/// `{"<dp_rank>": "tcp://host:port"}`. The frontend subscribes to these itself
+/// instead of receiving events over the Dynamo event plane.
+pub const DIRECT_KV_EVENTS_ENDPOINTS_RUNTIME_KEY: &str = "direct_kv_events_endpoints";
+
+/// `runtime_data` key for a directly dialed single-rank engine's KV-event replay
+/// socket, used to recover gaps in its live event stream.
+pub const DIRECT_KV_REPLAY_ENDPOINT_RUNTIME_KEY: &str = "direct_kv_replay_endpoint";
+
 /// Runtime-data key indicating that a backend expects tool structural tags to
 /// exclude reasoning and manages grammar activation around reasoning itself.
 ///
