@@ -954,6 +954,22 @@ impl Client {
             return Ok(source);
         }
 
+        // A statically configured endpoint never touches discovery: the frontend's
+        // direct-engine mode owns its instance list.
+        if let Some(instances) = endpoint.drt().static_endpoint_instances(endpoint) {
+            let discovery_source = Self::spawn_static_discovery_source(
+                endpoint,
+                instances,
+                endpoint.drt().primary_token().child_token(),
+            );
+            let mut sources = sources.lock().await;
+            if let Some(source) = sources.get(endpoint).and_then(Weak::upgrade) {
+                return Ok(source);
+            }
+            sources.insert(endpoint.clone(), Arc::downgrade(&discovery_source));
+            return Ok(discovery_source);
+        }
+
         // Discovery::list_and_watch establishes the backend watch, so it runs outside the
         // registry lock. Holding the lock across it serializes every client construction behind
         // one round trip to the discovery backend.
@@ -974,6 +990,67 @@ impl Client {
         }
         sources.insert(endpoint.clone(), Arc::downgrade(&discovery_source));
         Ok(discovery_source)
+    }
+
+    /// Mirror a caller-owned instance list into an [`EndpointDiscoverySource`], emitting
+    /// `Added`/`Removed` events for the diff so removal watchers behave as with discovery.
+    fn spawn_static_discovery_source(
+        endpoint: &Endpoint,
+        mut instances: tokio::sync::watch::Receiver<Vec<Instance>>,
+        cancel_token: CancellationToken,
+    ) -> Arc<EndpointDiscoverySource> {
+        let initial: Vec<Instance> = instances.borrow_and_update().clone();
+        let (watch_tx, watch_rx) = tokio::sync::watch::channel(initial.clone());
+        let discovery_source = Arc::new(EndpointDiscoverySource::new(
+            watch_rx,
+            cancel_token.clone().drop_guard(),
+        ));
+        let discovery_source_task = Arc::downgrade(&discovery_source);
+        let secondary = endpoint.component.drt.runtime().secondary().clone();
+        let endpoint_id = endpoint.id();
+
+        secondary.spawn(async move {
+            tracing::debug!(%endpoint_id, "static endpoint instances: watching caller-owned list");
+            let mut known: HashMap<u64, Instance> =
+                initial.into_iter().map(|i| (i.id(), i)).collect();
+            loop {
+                tokio::select! {
+                    _ = cancel_token.cancelled() => break,
+                    _ = watch_tx.closed() => break,
+                    changed = instances.changed() => {
+                        if changed.is_err() {
+                            break;
+                        }
+                    }
+                }
+                let next: Vec<Instance> = instances.borrow_and_update().clone();
+                let next_map: HashMap<u64, Instance> =
+                    next.iter().map(|i| (i.id(), i.clone())).collect();
+                if let Some(source) = discovery_source_task.upgrade() {
+                    for (id, instance) in &known {
+                        if !next_map.contains_key(id) {
+                            source.broadcast_event(&DiscoveryEvent::Removed(
+                                DiscoveryInstanceId::Endpoint(instance.endpoint_instance_id()),
+                            ));
+                        }
+                    }
+                    for (id, instance) in &next_map {
+                        if known.get(id) != Some(instance) {
+                            source.broadcast_event(&DiscoveryEvent::Added(
+                                DiscoveryInstance::Endpoint(instance.clone()),
+                            ));
+                        }
+                    }
+                }
+                known = next_map;
+                if watch_tx.send(next).is_err() {
+                    break;
+                }
+            }
+            let _ = watch_tx.send(vec![]);
+        });
+
+        discovery_source
     }
 
     /// Pass a child of the runtime's primary token as `cancel_token`: the backends fall back to

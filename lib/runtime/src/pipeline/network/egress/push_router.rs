@@ -1921,6 +1921,7 @@ where
                         (tcp_endpoint.clone(), "transport.tcp.request")
                     }
                     TransportType::Nats(subject) => (subject.clone(), "transport.nats.request"),
+                    TransportType::Grpc(endpoint) => (endpoint.clone(), "transport.grpc.request"),
                 };
                 (addr, kind, instance)
             })
