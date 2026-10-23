@@ -76,8 +76,8 @@ required-features = ["media-ffmpeg"]
 dynamo-custom-policy-builtin = { workspace = true }
 # repo
 dynamo-kv-router = { workspace = true, features = ["metrics", "runtime-protocols", "standalone-selection"] }
+dynamo-backend-common = { workspace = true }
 dynamo-llm-protocol = { workspace = true }
-dynamo-llm-worker = { workspace = true }
 dynamo-local-model = { workspace = true }
 dynamo-metrics = { workspace = true }
 dynamo-memory = { workspace = true }
@@ -225,7 +225,7 @@ llm-tokenizer = { version = "=1.6.0", optional = true }
 [dev-dependencies]
 dynamo-local-model = { workspace = true, features = ["testing"] }
 dynamo-kv-router = { workspace = true, features = ["testing"] }
-dynamo-llm-worker = { workspace = true, features = ["testing"] }
+dynamo-backend-common = { workspace = true, features = ["testing"] }
 dynamo-runtime = { workspace = true, features = ["testing"] }
 tokio = { workspace = true, features = ["test-util"] }
 approx = "0.5"

@@ -562,6 +562,14 @@ Also available: `testing::mock_context()` and
 | `error.rs` | Re-exports `DynamoError`, `ErrorType`, `BackendError` from `dynamo-runtime`. No custom error types. |
 | `validate.rs` | Debug-build stream validator. Compiled out in release. |
 | `testing.rs` | Conformance test kit. Gated behind the `testing` feature. |
+| `kv_publisher/` | `KvEventPublisher`, `WorkerMetricsPublisher`, the KV state agent and its host, the ZMQ listener, event batching/dedup, and `KvPublisherMetrics`. Has its own `README.md` / `AGENTS.md`. Co-owned with the router team. |
+| `kv_state.rs` | KV state wire contracts: topic constants, host/intent/source/attachment advertisements, `KvStateIngressProtocol`, `KvStateHostStatus`, and the residency projection resolver. |
+| `kv_source_membership.rs` | `KvEventSource` identity, `KvSourceMembership` view, and `resolve_kv_state_endpoint`. |
+| `admission_gate.rs` | `WorkerAdmissionGate` — per-worker in-flight request limit read from the environment, with Prometheus counters in `admission_gate/metrics.rs`. |
+| `first_token.rs` | `FirstTokenNotifier` / `FirstTokenSource` — disaggregated first-token handoff. `from_publisher` is a `testing`-feature hook. |
+| `sequence.rs` | `ActiveSequenceEventPublisher` and the runtime sequence subscriber, with the direct-ZMQ ingress in `sequence/direct_zmq.rs`. |
+| `runtime_configs.rs` | `runtime_config_watch` — per-worker runtime-config watch over discovery. |
+| `worker_query_endpoint.rs` | Worker-local `LocalKvIndexer` query endpoint started by the KV state agent. |
 
 ## PyO3 binding
 

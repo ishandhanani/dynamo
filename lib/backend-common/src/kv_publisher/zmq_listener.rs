@@ -12,7 +12,7 @@ use tokio_util::sync::CancellationToken;
 use dynamo_kv_router::protocols::*;
 use dynamo_kv_router::zmq_wire::*;
 
-use crate::publisher::metrics::kv_publisher_metrics;
+use crate::kv_publisher::metrics::kv_publisher_metrics;
 use dynamo_runtime::transports::zmq::sockets::{connect_sub_socket, multipart_message};
 
 pub(super) struct DecodedZmqKvBatch {

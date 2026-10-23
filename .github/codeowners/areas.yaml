@@ -64,7 +64,6 @@ areas:
   - lib/llm/src/kv_router/
   - lib/llm/src/kv_router/indexer/
   - lib/llm/src/kv_router/prefill_router/
-  - lib/llm-worker/
   - tests/router/
   - tests/router/configs/
   - lib/router-plugins/
@@ -565,6 +564,12 @@ required_owners:
   owners:
   - operator
 shared:
+# The KV event publisher and state agent moved from the router-owned
+# dynamo-llm-worker crate into the worker library; router keeps co-ownership.
+- glob: lib/backend-common/src/kv_publisher/
+  owners:
+  - runtime
+  - router
 - glob: .github/review-prompts/README.md
   owners:
   - ops

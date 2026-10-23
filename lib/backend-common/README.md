@@ -404,6 +404,17 @@ lib/backend-common/
         error.rs         # Re-exports DynamoError / ErrorType / BackendError
         validate.rs      # Debug-build stream validator (compiled out in release)
         testing.rs       # Conformance kit (`testing` feature)
+        kv_publisher/    # KV event publisher, state agent, ZMQ listener, worker
+                         #   metrics publisher (README.md / AGENTS.md inside)
+        kv_state.rs      # KV state wire contracts: topics, advertisements,
+                         #   host status, ingress protocol, projection resolver
+        kv_source_membership.rs  # KV event source identity and membership view
+        admission_gate.rs        # Worker admission gate (+ admission_gate/metrics.rs)
+        first_token.rs   # First-token notifier for disaggregated prefill
+        sequence.rs      # Active-sequence publication (+ sequence/direct_zmq.rs,
+                         #   sequence/metrics.rs)
+        runtime_configs.rs       # Per-worker runtime-config watch
+        worker_query_endpoint.rs # Worker-local KV indexer query endpoint
     examples/
         mocker/          # CPU-only reference backend + docker-compose stack
 ```

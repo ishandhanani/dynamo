@@ -17,8 +17,8 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use dynamo_llm_worker::first_token::FirstTokenSource;
-use dynamo_llm_worker::publisher::{KvEventPublisher, KvEventSourceConfig, WorkerMetricsPublisher};
+use crate::first_token::FirstTokenSource;
+use crate::kv_publisher::{KvEventPublisher, KvEventSourceConfig, WorkerMetricsPublisher};
 use dynamo_runtime::component::Endpoint;
 use dynamo_runtime::protocols::EndpointId;
 

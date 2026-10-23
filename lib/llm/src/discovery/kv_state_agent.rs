@@ -9,13 +9,13 @@
 //!
 //! The wire contracts (topics, advertisements, intents, host status, the
 //! ingress protocol, and the projection resolver) live in
-//! `dynamo_llm_worker::kv_state` and are re-exported here at their historical
+//! `dynamo_backend_common::kv_state` and are re-exported here at their historical
 //! paths. This module keeps only the frontend-side projection controller,
 //! which holds the shared router [`Indexer`].
 
 use dynamo_kv_router::protocols::ResidencyProjectionError;
 
-pub use dynamo_llm_worker::kv_state::*;
+pub use dynamo_backend_common::kv_state::*;
 
 use crate::kv_router::indexer::Indexer;
 

@@ -21,6 +21,8 @@ use tokio::sync::watch;
 
 use crate::error::DynamoError;
 
+pub use crate::first_token::FirstTokenNotifier;
+pub use crate::kv_publisher::KvEventPublisher;
 pub use dynamo_llm_protocol::protocols::common::llm_backend::{
     LLMEngineOutput, LogProbs, TopLogprob, TopLogprobs,
 };
@@ -31,8 +33,6 @@ pub use dynamo_llm_protocol::protocols::common::preprocessor::{
 pub use dynamo_llm_protocol::protocols::common::{
     FinishReason, GuidedDecodingOptions, OutputOptions, SamplingOptions, StopConditions,
 };
-pub use dynamo_llm_worker::first_token::FirstTokenNotifier;
-pub use dynamo_llm_worker::publisher::KvEventPublisher;
 pub use dynamo_protocols::types::{CompletionUsage, PromptTokensDetails, StopReason};
 pub use dynamo_runtime::engine::AsyncEngineContext;
 

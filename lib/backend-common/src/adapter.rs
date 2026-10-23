@@ -14,10 +14,10 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::task::{Context, Poll};
 use std::time::{Duration, Instant};
 
+use crate::first_token::FirstTokenSource;
 use async_trait::async_trait;
 use dynamo_llm_protocol::protocols::common::llm_backend::LLMEngineOutput;
 use dynamo_llm_protocol::protocols::common::preprocessor::PreprocessedRequest;
-use dynamo_llm_worker::first_token::FirstTokenSource;
 use dynamo_runtime::engine::AsyncEngineContext;
 use dynamo_runtime::pipeline::{
     AsyncEngine, AsyncEngineContextProvider, Error, ManyOut, ResponseStream, SingleIn,

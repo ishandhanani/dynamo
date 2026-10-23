@@ -9,22 +9,23 @@ authors.workspace = true
 license.workspace = true
 homepage.workspace = true
 repository.workspace = true
-description = "Shared runtime glue for Rust LLM backends."
+description = "Dynamo worker library: runtime glue for Rust LLM backends plus the KV event publisher and state agent, worker admission gate, first-token notifier, active-sequence publication, KV source membership, and runtime-config watch."
 # examples/mocker is its own workspace member crate, not a cargo-auto-discovered example.
 autoexamples = false
 
 [features]
-# Enables the conformance test kit (testing.rs). Intended for `[dev-dependencies]`
-# in backend crates — adds no weight to production binaries.
+# Enables the conformance test kit (testing.rs) and test-only hooks such as
+# `FirstTokenSource::from_publisher`. Intended for `[dev-dependencies]` in
+# backend crates — adds no weight to production binaries; never enable in release.
 testing = []
-# Enables NATS-backed integration tests (e.g. the on_endpoint_ready handoff).
-# Forwards to dynamo-runtime's integration feature for `create_test_drt_async`.
+# Enables NATS-backed integration tests (the on_endpoint_ready handoff and the
+# KV publisher's NATS tests). Forwards to dynamo-runtime's integration feature
+# for `create_test_drt_async`.
 integration = ["dynamo-runtime/integration"]
 
 [dependencies]
-dynamo-kv-router = { workspace = true }
+dynamo-kv-router = { workspace = true, features = ["metrics", "runtime-protocols", "standalone-selection"] }
 dynamo-llm-protocol = { workspace = true }
-dynamo-llm-worker = { workspace = true }
 dynamo-local-model = { workspace = true }
 dynamo-protocols = { workspace = true }
 dynamo-runtime = { workspace = true }
@@ -33,22 +34,34 @@ dynamo-rl = { workspace = true }
 anyhow = { workspace = true }
 async-stream = { workspace = true }
 async-trait = { workspace = true }
+blake3 = { workspace = true }
+bytes = { workspace = true }
 clap = { version = "4", features = ["derive", "env"] }
 futures = { workspace = true }
 opentelemetry = { workspace = true }
 parking_lot = { workspace = true }
 prometheus = { workspace = true }
+rand = { workspace = true }
+rmp-serde = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+thiserror = { workspace = true }
 tokio = { workspace = true }
 tokio-util = { workspace = true }
 tracing = { workspace = true }
 tracing-opentelemetry = { workspace = true }
+uuid = { workspace = true }
+
+# pinned alongside dynamo-llm
+arc-swap = "1.9.1"
 
 [dev-dependencies]
+dynamo-runtime = { workspace = true, features = ["testing"] }
 reqwest = { workspace = true }
 serde_json = { workspace = true }
 serial_test = "3"
 tempfile = { workspace = true }
 temp-env = { version = "0.3.6", features = ["async_closure"] }
+tokio = { workspace = true, features = ["test-util"] }
+tokio-stream = { workspace = true }
 tracing-subscriber = { workspace = true }

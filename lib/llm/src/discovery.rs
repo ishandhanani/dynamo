@@ -6,7 +6,7 @@ pub mod readiness;
 pub(crate) use model::GenerateEngineSelection;
 pub use model::Model;
 
-pub use dynamo_llm_worker::kv_source_membership;
+pub use dynamo_backend_common::kv_source_membership;
 pub use kv_source_membership::{
     KvEventSource, KvSourceAdvertisement, KvSourceAmbiguity, KvSourceId, KvSourceKey,
     KvSourceMembership, KvSourceMembershipError, KvSourceMembershipView, KvSourceStatus,
@@ -32,7 +32,7 @@ mod worker_set;
 pub use worker_set::WorkerSet;
 pub(crate) use worker_set::{CommittedWorkerSetTarget, WorkerSetTarget, WorkerSetTargetId};
 
-pub(crate) use dynamo_llm_worker::runtime_configs;
+pub(crate) use dynamo_backend_common::runtime_configs;
 pub use runtime_configs::{RuntimeConfigWatch, runtime_config_watch};
 
 mod endpoint_card;

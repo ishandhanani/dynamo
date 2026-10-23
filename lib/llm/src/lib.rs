@@ -6,7 +6,7 @@
 //! The `dynamo.llm` crate is a Rust library that provides a set of traits and types for building
 //! distributed LLM inference solutions.
 
-pub use dynamo_llm_worker::admission_gate;
+pub use dynamo_backend_common::admission_gate;
 pub mod backend;
 pub use dynamo_llm_protocol::{common, endpoint_type, model_type, worker_type};
 pub(crate) use dynamo_runtime::transports::zmq::{
@@ -15,7 +15,7 @@ pub(crate) use dynamo_runtime::transports::zmq::{
 pub mod discovery;
 pub mod engines;
 pub mod entrypoint;
-pub use dynamo_llm_worker::first_token;
+pub use dynamo_backend_common::first_token;
 pub mod fpm_publisher;
 pub mod fpm_trace;
 pub use dynamo_local_model::frontend_config;

@@ -64,12 +64,12 @@ use dynamo_runtime::transports::zmq::direct_sub_pool::{
 
 use crate::{
     WORKER_KV_INDEXER_BUFFER_SIZE,
+    kv_publisher::metrics::kv_publisher_metrics,
     kv_state::{
         KV_STATE_ATTACHMENT_TOPIC_V2, KV_STATE_EVENT_TOPIC_V2, KV_STATE_SOURCE_TOPIC_V2,
         KvStateAttachmentAdvertisement, KvStateIngressProtocol, KvStateSourceAdvertisement,
         attachment_record_id,
     },
-    publisher::metrics::kv_publisher_metrics,
     worker_query_endpoint::{KvStateAgentStatusCell, start_worker_kv_query_endpoint_with_status},
 };
 

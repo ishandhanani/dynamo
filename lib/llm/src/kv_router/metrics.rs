@@ -33,7 +33,7 @@
 //!     when set (default is `-1`, disabled), populated per-request
 //!
 //! The worker-local KV event publisher and ZMQ relay counters
-//! (`KvPublisherMetrics`) live in `dynamo_llm_worker::publisher::metrics`; the
+//! (`KvPublisherMetrics`) live in `dynamo_backend_common::kv_publisher::metrics`; the
 //! registration regression tests below exercise them against a fake hierarchy.
 //!
 //! The standalone router does not create `WorkerLoadMetrics` or
@@ -1648,7 +1648,7 @@ mod kv_publisher_registration_tests {
     //! the exposition output. No `DistributedRuntime` and no NATS required.
 
     use super::*;
-    use dynamo_llm_worker::publisher::metrics::KvPublisherMetrics;
+    use dynamo_backend_common::kv_publisher::metrics::KvPublisherMetrics;
     use dynamo_runtime::MetricsRegistry;
     use dynamo_runtime::metrics::prometheus_names::kv_publisher;
 

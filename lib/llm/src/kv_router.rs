@@ -62,11 +62,11 @@ pub mod metrics;
 pub mod metrics_subscriber;
 pub mod plugins;
 pub mod prefill_router;
-pub use dynamo_llm_worker::publisher;
+pub use dynamo_backend_common::kv_publisher as publisher;
 mod request_lease;
 mod routing_host;
 pub(crate) mod routing_load;
-pub use dynamo_llm_worker::sequence;
+pub use dynamo_backend_common::sequence;
 pub mod shared_cache;
 
 pub use dynamo_kv_router::scheduling::OverlapScoresResponse;
@@ -520,8 +520,8 @@ fn cache_hit_for_worker(
 }
 
 // Event-plane subjects and the worker-local indexer buffer size live with the
-// worker-side publishers in `dynamo-llm-worker`.
-pub use dynamo_llm_worker::{
+// worker-side publishers in `dynamo-backend-common`.
+pub use dynamo_backend_common::{
     ACTIVE_SEQUENCES_SUBJECT, KV_METRICS_SUBJECT, MULTIMODAL_EMBEDDING_CACHE_SUBJECT,
     WORKER_KV_INDEXER_BUFFER_SIZE,
 };
