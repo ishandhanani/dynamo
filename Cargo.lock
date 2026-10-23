@@ -2983,6 +2983,7 @@ dependencies = [
  "async-trait",
  "clap",
  "dynamo-backend-common",
+ "dynamo-llm",
  "dynamo-runtime",
  "futures",
  "hyper-util",

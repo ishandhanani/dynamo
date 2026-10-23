@@ -18,9 +18,11 @@ ignored = ["prost-types-v14"]
 
 [dependencies]
 dynamo-backend-common = { workspace = true }
+dynamo-llm = { workspace = true }
 dynamo-runtime = { workspace = true }
 
 anyhow = { workspace = true }
+async-trait = { workspace = true }
 
 clap = { version = "4", features = ["derive", "env"] }
 futures = { workspace = true }
