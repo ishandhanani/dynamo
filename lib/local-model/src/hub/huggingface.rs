@@ -27,13 +27,13 @@ const LORA_COMPLETE_MARKER_CONTENT: &[u8] = b"1\n";
 
 /// A Hugging Face model repository and the revision requested by an `hf://` URI.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct HfRepoSpec {
+pub struct HfRepoSpec {
     repo_id: String,
     revision: String,
 }
 
 impl HfRepoSpec {
-    pub(crate) fn from_uri(uri: &str) -> anyhow::Result<Self> {
+    pub fn from_uri(uri: &str) -> anyhow::Result<Self> {
         let value = uri
             .strip_prefix("hf://")
             .with_context(|| format!("expected hf:// URI, got: {uri}"))?;
@@ -135,7 +135,7 @@ fn hf_token_path_from_values(
     })
 }
 
-pub(crate) fn huggingface_cache() -> Cache {
+pub fn huggingface_cache() -> Cache {
     Cache::new(hf_cache_dir_from_values(
         env::var(env_model::huggingface::HF_HUB_CACHE).ok(),
         env::var(env_model::huggingface::HF_HOME).ok(),
@@ -182,11 +182,7 @@ fn is_complete_hf_snapshot(snapshot: &Path, anchor_file: &str) -> bool {
             .is_ok_and(|content| content == LORA_COMPLETE_MARKER_CONTENT)
 }
 
-pub(crate) fn cached_hf_snapshot(
-    cache: &Cache,
-    spec: &HfRepoSpec,
-    anchor_file: &str,
-) -> Option<PathBuf> {
+pub fn cached_hf_snapshot(cache: &Cache, spec: &HfRepoSpec, anchor_file: &str) -> Option<PathBuf> {
     let repo = spec.repo();
     if let Some(snapshot) = cache
         .repo(repo.clone())
@@ -209,7 +205,7 @@ pub(crate) fn cached_hf_snapshot(
     is_complete_hf_snapshot(&snapshot, anchor_file).then_some(snapshot)
 }
 
-pub(crate) fn finalize_hf_snapshot(
+pub fn finalize_hf_snapshot(
     cache: &Cache,
     spec: &HfRepoSpec,
     snapshot: &Path,
@@ -396,10 +392,7 @@ where
 /// The requested branch/tag is resolved once via `info()`. Every sibling is then
 /// downloaded through the commit SHA. The caller validates the completed LoRA
 /// before publishing the completion marker and mutable cache ref.
-pub(crate) async fn download_hf_snapshot(
-    cache: &Cache,
-    spec: &HfRepoSpec,
-) -> anyhow::Result<PathBuf> {
+pub async fn download_hf_snapshot(cache: &Cache, spec: &HfRepoSpec) -> anyhow::Result<PathBuf> {
     if is_offline_mode() {
         anyhow::bail!(
             "HF_HUB_OFFLINE is enabled and hf://{}@{} is not fully cached",

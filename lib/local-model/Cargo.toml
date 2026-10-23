@@ -1,0 +1,57 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+[package]
+name = "dynamo-local-model"
+description = "Dynamo local model loading stack: LocalModel and its builder, model deployment card loader, model hub download and cache, frontend API config, reasoning field, and request template"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[features]
+default = []
+# ModelExpress server client for model downloads; direct download is always available.
+modelexpress = ["dep:modelexpress-client"]
+
+[dependencies]
+# repo
+dynamo-llm-protocol = { workspace = true }
+dynamo-parsers = { workspace = true }
+dynamo-runtime = { workspace = true }
+dynamo-tokenizers = { workspace = true }
+
+# workspace
+anyhow = { workspace = true }
+futures = { workspace = true }
+hf-hub = { workspace = true, features = ["tokio", "rustls-tls", "ureq"] }
+libc = { workspace = true }
+modelexpress-client = { workspace = true, optional = true }
+modelexpress-common = { workspace = true }
+reqwest = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tempfile = { workspace = true }
+tokio = { workspace = true }
+tokio-util = { workspace = true }
+tracing = { workspace = true }
+url = { workspace = true }
+uuid = { workspace = true }
+
+# pinned alongside dynamo-llm
+json-five = { version = "0.3" }
+tokenizers = { version = "0.21.4", default-features = false, features = [
+  "onig",
+  "esaxx_fast",
+  "rustls-tls",
+] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+sysinfo = { workspace = true }
+
+[dev-dependencies]
+dynamo-kv-router = { workspace = true }
+mockito = "1.7.0"
+serial_test = "3"
+temp-env = { version = "0.3.6", features = ["async_closure"] }

@@ -244,6 +244,7 @@
 /examples/common/                                                                                       @ai-dynamo/dynamo-runtime-codeowners
 /lib/llm/benches/                                                                                       @ai-dynamo/dynamo-runtime-codeowners
 /lib/llm/src/bin/                                                                                       @ai-dynamo/dynamo-runtime-codeowners
+/lib/local-model/                                                                                       @ai-dynamo/dynamo-runtime-codeowners
 /lib/runtime/lib/                                                                                       @ai-dynamo/dynamo-runtime-codeowners
 /lib/llm/examples/                                                                                      @ai-dynamo/dynamo-runtime-codeowners
 /lib/runtime/docs/                                                                                      @ai-dynamo/dynamo-runtime-codeowners
@@ -268,7 +269,6 @@
 /lib/runtime/src/utils/                                                                                 @ai-dynamo/dynamo-runtime-codeowners
 /lib/runtime/src/config/                                                                                @ai-dynamo/dynamo-runtime-codeowners
 /examples/custom_backend/                                                                               @ai-dynamo/dynamo-runtime-codeowners
-/lib/llm/src/local_model/                                                                               @ai-dynamo/dynamo-runtime-codeowners
 /lib/runtime/src/compute/                                                                               @ai-dynamo/dynamo-runtime-codeowners
 /lib/runtime/src/storage/                                                                               @ai-dynamo/dynamo-runtime-codeowners
 /examples/backends/sample/                                                                              @ai-dynamo/dynamo-runtime-codeowners

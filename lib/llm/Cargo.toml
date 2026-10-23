@@ -17,8 +17,8 @@ default = ["text-repl", "lora-s3", "modelexpress", "swagger-ui"]
 text-repl = ["dep:dialoguer"]
 # S3-backed LoRA adapter source (AWS SDK + object_store).
 lora-s3 = ["dep:object_store", "dep:aws-config", "dep:aws-credential-types", "dep:aws-types"]
-# ModelExpress server client for model downloads; direct download is always available.
-modelexpress = ["dep:modelexpress-client"]
+# ModelExpress server client for model downloads (lives in dynamo-local-model); direct download is always available.
+modelexpress = ["dynamo-local-model/modelexpress"]
 # Swagger UI assets at /docs; /openapi.json is always served.
 swagger-ui = ["dep:utoipa-swagger-ui"]
 # Test-only NIXL/CUDA fixtures for the frontend media (RDMA) path, forwarded to dynamo-memory.
@@ -78,6 +78,7 @@ dynamo-custom-policy-builtin = { workspace = true }
 dynamo-kv-router = { workspace = true, features = ["metrics", "runtime-protocols", "standalone-selection"] }
 dynamo-llm-protocol = { workspace = true }
 dynamo-llm-worker = { workspace = true }
+dynamo-local-model = { workspace = true }
 dynamo-metrics = { workspace = true }
 dynamo-memory = { workspace = true }
 dynamo-mocker = { workspace = true, features = ["zmq-events"] }
@@ -133,8 +134,6 @@ validator = { workspace = true }
 url = { workspace = true }
 uuid = { workspace = true }
 xxhash-rust = { workspace = true }
-modelexpress-client = { workspace = true, optional = true }
-modelexpress-common = { workspace = true }
 
 blake3 = { version = "1.8", features = ["mmap", "rayon"] }
 bytemuck = "1.22"
@@ -196,7 +195,6 @@ bs62 = { version = "0.1" }
 # dict insertion order. serde_json already has its preserve_order enabled by
 # dynamo-renderer; minijinja's map is the remaining sort point.
 minijinja = { version = "2.21.0", features = ["loader", "loop_controls", "preserve_order"] }
-json-five = { version = "0.3" }
 
 # media loading in the preprocessor
 reqwest = { workspace = true }
@@ -227,9 +225,6 @@ llm-multimodal = { version = "=1.9.0", optional = true }
 # `ModelRegistry::lookup` for image-placeholder token-id resolution.
 llm-tokenizer = { version = "=1.6.0", optional = true }
 
-[target.'cfg(target_os = "linux")'.dependencies]
-sysinfo = { workspace = true }
-
 [dev-dependencies]
 dynamo-kv-router = { workspace = true, features = ["testing"] }
 dynamo-llm-worker = { workspace = true, features = ["testing"] }
@@ -239,8 +234,6 @@ approx = "0.5"
 assert_matches = "1.5"
 criterion = { version = "0.5", features = ["html_reports"] }
 hf-hub = { workspace = true }
-modelexpress-client = { workspace = true }
-modelexpress-common = { workspace = true }
 reqwest = { workspace = true, features = ["http2"] }
 rcgen = { workspace = true }
 rustls = { workspace = true }

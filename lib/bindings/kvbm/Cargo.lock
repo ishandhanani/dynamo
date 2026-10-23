@@ -1502,6 +1502,7 @@ dependencies = [
  "derive_builder",
  "dynamo-kv-router",
  "dynamo-parsers",
+ "dynamo-parsers-v2",
  "dynamo-protocols",
  "dynamo-renderer",
  "dynamo-runtime-protocols",
@@ -1570,6 +1571,23 @@ dependencies = [
  "serde",
  "serde_json",
  "tokio",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
+name = "dynamo-parsers-v2"
+version = "0.7.24"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8a62c4aea442890712dcdb64e493fac636edad8c9b25f793948800507c41bedc"
+dependencies = [
+ "anyhow",
+ "openai-harmony",
+ "percent-encoding",
+ "regex",
+ "serde",
+ "serde_json",
+ "serde_yaml",
  "tracing",
  "uuid",
 ]

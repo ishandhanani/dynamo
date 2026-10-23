@@ -271,7 +271,7 @@ areas:
   - lib/llm/examples/
   - lib/llm/src/bin/
   - lib/llm/src/discovery/
-  - lib/llm/src/local_model/
+  - lib/local-model/
   - lib/llm/src/lora/routing/
   - lib/llm/src/model_card.rs
   - lib/llm/src/utils/

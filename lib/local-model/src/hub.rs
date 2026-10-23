@@ -14,7 +14,7 @@ use dynamo_runtime::config::environment_names::model as env_model;
 
 mod huggingface;
 
-pub(crate) use huggingface::{
+pub use huggingface::{
     HfRepoSpec, cached_hf_snapshot, download_hf_snapshot, finalize_hf_snapshot, huggingface_cache,
 };
 

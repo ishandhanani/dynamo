@@ -32,7 +32,7 @@ mod worker_set;
 pub use worker_set::WorkerSet;
 pub(crate) use worker_set::{CommittedWorkerSetTarget, WorkerSetTarget, WorkerSetTargetId};
 
-pub(crate) mod runtime_configs;
+pub(crate) use dynamo_llm_worker::runtime_configs;
 pub use runtime_configs::{RuntimeConfigWatch, runtime_config_watch};
 
 mod endpoint_card;

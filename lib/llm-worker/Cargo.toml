@@ -3,7 +3,7 @@
 
 [package]
 name = "dynamo-llm-worker"
-description = "Dynamo LLM worker-side runtime: KV event publisher and state agent, worker admission gate, first-token notifier, active-sequence publication, KV source membership, and direct-ZMQ ingress"
+description = "Dynamo LLM worker-side runtime: KV event publisher and state agent, worker admission gate, first-token notifier, active-sequence publication, KV source membership, runtime-config watch, and direct-ZMQ ingress"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
@@ -49,6 +49,7 @@ arc-swap = "1.9.1"
 dynamo-protocols = { workspace = true }
 dynamo-runtime = { workspace = true, features = ["testing"] }
 tokio = { workspace = true, features = ["test-util"] }
+tokio-stream = { workspace = true }
 serial_test = "3"
 temp-env = { version = "0.3.6", features = ["async_closure"] }
 tempfile = { workspace = true }

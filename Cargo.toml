@@ -6,6 +6,7 @@ members = [
     "lib/llm",
     "lib/llm-protocol",
     "lib/llm-worker",
+    "lib/local-model",
     "lib/rl",
     "lib/runtime",
     "lib/runtime-protocols",
@@ -71,6 +72,7 @@ dynamo-runtime-protocols = { path = "lib/runtime-protocols", version = "1.6.0" }
 dynamo-llm = { path = "lib/llm", version = "1.6.0", default-features = false }
 dynamo-llm-protocol = { path = "lib/llm-protocol", version = "1.6.0" }
 dynamo-llm-worker = { path = "lib/llm-worker", version = "1.6.0" }
+dynamo-local-model = { path = "lib/local-model", version = "1.6.0" }
 dynamo-rl = { path = "lib/rl", version = "1.6.0" }
 dynamo-tokenizers = { version = "=3.1.1" }
 dynamo-renderer = { version = "=8.0.3" }

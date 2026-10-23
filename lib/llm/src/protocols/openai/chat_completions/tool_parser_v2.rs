@@ -3,9 +3,9 @@
 
 //! Tool calls routed through the `dynamo-parsers-v2` streaming parser, bypassing the jail.
 //!
-//! The families in `V2_FAMILIES` (Qwen3-Coder, DeepSeek-V4) stream
-//! straight through their `dynamo_parsers_v2` parser instead of
-//! `JailedStream`: the v2 parser owns incremental
+//! The families in `dynamo_llm_protocol::local_model::tool_call_parsers::V2_FAMILIES`
+//! (Qwen3-Coder, DeepSeek-V4) stream straight through their `dynamo_parsers_v2`
+//! parser instead of `JailedStream`: the v2 parser owns incremental
 //! tool-call emission and drops a parameter value truncated at EOF rather than
 //! guessing it. The jail is never built for these families in either path
 //! (`apply_stream` for streaming, `parse_complete` for batch). Within this legacy
@@ -47,10 +47,7 @@ use super::{NvCreateChatCompletionStreamResponse, stream_choice_chunk_from_templ
 // entirely, so the ChoiceRecovery buffer and finish_reason=length synthetic-chunk
 // logic will not run. The aggregator.rs (non-streaming) half is parser-agnostic
 // and keeps working on both paths — only the streaming side needs porting.
-/// Map Dynamo tool-parser names onto the corresponding v2 registry family.
-#[cfg(test)]
-pub(crate) const V2_FAMILIES: &[&str] =
-    &["qwen3_coder", "deepseek_v4", "deepseek-v4", "deepseekv4"];
+pub use dynamo_llm_protocol::local_model::tool_call_parsers::unified_family_names;
 
 fn v2_family(parser: &str) -> Option<&'static str> {
     match parser {
@@ -154,10 +151,6 @@ fn validate_parser_version_for_mode(
 /// Whether `family` has a v2 parser and should bypass the v1 jail when [`enabled`].
 pub(crate) fn supports_family(family: &str) -> bool {
     v2_family(family).is_some()
-}
-
-pub fn unified_family_names() -> &'static [&'static str] {
-    &super::unified_parser::FAMILY_NAMES
 }
 
 /// Resolve the configured family through the shared generation and pair policy.

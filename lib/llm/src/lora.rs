@@ -35,8 +35,7 @@ pub use source::S3LoRASource;
 pub use source::{HuggingFaceLoRASource, LoRASource, LocalLoRASource};
 pub use state_tracker::LoraStateTracker;
 
-/// Worker runtime flag requiring an adapter registration before request routing.
-pub const LORA_REQUIRES_REGISTRATION: &str = "lora_requires_registration";
+pub use dynamo_llm_protocol::local_model::runtime_config::LORA_REQUIRES_REGISTRATION;
 
 /// Returns true when LoRA serving is enabled via a truthy `DYN_LORA_ENABLED` env var
 /// (`1`/`true`/`on`/`yes`, case-insensitive). This gates the request-time LoRA filter on

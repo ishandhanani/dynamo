@@ -32,6 +32,9 @@ pub const TOPOLOGY_TAINT_PREFIX: &str = "dynamo.topology/";
 /// Runtime-data key for an engine-published token-overflow contract.
 pub const TOKEN_BUDGET_RUNTIME_KEY: &str = "token_budget";
 
+/// Worker runtime flag requiring an adapter registration before request routing.
+pub const LORA_REQUIRES_REGISTRATION: &str = "lora_requires_registration";
+
 /// Runtime-data key indicating that a backend expects tool structural tags to
 /// exclude reasoning and manages grammar activation around reasoning itself.
 ///
@@ -726,7 +729,7 @@ impl ModelRuntimeConfig {
     ///
     /// [`validate_config`](Self::validate_config) covers the structure of the config
     /// and is independent of which parsers a process ships; the caller supplies the
-    /// supported names (see `dynamo_llm::local_model::validate_runtime_config`).
+    /// supported names (see `dynamo_local_model::validate_runtime_config`).
     pub fn validate_tool_call_parser(&self, supported_parsers: &[&str]) -> Result<(), String> {
         let Some(parser) = self
             .tool_call_parser

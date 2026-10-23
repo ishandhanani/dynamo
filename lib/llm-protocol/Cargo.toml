@@ -14,6 +14,7 @@ repository.workspace = true
 # repo
 dynamo-kv-router = { workspace = true }
 dynamo-parsers = { workspace = true }
+dynamo-parsers-v2 = { workspace = true }
 dynamo-protocols = { workspace = true, features = ["protocol-schema"] }
 dynamo-renderer = { workspace = true }
 dynamo-runtime-protocols = { workspace = true }
