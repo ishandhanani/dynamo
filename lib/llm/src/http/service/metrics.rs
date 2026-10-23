@@ -36,6 +36,7 @@ use crate::protocols::{
 use crate::reasoning_field::{ReasoningField, RoutedReasoning};
 use dynamo_runtime::metrics::prometheus_names::clamp_u64_to_i64;
 
+use dynamo_http_server::metrics::RequestMetrics;
 use dynamo_runtime::error::{DynamoError, ErrorType as DynamoErrorType};
 
 fn new_failure_counter(metrics_prefix: Option<&str>) -> IntCounterVec {
@@ -676,14 +677,7 @@ struct MetricsHandlerState {
 }
 
 pub struct Metrics {
-    request_started_counter: IntCounterVec,
-    request_counter: IntCounterVec,
-    /// Deprecated: use `active_requests_gauge`. Kept for backwards compatibility.
-    inflight_gauge: IntGaugeVec,
-    active_requests_gauge: IntGaugeVec,
-    client_disconnect_gauge: prometheus::IntGauge,
-    http_queue_gauge: IntGaugeVec,
-    request_duration: HistogramVec,
+    http: RequestMetrics,
     input_sequence_length: HistogramVec,
     output_sequence_length: HistogramVec,
     cached_tokens: HistogramVec,
@@ -1007,57 +1001,6 @@ impl Metrics {
         }
         let frontend_metric_name = |suffix: &str| format!("{}_{}", &prefix, suffix);
 
-        let request_counter = IntCounterVec::new(
-            Opts::new(
-                frontend_metric_name(frontend_service::REQUESTS_TOTAL),
-                "Total number of LLM requests processed",
-            ),
-            &["model", "endpoint", "request_type", "status", "error_type"],
-        )
-        .unwrap();
-
-        let request_started_counter = IntCounterVec::new(
-            Opts::new(
-                frontend_metric_name(frontend_service::REQUESTS_STARTED_TOTAL),
-                "Total number of LLM requests accepted by the frontend handler",
-            ),
-            &["model", "endpoint", "request_type"],
-        )
-        .unwrap();
-
-        let inflight_gauge = IntGaugeVec::new(
-            Opts::new(
-                frontend_metric_name(frontend_service::INFLIGHT_REQUESTS),
-                "Number of inflight requests",
-            ),
-            &["model"],
-        )
-        .unwrap();
-
-        let active_requests_gauge = IntGaugeVec::new(
-            Opts::new(
-                frontend_metric_name(frontend_service::ACTIVE_REQUESTS),
-                "Number of requests currently being handled by the frontend, from HTTP handler entry to response completion",
-            ),
-            &["model"],
-        )
-        .unwrap();
-
-        let client_disconnect_gauge = prometheus::IntGauge::new(
-            frontend_metric_name(frontend_service::DISCONNECTED_CLIENTS),
-            "Number of disconnected clients",
-        )
-        .unwrap();
-
-        let http_queue_gauge = IntGaugeVec::new(
-            Opts::new(
-                frontend_metric_name(frontend_service::QUEUED_REQUESTS),
-                "Number of requests in HTTP processing queue",
-            ),
-            &["model"],
-        )
-        .unwrap();
-
         // Request duration buckets: configurable via DYN_METRICS_REQUEST_DURATION_{MIN,MAX,COUNT}
         let (req_dur_min, req_dur_max, req_dur_count) = parse_bucket_config(
             env,
@@ -1069,15 +1012,7 @@ impl Metrics {
         let request_duration_buckets =
             generate_log_buckets(req_dur_min, req_dur_max, req_dur_count);
 
-        let request_duration = HistogramVec::new(
-            HistogramOpts::new(
-                frontend_metric_name(frontend_service::REQUEST_DURATION_SECONDS),
-                "Duration of LLM requests",
-            )
-            .buckets(request_duration_buckets),
-            &["model"],
-        )
-        .unwrap();
+        let http = RequestMetrics::new(&prefix, request_duration_buckets);
 
         // Input sequence length buckets: configurable via DYN_METRICS_INPUT_SEQUENCE_{MIN,MAX,COUNT}
         let (isl_min, isl_max, isl_count) = parse_bucket_config(
@@ -1367,13 +1302,7 @@ impl Metrics {
         .unwrap();
 
         Metrics {
-            request_started_counter,
-            request_counter,
-            inflight_gauge,
-            active_requests_gauge,
-            client_disconnect_gauge,
-            http_queue_gauge,
-            request_duration,
+            http,
             input_sequence_length,
             output_sequence_length,
             cached_tokens,
@@ -1413,15 +1342,13 @@ impl Metrics {
         status: &Status,
         error_type: &ErrorType,
     ) -> u64 {
-        self.request_counter
-            .with_label_values(&[
-                model,
-                endpoint.as_str(),
-                request_type.as_str(),
-                status.as_str(),
-                error_type.as_str(),
-            ])
-            .get()
+        self.http.request_count(
+            model,
+            endpoint.as_str(),
+            request_type.as_str(),
+            status.as_str(),
+            error_type.as_str(),
+        )
     }
 
     /// Increment the counter for requests for the given dimensions:
@@ -1437,15 +1364,13 @@ impl Metrics {
         status: &Status,
         error_type: &ErrorType,
     ) {
-        self.request_counter
-            .with_label_values(&[
-                model,
-                endpoint.as_str(),
-                request_type.as_str(),
-                status.as_str(),
-                error_type.as_str(),
-            ])
-            .inc()
+        self.http.inc_request_completed(
+            model,
+            endpoint.as_str(),
+            request_type.as_str(),
+            status.as_str(),
+            error_type.as_str(),
+        )
     }
 
     /// Increment the counter for requests accepted by the frontend handler.
@@ -1455,14 +1380,13 @@ impl Metrics {
         endpoint: &Endpoint,
         request_type: &RequestType,
     ) {
-        self.request_started_counter
-            .with_label_values(&[model, endpoint.as_str(), request_type.as_str()])
-            .inc()
+        self.http
+            .inc_request_started(model, endpoint.as_str(), request_type.as_str())
     }
 
     /// Get the number if inflight requests for the given model
     pub fn get_inflight_count(&self, model: &str) -> i64 {
-        self.inflight_gauge.with_label_values(&[model]).get()
+        self.http.inflight_count(model)
     }
 
     /// Record one observation of the end-to-end latency of an
@@ -1498,41 +1422,33 @@ impl Metrics {
     }
 
     fn inc_inflight_gauge(&self, model: &str) {
-        self.inflight_gauge.with_label_values(&[model]).inc();
-        self.active_requests_gauge.with_label_values(&[model]).inc();
+        self.http.inc_inflight(model);
     }
 
     fn dec_inflight_gauge(&self, model: &str) {
-        self.inflight_gauge.with_label_values(&[model]).dec();
-        self.active_requests_gauge.with_label_values(&[model]).dec();
+        self.http.dec_inflight(model);
     }
 
     /// Increment the gauge for client disconnections
     pub fn inc_client_disconnect(&self) {
-        self.client_disconnect_gauge.inc();
+        self.http.inc_client_disconnect();
     }
 
     /// Get the count of client disconnections
     pub fn get_client_disconnect_count(&self) -> i64 {
-        self.client_disconnect_gauge.get()
+        self.http.client_disconnect_count()
     }
 
     fn inc_http_queue_gauge(&self, model: &str) {
-        self.http_queue_gauge.with_label_values(&[model]).inc()
+        self.http.inc_queued(model)
     }
 
     fn dec_http_queue_gauge(&self, model: &str) {
-        self.http_queue_gauge.with_label_values(&[model]).dec()
+        self.http.dec_queued(model)
     }
 
     pub fn register(&self, registry: &Registry) -> Result<(), prometheus::Error> {
-        registry.register(Box::new(self.request_started_counter.clone()))?;
-        registry.register(Box::new(self.request_counter.clone()))?;
-        registry.register(Box::new(self.inflight_gauge.clone()))?;
-        registry.register(Box::new(self.active_requests_gauge.clone()))?;
-        registry.register(Box::new(self.client_disconnect_gauge.clone()))?;
-        registry.register(Box::new(self.http_queue_gauge.clone()))?;
-        registry.register(Box::new(self.request_duration.clone()))?;
+        self.http.register(registry)?;
         registry.register(Box::new(self.input_sequence_length.clone()))?;
         registry.register(Box::new(self.output_sequence_length.clone()))?;
         registry.register(Box::new(self.cached_tokens.clone()))?;
@@ -1861,9 +1777,8 @@ impl Drop for InflightGuard {
             &self.error_type,
         );
         self.metrics
-            .request_duration
-            .with_label_values(&[&self.model])
-            .observe(duration);
+            .http
+            .observe_request_duration(&self.model, duration);
 
         let completion = self.request_completion();
         self.span.record("request.outcome", completion.as_str());
@@ -4049,7 +3964,8 @@ mod tests {
 
         // Verify counter incremented with status=success, error_type=""
         let counter_value = metrics
-            .request_counter
+            .http
+            .request_counter()
             .with_label_values(&[
                 model,
                 Endpoint::ChatCompletions.as_str(),
@@ -4061,7 +3977,8 @@ mod tests {
         assert_eq!(counter_value, 1);
 
         let started_counter_value = metrics
-            .request_started_counter
+            .http
+            .request_started_counter()
             .with_label_values(&[
                 model,
                 Endpoint::ChatCompletions.as_str(),
@@ -4089,7 +4006,8 @@ mod tests {
 
         // Verify counter incremented with status=error, error_type=validation
         let counter_value = metrics
-            .request_counter
+            .http
+            .request_counter()
             .with_label_values(&[
                 model,
                 Endpoint::ChatCompletions.as_str(),
@@ -4122,7 +4040,8 @@ mod tests {
         // Keep the existing Prometheus contract while tracing reports cancellation
         // as an expected request outcome rather than a span error.
         let counter_value = metrics
-            .request_counter
+            .http
+            .request_counter()
             .with_label_values(&[
                 model,
                 Endpoint::ChatCompletions.as_str(),
@@ -4152,7 +4071,8 @@ mod tests {
 
         // Verify counter incremented with status=error, error_type=internal
         let counter_value = metrics
-            .request_counter
+            .http
+            .request_counter()
             .with_label_values(&[
                 model,
                 Endpoint::ChatCompletions.as_str(),
@@ -4173,10 +4093,18 @@ mod tests {
         let model = "test-model-active";
 
         // Both gauges start at 0
-        assert_eq!(metrics.inflight_gauge.with_label_values(&[model]).get(), 0);
         assert_eq!(
             metrics
-                .active_requests_gauge
+                .http
+                .inflight_gauge()
+                .with_label_values(&[model])
+                .get(),
+            0
+        );
+        assert_eq!(
+            metrics
+                .http
+                .active_requests_gauge()
                 .with_label_values(&[model])
                 .get(),
             0
@@ -4191,10 +4119,18 @@ mod tests {
             );
 
             // Both gauges increment together
-            assert_eq!(metrics.inflight_gauge.with_label_values(&[model]).get(), 1);
             assert_eq!(
                 metrics
-                    .active_requests_gauge
+                    .http
+                    .inflight_gauge()
+                    .with_label_values(&[model])
+                    .get(),
+                1
+            );
+            assert_eq!(
+                metrics
+                    .http
+                    .active_requests_gauge()
                     .with_label_values(&[model])
                     .get(),
                 1
@@ -4207,30 +4143,54 @@ mod tests {
                     true,
                     "req-2",
                 );
-                assert_eq!(metrics.inflight_gauge.with_label_values(&[model]).get(), 2);
                 assert_eq!(
                     metrics
-                        .active_requests_gauge
+                        .http
+                        .inflight_gauge()
+                        .with_label_values(&[model])
+                        .get(),
+                    2
+                );
+                assert_eq!(
+                    metrics
+                        .http
+                        .active_requests_gauge()
                         .with_label_values(&[model])
                         .get(),
                     2
                 );
             }
             // guard2 dropped
-            assert_eq!(metrics.inflight_gauge.with_label_values(&[model]).get(), 1);
             assert_eq!(
                 metrics
-                    .active_requests_gauge
+                    .http
+                    .inflight_gauge()
+                    .with_label_values(&[model])
+                    .get(),
+                1
+            );
+            assert_eq!(
+                metrics
+                    .http
+                    .active_requests_gauge()
                     .with_label_values(&[model])
                     .get(),
                 1
             );
         }
         // guard dropped — both back to 0
-        assert_eq!(metrics.inflight_gauge.with_label_values(&[model]).get(), 0);
         assert_eq!(
             metrics
-                .active_requests_gauge
+                .http
+                .inflight_gauge()
+                .with_label_values(&[model])
+                .get(),
+            0
+        );
+        assert_eq!(
+            metrics
+                .http
+                .active_requests_gauge()
                 .with_label_values(&[model])
                 .get(),
             0
@@ -4316,7 +4276,8 @@ mod tests {
         // Verify each error type recorded correctly
         for error_type in &error_types {
             let counter_value = metrics
-                .request_counter
+                .http
+                .request_counter()
                 .with_label_values(&[
                     model,
                     endpoint.as_str(),
@@ -4430,7 +4391,8 @@ mod tests {
 
         // Check validation errors (2 from ChatCompletions)
         let validation_count = metrics
-            .request_counter
+            .http
+            .request_counter()
             .with_label_values(&[
                 model,
                 Endpoint::ChatCompletions.as_str(),
@@ -4443,7 +4405,8 @@ mod tests {
 
         // Check internal errors (3 from Completions)
         let internal_count = metrics
-            .request_counter
+            .http
+            .request_counter()
             .with_label_values(&[
                 model,
                 Endpoint::Completions.as_str(),
@@ -4456,7 +4419,8 @@ mod tests {
 
         // Check success (1 from Embeddings)
         let success_count = metrics
-            .request_counter
+            .http
+            .request_counter()
             .with_label_values(&[
                 model,
                 Endpoint::Embeddings.as_str(),

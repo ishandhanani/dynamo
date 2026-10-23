@@ -13,11 +13,13 @@ repository.workspace = true
 [dependencies]
 anyhow = { workspace = true }
 axum = { workspace = true }
+dynamo-metrics = { workspace = true }
 dynamo-runtime-protocols = { workspace = true }
 futures = { workspace = true }
 hyper-util = { workspace = true, features = ["server-auto", "service", "tokio"] }
 libc = { workspace = true }
 parking_lot = { workspace = true }
+prometheus = { workspace = true }
 tokio = { workspace = true }
 tokio-rustls = { workspace = true }
 tokio-util = { workspace = true }

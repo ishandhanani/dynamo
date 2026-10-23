@@ -2482,11 +2482,13 @@ version = "1.6.0"
 dependencies = [
  "anyhow",
  "axum 0.8.4",
+ "dynamo-metrics",
  "dynamo-runtime-protocols",
  "futures",
  "hyper-util",
  "libc",
  "parking_lot",
+ "prometheus",
  "rcgen",
  "rustls",
  "socket2 0.5.10",

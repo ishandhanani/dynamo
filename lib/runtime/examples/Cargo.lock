@@ -788,11 +788,13 @@ version = "1.6.0"
 dependencies = [
  "anyhow",
  "axum",
+ "dynamo-metrics",
  "dynamo-runtime-protocols",
  "futures",
  "hyper-util",
  "libc",
  "parking_lot",
+ "prometheus",
  "tokio",
  "tokio-rustls",
  "tokio-util",
