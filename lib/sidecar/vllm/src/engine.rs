@@ -1294,8 +1294,8 @@ async fn resolve_routing_image_token_id(
     model: &DiscoveredModel,
     startup_deadline: Instant,
 ) -> Option<u32> {
-    use dynamo_llm::preprocessor::mm_routing::image::resolve_exact_routing_image_token_id;
     use dynamo_local_model::LocalModel;
+    use dynamo_local_model::mm_routing::image::resolve_exact_routing_image_token_id;
     use std::path::PathBuf;
     use tokio::time::timeout_at;
 

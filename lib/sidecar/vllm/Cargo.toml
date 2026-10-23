@@ -20,13 +20,10 @@ path = "src/main.rs"
 # forward their own opt-in `mm-routing` feature, so the default wheel stays lean.
 default = ["mm-routing"]
 # Resolve the image placeholder token for exact multimodal KV routing.
-mm-routing = ["dep:dynamo-llm", "dynamo-llm/mm-routing"]
+mm-routing = ["dynamo-local-model/mm-routing"]
 
 [dependencies]
 dynamo-backend-common = { workspace = true }
-# Only for preprocessor::mm_routing behind `mm-routing`; everything else comes
-# from the protocol, worker, and local-model crates.
-dynamo-llm = { workspace = true, optional = true }
 dynamo-llm-protocol = { workspace = true }
 dynamo-local-model = { workspace = true, features = ["lora-s3"] }
 dynamo-runtime = { workspace = true }

@@ -2819,7 +2819,6 @@ dependencies = [
  "base64 0.22.1",
  "clap",
  "dynamo-backend-common",
- "dynamo-llm",
  "dynamo-llm-protocol",
  "dynamo-local-model",
  "dynamo-runtime",
