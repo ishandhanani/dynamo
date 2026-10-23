@@ -10,8 +10,8 @@ use std::time::Duration;
 use anyhow::{Context, Result, bail, ensure};
 use dynamo_backend_common::{CommonArgs, DisaggregationMode, DynamoError};
 use dynamo_llm::discovery::{RuntimeConfigWatch, runtime_config_watch};
-use dynamo_llm::kv_router::publisher::{KvEventPublisher, KvEventSourceConfig};
-use dynamo_llm::local_model::runtime_config::ModelRuntimeConfig;
+use dynamo_llm_protocol::local_model::runtime_config::ModelRuntimeConfig;
+use dynamo_llm_worker::publisher::{KvEventPublisher, KvEventSourceConfig};
 use dynamo_runtime::component::Endpoint;
 use dynamo_runtime::config::HealthStatus;
 use dynamo_runtime::distributed::DistributedRuntime;
@@ -596,7 +596,7 @@ mod tests {
     #[tokio::test]
     async fn local_zmq_events_keep_global_rank_and_leader_identity_without_serving() {
         use dynamo_kv_router::protocols::{KV_EVENT_SUBJECT, RouterEvent};
-        use dynamo_llm::discovery::KvEventSource;
+        use dynamo_llm_worker::kv_source_membership::KvEventSource;
         use dynamo_runtime::discovery::{DiscoveryInstance, DiscoveryQuery, EventSourceQuery};
         use dynamo_runtime::transports::event_plane::EventSubscriber;
         use futures::SinkExt;

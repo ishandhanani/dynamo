@@ -13,15 +13,15 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
-use dynamo_llm::admission_gate::{AdmissionEngine, WorkerAdmissionGate};
-use dynamo_llm::first_token::FirstTokenSource;
-use dynamo_llm::local_model::runtime_config::{
+use dynamo_llm::local_model::{LocalModel, LocalModelBuilder, update_model_taints};
+use dynamo_llm_protocol::local_model::runtime_config::{
     DisaggregatedEndpoint, ModelRuntimeConfig, StructuralTagConfig, TOPOLOGY_TAINT_PREFIX,
 };
-use dynamo_llm::local_model::{LocalModel, LocalModelBuilder, update_model_taints};
-use dynamo_llm::model_card::media::{MediaDecoderConfig, MediaFetcherConfig};
-use dynamo_llm::model_type::{ModelInput, ModelType};
-use dynamo_llm::worker_type::WorkerType;
+use dynamo_llm_protocol::model_card::media::{MediaDecoderConfig, MediaFetcherConfig};
+use dynamo_llm_protocol::model_type::{ModelInput, ModelType};
+use dynamo_llm_protocol::worker_type::WorkerType;
+use dynamo_llm_worker::admission_gate::{AdmissionEngine, WorkerAdmissionGate};
+use dynamo_llm_worker::first_token::FirstTokenSource;
 use dynamo_runtime::config::HealthStatus;
 use dynamo_runtime::engine_routes::EngineRouteCallback;
 use dynamo_runtime::pipeline::network::Ingress;

@@ -20,8 +20,8 @@
 
 use crate::disagg::DisaggregationMode;
 use crate::error::DynamoError;
-use dynamo_llm::protocols::common::FinishReason;
-use dynamo_llm::protocols::common::llm_backend::LLMEngineOutput;
+use dynamo_llm_protocol::protocols::common::FinishReason;
+use dynamo_llm_protocol::protocols::common::llm_backend::LLMEngineOutput;
 use futures::StreamExt;
 use futures::stream::BoxStream;
 

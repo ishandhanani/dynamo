@@ -26,7 +26,7 @@ use crate::{client, client::Discovery, protocol};
 const PAYLOAD_KEY: &str = "sglang_tito";
 /// SGLang's default `SGLANG_DISAGGREGATION_WAITING_TIMEOUT`, so a healthy engine ends the wait first.
 const DECODE_DRAIN_TIMEOUT: Duration = Duration::from_secs(300);
-/// `dynamo_llm::protocols::response_merge::PREFILL_OUTPUT_ANNOTATION`.
+/// `dynamo_llm_protocol::protocols::response_merge::PREFILL_OUTPUT_ANNOTATION`.
 const PREFILL_OUTPUT_ANNOTATION: &str = "prefill_output";
 
 pub(crate) struct NativeRequest {

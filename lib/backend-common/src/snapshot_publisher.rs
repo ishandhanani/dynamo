@@ -21,7 +21,7 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
-use dynamo_llm::kv_router::publisher::WorkerMetricsPublisher;
+use dynamo_llm_worker::publisher::WorkerMetricsPublisher;
 use parking_lot::Mutex;
 
 use crate::engine::ComponentSnapshot;
