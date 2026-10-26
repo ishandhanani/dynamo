@@ -116,14 +116,12 @@ impl RequestContext {
         }
     }
 
-    /// Advance the state machine and collect responses that are ready to send.
     /// The booking id handed back to the picker: its own, else the request id.
-    fn picker_booking_id(&self) -> String {
-        self.booking_id
-            .clone()
-            .unwrap_or_else(|| self.request_id.clone())
+    fn picker_booking_id(&self) -> &str {
+        self.booking_id.as_deref().unwrap_or(&self.request_id)
     }
 
+    /// Advance the state machine and collect responses that are ready to send.
     fn drain_pending_responses(&mut self) -> Vec<ProcessingResponse> {
         let mut out = Vec::new();
 
@@ -704,7 +702,7 @@ impl<P: EndpointPicker> ExternalProcessor for ExtProcServer<P> {
                             if ctx.model_server_streaming {
                                 if ctx.body_routed {
                                     picker.on_response_body(
-                                        &ctx.picker_booking_id(),
+                                        ctx.picker_booking_id(),
                                         &body.body,
                                         true,
                                         body.end_of_stream,
@@ -717,7 +715,7 @@ impl<P: EndpointPicker> ExternalProcessor for ExtProcServer<P> {
                                     let full_body = std::mem::take(&mut resp_body_buf);
                                     if ctx.body_routed {
                                         picker.on_response_body(
-                                            &ctx.picker_booking_id(),
+                                            ctx.picker_booking_id(),
                                             &full_body,
                                             false,
                                             true,
@@ -736,7 +734,7 @@ impl<P: EndpointPicker> ExternalProcessor for ExtProcServer<P> {
                                 ctx.response_complete = true;
                                 if ctx.body_routed && ctx.model_server_streaming {
                                     picker.on_response_body(
-                                        &ctx.picker_booking_id(),
+                                        ctx.picker_booking_id(),
                                         &[],
                                         true,
                                         true,
@@ -746,7 +744,7 @@ impl<P: EndpointPicker> ExternalProcessor for ExtProcServer<P> {
                                     let full_body = std::mem::take(&mut resp_body_buf);
                                     if ctx.body_routed {
                                         picker.on_response_body(
-                                            &ctx.picker_booking_id(),
+                                            ctx.picker_booking_id(),
                                             &full_body,
                                             false,
                                             true,
