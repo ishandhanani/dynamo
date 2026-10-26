@@ -151,9 +151,10 @@ pub trait EndpointPicker: Send + Sync + 'static {
 
     /// Called with each response body chunk Envoy relays for a routed request
     /// (`streaming`: an SSE response), and once with the whole body for a
-    /// buffered response. Lets a picker follow output progress. Must not block:
-    /// it runs on the response path ahead of forwarding the chunk.
-    fn on_response_body(
+    /// buffered response. Lets a picker follow output progress. It runs on the
+    /// response path ahead of forwarding the chunk, so it must be cheap and
+    /// must not wait on anything slower than its own bookkeeping.
+    async fn on_response_body(
         &self,
         _booking_id: &str,
         _chunk: &[u8],

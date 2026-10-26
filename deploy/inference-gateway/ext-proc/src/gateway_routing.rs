@@ -15,7 +15,7 @@
 //! its existing disaggregated path.
 
 use std::collections::HashSet;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use dashmap::DashMap;
 use dynamo_llm::http::service::{
@@ -35,6 +35,7 @@ use dynamo_llm::types::openai::completions::NvCreateCompletionRequest;
 use dynamo_protocols::types::{CompletionUsage, Prompt};
 use dynamo_runtime::pipeline::{Context, ManyOut, ServiceEngine, SingleIn};
 use futures::StreamExt;
+use std::task::Poll;
 
 use crate::picker::{PickError, PickResult};
 
@@ -158,19 +159,28 @@ impl GatewayRouting {
         let route = self.dispatch.take_route(&request_id).ok_or_else(|| {
             PickError::RoutingFailed("routing host returned without dispatching".to_string())
         })?;
-        // The host's request lifecycle runs as its response stream is polled:
-        // keep polling until the EPP completes or aborts the stream.
-        tokio::spawn(stream.for_each(|_| async {}));
 
         let Some(endpoint) = resolve_endpoint(route.worker_id) else {
             tracing::warn!(
                 worker_id = route.worker_id,
                 "Selected worker has no resolved endpoint"
             );
+            // Nothing will feed this stream; let it observe the abort and end.
+            tokio::spawn(stream.for_each(|_| async {}));
             return Err(PickError::NoEndpoints);
         };
-        self.responses
-            .insert(request_id.clone(), ResponseProgress::default());
+        // The host's request lifecycle (classifier, booking, output tracking)
+        // runs as its response stream is polled. The stream is polled from the
+        // ext_proc handler as progress arrives, so every chunk is accounted for
+        // on the task that received it; a task is spawned only to finish the
+        // stream once the gateway's stream has ended.
+        self.responses.insert(
+            request_id.clone(),
+            ResponseProgress {
+                host: Mutex::new(Some(stream)),
+                ..Default::default()
+            },
+        );
         pending.armed = false;
 
         let dp_rank = route.dp_rank.unwrap_or(0);
@@ -200,32 +210,56 @@ impl GatewayRouting {
         })
     }
 
-    /// Relay response progress Envoy delivered for `booking_id`.
-    pub(crate) fn on_response_body(
+    /// Relay response progress Envoy delivered for `booking_id`, then let the
+    /// routing host account for it on this task.
+    pub(crate) async fn on_response_body(
         &self,
         booking_id: &str,
         chunk: &[u8],
         streaming: bool,
         end_of_stream: bool,
     ) {
-        let Some(mut response) = self.responses.get_mut(booking_id) else {
-            return;
+        let (progress, host) = {
+            let Some(mut response) = self.responses.get_mut(booking_id) else {
+                return;
+            };
+            let progress = if streaming {
+                response.ingest_sse(chunk, end_of_stream)
+            } else if end_of_stream {
+                response.ingest_unary(chunk)
+            } else {
+                Vec::new()
+            };
+            let host = response
+                .host
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .take();
+            (progress, host)
         };
-        let progress = if streaming {
-            response.ingest_sse(chunk, end_of_stream)
-        } else if end_of_stream {
-            response.ingest_unary(chunk)
-        } else {
-            Vec::new()
-        };
-        drop(response);
         for progress in progress {
             self.dispatch.progress(booking_id, progress);
+        }
+        let Some(mut host) = host else {
+            return;
+        };
+        if drain_ready(&mut host).await == Drained::Open {
+            match self.responses.get(booking_id) {
+                Some(response) => {
+                    *response.host.lock().unwrap_or_else(|e| e.into_inner()) = Some(host);
+                }
+                // Completed while we polled: finish the stream off this task.
+                None => {
+                    tokio::spawn(host.for_each(|_| async {}));
+                }
+            }
         }
     }
 
     /// The ext_proc stream for `booking_id` ended: complete the host's stream
-    /// when the response finished, and abort it otherwise.
+    /// when the response finished, and abort it otherwise. The host's terminal
+    /// bookkeeping may wait on the router, so the tail of its stream is driven
+    /// by its own task.
     pub(crate) fn on_request_complete(&self, booking_id: &str) {
         let Some((_, response)) = self.responses.remove(booking_id) else {
             return;
@@ -238,7 +272,38 @@ impl GatewayRouting {
                 "gateway stream ended before the response finished",
             );
         }
+        if let Some(host) = response
+            .host
+            .into_inner()
+            .unwrap_or_else(|e| e.into_inner())
+        {
+            tokio::spawn(host.for_each(|_| async {}));
+        }
     }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum Drained {
+    /// Every item that was ready has been observed; the stream continues.
+    Open,
+    /// The stream ended.
+    Ended,
+}
+
+/// Poll `host` for the items that are already ready, with the current task's
+/// waker, so an item that awaits (an output-block update to the router) wakes
+/// this task rather than being lost.
+async fn drain_ready(host: &mut ManyOut<Annotated<LLMEngineOutput>>) -> Drained {
+    std::future::poll_fn(|cx| {
+        loop {
+            match host.poll_next_unpin(cx) {
+                Poll::Ready(Some(_)) => continue,
+                Poll::Ready(None) => return Poll::Ready(Drained::Ended),
+                Poll::Pending => return Poll::Ready(Drained::Open),
+            }
+        }
+    })
+    .await
 }
 
 struct AbortOnDrop<'a> {
@@ -288,6 +353,11 @@ struct ResponseProgress {
     pending: Vec<u8>,
     observed: Observed,
     finished: bool,
+    /// The routing host's response stream for this request, polled as
+    /// progress is fed in; `None` while a poll is in flight or once it ended.
+    /// The stream is `Send` but not `Sync`; the mutex (held only to take or
+    /// return it) is what lets the map of responses be shared.
+    host: Mutex<Option<ManyOut<Annotated<LLMEngineOutput>>>>,
 }
 
 /// What the terminal events of a response say about it.

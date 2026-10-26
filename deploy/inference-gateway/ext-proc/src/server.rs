@@ -706,12 +706,14 @@ impl<P: EndpointPicker> ExternalProcessor for ExtProcServer<P> {
 
                             if ctx.model_server_streaming {
                                 if ctx.body_routed {
-                                    picker.on_response_body(
-                                        ctx.picker_booking_id(),
-                                        &body.body,
-                                        true,
-                                        body.end_of_stream,
-                                    );
+                                    picker
+                                        .on_response_body(
+                                            ctx.picker_booking_id(),
+                                            &body.body,
+                                            true,
+                                            body.end_of_stream,
+                                        )
+                                        .await;
                                 }
                                 ExtProcServer::<P>::handle_response_body(&mut ctx, body);
                             } else {
@@ -719,12 +721,14 @@ impl<P: EndpointPicker> ExternalProcessor for ExtProcServer<P> {
                                 if body.end_of_stream {
                                     let full_body = std::mem::take(&mut resp_body_buf);
                                     if ctx.body_routed {
-                                        picker.on_response_body(
-                                            ctx.picker_booking_id(),
-                                            &full_body,
-                                            false,
-                                            true,
-                                        );
+                                        picker
+                                            .on_response_body(
+                                                ctx.picker_booking_id(),
+                                                &full_body,
+                                                false,
+                                                true,
+                                            )
+                                            .await;
                                     }
                                     let synthetic = ext_proc::HttpBody {
                                         body: full_body,
@@ -738,22 +742,21 @@ impl<P: EndpointPicker> ExternalProcessor for ExtProcServer<P> {
                             if !ctx.response_complete {
                                 ctx.response_complete = true;
                                 if ctx.body_routed && ctx.model_server_streaming {
-                                    picker.on_response_body(
-                                        ctx.picker_booking_id(),
-                                        &[],
-                                        true,
-                                        true,
-                                    );
+                                    picker
+                                        .on_response_body(ctx.picker_booking_id(), &[], true, true)
+                                        .await;
                                 }
                                 if !resp_body_buf.is_empty() {
                                     let full_body = std::mem::take(&mut resp_body_buf);
                                     if ctx.body_routed {
-                                        picker.on_response_body(
-                                            ctx.picker_booking_id(),
-                                            &full_body,
-                                            false,
-                                            true,
-                                        );
+                                        picker
+                                            .on_response_body(
+                                                ctx.picker_booking_id(),
+                                                &full_body,
+                                                false,
+                                                true,
+                                            )
+                                            .await;
                                     }
                                     let synthetic = ext_proc::HttpBody {
                                         body: full_body,

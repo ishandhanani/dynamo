@@ -1730,7 +1730,7 @@ impl EndpointPicker for Router {
         }
     }
 
-    fn on_response_body(
+    async fn on_response_body(
         &self,
         booking_id: &str,
         chunk: &[u8],
@@ -1738,7 +1738,9 @@ impl EndpointPicker for Router {
         end_of_stream: bool,
     ) {
         if let Some(gateway) = &self.gateway {
-            gateway.on_response_body(booking_id, chunk, streaming, end_of_stream);
+            gateway
+                .on_response_body(booking_id, chunk, streaming, end_of_stream)
+                .await;
         }
     }
 
