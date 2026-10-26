@@ -568,7 +568,12 @@ impl<P: EndpointPicker> ExternalProcessor for ExtProcServer<P> {
                         Status::unknown(format!("Cannot receive stream request: {e}"))
                     })?;
 
-                    ctx.request_metadata = envoy_helpers::extract_metadata_values(&req);
+                    // Metadata drives the pick (subset filter); once the request is
+                    // routed every streamed body chunk still carries it, and cloning
+                    // the map per chunk showed up in profiles. Stop reading it then.
+                    if !ctx.body_routed {
+                        ctx.request_metadata = envoy_helpers::extract_metadata_values(&req);
+                    }
 
                     if let Some(ref pc) = req.protocol_config {
                         tracing::debug!(
