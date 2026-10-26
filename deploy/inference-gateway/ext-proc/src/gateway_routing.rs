@@ -401,13 +401,14 @@ impl Observed {
             let Ok(event) = std::str::from_utf8(data) else {
                 continue;
             };
-            if carries_output(event) {
+            let scan = scan_event(event);
+            if scan.carries_output {
                 tokens += 1;
             }
-            if let Some(reason) = finish_reason_of(event) {
-                self.reason = Some(reason);
+            if let Some(reason) = scan.finish_reason {
+                self.reason = Some(finish_reason(reason));
             }
-            if event.contains("\"usage\":")
+            if scan.has_usage
                 && let Ok(terminal) = serde_json::from_str::<UsageEvent>(event)
                 && let Some(usage) = terminal.usage
             {
@@ -416,6 +417,55 @@ impl Observed {
         }
         tokens
     }
+}
+
+/// What one pass over a serialized event found.
+#[derive(Default)]
+struct EventScan<'a> {
+    /// A non-empty `content`, `reasoning_content` or `tool_calls` delta, or a
+    /// non-empty completions `text`.
+    carries_output: bool,
+    /// `finish_reason` when it is a string (`null` is not a finish).
+    finish_reason: Option<&'a str>,
+    /// A non-null `usage` object is present.
+    has_usage: bool,
+}
+
+/// One pass over the event: at every `":` key separator, look at the key
+/// before it and the value after it. JSON strings escape their quotes, so a
+/// key name inside generated text cannot match.
+fn scan_event(event: &str) -> EventScan<'_> {
+    let mut scan = EventScan::default();
+    for (at, _) in event.match_indices("\":") {
+        let key = &event[..at];
+        let value = event[at + 2..].trim_start();
+        if key.ends_with("\"content")
+            || key.ends_with("\"reasoning_content")
+            || key.ends_with("\"tool_calls")
+            || key.ends_with("\"text")
+        {
+            if !value_is_empty(value) {
+                scan.carries_output = true;
+            }
+        } else if key.ends_with("\"finish_reason") {
+            if let Some(string) = value.strip_prefix('"')
+                && let Some(end) = string.find('"')
+            {
+                scan.finish_reason = Some(&string[..end]);
+            }
+        } else if key.ends_with("\"usage") && value.starts_with('{') {
+            scan.has_usage = true;
+        }
+    }
+    scan
+}
+
+/// An empty string, array or object, or `null`, carries nothing.
+fn value_is_empty(value: &str) -> bool {
+    value.starts_with("\"\"")
+        || value.starts_with("[]")
+        || value.starts_with("{}")
+        || value.starts_with("null")
 }
 
 /// The fields of a terminal event this path needs; everything else is skipped.
@@ -442,43 +492,6 @@ fn line_boundary(bytes: &[u8]) -> usize {
         .iter()
         .rposition(|&b| b == b'\n')
         .map_or(0, |index| index + 1)
-}
-
-/// Whether an event carries output: a non-empty `content`, `reasoning_content`
-/// or `tool_calls` delta, or a non-empty completions `text`. A byte scan over
-/// the serialized event; JSON strings escape their quotes, so a field name
-/// inside generated text cannot match.
-fn carries_output(event: &str) -> bool {
-    const FIELDS: [&str; 4] = [
-        "\"content\":",
-        "\"reasoning_content\":",
-        "\"tool_calls\":",
-        "\"text\":",
-    ];
-    FIELDS.iter().any(|field| {
-        let mut rest = event;
-        while let Some(at) = rest.find(field) {
-            let value = rest[at + field.len()..].trim_start();
-            if !(value.starts_with("\"\"")
-                || value.starts_with("[]")
-                || value.starts_with("{}")
-                || value.starts_with("null"))
-            {
-                return true;
-            }
-            rest = &rest[at + field.len()..];
-        }
-        false
-    })
-}
-
-/// The event's `finish_reason` when it is a string (`null` is not a finish).
-fn finish_reason_of(event: &str) -> Option<FinishReason> {
-    const FIELD: &str = "\"finish_reason\":";
-    let at = event.find(FIELD)?;
-    let value = event[at + FIELD.len()..].trim_start().strip_prefix('"')?;
-    let end = value.find('"')?;
-    Some(finish_reason(&value[..end]))
 }
 
 fn finish_reason(reason: &str) -> FinishReason {
