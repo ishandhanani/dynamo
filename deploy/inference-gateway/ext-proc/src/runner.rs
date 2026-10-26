@@ -24,10 +24,13 @@ use crate::{EppMode, EppStandaloneConfig, ExtProcServer, Router, metrics};
 const GRPC_PORT: u16 = 9002;
 const HEALTH_PORT: u16 = 9003;
 const HEALTH_SERVICE_NAME: &str = "inference-extension";
-/// Cap concurrent in-flight TLS handshakes + active gRPC streams. Prevents a
-/// connection flood from exhausting fds / memory. Tuned for an inference EPP
-/// where a single Envoy upstream typically holds <100 concurrent streams.
-const MAX_CONCURRENT_CONNECTIONS: usize = 1024;
+/// Default cap on concurrent TLS connections (in-flight handshakes plus open
+/// gRPC streams). Prevents a connection flood from exhausting fds / memory.
+/// Tuned for an inference EPP where a single Envoy upstream typically holds
+/// <100 concurrent streams. A gateway that opens one connection per ext_proc
+/// stream and holds it after the response (agentgateway v1.0.0 keeps them
+/// for 100-180 s) needs more: override with `DYN_EPP_MAX_CONNECTIONS`.
+const DEFAULT_MAX_CONCURRENT_CONNECTIONS: usize = 1024;
 /// Propagation window after a shutdown signal before the server stops
 /// accepting new connections. The gateway stops routing to this EPP as soon
 /// as health flips to NOT_SERVING. Configurable via
@@ -418,10 +421,15 @@ async fn serve<P: crate::EndpointPicker>(
         let tls_acceptor = create_tls_acceptor()?;
         let svc = server.into_service();
         let listener = TcpListener::bind(addr).await?;
-        let conn_semaphore = Arc::new(tokio::sync::Semaphore::new(MAX_CONCURRENT_CONNECTIONS));
+        let max_connections = parse_env(
+            "DYN_EPP_MAX_CONNECTIONS",
+            DEFAULT_MAX_CONCURRENT_CONNECTIONS,
+        )
+        .max(1);
+        let conn_semaphore = Arc::new(tokio::sync::Semaphore::new(max_connections));
         tracing::info!(
             %addr,
-            max_connections = MAX_CONCURRENT_CONNECTIONS,
+            max_connections,
             "Listening for ext_proc connections (TLS)"
         );
 
