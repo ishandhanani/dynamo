@@ -277,51 +277,51 @@ fn header_map(headers: &[(String, String)]) -> HeaderMap {
     map
 }
 
-/// Response progress parsed from the gateway's copy of an OpenAI response.
+/// Response progress read off the gateway's copy of an OpenAI response.
+///
+/// Every SSE event is a token delta until proven otherwise, so deltas are
+/// counted with a byte scan; JSON is parsed only for the one or two events
+/// per response that carry a `finish_reason` or `usage`.
 #[derive(Default)]
 struct ResponseProgress {
+    /// Trailing partial SSE line from the previous chunk.
     pending: Vec<u8>,
-    reason: Option<FinishReason>,
-    usage: Option<CompletionUsage>,
+    observed: Observed,
     finished: bool,
 }
 
+/// What the terminal events of a response say about it.
+#[derive(Default)]
+struct Observed {
+    reason: Option<FinishReason>,
+    usage: Option<CompletionUsage>,
+}
+
 impl ResponseProgress {
-    /// Count one token per content-bearing choice in each complete SSE event.
-    /// Envoy may split events across chunks, so incomplete lines are held.
+    /// Count one token per SSE event that carries output. Envoy may split
+    /// events across chunks, so an incomplete trailing line is held; whole
+    /// chunks are scanned in place without copying.
     fn ingest_sse(&mut self, chunk: &[u8], end_of_stream: bool) -> Vec<GatewayProgress> {
-        self.pending.extend_from_slice(chunk);
-        let complete = if end_of_stream {
-            self.pending.len()
-        } else {
-            match self.pending.iter().rposition(|&b| b == b'\n') {
-                Some(index) => index + 1,
-                None => {
-                    if self.pending.len() > MAX_PENDING_SSE_BYTES {
-                        self.pending.clear();
-                        return vec![GatewayProgress::Tokens(1)];
-                    }
-                    return Vec::new();
-                }
-            }
-        };
-        let lines: Vec<u8> = self.pending.drain(..complete).collect();
-
-        let mut tokens = 0;
-        for line in lines.split(|&b| b == b'\n') {
-            let Some(data) = line.trim_ascii().strip_prefix(b"data:") else {
-                continue;
+        let tokens = if self.pending.is_empty() {
+            let complete = if end_of_stream {
+                chunk.len()
+            } else {
+                line_boundary(chunk)
             };
-            let data = data.trim_ascii();
-            if data == b"[DONE]" {
-                continue;
-            }
-            if let Ok(event) = serde_json::from_slice::<serde_json::Value>(data) {
-                tokens += self.observe_event(&event);
-            }
-        }
-
-        let mut progress = Vec::new();
+            let tokens = self.observed.scan_lines(&chunk[..complete]);
+            tokens + self.hold(&chunk[complete..])
+        } else {
+            self.pending.extend_from_slice(chunk);
+            let complete = if end_of_stream {
+                self.pending.len()
+            } else {
+                line_boundary(&self.pending)
+            };
+            let tokens = self.observed.scan_lines(&self.pending[..complete]);
+            self.pending.drain(..complete);
+            tokens + self.cap_pending()
+        };
+        let mut progress = Vec::with_capacity(2);
         if tokens > 0 {
             progress.push(GatewayProgress::Tokens(tokens));
         }
@@ -331,13 +331,40 @@ impl ResponseProgress {
         progress
     }
 
+    /// Keep a partial trailing line for the next chunk.
+    fn hold(&mut self, tail: &[u8]) -> usize {
+        if tail.is_empty() {
+            return 0;
+        }
+        self.pending.extend_from_slice(tail);
+        self.cap_pending()
+    }
+
+    /// An SSE line longer than [`MAX_PENDING_SSE_BYTES`] is not a token delta;
+    /// drop it rather than buffer it (the delta it might have carried counts
+    /// as one token).
+    fn cap_pending(&mut self) -> usize {
+        if self.pending.len() > MAX_PENDING_SSE_BYTES {
+            self.pending.clear();
+            1
+        } else {
+            0
+        }
+    }
+
     /// A buffered (non-streaming) response reports its output only through
     /// `usage.completion_tokens`.
     fn ingest_unary(&mut self, body: &[u8]) -> Vec<GatewayProgress> {
-        let mut progress = Vec::new();
-        if let Ok(response) = serde_json::from_slice::<serde_json::Value>(body) {
-            self.observe_event(&response);
+        let mut progress = Vec::with_capacity(2);
+        if let Ok(response) = serde_json::from_slice::<UnaryResponse>(body) {
+            self.observed.reason = response
+                .choices
+                .iter()
+                .find_map(|choice| choice.finish_reason.as_deref())
+                .map(finish_reason);
+            self.observed.usage = response.usage;
             let tokens = self
+                .observed
                 .usage
                 .as_ref()
                 .map_or(0, |usage| usage.completion_tokens as usize);
@@ -349,49 +376,109 @@ impl ResponseProgress {
         progress
     }
 
-    /// Record finish reason and usage; return the number of content deltas.
-    fn observe_event(&mut self, event: &serde_json::Value) -> usize {
-        if let Some(usage) = event.get("usage").filter(|usage| !usage.is_null())
-            && let Ok(usage) = serde_json::from_value(usage.clone())
-        {
-            self.usage = Some(usage);
-        }
-        let Some(choices) = event.get("choices").and_then(|c| c.as_array()) else {
-            return 0;
-        };
-        let mut tokens = 0;
-        for choice in choices {
-            if let Some(reason) = choice.get("finish_reason").and_then(|r| r.as_str()) {
-                self.reason = Some(finish_reason(reason));
-            }
-            let delta = choice.get("delta");
-            let has_content = ["content", "reasoning_content", "tool_calls"]
-                .iter()
-                .any(|field| delta.and_then(|d| d.get(field)).is_some_and(non_empty))
-                || choice.get("text").is_some_and(non_empty);
-            if has_content {
-                tokens += 1;
-            }
-        }
-        tokens
-    }
-
     fn finish(&mut self) -> GatewayProgress {
         self.finished = true;
         GatewayProgress::Finish {
-            reason: self.reason.take(),
-            usage: self.usage.take(),
+            reason: self.observed.reason.take(),
+            usage: self.observed.usage.take(),
         }
     }
 }
 
-fn non_empty(value: &serde_json::Value) -> bool {
-    match value {
-        serde_json::Value::Null => false,
-        serde_json::Value::String(text) => !text.is_empty(),
-        serde_json::Value::Array(items) => !items.is_empty(),
-        _ => true,
+impl Observed {
+    /// Scan complete SSE lines: count the events that carry output and record
+    /// a finish reason or usage when an event names one.
+    fn scan_lines(&mut self, lines: &[u8]) -> usize {
+        let mut tokens = 0;
+        for line in lines.split(|&b| b == b'\n') {
+            let Some(data) = line.trim_ascii().strip_prefix(b"data:") else {
+                continue;
+            };
+            let data = data.trim_ascii();
+            if data.is_empty() || data == b"[DONE]" {
+                continue;
+            }
+            let Ok(event) = std::str::from_utf8(data) else {
+                continue;
+            };
+            if carries_output(event) {
+                tokens += 1;
+            }
+            if let Some(reason) = finish_reason_of(event) {
+                self.reason = Some(reason);
+            }
+            if event.contains("\"usage\":")
+                && let Ok(terminal) = serde_json::from_str::<UsageEvent>(event)
+                && let Some(usage) = terminal.usage
+            {
+                self.usage = Some(usage);
+            }
+        }
+        tokens
     }
+}
+
+/// The fields of a terminal event this path needs; everything else is skipped.
+#[derive(serde::Deserialize)]
+struct UsageEvent {
+    usage: Option<CompletionUsage>,
+}
+
+#[derive(serde::Deserialize)]
+struct UnaryResponse {
+    #[serde(default)]
+    choices: Vec<UnaryChoice>,
+    usage: Option<CompletionUsage>,
+}
+
+#[derive(serde::Deserialize)]
+struct UnaryChoice {
+    finish_reason: Option<String>,
+}
+
+/// Index just past the last newline in `bytes`, or 0 when it has none.
+fn line_boundary(bytes: &[u8]) -> usize {
+    bytes
+        .iter()
+        .rposition(|&b| b == b'\n')
+        .map_or(0, |index| index + 1)
+}
+
+/// Whether an event carries output: a non-empty `content`, `reasoning_content`
+/// or `tool_calls` delta, or a non-empty completions `text`. A byte scan over
+/// the serialized event; JSON strings escape their quotes, so a field name
+/// inside generated text cannot match.
+fn carries_output(event: &str) -> bool {
+    const FIELDS: [&str; 4] = [
+        "\"content\":",
+        "\"reasoning_content\":",
+        "\"tool_calls\":",
+        "\"text\":",
+    ];
+    FIELDS.iter().any(|field| {
+        let mut rest = event;
+        while let Some(at) = rest.find(field) {
+            let value = rest[at + field.len()..].trim_start();
+            if !(value.starts_with("\"\"")
+                || value.starts_with("[]")
+                || value.starts_with("{}")
+                || value.starts_with("null"))
+            {
+                return true;
+            }
+            rest = &rest[at + field.len()..];
+        }
+        false
+    })
+}
+
+/// The event's `finish_reason` when it is a string (`null` is not a finish).
+fn finish_reason_of(event: &str) -> Option<FinishReason> {
+    const FIELD: &str = "\"finish_reason\":";
+    let at = event.find(FIELD)?;
+    let value = event[at + FIELD.len()..].trim_start().strip_prefix('"')?;
+    let end = value.find('"')?;
+    Some(finish_reason(&value[..end]))
 }
 
 fn finish_reason(reason: &str) -> FinishReason {

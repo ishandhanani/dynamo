@@ -143,3 +143,87 @@ fn an_unfinished_response_is_not_marked_finished() {
     );
     assert!(!response.finished);
 }
+
+/// The byte scan counts only events that carry output: empty or null deltas,
+/// role-only events and the finish event are not tokens; a spaced
+/// `finish_reason` and a `null` usage are read correctly.
+#[test]
+fn sse_scan_skips_empty_deltas_and_reads_terminal_fields() {
+    let mut response = ResponseProgress::default();
+    let events = concat!(
+        "data: {\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"\"},\"finish_reason\":null}]}\n\n",
+        "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":null},\"finish_reason\":null}]}\n\n",
+        "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"\\\"quoted\\\"\"},\"finish_reason\":null}]}\n\n",
+        "data: {\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"arguments\":\"{\\\"content\\\":\\\"\\\"}\"}}]},\"finish_reason\":null}]}\n\n",
+        "data: {\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\": \"stop\"}],\"usage\":null}\n\n",
+        "data: [DONE]\n\n",
+    )
+    .as_bytes();
+
+    let progress = response.ingest_sse(events, true);
+
+    assert_eq!(
+        progress,
+        vec![
+            GatewayProgress::Tokens(2),
+            GatewayProgress::Finish {
+                reason: Some(FinishReason::Stop),
+                usage: None,
+            },
+        ]
+    );
+}
+
+/// Whole-line chunks are scanned in place; only a partial trailing line is
+/// held, and it joins the next chunk.
+#[test]
+fn sse_scan_holds_only_partial_lines() {
+    let mut response = ResponseProgress::default();
+    let whole = b"data: {\"choices\":[{\"delta\":{\"content\":\"a\"}}]}\n\n";
+    assert_eq!(
+        response.ingest_sse(whole, false),
+        vec![GatewayProgress::Tokens(1)]
+    );
+    assert!(response.pending.is_empty());
+
+    let split_at = 20;
+    assert!(response.ingest_sse(&whole[..split_at], false).is_empty());
+    assert_eq!(response.pending, whole[..split_at].to_vec());
+    assert_eq!(
+        response.ingest_sse(&whole[split_at..], false),
+        vec![GatewayProgress::Tokens(1)]
+    );
+    assert!(response.pending.is_empty());
+}
+
+/// A line longer than the cap is dropped and counted as one token, as before.
+#[test]
+fn sse_scan_drops_oversized_lines() {
+    let mut response = ResponseProgress::default();
+    let huge = vec![b'x'; MAX_PENDING_SSE_BYTES + 1];
+    assert_eq!(
+        response.ingest_sse(&huge, false),
+        vec![GatewayProgress::Tokens(1)]
+    );
+    assert!(response.pending.is_empty());
+}
+
+/// Completions deltas report output through `text`.
+#[test]
+fn sse_scan_counts_completions_text() {
+    let mut response = ResponseProgress::default();
+    let events = concat!(
+        "data: {\"choices\":[{\"index\":0,\"text\":\"Hel\",\"finish_reason\":null}]}\n\n",
+        "data: {\"choices\":[{\"index\":0,\"text\":\"\",\"finish_reason\":\"length\"}],\"usage\":{\"prompt_tokens\":1,\"completion_tokens\":1,\"total_tokens\":2}}\n\n",
+    )
+    .as_bytes();
+    let progress = response.ingest_sse(events, true);
+    assert_eq!(progress.first(), Some(&GatewayProgress::Tokens(1)));
+    match progress.last() {
+        Some(GatewayProgress::Finish { reason, usage }) => {
+            assert_eq!(reason, &Some(FinishReason::Length));
+            assert_eq!(usage.as_ref().map(|usage| usage.completion_tokens), Some(1));
+        }
+        other => panic!("expected a finish, got {other:?}"),
+    }
+}
