@@ -26,6 +26,7 @@ tokio.workspace = true
 tracing.workspace = true
 
 [dev-dependencies]
+dynamo-worker-selection = { workspace = true, features = ["testing"] }
 tokio = { workspace = true, features = ["macros", "rt", "time"] }
 rustc-hash = "2.1.1"
 criterion = "0.5"
