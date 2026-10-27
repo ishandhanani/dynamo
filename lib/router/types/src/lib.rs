@@ -12,6 +12,7 @@ pub mod affinity;
 pub mod busy;
 pub mod cache;
 pub mod config;
+pub mod constraints;
 pub mod eligibility;
 pub mod identity;
 pub mod kv_hints;

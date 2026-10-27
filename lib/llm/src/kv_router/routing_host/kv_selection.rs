@@ -6,6 +6,7 @@ use std::collections::HashSet;
 use dynamo_admission::runtime::RequestLifecycle;
 use dynamo_kv_indexer::RoutingDecisionHashes;
 use dynamo_router_types::config::RouterConfigOverride;
+use dynamo_router_types::constraints::{Constraints, resolve_pinned_worker_rank};
 use dynamo_router_types::eligibility::RoutingEligibility;
 use dynamo_router_types::kv_hints::KvHint;
 use dynamo_router_types::protocols::QueueRejection;
@@ -172,8 +173,6 @@ impl RoutingHost {
     ) -> Result<SelectionOutcome, Error> {
         let _nvtx_select = dynamo_nvtx_range!("route.select_worker");
         let routing = request.routing.as_ref();
-        let explicit_pin = pinned_worker_hint(phase, routing);
-        let lora_name = routing.and_then(|routing| routing.lora_name.clone());
         let cache_namespace = routing.and_then(|routing| routing.cache_namespace.clone());
         let priority_jump = routing
             .and_then(|routing| routing.priority_jump)
@@ -182,35 +181,6 @@ impl RoutingHost {
             .and_then(|routing| routing.strict_priority)
             .unwrap_or(0);
         let expected_output_tokens = routing.and_then(|routing| routing.expected_output_tokens);
-        let routing_constraints = routing
-            .and_then(|routing| routing.routing_constraints.clone())
-            .unwrap_or_default();
-        let mut allowed_worker_ids = routing.and_then(|routing| routing.allowed_worker_ids.clone());
-        let migration_excluded_worker_ids = request
-            .migration_state
-            .as_ref()
-            .map(|state| state.excluded_worker_ids())
-            .unwrap_or_default();
-        if explicit_pin.is_none() && !migration_excluded_worker_ids.is_empty() {
-            let workers = self.kv_router().workers_with_configs.borrow();
-            let eligible =
-                allowed_worker_ids.get_or_insert_with(|| workers.keys().copied().collect());
-            eligible.retain(|worker_id| {
-                workers.get(worker_id).is_some_and(|config| {
-                    routing_constraints.is_compatible_with_worker_taints(&config.taints)
-                }) && !migration_excluded_worker_ids.contains(worker_id)
-            });
-            if eligible.is_empty()
-                && let Some(error) = request
-                    .migration_state
-                    .as_ref()
-                    .and_then(|state| state.exhausted_error())
-            {
-                return Err(anyhow::anyhow!(error));
-            }
-        }
-        let return_routing_hashes =
-            !is_query_only && self.kv_router().indexer().records_routing_decisions();
         let SelectionOptions {
             pinned_target,
             affinity_target,
@@ -219,66 +189,48 @@ impl RoutingHost {
             session_context,
             admission,
         } = options;
-        let worker_only_affinity = pinned_target.filter(|target| target.dp_rank.is_none());
-        if let Some(target) = worker_only_affinity {
-            match &mut allowed_worker_ids {
-                Some(allowed_workers) => {
-                    allowed_workers.retain(|worker_id| *worker_id == target.worker_id);
-                }
-                None => {
-                    allowed_worker_ids = Some(HashSet::from([target.worker_id]));
-                }
-            }
+
+        let mut constraints = constraints_for(request, phase);
+        self.exclude_migrated_workers(&mut constraints, request)?;
+        if let Some(target) = pinned_target {
+            constraints.bind_hard(WorkerAffinityTarget::new(target.worker_id, target.dp_rank));
         }
-        let explicit_pin = match (explicit_pin, worker_only_affinity) {
-            (Some((worker_id, None)), Some(affinity_target))
-                if worker_id == affinity_target.worker_id =>
-            {
-                // A worker-only session binding allows the KV scheduler to select this
-                // request's rank, so do not turn a matching worker-only request hint into an
-                // exact-rank pin.
-                None
-            }
-            (explicit_pin, _) => explicit_pin,
-        };
-        let affinity_pin = pinned_target.and_then(|target| {
-            target
-                .dp_rank
-                .map(|dp_rank| (target.worker_id, Some(dp_rank)))
-        });
-        let requested_pin = merge_affinity_pin(explicit_pin, affinity_pin);
+        if let Some(target) = affinity_target {
+            constraints.bind_soft(WorkerAffinityTarget::new(target.worker_id, target.dp_rank));
+        }
+        let return_routing_hashes =
+            !is_query_only && self.kv_router().indexer().records_routing_decisions();
         let pinned_worker = match planned_worker {
             Some(planned_worker) => {
-                if let Some((worker_id, dp_rank)) = requested_pin
-                    && (worker_id != planned_worker.worker_id
-                        || dp_rank.is_some_and(|dp_rank| dp_rank != planned_worker.dp_rank))
-                {
-                    return Err(anyhow::anyhow!(
-                        "Previewed worker {} dp_rank {} conflicts with requested worker {} dp_rank {:?}",
-                        planned_worker.worker_id,
-                        planned_worker.dp_rank,
-                        worker_id,
-                        dp_rank,
-                    ));
-                }
+                constraints.check_planned(planned_worker)?;
                 Some(planned_worker)
             }
-            None => match requested_pin {
-                Some((worker_id, requested_dp_rank)) => Some(resolve_pinned_worker_rank(
-                    worker_id,
-                    requested_dp_rank,
-                    self.kv_router().unique_dp_rank_for_worker(worker_id),
-                )?),
-                None => None,
-            },
+            None => constraints
+                .pin
+                .map(|pin| {
+                    resolve_pinned_worker_rank(
+                        pin.worker_id,
+                        pin.dp_rank,
+                        self.kv_router().unique_dp_rank_for_worker(pin.worker_id),
+                    )
+                })
+                .transpose()?,
         };
+        let Constraints {
+            prefer,
+            allow: allowed_worker_ids,
+            taints: routing_constraints,
+            lora: lora_name,
+            policy_override,
+            ..
+        } = constraints;
         let Some(pinned_worker) = pinned_worker else {
             let _nvtx_kv = dynamo_nvtx_range!("route.kv_match");
             let selection = self
                 .select_best_match(BestMatchArgs {
                     context_id,
                     routing_parts,
-                    router_config_override: request.router_config_override.as_ref(),
+                    router_config_override: policy_override.as_ref(),
                     update_states: !is_query_only,
                     return_routing_hashes,
                     lora_name,
@@ -288,11 +240,10 @@ impl RoutingHost {
                     policy_class,
                     session_context,
                     expected_output_tokens,
-                    affinity_target: affinity_target
-                        .map(|target| WorkerAffinityTarget::new(target.worker_id, target.dp_rank)),
+                    affinity_target: prefer,
                     pinned_worker: None,
                     allowed_worker_ids,
-                    routing_constraints: routing_constraints.clone(),
+                    routing_constraints,
                     admission,
                 })
                 .await?;
@@ -346,7 +297,7 @@ impl RoutingHost {
         self.select_best_match(BestMatchArgs {
             context_id,
             routing_parts,
-            router_config_override: request.router_config_override.as_ref(),
+            router_config_override: policy_override.as_ref(),
             update_states: !is_query_only,
             return_routing_hashes,
             lora_name,
@@ -364,57 +315,74 @@ impl RoutingHost {
         })
         .await
     }
-}
 
-fn merge_affinity_pin(
-    explicit: Option<(u64, Option<u32>)>,
-    affinity: Option<(u64, Option<u32>)>,
-) -> Option<(u64, Option<u32>)> {
-    match (explicit, affinity) {
-        (Some((worker_id, None)), Some((affinity_worker_id, affinity_rank)))
-            if worker_id == affinity_worker_id =>
-        {
-            Some((worker_id, affinity_rank))
+    /// Keep a migration retry off the workers that already failed it. Only an
+    /// unpinned request narrows: a pinned one goes where it was told, and the
+    /// eligibility check reports the conflict.
+    fn exclude_migrated_workers(
+        &self,
+        constraints: &mut Constraints,
+        request: &PreprocessedRequest,
+    ) -> Result<(), Error> {
+        if constraints.pin.is_some() || constraints.exclude.is_empty() {
+            return Ok(());
         }
-        (Some(explicit), _) => Some(explicit),
-        (None, affinity) => affinity,
+        let workers = self.kv_router().workers_with_configs.borrow();
+        let any_left = constraints.exclude_from(workers.keys().copied(), |worker_id, taints| {
+            workers
+                .get(&worker_id)
+                .is_some_and(|config| taints.is_compatible_with_worker_taints(&config.taints))
+        });
+        if !any_left
+            && let Some(error) = request
+                .migration_state
+                .as_ref()
+                .and_then(|state| state.exhausted_error())
+        {
+            return Err(anyhow::anyhow!(error));
+        }
+        Ok(())
     }
 }
 
-fn resolve_pinned_worker_rank(
-    worker_id: WorkerId,
-    requested_dp_rank: Option<u32>,
-    unique_dp_rank: Option<u32>,
-) -> Result<WorkerWithDpRank, Error> {
-    let Some(dp_rank) = requested_dp_rank.or(unique_dp_rank) else {
-        return Err(anyhow::anyhow!(
-            "Pinned worker {worker_id} requires an explicit dp_rank because it has multiple or unknown DP ranks"
-        ));
-    };
-
-    Ok(WorkerWithDpRank::new(worker_id, dp_rank))
+/// The constraints one request carries into selection, read once from its
+/// routing hints and migration history. The host binds session affinity and a
+/// route preview's worker on top.
+pub(super) fn constraints_for(request: &PreprocessedRequest, phase: RequestPhase) -> Constraints {
+    let routing = request.routing.as_ref();
+    Constraints {
+        pin: pinned_worker_hint(phase, routing),
+        prefer: None,
+        allow: routing.and_then(|routing| routing.allowed_worker_ids.clone()),
+        exclude: request
+            .migration_state
+            .as_ref()
+            .map(|state| state.excluded_worker_ids())
+            .unwrap_or_default(),
+        taints: routing
+            .and_then(|routing| routing.routing_constraints.clone())
+            .unwrap_or_default(),
+        lora: routing.and_then(|routing| routing.lora_name.clone()),
+        policy_override: request.router_config_override.clone(),
+    }
 }
 
 fn pinned_worker_hint(
     phase: RequestPhase,
     routing: Option<&RoutingHints>,
-) -> Option<(u64, Option<u32>)> {
+) -> Option<WorkerAffinityTarget> {
     let routing = routing?;
-    match phase {
-        RequestPhase::Prefill => {
-            let worker_id = routing.prefill_worker_id.or(routing.backend_instance_id)?;
-            let dp_rank = routing.prefill_dp_rank.or(routing.dp_rank);
-            Some((worker_id, dp_rank))
-        }
-        RequestPhase::Decode => {
-            let worker_id = routing.decode_worker_id.or(routing.backend_instance_id)?;
-            Some((worker_id, routing.dp_rank))
-        }
-        RequestPhase::Aggregated => {
-            let worker_id = routing.decode_worker_id.or(routing.backend_instance_id)?;
-            Some((worker_id, routing.dp_rank))
-        }
-    }
+    let (worker_id, dp_rank) = match phase {
+        RequestPhase::Prefill => (
+            routing.prefill_worker_id.or(routing.backend_instance_id)?,
+            routing.prefill_dp_rank.or(routing.dp_rank),
+        ),
+        RequestPhase::Decode | RequestPhase::Aggregated => (
+            routing.decode_worker_id.or(routing.backend_instance_id)?,
+            routing.dp_rank,
+        ),
+    };
+    Some(WorkerAffinityTarget::new(worker_id, dp_rank))
 }
 
 #[cfg(test)]
@@ -422,47 +390,15 @@ mod tests {
     use std::collections::{HashMap, HashSet};
 
     use dynamo_router_types::eligibility::{RoutingEligibility, WorkerEligibilityError};
-    use dynamo_router_types::protocols::{RoutingConstraints, WorkerWithDpRank};
+    use dynamo_router_types::protocols::{
+        RoutingConstraints, WorkerAffinityTarget, WorkerWithDpRank,
+    };
 
-    use super::{merge_affinity_pin, pinned_worker_hint, resolve_pinned_worker_rank};
+    use super::pinned_worker_hint;
     use crate::{
         local_model::runtime_config::ModelRuntimeConfig,
         protocols::common::{preprocessor::RoutingHints, timing::RequestPhase},
     };
-
-    #[test]
-    fn resolve_pinned_worker_rank_uses_explicit_rank_including_zero() {
-        let worker = resolve_pinned_worker_rank(7, Some(0), Some(3)).unwrap();
-        assert_eq!(worker.worker_id, 7);
-        assert_eq!(worker.dp_rank, 0);
-    }
-
-    #[test]
-    fn resolve_pinned_worker_rank_uses_unique_rank_when_unset() {
-        let worker = resolve_pinned_worker_rank(7, None, Some(3)).unwrap();
-        assert_eq!(worker.worker_id, 7);
-        assert_eq!(worker.dp_rank, 3);
-    }
-
-    #[test]
-    fn resolve_pinned_worker_rank_rejects_unresolved_rank() {
-        let error = resolve_pinned_worker_rank(7, None, None)
-            .unwrap_err()
-            .to_string();
-        assert!(error.contains("requires an explicit dp_rank"));
-    }
-
-    #[test]
-    fn affinity_pin_supplies_rank_for_matching_explicit_worker() {
-        assert_eq!(
-            merge_affinity_pin(Some((7, None)), Some((7, Some(0)))),
-            Some((7, Some(0)))
-        );
-        assert_eq!(
-            merge_affinity_pin(Some((7, Some(2))), Some((7, Some(3)))),
-            Some((7, Some(2)))
-        );
-    }
 
     #[test]
     fn pinned_worker_hint_prefill_uses_prefill_worker_before_backend() {
@@ -476,7 +412,7 @@ mod tests {
 
         assert_eq!(
             pinned_worker_hint(RequestPhase::Prefill, Some(&routing)),
-            Some((2, Some(4)))
+            Some(WorkerAffinityTarget::new(2, Some(4)))
         );
     }
 
@@ -491,7 +427,7 @@ mod tests {
 
         assert_eq!(
             pinned_worker_hint(RequestPhase::Decode, Some(&routing)),
-            Some((5, Some(6)))
+            Some(WorkerAffinityTarget::new(5, Some(6)))
         );
     }
 
@@ -506,7 +442,7 @@ mod tests {
 
         assert_eq!(
             pinned_worker_hint(RequestPhase::Aggregated, Some(&routing)),
-            Some((5, Some(7)))
+            Some(WorkerAffinityTarget::new(5, Some(7)))
         );
     }
 
