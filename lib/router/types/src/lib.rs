@@ -22,6 +22,7 @@ pub mod protocols;
 pub mod sched;
 pub mod selection_inputs;
 pub mod slots;
+pub mod topology;
 pub mod tracking_hash;
 pub mod worker_type;
 

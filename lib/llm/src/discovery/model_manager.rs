@@ -21,8 +21,8 @@ use tokio_util::sync::CancellationToken;
 
 use super::worker_monitor::LoadThresholdConfig;
 use super::{
-    GenerateEngineSelection, KvSourceMembershipWatch, Model, RuntimeConfigWatch, WorkerSet,
-    kv_source_watch::KvSourceMembershipCoordinator, runtime_config_watch,
+    GenerateEngineSelection, KvSourceMembershipWatch, Model, RuntimeConfigWatch, TopologyWatch,
+    WorkerSet, kv_source_watch::KvSourceMembershipCoordinator, topology_watch,
 };
 
 use dynamo_runtime::{
@@ -196,6 +196,9 @@ pub struct ModelManager {
     /// ownership tracking because multiple routers may consume the same endpoint watch.
     runtime_configs: DashMap<EndpointId, RuntimeConfigWatch>,
 
+    /// Per-endpoint worker topology; the runtime-config map above is derived from it.
+    topologies: DashMap<EndpointId, TopologyWatch>,
+
     /// Per-endpoint HiCache state and its one Mooncake event subscriber.
     hicache_caches: DashMap<EndpointId, HicacheSharedKvCache>,
 
@@ -298,6 +301,7 @@ impl ModelManager {
             discovery_groups: DashMap::new(),
             worker_inventory: Default::default(),
             runtime_configs: DashMap::new(),
+            topologies: DashMap::new(),
             hicache_caches: DashMap::new(),
             kv_source_memberships: DashMap::new(),
             lora_domains: DashMap::new(),
@@ -2702,34 +2706,52 @@ impl ModelManager {
 
     // -- Runtime configs --
 
-    /// Get or create a runtime config watcher for an endpoint.
-    /// Spawns a background task that joins instance availability and config discovery.
-    /// Returns a `watch::Receiver` with the latest `HashMap<WorkerId, ModelRuntimeConfig>`.
-    pub async fn get_or_create_runtime_config_watcher(
+    /// Get or create the worker topology watch for an endpoint.
+    ///
+    /// Spawns the join of instance availability and config discovery once per
+    /// endpoint. If another caller raced us, the entry() below picks up the
+    /// winner; the loser's task stops once its receivers are dropped. This
+    /// registry is keyed by endpoint and outlives any one WorkerSet, so the
+    /// watch is scoped to the process, not to a caller's own lifecycle.
+    pub async fn get_or_create_topology_watch(
         &self,
         endpoint: &Endpoint,
-    ) -> anyhow::Result<RuntimeConfigWatch> {
+    ) -> anyhow::Result<TopologyWatch> {
         let endpoint_id = endpoint.id();
-
-        if let Some(existing) = self.runtime_configs.get(&endpoint_id) {
+        if let Some(existing) = self.topologies.get(&endpoint_id) {
             return Ok(existing.clone());
         }
-
-        // Slow path: create the watch (spawns a background task).
-        // If another caller raced us, the entry() below picks up the winner;
-        // the loser's background task stops once its receivers are dropped.
-        // This registry is keyed by endpoint and outlives any one WorkerSet, so
-        // the watch is scoped to the process, not to a caller's own lifecycle.
-        let rx = runtime_config_watch(endpoint, endpoint.drt().primary_token()).await?;
-        let result = match self.runtime_configs.entry(endpoint_id) {
+        let rx = topology_watch(endpoint, endpoint.drt().primary_token()).await?;
+        Ok(match self.topologies.entry(endpoint_id) {
             Entry::Occupied(e) => e.get().clone(),
             Entry::Vacant(e) => {
                 e.insert(rx.clone());
                 rx
             }
-        };
+        })
+    }
 
-        Ok(result)
+    /// Get or create the runtime config map for an endpoint: the topology
+    /// projected to `HashMap<WorkerId, ModelRuntimeConfig>`, one projection per
+    /// endpoint, for the readers that still consume membership as a map.
+    pub async fn get_or_create_runtime_config_watcher(
+        &self,
+        endpoint: &Endpoint,
+    ) -> anyhow::Result<RuntimeConfigWatch> {
+        let endpoint_id = endpoint.id();
+        if let Some(existing) = self.runtime_configs.get(&endpoint_id) {
+            return Ok(existing.clone());
+        }
+        let topology = self.get_or_create_topology_watch(endpoint).await?;
+        let rx =
+            super::topology::runtime_config_watch_from(topology, endpoint.drt().primary_token());
+        Ok(match self.runtime_configs.entry(endpoint_id) {
+            Entry::Occupied(e) => e.get().clone(),
+            Entry::Vacant(e) => {
+                e.insert(rx.clone());
+                rx
+            }
+        })
     }
 
     /// Get or create the reusable KV-source membership watch for one exact serving endpoint.

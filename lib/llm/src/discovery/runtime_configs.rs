@@ -1,16 +1,13 @@
 // SPDX-FileCopyrightText: Copyright (c) 2024-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 use futures::StreamExt;
 use tokio::sync::watch;
 
 use dynamo_runtime::component::Endpoint;
-use dynamo_runtime::discovery::{
-    DiscoveryEvent, DiscoveryInstanceId, DiscoveryQuery, DiscoveryStream,
-};
-use dynamo_runtime::prelude::DistributedRuntimeProvider;
+use dynamo_runtime::discovery::{DiscoveryEvent, DiscoveryInstanceId, DiscoveryStream};
 use tokio_util::sync::CancellationToken;
 
 use crate::local_model::runtime_config::ModelRuntimeConfig;
@@ -27,7 +24,7 @@ pub type RuntimeConfigWatch = watch::Receiver<HashMap<WorkerId, ModelRuntimeConf
 // events, the case a retired WorkerSet is usually in) this task can sit in
 // `stream.next()` forever, past every consumer's exit, past `lifecycle`
 // cancelling. See the "WorkerSet churn" test below.
-fn base_runtime_config_watch(
+pub(super) fn base_runtime_config_watch(
     mut stream: DiscoveryStream,
     lifecycle: CancellationToken,
 ) -> watch::Receiver<HashMap<WorkerId, ModelRuntimeConfig>> {
@@ -112,88 +109,27 @@ fn base_runtime_config_watch(
     rx
 }
 
-/// Join instance availability and config discovery into a single watch.
+/// The per-worker configuration map of an endpoint: a projection of
+/// [`super::topology_watch`], kept for the readers that consume membership as
+/// a map (shared caches, KV-source membership, the sidecars and bindings).
 ///
-/// Only includes workers that have BOTH an instance registration AND a runtime config.
-/// Spawns a background task that recomputes the joined state whenever either source changes.
-/// The returned `watch::Receiver` always contains the latest joined snapshot.
-///
-/// `lifecycle` bounds `Source 2`'s `base_runtime_config_watch` task directly, and this
-/// function's own join task below. `Source 1`'s `Client` already scopes its own
-/// `monitor_instance_source` task to the lifetime of its last `instance_avail_watcher`
-/// receiver, so it needs no token here — dropping this function's receivers already
-/// stops it. A caller scoped to something narrower than the process, such as a monitor
-/// bound to one `WorkerSet`'s lifecycle, must still pass that scope's own token, or
-/// `base_runtime_config_watch`'s task outlives every dropped reference the caller holds
-/// and leaks until process shutdown.
+/// `lifecycle` bounds the topology's discovery task and the projection; see
+/// [`super::topology_watch`] for why a caller scoped narrower than the process
+/// must pass its own token.
 pub async fn runtime_config_watch(
     endpoint: &Endpoint,
     lifecycle: CancellationToken,
 ) -> anyhow::Result<RuntimeConfigWatch> {
-    let component = endpoint.component();
-    let cancel_token = component.drt().primary_token();
-
-    // Source 1: instance availability (watches DiscoveryQuery::Endpoint)
-    let client = endpoint.client().await?;
-    let mut instance_ids_rx = client.instance_avail_watcher();
-
-    // Source 2: runtime configs from discovery (watches DiscoveryQuery::EndpointModels)
-    let discovery = component.drt().discovery();
-    let eid = endpoint.id();
-    let stream = discovery
-        .list_and_watch(
-            DiscoveryQuery::EndpointModels {
-                namespace: eid.namespace.clone(),
-                component: eid.component.clone(),
-                endpoint: eid.name.clone(),
-            },
-            Some(cancel_token.clone()),
-        )
-        .await?;
-    let mut configs_rx = base_runtime_config_watch(stream, lifecycle.clone());
-
-    let (tx, rx) = watch::channel(HashMap::new());
-
-    tokio::spawn(async move {
-        loop {
-            tokio::select! {
-                _ = cancel_token.cancelled() => break,
-                _ = lifecycle.cancelled() => break,
-                _ = tx.closed() => break,
-                result = instance_ids_rx.changed() => { if result.is_err() { break; } }
-                result = configs_rx.changed() => { if result.is_err() { break; } }
-            }
-
-            let instances: HashSet<WorkerId> = instance_ids_rx
-                .borrow_and_update()
-                .iter()
-                .copied()
-                .collect();
-            let configs = configs_rx.borrow_and_update().clone();
-
-            let ready: HashMap<WorkerId, ModelRuntimeConfig> = instances
-                .into_iter()
-                .filter_map(|id| configs.get(&id).map(|cfg| (id, cfg.clone())))
-                .collect();
-
-            // Only send if the joined result actually changed, to avoid waking
-            // downstream consumers (wait_for, changed) on no-op recomputations.
-            if *tx.borrow() == ready {
-                continue;
-            }
-
-            // Break if all receivers dropped (e.g., TOCTOU in model_manager discards a duplicate).
-            if tx.send(ready).is_err() {
-                break;
-            }
-        }
-    });
-
-    Ok(rx)
+    let topology = super::topology_watch(endpoint, lifecycle.clone()).await?;
+    Ok(super::topology::runtime_config_watch_from(
+        topology, lifecycle,
+    ))
 }
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashSet;
+
     use super::*;
     use dynamo_runtime::discovery::{DiscoveryInstance, ModelCardInstanceId, ModelTaintsUpdate};
 

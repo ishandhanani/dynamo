@@ -24,7 +24,7 @@ use dynamo_http_server::metrics::WORKER_LAST_TIME_TO_FIRST_TOKEN_GAUGE;
 use dynamo_runtime::component::Client;
 use dynamo_runtime::pipeline::{WorkerLoadMonitor, async_trait};
 
-use super::runtime_config_watch;
+use super::topology_watch;
 
 // Re-export worker type constants from timing.rs (single source of truth)
 pub use crate::protocols::common::timing::{WORKER_TYPE_DECODE, WORKER_TYPE_PREFILL};
@@ -861,18 +861,17 @@ impl WorkerLoadMonitor for KvWorkerMonitor {
         let endpoint = &self.client.endpoint;
         let cancellation_token = self.lifecycle.cancellation_token.child_token();
 
-        let runtime_configs_rx =
-            match runtime_config_watch(endpoint, cancellation_token.clone()).await {
-                Ok(rx) => rx,
-                Err(error) => {
-                    tracing::error!(
-                        endpoint = %endpoint.id(),
-                        %error,
-                        "KvWorkerMonitor: failed to watch endpoint runtime configs"
-                    );
-                    return Err(error);
-                }
-            };
+        let topology_rx = match topology_watch(endpoint, cancellation_token.clone()).await {
+            Ok(rx) => rx,
+            Err(error) => {
+                tracing::error!(
+                    endpoint = %endpoint.id(),
+                    %error,
+                    "KvWorkerMonitor: failed to watch the endpoint topology"
+                );
+                return Err(error);
+            }
+        };
 
         // Subscribe to KV metrics over the configured event transport. This is
         // optional; cleanup of TTFT and ITL metrics continues without it.
@@ -916,7 +915,7 @@ impl WorkerLoadMonitor for KvWorkerMonitor {
 
             let _started_guard = StartedGuard(started);
             let mut kv_metrics_rx = kv_metrics_rx;
-            let mut runtime_configs_rx = runtime_configs_rx;
+            let mut topology_rx = topology_rx;
             let mut known_workers: HashSet<u64> = instances_rx.borrow().iter().copied().collect();
 
             let mut known_worker_dp_ranks: HashMap<u64, std::collections::HashSet<u32>> =
@@ -936,9 +935,9 @@ impl WorkerLoadMonitor for KvWorkerMonitor {
                 tokio::select! {
                     _ = cancellation_token.cancelled() => {
                         tracing::debug!("Worker monitoring cancelled");
-                        let runtime_configs = runtime_configs_rx.borrow();
+                        let topology = topology_rx.borrow();
                         for worker_id in known_worker_dp_ranks.keys() {
-                            if runtime_configs.contains_key(worker_id) {
+                            if topology.contains(*worker_id) {
                                 continue;
                             }
                             let dp_ranks: Vec<u32> = known_worker_dp_ranks[worker_id]
@@ -951,18 +950,18 @@ impl WorkerLoadMonitor for KvWorkerMonitor {
                     }
 
                     // Handle runtime config updates
-                    result = runtime_configs_rx.changed() => {
+                    result = topology_rx.changed() => {
                         if result.is_err() {
-                            tracing::warn!(source = ?source, "runtime-config watch closed");
+                            tracing::warn!(source = ?source, "topology watch closed");
                             break;
                         }
 
-                        let runtime_configs = runtime_configs_rx.borrow_and_update().clone();
+                        let topology = topology_rx.borrow_and_update().clone();
 
-                        // Find workers that are being removed (not in runtime_configs anymore)
+                        // Find workers that are being removed (no longer in the topology)
                         let removed_workers: Vec<u64> = known_worker_dp_ranks
                             .keys()
-                            .filter(|id| !runtime_configs.contains_key(id))
+                            .filter(|id| !topology.contains(**id))
                             .copied()
                             .collect();
 
@@ -982,7 +981,7 @@ impl WorkerLoadMonitor for KvWorkerMonitor {
                             }
                         }
 
-                        worker_load_states.retain(|lease_id, _| runtime_configs.contains_key(lease_id));
+                        worker_load_states.retain(|lease_id, _| topology.contains(*lease_id));
                         overloaded_tracker.remove_workers(&removed_workers);
                         client.clear_overloaded_instances_for_removed(&removed_workers);
 
@@ -991,7 +990,9 @@ impl WorkerLoadMonitor for KvWorkerMonitor {
                         // Reconcile worker state to the authoritative rank range from discovery.
                         // This also makes expected-but-unobserved ranks participate in the
                         // worker-level "all ranks overloaded" decision.
-                        for (lease_id, runtime_config) in runtime_configs.iter() {
+                        for row in topology.rows() {
+                            let lease_id = &row.worker_id;
+                            let runtime_config = &row.config;
                             let mut state = worker_load_states.entry(*lease_id).or_default();
                             let dp_ranks = match runtime_config.data_parallel_rank_range() {
                                 Ok(dp_ranks) => dp_ranks,
@@ -1033,7 +1034,7 @@ impl WorkerLoadMonitor for KvWorkerMonitor {
                         // on endpoint membership and runtime-config changes, so the recompute above
                         // reads whatever load state was last observed. Publishing on an unchanged
                         // set here would retire request-path overload leases on no load evidence at
-                        // all — and because `runtime_config_watch` joins availability for the whole
+                        // all — and because `topology_watch` joins availability for the whole
                         // endpoint, one unrelated worker appearing would clear another worker's
                         // in-force lease. Leases are bounded, so they expire on their own instead.
                         if overloaded_tracker.replace(overloaded_workers) {
