@@ -28,8 +28,8 @@ use crate::{
     discovery::{LoadThresholdHandle, WORKER_TYPE_DECODE, WorkerSet},
     entrypoint::{self, ChatEngineFactoryCallback, RouterConfig},
     kv_router::{
-        EncoderRouter, PrefillRouter, RouterLoadSource, RoutingLoadContext,
-        plugins::RouterPluginBuilder,
+        EncoderRouter, KvPolicy, KvRouterSpec, LoadContextSpec, PrefillRouter, RouterLoadSource,
+        RoutingLoadContext, plugins::RouterPluginBuilder,
     },
     local_model::runtime_config::{
         SGLANG_QWEN_VIDEO_PROCESSOR_CONTRACT_RUNTIME_KEY, TokenizerBackend,
@@ -563,63 +563,30 @@ impl ModelWatcher {
 
             let load_thresholds =
                 LoadThresholdHandle::new(router_config.load_threshold_config.clone());
-            let load_context = if needs_preprocessed_routing {
-                let source = RouterLoadSource::from_worker_type(effective_worker_type(
+            // The host starts the load context and, under KV routing, constructs
+            // the router whenever any routed pipeline will be built. Python chat
+            // factories receive a Rust-routed engine, so they also need it.
+            let load = LoadContextSpec {
+                source: RouterLoadSource::from_worker_type(effective_worker_type(
                     card.worker_type,
                     card.model_type,
-                ));
-                Some(
-                    RoutingLoadContext::start(
-                        client.clone(),
-                        source,
-                        load_thresholds.clone(),
-                        &cancellation,
-                        Some(allocator_trim.clone()),
-                    )
-                    .await?,
-                )
-            } else {
-                None
+                )),
+                thresholds: load_thresholds.clone(),
+                parent_token: cancellation.clone(),
+                task_guard: Some(allocator_trim.clone()),
             };
-
-            // Create the KV router whenever any routed pipeline will be built.
-            // Python chat factories receive a Rust-routed engine, so they also
-            // need the shared chooser in KV mode.
-            let kv_chooser =
-                if router_config.router_mode == RouterMode::KV && needs_preprocessed_routing {
-                    let mut chooser = self
-                        .manager
-                        .kv_chooser_for_with_plugins_and_client(
-                            load_context
-                                .as_ref()
-                                .expect("routing load context must exist")
-                                .client()
-                                .clone(),
-                            card.kv_cache_block_size,
-                            &self.plugins,
-                            Some(router_config.kv_router_config.clone()),
-                            self.prefill_load_estimator.clone(),
-                            card.worker_type,
-                            WORKER_TYPE_DECODE, // This is the decode router
-                            Some(card.display_name.clone()),
-                            card.runtime_config.enable_eagle,
-                            load_context
-                                .as_ref()
-                                .expect("routing load context must exist")
-                                .scheduler_load_sender(),
-                            load_context
-                                .as_ref()
-                                .expect("routing load context must exist")
-                                .cancellation_token(),
-                        )
-                        .await?;
-                    Arc::get_mut(&mut chooser)
-                        .expect("new KV chooser must have one owner")
-                        .set_teardown_task_guard(allocator_trim.clone());
-                    Some(chooser)
-                } else {
-                    None
-                };
+            let kv = (router_config.router_mode == RouterMode::KV).then(|| KvRouterSpec {
+                model_manager: self.manager.clone(),
+                block_size: card.kv_cache_block_size,
+                policy: KvPolicy::Plugins(self.plugins.clone()),
+                kv_router_config: Some(router_config.kv_router_config.clone()),
+                prefill_load_estimator: self.prefill_load_estimator.clone(),
+                worker_role: card.worker_type,
+                metric_worker_type: WORKER_TYPE_DECODE, // This is the decode router
+                model_name: Some(card.display_name.clone()),
+                is_eagle: card.runtime_config.enable_eagle,
+                teardown_task_guard: Some(allocator_trim.clone()),
+            });
 
             // Only a typed Decode endpoint participates in the namespace-level
             // P/D rendezvous. Aggregated and Encode endpoints are independent
@@ -672,14 +639,12 @@ impl ModelWatcher {
 
             let preprocessed_routing = if needs_preprocessed_routing {
                 Some(
-                    entrypoint::input::build_preprocessed_routing_with_session_affinity_mode(
+                    entrypoint::input::build_preprocessed_routing(
                         &client,
                         self.manager.clone(),
                         router_config.router_mode,
-                        load_context
-                            .clone()
-                            .expect("routing load context must exist"),
-                        kv_chooser.clone(),
+                        load,
+                        kv,
                         prefill_chooser.clone(),
                         encoder_chooser.clone(),
                         uses_multimodal_cache_routing(card),

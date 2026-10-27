@@ -5,15 +5,17 @@
 //!
 //! One builder serves every routing mode and every host. The frontend, the
 //! prefill binding, the Python bindings and tests all describe what they have
-//! (a discovery client, a routing mode, an optional [`KvRouter`], an optional
-//! load context, affinity, LoRA, a transport override) and the builder derives
-//! the host's policy, its transport and its capability checks from that in one
-//! place.
+//! (a discovery client, a routing mode, the load context to start or one they
+//! hold, the [`KvRouter`] to construct or one they hold, affinity, LoRA, a
+//! transport override) and the builder derives the host's policy, its
+//! transport and its capability checks from that in one place.
 
 use std::{sync::Arc, time::Duration};
 
+use dynamo_router_types::{config::KvRouterConfig, prefill_load::PrefillLoadEstimator};
 use dynamo_runtime::{
     component::Client,
+    engine::EngineContextGuard,
     pipeline::{
         MultimodalCacheIndex, MultimodalCacheKeyExtractor, PushRouter, PushRouterOptions,
         RouterMode, StreamingDispatch, WorkerLoadMonitor,
@@ -21,17 +23,23 @@ use dynamo_runtime::{
     protocols::annotated::Annotated,
 };
 use dynamo_worker_selection::selector::WorkerInputs;
+use tokio_util::sync::CancellationToken;
 
 use super::{
     HostedOccupancy, LoraRouting, RoutingHost, RoutingPolicy,
     builtin::{builtin_inputs, builtin_picker},
 };
 use crate::{
-    kv_router::{KvRouter, RoutingLoadContext, metrics::RouterRequestMetrics},
+    discovery::{LoadThresholdHandle, ModelManager},
+    kv_router::{
+        KvRouter, RouterLoadSource, RoutingLoadContext, SelectionPolicySource,
+        metrics::RouterRequestMetrics, plugins::RouterPluginBuilder,
+    },
     lora::{LoadEstimator, LoraFilter},
     preprocessor::PreprocessedRequest,
     protocols::common::llm_backend::LLMEngineOutput,
     session_affinity::{AffinityCoordinator, SessionAffinityMode, create_affinity_coordinator},
+    worker_type::WorkerType,
 };
 
 /// The transport a [`RoutingHost`] sends through.
@@ -52,13 +60,52 @@ enum Affinity {
     },
 }
 
+/// What [`RoutingHostBuilder::load`] starts: the host's load context, which
+/// owns the shared client, overload monitoring for `source`, and the
+/// cancellation subtree every router task of the host lives under.
+pub struct LoadContextSpec {
+    pub source: RouterLoadSource,
+    pub thresholds: LoadThresholdHandle,
+    pub parent_token: CancellationToken,
+    pub task_guard: Option<EngineContextGuard>,
+}
+
+/// How the KV router the builder constructs chooses its selection policy.
+pub enum KvPolicy {
+    /// The plugin bundle; its policy is validated against the config and the
+    /// bundle is installed on the router after construction.
+    Plugins(RouterPluginBuilder),
+    /// A policy source the caller already resolved.
+    Source(SelectionPolicySource),
+}
+
+/// What [`RoutingHostBuilder::kv`] constructs: a [`KvRouter`] through the
+/// model manager, on the host's load context.
+pub struct KvRouterSpec {
+    pub model_manager: Arc<ModelManager>,
+    pub block_size: u32,
+    pub policy: KvPolicy,
+    pub kv_router_config: Option<KvRouterConfig>,
+    pub prefill_load_estimator: Option<Arc<dyn PrefillLoadEstimator>>,
+    pub worker_role: Option<WorkerType>,
+    pub metric_worker_type: &'static str,
+    pub model_name: Option<String>,
+    pub is_eagle: bool,
+    /// Keeps the router's teardown tasks alive as long as the owning worker set.
+    pub teardown_task_guard: Option<EngineContextGuard>,
+}
+
 /// Builds a [`RoutingHost`]. Obtain one from [`RoutingHost::builder`].
 pub struct RoutingHostBuilder {
     client: Client,
     router_mode: RouterMode,
     kv_router: Option<Arc<KvRouter>>,
     load_context: Option<Arc<RoutingLoadContext>>,
+    load: Option<LoadContextSpec>,
+    kv: Option<KvRouterSpec>,
     affinity: Affinity,
+    /// Whether a session affinity built here syncs its bindings across replicas.
+    session_replication: bool,
     lora: Option<(Arc<LoraFilter>, Arc<LoadEstimator>)>,
     dispatch: Option<LlmDispatch>,
     worker_monitor: Option<Arc<dyn WorkerLoadMonitor>>,
@@ -80,7 +127,10 @@ impl RoutingHost {
             router_mode,
             kv_router: None,
             load_context: None,
+            load: None,
+            kv: None,
             affinity: Affinity::None,
+            session_replication: true,
             lora: None,
             dispatch: None,
             worker_monitor: None,
@@ -106,12 +156,34 @@ impl RoutingHostBuilder {
     }
 
     /// The shared client, overload state and cancellation subtree this host
-    /// belongs to. Required for every mode except KV.
+    /// belongs to, when the caller already started one. Required for every
+    /// mode except KV unless [`Self::load`] starts it.
     pub fn load_context(
         mut self,
         load_context: impl Into<Option<Arc<RoutingLoadContext>>>,
     ) -> Self {
         self.load_context = load_context.into();
+        self
+    }
+
+    /// Start the host's load context from `spec` during [`Self::build`].
+    pub fn load(mut self, spec: LoadContextSpec) -> Self {
+        self.load = Some(spec);
+        self
+    }
+
+    /// Construct the host's [`KvRouter`] from `spec` during [`Self::build`], on
+    /// the load context the builder starts or was given.
+    pub fn kv(mut self, spec: KvRouterSpec) -> Self {
+        self.kv = Some(spec);
+        self
+    }
+
+    /// Whether a session affinity built by [`Self::session_affinity`] syncs its
+    /// bindings across router replicas over the event plane. On by default; a
+    /// standalone router with no peers turns it off.
+    pub fn session_affinity_replication(mut self, enabled: bool) -> Self {
+        self.session_replication = enabled;
         self
     }
 
@@ -171,20 +243,49 @@ impl RoutingHostBuilder {
         self
     }
 
-    /// Build the host, constructing its transport unless one was supplied.
+    /// Build the host: start the load context and construct the KV router when
+    /// asked to, then the transport unless one was supplied.
     pub async fn build(self) -> anyhow::Result<RoutingHost> {
         let Self {
             client,
             router_mode,
             kv_router,
             load_context,
+            load,
+            kv,
             affinity,
+            session_replication,
             lora,
             dispatch,
             worker_monitor,
             multimodal_cache,
             transport,
         } = self;
+        let load_context = match (load_context, load) {
+            (Some(context), None) => Some(context),
+            (None, Some(spec)) => Some(
+                RoutingLoadContext::start(
+                    client.clone(),
+                    spec.source,
+                    spec.thresholds,
+                    &spec.parent_token,
+                    spec.task_guard,
+                )
+                .await?,
+            ),
+            (None, None) => None,
+            (Some(_), Some(_)) => {
+                anyhow::bail!("pass either a load context or the parameters to start one")
+            }
+        };
+        let kv_router = match (kv_router, kv) {
+            (Some(router), None) => Some(router),
+            (None, Some(spec)) => Some(construct_kv_router(spec, load_context.as_ref()).await?),
+            (None, None) => None,
+            (Some(_), Some(_)) => {
+                anyhow::bail!("pass either a KvRouter or the parameters to construct one")
+            }
+        };
         validate_policy_inputs(router_mode, kv_router.as_ref(), load_context.as_ref())?;
 
         let affinity = match affinity {
@@ -193,7 +294,9 @@ impl RoutingHostBuilder {
             Affinity::Session { ttl, mode } => match kv_router.as_ref() {
                 Some(kv_router) => {
                     let coordinator = kv_router.affinity_coordinator(ttl, mode)?;
-                    coordinator.enable_replica_sync(client.clone()).await?;
+                    if session_replication {
+                        coordinator.enable_replica_sync(client.clone()).await?;
+                    }
                     Some(coordinator)
                 }
                 None => create_affinity_coordinator(Some(ttl), mode, client.clone()).await?,
@@ -266,6 +369,74 @@ impl RoutingHostBuilder {
         };
         assemble(transport, kv_router, load_context, affinity, lora)
     }
+}
+
+/// Construct the KV router a [`KvRouterSpec`] describes on the host's load
+/// context: the model manager owns the per-endpoint topology, shared caches,
+/// and KV-source membership the router joins.
+async fn construct_kv_router(
+    spec: KvRouterSpec,
+    load_context: Option<&Arc<RoutingLoadContext>>,
+) -> anyhow::Result<Arc<KvRouter>> {
+    let load_context = load_context
+        .ok_or_else(|| anyhow::anyhow!("constructing a KvRouter requires a load context"))?;
+    let KvRouterSpec {
+        model_manager,
+        block_size,
+        policy,
+        kv_router_config,
+        prefill_load_estimator,
+        worker_role,
+        metric_worker_type,
+        model_name,
+        is_eagle,
+        teardown_task_guard,
+    } = spec;
+    let client = load_context.client().clone();
+    let scheduler_load = load_context.scheduler_load_sender();
+    let cancellation_token = load_context.cancellation_token();
+    let mut router = match policy {
+        KvPolicy::Plugins(plugins) => {
+            model_manager
+                .kv_chooser_for_with_plugins_and_client(
+                    client,
+                    block_size,
+                    &plugins,
+                    kv_router_config,
+                    prefill_load_estimator,
+                    worker_role,
+                    metric_worker_type,
+                    model_name,
+                    is_eagle,
+                    scheduler_load,
+                    cancellation_token,
+                )
+                .await?
+        }
+        KvPolicy::Source(policy) => {
+            model_manager
+                .kv_chooser_for_with_policy_and_client(
+                    client,
+                    block_size,
+                    policy,
+                    kv_router_config,
+                    prefill_load_estimator,
+                    worker_role,
+                    metric_worker_type,
+                    model_name,
+                    is_eagle,
+                    scheduler_load,
+                    cancellation_token,
+                )
+                .await?
+        }
+    };
+    if let Some(guard) = teardown_task_guard {
+        Arc::get_mut(&mut router)
+            .expect("new KV chooser must have one owner")
+            .set_teardown_task_guard(guard);
+    }
+    Ok(router)
 }
 
 fn validate_policy_inputs(

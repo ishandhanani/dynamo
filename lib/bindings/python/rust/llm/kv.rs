@@ -45,7 +45,6 @@ use tracing::Instrument;
 use llm_rs::discovery::LoadThresholdConfig as RsLoadThresholdConfig;
 use llm_rs::kv_router::RoutingHost;
 type RsRoutingHost = RoutingHost;
-type RsManagedKvRouter = llm_rs::kv_router::ManagedKvRouter;
 use llm_rs::kv_router::publisher::{KvEventSourceConfig, create_stored_blocks};
 use llm_rs::protocols::common::timing::RequestTracker;
 use llm_rs::protocols::common::{OutputOptions, SamplingOptions, StopConditions};
@@ -1827,7 +1826,7 @@ mod metric_worker_type_tests {
     async fn standalone_encode_router(
         namespace: &str,
         load_threshold_config: RsLoadThresholdConfig,
-    ) -> (RsManagedKvRouter, rs::Runtime) {
+    ) -> (RsRoutingHost, rs::Runtime) {
         let runtime = rs::Runtime::from_current().unwrap();
         let distributed = rs::DistributedRuntime::new(
             runtime.clone(),
@@ -1865,6 +1864,9 @@ mod metric_worker_type_tests {
             None,
             RouterPlugins::default(),
         )
+        .await
+        .unwrap()
+        .build()
         .await
         .unwrap();
         (router, runtime)
@@ -1906,13 +1908,13 @@ mod metric_worker_type_tests {
                 .await;
 
         assert_eq!(
-            router.load_context().source(),
+            router.load_context().unwrap().source(),
             llm_rs::kv_router::RouterLoadSource::Encode
         );
-        assert!(router.load_context().monitor().is_none());
-        assert!(!router.load_context().scheduler_load_sender().is_enabled());
+        assert!(router.load_context().unwrap().monitor().is_none());
+        assert!(!router.load_context().unwrap().scheduler_load_sender().is_enabled());
         assert_eq!(
-            router.load_context().load_thresholds().get(),
+            router.load_context().unwrap().load_thresholds().get(),
             RsLoadThresholdConfig::default()
         );
         runtime.shutdown();
@@ -1931,7 +1933,7 @@ mod metric_worker_type_tests {
         )
         .await;
 
-        assert_eq!(router.load_context().load_thresholds().get(), thresholds);
+        assert_eq!(router.load_context().unwrap().load_thresholds().get(), thresholds);
         runtime.shutdown();
     }
 }
@@ -1978,8 +1980,10 @@ async fn create_kv_router_from_endpoint(
     load_threshold_config: RsLoadThresholdConfig,
     prefill_load_estimator: Option<Arc<dyn dynamo_router_types::prefill_load::PrefillLoadEstimator>>,
     plugins: RouterPlugins,
-) -> anyhow::Result<RsManagedKvRouter> {
-    // Create ModelManager and use it to create KvRouter (ensures registration)
+) -> anyhow::Result<llm_rs::kv_router::RoutingHostBuilder> {
+    // The model manager owns the per-endpoint topology, shared caches and
+    // KV-source membership the router joins; the host builder constructs the
+    // router on it.
     let model_manager = Arc::new(llm_rs::discovery::ModelManager::new());
     let endpoint_id = endpoint.id();
     let track_active_blocks = kv_router_config
@@ -2088,15 +2092,6 @@ async fn create_kv_router_from_endpoint(
         }
     };
 
-    let load_context = llm_rs::kv_router::RoutingLoadContext::start(
-        client.clone(),
-        load_source,
-        llm_rs::discovery::LoadThresholdHandle::new(load_threshold_config),
-        &endpoint.component().drt().child_token(),
-        None,
-    )
-    .await?;
-
     // Preserve the model card's role and display name, which can differ
     // from the metric role and the routing partition name.
     let plugins = if let Some(factory) = plugins
@@ -2121,26 +2116,28 @@ async fn create_kv_router_from_endpoint(
         plugins
     };
     let plugins = llm_rs::kv_router::plugins::RouterPluginBuilder::new(plugins);
-    let kv_router = model_manager
-        .kv_chooser_for_with_plugins_and_client(
-            client,
-            block_size as u32,
-            &plugins,
+    // The host starts the load context and constructs the router on it; the
+    // standalone router has no admitted-set controller, so the plain client is
+    // both its discovery view and its transport.
+    Ok(RsRoutingHost::builder(client, rs::pipeline::RouterMode::KV)
+        .load(llm_rs::kv_router::LoadContextSpec {
+            source: load_source,
+            thresholds: llm_rs::discovery::LoadThresholdHandle::new(load_threshold_config),
+            parent_token: endpoint.component().drt().child_token(),
+            task_guard: None,
+        })
+        .kv(llm_rs::kv_router::KvRouterSpec {
+            model_manager,
+            block_size: block_size as u32,
+            policy: llm_rs::kv_router::KvPolicy::Plugins(plugins),
             kv_router_config,
             prefill_load_estimator,
             worker_role,
             metric_worker_type,
             model_name,
-            enable_eagle,
-            load_context.scheduler_load_sender(),
-            load_context.cancellation_token(),
-        )
-        .await?;
-
-    Ok(llm_rs::kv_router::ManagedKvRouter::new(
-        load_context,
-        kv_router,
-    ))
+            is_eagle: enable_eagle,
+            teardown_task_guard: None,
+        }))
 }
 
 #[pyclass]
@@ -2325,8 +2322,10 @@ impl KvRouter {
             runtime.block_on(async move {
                 let client = endpoint.inner.client().await.map_err(to_pyerr)?;
 
-                // Create KvRouter using helper function (ensures etcd registration)
-                let managed_router = create_kv_router_from_endpoint(
+                // One builder chain: load context, KV router, transport, and
+                // the session table bound to this router alone (no replica sync,
+                // as before: the standalone router has no peers on the event plane).
+                let routing_host = create_kv_router_from_endpoint(
                     &endpoint.inner,
                     client,
                     block_size,
@@ -2336,27 +2335,14 @@ impl KvRouter {
                     plugins,
                 )
                 .await
-                .map_err(to_pyerr)?;
-
-                let push_router = rs::pipeline::PushRouter::<
-                    llm_rs::protocols::common::preprocessor::PreprocessedRequest,
-                    rs::protocols::annotated::Annotated<
-                        llm_rs::protocols::common::llm_backend::LLMEngineOutput,
-                    >,
-                >::from_client(
-                    managed_router.load_context().client().clone(),
-                    rs::pipeline::network::egress::push_router::RouterMode::KV,
-                )
-                .await
-                .map_err(to_pyerr)?;
-
-                let routing_host = RsRoutingHost::new_with_load_context(
-                    push_router,
-                    managed_router.router().clone(),
-                    managed_router.load_context().clone(),
+                .map_err(to_pyerr)?
+                .session_affinity(
                     session_affinity_ttl_secs.map(Duration::from_secs),
                     session_affinity_mode,
                 )
+                .session_affinity_replication(false)
+                .build()
+                .await
                 .map_err(to_pyerr)?;
 
                 Ok(Self {

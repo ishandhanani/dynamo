@@ -53,7 +53,9 @@ mod kv_selection;
 mod occupancy;
 mod request_guard;
 
-pub use builder::{LlmDispatch, LlmPushRouter, RoutingHostBuilder};
+pub use builder::{
+    KvPolicy, KvRouterSpec, LlmDispatch, LlmPushRouter, LoadContextSpec, RoutingHostBuilder,
+};
 use builtin::HostedPlan;
 use cancellation::{CleanupBudget, DispatchCancellation, StagedKv, await_with_cleanup_policy};
 use kv_selection::{RoutingRequestParts, SelectionOptions, WorkerSelection};
@@ -309,7 +311,6 @@ pub struct RoutingHost {
     /// Retains the shared client, overload state, and cancellation subtree for this host.
     ///
     /// Every host except a KV host built with [`RoutingHost::new`] has one.
-    #[allow(dead_code)]
     routing_context: Option<Arc<crate::kv_router::RoutingLoadContext>>,
 }
 
@@ -492,6 +493,13 @@ impl RoutingHost {
     #[cfg(test)]
     pub(crate) fn occupancy_for_test(&self, worker_id: u64) -> u64 {
         self.inner.occupancy_for_test(worker_id)
+    }
+
+    /// The load context this host owns: its shared client, overload monitor,
+    /// thresholds, and cancellation subtree. `None` only for a KV host built
+    /// over a caller's transport without one.
+    pub fn load_context(&self) -> Option<&Arc<crate::kv_router::RoutingLoadContext>> {
+        self.routing_context.as_ref()
     }
 
     /// The active KV-aware data plane.

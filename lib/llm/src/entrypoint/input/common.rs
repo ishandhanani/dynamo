@@ -12,14 +12,14 @@ use crate::{
     engines::StreamingEngineAdapter,
     entrypoint::EngineConfig,
     kv_router::indexer::{preprocessed_multimodal_cache_keys, try_build_cache_indexer},
-    kv_router::{EncoderRouter, KvRouter, PrefillRouter, RoutingHost, RoutingLoadContext},
+    kv_router::{EncoderRouter, KvRouterSpec, LoadContextSpec, PrefillRouter, RoutingHost},
     migration::Migration,
     model_card::ModelDeploymentCard,
     namespace::NamespaceFilter,
     preprocessor::{OpenAIPreprocessor, prompt::prompt_formatter_from_mdc},
     protocols::common::llm_backend::{BackendOutput, LLMEngineOutput, PreprocessedRequest},
     request_template::RequestTemplate,
-    session_affinity::{SessionAffinityMode, create_affinity_coordinator},
+    session_affinity::SessionAffinityMode,
     types::{
         Annotated,
         openai::chat_completions::{
@@ -96,21 +96,6 @@ async fn wait_for_min_initial_workers(
     }
 }
 
-fn router_client(
-    client: &Client,
-    router_mode: RouterMode,
-    chooser: Option<&Arc<KvRouter>>,
-) -> anyhow::Result<Client> {
-    if router_mode == RouterMode::KV {
-        let Some(chooser) = chooser else {
-            anyhow::bail!("RouterMode::KV requires KVRouter to not be null");
-        };
-        Ok(chooser.client().clone())
-    } else {
-        Ok(client.clone())
-    }
-}
-
 /// LoRA-aware routing is only implemented for the KV, Random, and RoundRobin modes. `Direct`
 /// dispatches to a caller-chosen worker and bypasses both the LoRA filter and non-KV load
 /// tracking; the advanced load-based modes (`PowerOfTwoChoices`, `LeastLoaded`,
@@ -144,40 +129,16 @@ fn validate_router_mode_for_lora(
     }
 }
 
+/// Build the routing a preprocessed pipeline sends through: one
+/// [`RoutingHost`] over `client`, with the load context `load` starts and the
+/// KV router `kv` describes, plus the prefill and encoder hops.
 #[allow(clippy::too_many_arguments)]
 pub async fn build_preprocessed_routing(
     client: &Client,
     model_manager: Arc<crate::discovery::ModelManager>,
     router_mode: RouterMode,
-    load_context: Arc<RoutingLoadContext>,
-    chooser: Option<Arc<KvRouter>>,
-    prefill_chooser: Option<Arc<PrefillRouter>>,
-    encoder_chooser: Option<Arc<EncoderRouter>>,
-    enable_multimodal_cache_indexer: bool,
-    session_affinity_ttl_secs: Option<u64>,
-) -> anyhow::Result<PreprocessedRouting> {
-    build_preprocessed_routing_with_session_affinity_mode(
-        client,
-        model_manager,
-        router_mode,
-        load_context,
-        chooser,
-        prefill_chooser,
-        encoder_chooser,
-        enable_multimodal_cache_indexer,
-        session_affinity_ttl_secs,
-        SessionAffinityMode::Hard,
-    )
-    .await
-}
-
-#[allow(clippy::too_many_arguments)]
-pub(crate) async fn build_preprocessed_routing_with_session_affinity_mode(
-    client: &Client,
-    model_manager: Arc<crate::discovery::ModelManager>,
-    router_mode: RouterMode,
-    load_context: Arc<RoutingLoadContext>,
-    chooser: Option<Arc<KvRouter>>,
+    load: LoadContextSpec,
+    kv: Option<KvRouterSpec>,
     prefill_chooser: Option<Arc<PrefillRouter>>,
     encoder_chooser: Option<Arc<EncoderRouter>>,
     enable_multimodal_cache_indexer: bool,
@@ -193,25 +154,17 @@ pub(crate) async fn build_preprocessed_routing_with_session_affinity_mode(
         session_affinity_ttl_secs.is_some(),
     )?;
     let min_initial_workers = min_initial_workers_from_env()?;
-    let router_client = router_client(client, router_mode, chooser.as_ref())?;
+    if router_mode == RouterMode::KV && kv.is_none() {
+        anyhow::bail!("RouterMode::KV requires KVRouter to not be null");
+    }
 
-    wait_for_min_initial_workers(&router_client, min_initial_workers).await?;
-    let endpoint_id = router_client.endpoint.id();
-
-    let ttl = session_affinity_ttl_secs.map(Duration::from_secs);
-    let affinity = match (ttl, chooser.as_ref()) {
-        (Some(ttl), Some(chooser)) => {
-            let affinity = chooser.affinity_coordinator(ttl, session_affinity_mode)?;
-            affinity.enable_replica_sync(router_client.clone()).await?;
-            Some(affinity)
-        }
-        _ => create_affinity_coordinator(ttl, session_affinity_mode, router_client.clone()).await?,
-    };
+    wait_for_min_initial_workers(client, min_initial_workers).await?;
+    let endpoint_id = client.endpoint.id();
 
     let embedding_cache_indexer = if enable_multimodal_cache_indexer
         && matches!(router_mode, RouterMode::DeviceAwareWeighted)
     {
-        try_build_cache_indexer(&router_client.endpoint).await
+        try_build_cache_indexer(&client.endpoint).await
     } else {
         None
     };
@@ -239,11 +192,16 @@ pub(crate) async fn build_preprocessed_routing_with_session_affinity_mode(
                 .map(|filter| (filter, model_manager.lora_load_estimator_for(&endpoint_id)))
         })
         .flatten();
-    let mut host = RoutingHost::builder(router_client, router_mode)
-        .kv_router(chooser)
-        .load_context(load_context)
-        .affinity_coordinator(affinity)
+    let mut host = RoutingHost::builder(client.clone(), router_mode)
+        .load(load)
+        .session_affinity(
+            session_affinity_ttl_secs.map(Duration::from_secs),
+            session_affinity_mode,
+        )
         .lora(lora);
+    if let Some(kv) = kv {
+        host = host.kv(kv);
+    }
     if let Some((indexer, extractor)) = embedding_cache_indexer.zip(cache_key_extractor) {
         host = host.multimodal_cache(indexer, extractor);
     }
