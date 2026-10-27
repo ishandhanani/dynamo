@@ -11,7 +11,6 @@ use std::{
 };
 
 use crate::kv_router::SelectionPolicySource;
-use dynamo_kv_router::plugins::worker_selection::WorkerCandidates;
 use dynamo_kv_router::{
     config::KvRouterConfig,
     protocols::RoutingConstraints,
@@ -32,6 +31,7 @@ use dynamo_runtime::{
     storage::kv::Selector,
     traits::DistributedRuntimeProvider,
 };
+use dynamo_worker_selection::plugin::WorkerCandidates;
 use tokio::sync::{Notify, mpsc, watch};
 
 use super::*;
@@ -2226,7 +2226,7 @@ async fn tracked_admission_without_lifecycle_bypasses_classifier() {
 }
 
 struct TokenContractClassifier {
-    classified: mpsc::UnboundedSender<(usize, dynamo_kv_router::scheduling::RequestProgress)>,
+    classified: mpsc::UnboundedSender<(usize, dynamo_admission::classifier::RequestProgress)>,
     completed: mpsc::UnboundedSender<usize>,
 }
 

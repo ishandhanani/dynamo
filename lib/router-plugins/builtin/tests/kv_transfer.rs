@@ -5,13 +5,13 @@
 
 mod support;
 use dynamo_custom_policy_builtin::DefaultWorkerSelector;
-use dynamo_kv_router::scheduling::SchedulingRequest;
 use dynamo_kv_router::{KvRouterConfig, WorkerLoadProjection, WorkerSelector};
 use dynamo_router_types::kv_hints::{KvTransferCandidateSource, KvTransferCandidates};
 use dynamo_router_types::protocols::{
     ExternalSequenceBlockHash, KvHintTransferWorkerMetadata, KvTransferEnforcement,
     WorkerConfigLike, WorkerWithDpRank,
 };
+use dynamo_router_types::sched::SchedulingRequest;
 use std::collections::HashMap;
 
 const BLOCK_SIZE: u32 = 16;

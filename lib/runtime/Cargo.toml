@@ -34,6 +34,8 @@ nvtx = ["dep:nvtx"]
 dynamo-truthy = { workspace = true }
 dynamo-http-server = { workspace = true }
 dynamo-prometheus-names = { workspace = true }
+dynamo-router-types = { workspace = true }
+dynamo-worker-selection = { workspace = true }
 
 # Use workspace dependencies where available
 anyhow = { workspace = true }

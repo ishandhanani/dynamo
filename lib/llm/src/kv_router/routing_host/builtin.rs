@@ -144,10 +144,9 @@ impl RoutingHost {
         }
         let target = lora
             .selector
-            .select_worker(dynamo_kv_router::selector::WorkerSelectionInput::hosted(
-                &candidates,
-                None,
-            ))?
+            .select_worker(
+                dynamo_worker_selection::selector::WorkerSelectionInput::hosted(&candidates, None),
+            )?
             .worker
             .worker_id;
         tracing::debug!(
@@ -231,7 +230,7 @@ impl RoutingHost {
                             } else {
                                 selector
                                     .select_worker(
-                                        dynamo_kv_router::selector::WorkerSelectionInput::hosted(
+                                        dynamo_worker_selection::selector::WorkerSelectionInput::hosted(
                                             ids, None,
                                         ),
                                     )

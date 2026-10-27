@@ -734,7 +734,9 @@ fn make_request(
         allowed_worker_ids: None,
         routing_constraints: crate::protocols::RoutingConstraints::default(),
         shared_cache_hits: None,
-        resp_tx: Some(tx),
+        resp_tx: Some(Box::new(
+            dynamo_worker_selection::selector::OneshotResponder(tx),
+        )),
     };
     (req, rx)
 }

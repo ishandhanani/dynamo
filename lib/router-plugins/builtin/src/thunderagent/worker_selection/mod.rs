@@ -6,10 +6,13 @@ use std::sync::Arc;
 use dynamo_kv_router::WorkerType;
 use dynamo_kv_router::plugins::RouterPluginRegistry;
 use dynamo_kv_router::plugins::worker_selection::{
+    WorkerSelectionPolicyParameters, WorkerSelectionPolicyProviderError,
+    WorkerSelectionPolicyRegistryError,
+};
+use dynamo_worker_selection::plugin::{
     WorkerCandidates, WorkerInputView, WorkerInputs, WorkerPicker, WorkerScorer,
     WorkerSelectionContext, WorkerSelectionPolicy, WorkerSelectionPolicyError,
-    WorkerSelectionPolicyFactory, WorkerSelectionPolicyParameters,
-    WorkerSelectionPolicyProviderError, WorkerSelectionPolicyRegistryError,
+    WorkerSelectionPolicyFactory,
 };
 
 use super::THUNDERAGENT_CLASSIFIER_TYPE;
@@ -104,12 +107,13 @@ pub(crate) fn register(
 mod tests {
     use std::collections::HashMap;
 
-    use dynamo_kv_router::scheduling::{OverlapSignals, ScheduleMode, SchedulingRequest};
     use dynamo_kv_router::{
         KvRouterConfig, WorkerLoadProjection, WorkerSelectionInput, WorkerSelectionPolicy,
         WorkerSelector,
     };
+    use dynamo_router_types::overlap::OverlapSignals;
     use dynamo_router_types::protocols::{RoutingConstraints, WorkerConfigLike, WorkerWithDpRank};
+    use dynamo_router_types::sched::{ScheduleMode, SchedulingRequest};
 
     use super::*;
 

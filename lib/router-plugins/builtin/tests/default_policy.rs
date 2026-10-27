@@ -13,7 +13,7 @@ use support::*;
 
 #[test]
 fn runtime_parameters_change_selection_and_reset_to_resolved_startup_values() {
-    use dynamo_kv_router::plugins::worker_selection::{RuntimePolicyError, RuntimePolicyUpdate};
+    use dynamo_worker_selection::plugin::{RuntimePolicyError, RuntimePolicyUpdate};
     use serde_json::json;
 
     let (workers, mut request) = fixture(2, 160);
@@ -107,7 +107,7 @@ fn runtime_parameters_change_selection_and_reset_to_resolved_startup_values() {
 
 #[test]
 fn runtime_parameters_cannot_enable_worker_signals_missing_at_startup() {
-    use dynamo_kv_router::plugins::worker_selection::{RuntimePolicyError, RuntimePolicyUpdate};
+    use dynamo_worker_selection::plugin::{RuntimePolicyError, RuntimePolicyUpdate};
     for (config, role) in [
         (
             KvRouterConfig {
@@ -164,7 +164,7 @@ fn runtime_parameters_cannot_enable_worker_signals_missing_at_startup() {
 
 #[test]
 fn runtime_cache_tier_weights_change_selection_without_device_credit() {
-    use dynamo_kv_router::plugins::worker_selection::RuntimePolicyUpdate;
+    use dynamo_worker_selection::plugin::RuntimePolicyUpdate;
 
     for role in [WorkerType::Prefill, WorkerType::Decode] {
         for name in [
@@ -815,7 +815,7 @@ fn patch(parameters: serde_json::Value) -> serde_json::Map<String, serde_json::V
 
 #[test]
 fn selector_runtime_update_keeps_the_seeded_random_stream() {
-    use dynamo_kv_router::plugins::worker_selection::RuntimePolicyUpdate;
+    use dynamo_worker_selection::plugin::RuntimePolicyUpdate;
 
     let (workers, request) = fixture(16, 2048);
     let config = KvRouterConfig {
@@ -847,7 +847,7 @@ fn selector_runtime_update_keeps_the_seeded_random_stream() {
 
 #[test]
 fn selector_controls_share_runtime_state_and_clones_start_fresh() {
-    use dynamo_kv_router::plugins::worker_selection::RuntimePolicyUpdate;
+    use dynamo_worker_selection::plugin::RuntimePolicyUpdate;
 
     let config = KvRouterConfig {
         router_temperature: 0.5,

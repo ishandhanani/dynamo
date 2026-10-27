@@ -21,7 +21,7 @@ use crate::{
 };
 use dynamo_http_server::metrics::Metrics;
 
-use dynamo_kv_router::scheduling::AbortCause;
+use dynamo_admission::classifier::AbortCause;
 use dynamo_protocols::types::CompletionUsage;
 use dynamo_runtime::engine::Data;
 use dynamo_runtime::error::{self, DynamoError, ErrorReason, ErrorType};

@@ -2256,6 +2256,28 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d0881ea181b1df73ff77ffaaf9c7544ecc11e82fba9b5f27b262a3c73a332555"
 
 [[package]]
+name = "dynamo-admission"
+version = "1.7.0"
+dependencies = [
+ "async-trait",
+ "criterion",
+ "dynamo-router-types",
+ "dynamo-tokens",
+ "futures-util",
+ "ordered-float 4.6.0",
+ "parking_lot",
+ "rustc-hash 2.1.2",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tokio",
+ "tokio-util",
+ "tracing",
+]
+
+[[package]]
 name = "dynamo-backend-common"
 version = "1.7.0"
 dependencies = [
@@ -2335,8 +2357,10 @@ version = "1.7.0"
 dependencies = [
  "async-trait",
  "criterion",
+ "dynamo-admission",
  "dynamo-kv-router",
  "dynamo-router-types",
+ "dynamo-worker-selection",
  "fastrand",
  "parking_lot",
  "rustc-hash 2.1.2",
@@ -2384,6 +2408,7 @@ name = "dynamo-custom-policy-example-simple-filter-score-pick"
 version = "1.7.0"
 dependencies = [
  "dynamo-kv-router",
+ "dynamo-worker-selection",
  "serde",
  "serde_json",
 ]
@@ -2455,6 +2480,7 @@ dependencies = [
  "dynamo-protocols",
  "dynamo-router-types",
  "dynamo-runtime",
+ "dynamo-worker-selection",
  "futures",
  "hyper-util",
  "k8s-openapi",
@@ -2531,7 +2557,6 @@ dependencies = [
  "criterion",
  "dashmap",
  "dynamo-router-types",
- "dynamo-runtime",
  "dynamo-tokens",
  "dynamo-truthy",
  "fastrand",
@@ -2571,13 +2596,14 @@ dependencies = [
  "crossbeam-utils",
  "dashmap",
  "derive_builder",
+ "dynamo-admission",
  "dynamo-kv-hashing",
  "dynamo-kv-indexer",
  "dynamo-router-types",
- "dynamo-runtime",
  "dynamo-slot-tracker",
  "dynamo-tokens",
  "dynamo-truthy",
+ "dynamo-worker-selection",
  "fastrand",
  "flume",
  "futures-util",
@@ -2637,6 +2663,7 @@ dependencies = [
  "derive-getters",
  "derive_builder",
  "dialoguer",
+ "dynamo-admission",
  "dynamo-bench",
  "dynamo-custom-policy-builtin",
  "dynamo-http-server",
@@ -2654,6 +2681,7 @@ dependencies = [
  "dynamo-slot-tracker",
  "dynamo-tokenizers",
  "dynamo-tokens",
+ "dynamo-worker-selection",
  "either",
  "ffmpeg-next",
  "flate2",
@@ -2763,12 +2791,14 @@ dependencies = [
  "blake3",
  "bytes",
  "dashmap",
+ "dynamo-admission",
  "dynamo-custom-policy-builtin",
  "dynamo-kv-indexer",
  "dynamo-kv-router",
  "dynamo-router-types",
  "dynamo-slot-tracker",
  "dynamo-tokens",
+ "dynamo-worker-selection",
  "futures",
  "ndarray 0.16.1",
  "ndarray-interp",
@@ -2926,7 +2956,6 @@ dependencies = [
  "criterion",
  "derive_builder",
  "dynamo-kv-hashing",
- "dynamo-runtime",
  "dynamo-tokens",
  "dynamo-truthy",
  "fastrand",
@@ -2967,7 +2996,9 @@ dependencies = [
  "derive_builder",
  "dynamo-http-server",
  "dynamo-prometheus-names",
+ "dynamo-router-types",
  "dynamo-truthy",
+ "dynamo-worker-selection",
  "educe",
  "either",
  "etcd-client",
@@ -3336,6 +3367,28 @@ dependencies = [
  "tonic-health 0.14.6",
  "tracing",
  "vllm-proto",
+]
+
+[[package]]
+name = "dynamo-worker-selection"
+version = "1.7.0"
+dependencies = [
+ "async-trait",
+ "blake3",
+ "criterion",
+ "dashmap",
+ "dynamo-router-types",
+ "dynamo-slot-tracker",
+ "fastrand",
+ "parking_lot",
+ "rstest 0.18.2",
+ "rustc-hash 2.1.2",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+ "tokio-util",
+ "tracing",
 ]
 
 [[package]]

@@ -1,0 +1,42 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+[package]
+name = "dynamo-admission"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+homepage.workspace = true
+repository.workspace = true
+description = "Admission for the Dynamo router: the per-class policy queue, the request-classifier plugin API, and the classifier runtime"
+
+[features]
+default = []
+bench = ["dynamo-router-types/bench"]
+
+[dependencies]
+dynamo-router-types = { workspace = true }
+async-trait = { workspace = true }
+ordered-float = { workspace = true }
+futures-util = { workspace = true }
+serde = { workspace = true }
+serde_yaml = "0.9.34"
+thiserror = { workspace = true }
+tokio = { workspace = true }
+tokio-util = { workspace = true }
+tracing = { workspace = true }
+parking_lot = { workspace = true }
+rustc-hash = "2.1.1"
+dynamo-tokens = { workspace = true }
+
+[dev-dependencies]
+dynamo-router-types = { workspace = true, features = ["testing"] }
+criterion = "0.5"
+tempfile = { workspace = true }
+tokio = { workspace = true, features = ["rt", "macros", "time", "test-util"] }
+serde_json = { workspace = true }
+
+[[bench]]
+name = "policy_queue"
+harness = false

@@ -15,7 +15,7 @@ use axum::{
     response::{IntoResponse, Response},
     routing::get,
 };
-use dynamo_kv_router::plugins::worker_selection::{
+use dynamo_worker_selection::plugin::{
     RuntimePolicyConfig, RuntimePolicyError, RuntimePolicyUpdate,
 };
 use serde::{Deserialize, Serialize};

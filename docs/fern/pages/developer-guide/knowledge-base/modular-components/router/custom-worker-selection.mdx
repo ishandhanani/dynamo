@@ -109,10 +109,7 @@ A filter answers a hard yes-or-no question about one worker that already passed 
 This filter keeps workers with at least the configured number of device-resident overlap blocks:
 
 ```rust
-use dynamo_kv_router::plugins::worker_selection::{
-    WorkerCandidate, WorkerFilter, WorkerInputs, WorkerSelectionContext,
-    WorkerSelectionPolicyError,
-};
+use dynamo_worker_selection::plugin::{WorkerCandidate, WorkerFilter, WorkerInputs, WorkerSelectionContext, WorkerSelectionPolicyError};
 
 struct MinimumDeviceOverlapFilter {
     minimum_blocks: f64,
@@ -147,9 +144,7 @@ A scorer expresses a preference without excluding a worker. It writes one finite
 This scorer ranks workers by active requests above the batch minimum:
 
 ```rust
-use dynamo_kv_router::plugins::worker_selection::{
-    WorkerCandidates, WorkerInputs, WorkerScorer, WorkerSelectionContext, WorkerSelectionPolicyError,
-};
+use dynamo_worker_selection::plugin::{WorkerCandidates, WorkerInputs, WorkerScorer, WorkerSelectionContext, WorkerSelectionPolicyError};
 
 struct ActiveRequestsScorer;
 
@@ -193,9 +188,7 @@ A picker makes the final choice after filtering and scoring. It sees every remai
 This picker selects the lowest-cost row:
 
 ```rust
-use dynamo_kv_router::plugins::worker_selection::{
-    WorkerInputView, WorkerPicker, WorkerSelectionContext, WorkerSelectionPolicyError,
-};
+use dynamo_worker_selection::plugin::{WorkerInputView, WorkerPicker, WorkerSelectionContext, WorkerSelectionPolicyError};
 
 struct LowestCostPicker;
 
@@ -225,11 +218,9 @@ The provider runs once at startup. Parse and validate all parameters there, then
 ```rust
 use std::sync::Arc;
 
-use dynamo_kv_router::plugins::worker_selection::{
-    WorkerSelectionPolicyFactory, WorkerSelectionPolicyParameters,
-    WorkerSelectionPolicyProviderError,
-};
-use dynamo_kv_router::plugins::worker_selection::{WorkerFilter, WorkerScorer, WorkerSelectionPolicy};
+use dynamo_worker_selection::plugin::WorkerSelectionPolicyFactory;
+use dynamo_kv_router::plugins::worker_selection::{WorkerSelectionPolicyParameters, WorkerSelectionPolicyProviderError};
+use dynamo_worker_selection::plugin::{WorkerFilter, WorkerScorer, WorkerSelectionPolicy};
 
 #[derive(serde::Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -465,9 +456,7 @@ A scorer reads `KV_TRANSFER` through `WorkerCandidate::kv_transfer()`. Filters a
 This scorer charges each worker for the prompt blocks it can neither reuse nor fetch. A worker without transfer data still counts its own cache:
 
 ```rust
-use dynamo_kv_router::plugins::worker_selection::{
-    WorkerCandidates, WorkerInputs, WorkerScorer, WorkerSelectionContext, WorkerSelectionPolicyError,
-};
+use dynamo_worker_selection::plugin::{WorkerCandidates, WorkerInputs, WorkerScorer, WorkerSelectionContext, WorkerSelectionPolicyError};
 
 struct UncoveredPromptScorer;
 
@@ -608,10 +597,8 @@ For `P` retained inputs containing `H` hashes each, the added hash payload is `8
 For example, a classifier can inspect the sequence while retaining the request in its future:
 
 ```rust
-use dynamo_kv_router::plugins::request_classifier::{
-    ClassifyFuture, ClassifyRequest, RequestClassifier,
-};
-use dynamo_kv_router::plugins::worker_selection::WorkerCandidates;
+use dynamo_admission::classifier::{ClassifyFuture, ClassifyRequest, RequestClassifier};
+use dynamo_worker_selection::plugin::WorkerCandidates;
 
 struct InspectPrefixes;
 

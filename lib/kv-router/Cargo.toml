@@ -15,25 +15,26 @@ readme = "README.md"
 [features]
 default = []
 metrics = ["dep:prometheus", "dynamo-kv-indexer/metrics"]
-runtime-protocols = [
-  "dep:dynamo-runtime",
-  "dynamo-router-types/runtime-protocols",
-  "dynamo-kv-indexer/runtime-protocols",
+bench = [
+  "dynamo-router-types/bench",
+  "dynamo-kv-indexer/bench",
+  "dynamo-slot-tracker/bench",
+  "dynamo-worker-selection/bench",
 ]
-bench = ["dynamo-router-types/bench", "dynamo-kv-indexer/bench", "dynamo-slot-tracker/bench"]
 profile = ["dynamo-kv-indexer/profile"]
 standalone-indexer = ["dep:axum", "dynamo-kv-indexer/http"]
 standalone-slot-tracker = ["dep:axum", "dynamo-slot-tracker/http"]
 standalone-selection = ["standalone-indexer", "dep:once_cell", "dynamo-slot-tracker/http"]
 # Test-only hooks consumed by dependent crates' tests; never enable in release.
-testing = []
+testing = ["dynamo-worker-selection/testing"]
 
 [dependencies]
 dynamo-router-types = { workspace = true }
 dynamo-kv-indexer = { workspace = true }
 dynamo-slot-tracker = { workspace = true }
+dynamo-admission = { workspace = true }
+dynamo-worker-selection = { workspace = true }
 # repo
-dynamo-runtime = { workspace = true, optional = true }
 dynamo-kv-hashing = { workspace = true }
 dynamo-tokens = { workspace = true }
 dynamo-truthy = { workspace = true }
@@ -87,6 +88,7 @@ axum = { version = "=0.8.4", default-features = false, features = [
 dynamo-router-types = { workspace = true, features = ["testing"] }
 dynamo-kv-indexer = { workspace = true, features = ["testing"] }
 dynamo-slot-tracker = { workspace = true, features = ["testing"] }
+dynamo-worker-selection = { workspace = true, features = ["testing"] }
 criterion = "0.5"
 rstest = "0.18.2"
 rstest_reuse = "0.7.0"
@@ -94,15 +96,6 @@ tempfile = { workspace = true }
 tokio = { workspace = true, features = ["rt", "macros", "time", "test-util"] }
 dynamo-tokens = { workspace = true }
 tower = { version = "0.5", features = ["util"] }
-
-[[bench]]
-name = "policy_queue"
-harness = false
-
-[[bench]]
-name = "worker_selection"
-harness = false
-required-features = ["bench"]
 
 [[bench]]
 name = "selection_core"

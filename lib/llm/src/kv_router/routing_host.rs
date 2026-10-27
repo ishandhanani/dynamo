@@ -579,7 +579,9 @@ impl RoutingHost {
                     .inner
                     .with_selectable_worker_ids(|ids| {
                         selector.peek_worker(
-                            dynamo_kv_router::selector::WorkerSelectionInput::hosted(ids, None),
+                            dynamo_worker_selection::selector::WorkerSelectionInput::hosted(
+                                ids, None,
+                            ),
                         )
                     })
                     .ok()

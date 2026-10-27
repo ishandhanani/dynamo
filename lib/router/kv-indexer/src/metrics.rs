@@ -1,16 +1,10 @@
 // SPDX-FileCopyrightText: Copyright (c) 2024-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-#[cfg(any(feature = "metrics", feature = "runtime-protocols"))]
+#[cfg(feature = "metrics")]
 use std::sync::Arc;
-#[cfg(all(feature = "metrics", feature = "runtime-protocols"))]
-use std::sync::OnceLock;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-#[cfg(feature = "runtime-protocols")]
-use dynamo_runtime::component::Component;
-#[cfg(all(feature = "metrics", feature = "runtime-protocols"))]
-use dynamo_runtime::metrics::MetricsHierarchy;
 #[cfg(feature = "metrics")]
 use prometheus::{IntCounter, IntCounterVec, Opts};
 
@@ -204,38 +198,37 @@ pub const METRIC_CKF_MUTATION_UNKNOWN_REMOVE: &str = "unknown_remove";
 pub const METRIC_CKF_MUTATION_CAPACITY_EXHAUSTED: &str = "capacity_exhausted";
 
 /// Metric name for KV cache events applied counter.
-#[cfg(all(feature = "metrics", feature = "runtime-protocols"))]
-const KV_CACHE_EVENTS_APPLIED_SUFFIX: &str = "kv_cache_events_applied";
 #[cfg(feature = "metrics")]
 const KV_CACHE_EVENTS_APPLIED_NAME: &str = "dynamo_kvrouter_kv_cache_events_applied";
 #[cfg(feature = "metrics")]
-const KV_CACHE_EVENTS_APPLIED_HELP: &str = "Total number of KV cache events applied to index";
+#[doc(hidden)]
+pub const KV_CACHE_EVENTS_APPLIED_HELP: &str = "Total number of KV cache events applied to index";
 #[cfg(feature = "metrics")]
-const KV_CACHE_EVENTS_APPLIED_LABELS: &[&str] = &["event_type", "status"];
-#[cfg(all(feature = "metrics", feature = "runtime-protocols"))]
-const KV_CACHE_EVENT_WARNINGS_SUFFIX: &str = "kv_cache_event_warnings";
+#[doc(hidden)]
+pub const KV_CACHE_EVENTS_APPLIED_LABELS: &[&str] = &["event_type", "status"];
 #[cfg(feature = "metrics")]
 const KV_CACHE_EVENT_WARNINGS_NAME: &str = "dynamo_kvrouter_kv_cache_event_warnings";
 #[cfg(feature = "metrics")]
-const KV_CACHE_EVENT_WARNINGS_HELP: &str =
+#[doc(hidden)]
+pub const KV_CACHE_EVENT_WARNINGS_HELP: &str =
     "Total number of suspicious KV cache events seen by the router indexer";
 #[cfg(feature = "metrics")]
-const KV_CACHE_EVENT_WARNINGS_LABELS: &[&str] = &["warning_kind"];
-#[cfg(all(feature = "metrics", feature = "runtime-protocols"))]
-const CKF_MUTATION_SUFFIX: &str = "ckf_mutation_total";
+#[doc(hidden)]
+pub const KV_CACHE_EVENT_WARNINGS_LABELS: &[&str] = &["warning_kind"];
 #[cfg(feature = "metrics")]
 const CKF_MUTATION_NAME: &str = "dynamo_kvrouter_ckf_mutation_total";
 #[cfg(feature = "metrics")]
-const CKF_MUTATION_HELP: &str = "Total number of CKF block-level mutation outcomes";
+#[doc(hidden)]
+pub const CKF_MUTATION_HELP: &str = "Total number of CKF block-level mutation outcomes";
 #[cfg(feature = "metrics")]
-const CKF_MUTATION_LABELS: &[&str] = &["outcome"];
-
-#[cfg(all(feature = "metrics", feature = "runtime-protocols"))]
-static KV_INDEXER_METRICS: OnceLock<Arc<KvIndexerMetrics>> = OnceLock::new();
+#[doc(hidden)]
+pub const CKF_MUTATION_LABELS: &[&str] = &["outcome"];
 
 impl KvIndexerMetrics {
+    /// Build from host-created counters (hosts register them under their own metric names).
     #[cfg(feature = "metrics")]
-    fn new(
+    #[doc(hidden)]
+    pub fn from_counters(
         kv_cache_events_applied: IntCounterVec,
         kv_cache_event_warnings: IntCounterVec,
         ckf_mutation: IntCounterVec,
@@ -249,7 +242,7 @@ impl KvIndexerMetrics {
 
     #[cfg(feature = "metrics")]
     fn new_prometheus() -> Result<Self, prometheus::Error> {
-        Ok(Self::new(
+        Ok(Self::from_counters(
             IntCounterVec::new(
                 Opts::new(KV_CACHE_EVENTS_APPLIED_NAME, KV_CACHE_EVENTS_APPLIED_HELP),
                 KV_CACHE_EVENTS_APPLIED_LABELS,
@@ -273,59 +266,6 @@ impl KvIndexerMetrics {
         registry.register(Box::new(metrics.kv_cache_event_warnings.clone()))?;
         registry.register(Box::new(metrics.ckf_mutation.clone()))?;
         Ok(metrics)
-    }
-
-    /// Creates a new KvIndexerMetrics from a Component, memoizing the result in
-    /// KV_INDEXER_METRICS to avoid duplicate registration issues.
-    #[cfg(feature = "runtime-protocols")]
-    pub fn from_component(component: &Component) -> Arc<Self> {
-        #[cfg(feature = "metrics")]
-        {
-            KV_INDEXER_METRICS
-                .get_or_init(|| {
-                    match (
-                        component.metrics().create_intcountervec(
-                            KV_CACHE_EVENTS_APPLIED_SUFFIX,
-                            KV_CACHE_EVENTS_APPLIED_HELP,
-                            KV_CACHE_EVENTS_APPLIED_LABELS,
-                            &[],
-                        ),
-                        component.metrics().create_intcountervec(
-                            KV_CACHE_EVENT_WARNINGS_SUFFIX,
-                            KV_CACHE_EVENT_WARNINGS_HELP,
-                            KV_CACHE_EVENT_WARNINGS_LABELS,
-                            &[],
-                        ),
-                        component.metrics().create_intcountervec(
-                            CKF_MUTATION_SUFFIX,
-                            CKF_MUTATION_HELP,
-                            CKF_MUTATION_LABELS,
-                            &[],
-                        ),
-                    ) {
-                        (
-                            Ok(kv_cache_events_applied),
-                            Ok(kv_cache_event_warnings),
-                            Ok(ckf_mutation),
-                        ) => Arc::new(Self::new(
-                            kv_cache_events_applied,
-                            kv_cache_event_warnings,
-                            ckf_mutation,
-                        )),
-                        (Err(e), _, _) | (_, Err(e), _) | (_, _, Err(e)) => {
-                            tracing::warn!("Failed to create kv indexer metrics from component: {}. Using unregistered metrics as fallback.", e);
-                            Arc::new(Self::new_unregistered())
-                        }
-                    }
-                })
-                .clone()
-        }
-
-        #[cfg(not(feature = "metrics"))]
-        {
-            let _ = component;
-            Arc::new(Self::new_unregistered())
-        }
     }
 
     /// Creates a new KvIndexerMetrics which is not registered with a MetricsRegistry.

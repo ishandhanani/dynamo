@@ -130,7 +130,10 @@ where
             retain_kv_transfer_chain,
             shared_cache_hits,
             worker_loads: FxHashMap::default(),
-            resp_tx,
+            resp_tx: resp_tx.map(|tx| {
+                Box::new(dynamo_worker_selection::selector::OneshotResponder(tx))
+                    as Box<dyn dynamo_router_types::sched::SchedulingResponder>
+            }),
         };
 
         (request, block_hashes)

@@ -27,7 +27,7 @@ use crate::{
     },
     types::Annotated,
 };
-use dynamo_kv_router::services::selection::affinity::MAX_SESSION_AFFINITY_ID_BYTES;
+use dynamo_worker_selection::affinity::MAX_SESSION_AFFINITY_ID_BYTES;
 
 fn session_id() -> SessionAffinityId {
     SessionAffinityId::new("session-1")
@@ -40,7 +40,7 @@ fn target(worker_id: u64, dp_rank: Option<u32>) -> AffinityTarget {
 fn table_target(
     worker_id: u64,
     dp_rank: Option<u32>,
-) -> dynamo_kv_router::services::selection::affinity::AffinityTarget {
+) -> dynamo_worker_selection::affinity::AffinityTarget {
     to_table(target(worker_id, dp_rank))
 }
 

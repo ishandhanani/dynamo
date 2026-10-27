@@ -3503,7 +3503,7 @@ mod ownership_tests {
     #[test]
     fn prefill_load_model_wire_aliases_preserve_card_and_mdcsum() {
         use crate::entrypoint::RouterConfig;
-        use dynamo_kv_router::scheduling::config::RouterPrefillLoadModel;
+        use dynamo_router_types::config::RouterPrefillLoadModel;
         use dynamo_runtime::pipeline::RouterMode;
 
         for mode in [RouterMode::KV, RouterMode::RoundRobin] {

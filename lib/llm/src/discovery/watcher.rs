@@ -2202,10 +2202,10 @@ mod tests {
             crate::test_utils::assert_isolated_success(&output);
             return;
         }
-        use dynamo_kv_router::plugins::worker_selection::WorkerCandidates;
-        use dynamo_kv_router::scheduling::{
+        use dynamo_admission::classifier::{
             ClassifyEvent, ClassifyFuture, ClassifyRequest, RequestClassifier,
         };
+        use dynamo_worker_selection::plugin::WorkerCandidates;
         use std::sync::atomic::{AtomicUsize, Ordering};
 
         struct RejectingClassifier {
@@ -2260,7 +2260,7 @@ request_classifier:
         );
         let instances = Arc::new(AtomicUsize::new(0));
         let (events, mut received) = tokio::sync::mpsc::unbounded_channel();
-        let factory: dynamo_kv_router::scheduling::RequestClassifierFactory = Arc::new({
+        let factory: dynamo_admission::classifier::RequestClassifierFactory = Arc::new({
             let instances = instances.clone();
             move |context| {
                 assert_eq!(context.block_size(), 16);

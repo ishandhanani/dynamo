@@ -16,7 +16,6 @@ default = []
 bench = []
 # Test helpers for dependents' tests; never enable in release.
 testing = []
-runtime-protocols = ["dep:dynamo-runtime"]
 
 [dependencies]
 serde = { workspace = true }
@@ -35,7 +34,6 @@ xxhash-rust = { workspace = true }
 uuid = { workspace = true }
 derive_builder = { workspace = true }
 async-trait = { workspace = true }
-dynamo-runtime = { workspace = true, optional = true }
 dynamo-truthy = { workspace = true }
 serde_yaml = "0.9.34"
 

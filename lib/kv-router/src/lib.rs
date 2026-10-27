@@ -6,7 +6,7 @@
 //! This crate provides the core radix tree implementation and protocols for
 //! efficient KV cache lookup and routing in distributed LLM inference systems.
 
-pub mod conditional_disagg;
+pub use dynamo_worker_selection::conditional_disagg;
 
 pub use dynamo_kv_indexer as indexer;
 pub use dynamo_kv_indexer::{recovery, session_prefix_index, zmq_wire};
@@ -60,7 +60,6 @@ pub use radix_tree::RadixTree;
 pub use scheduling::LocalScheduler;
 pub use scheduling::LoraWorkerFilter;
 pub use scheduling::PrefillLoadEstimator;
-pub use scheduling::policy::{FcfsPolicy, RouterSchedulingPolicy, SchedulingPolicy, WsptPolicy};
 pub use scheduling::{
     KvSchedulerError, PotentialLoad, SchedulingRequest, SchedulingResponse, SessionContext,
     WorkerSelectionInputTrigger, WorkerSelectionPolicyError,

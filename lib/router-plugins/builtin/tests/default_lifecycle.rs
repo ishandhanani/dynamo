@@ -65,7 +65,7 @@ async fn shared_core_books_and_releases_with_the_builtin_default() {
         .unwrap();
     assert!(partition.scheduler().has_request("request"));
     // Replacing scorer/picker state must leave active reservations intact.
-    use dynamo_kv_router::plugins::worker_selection::RuntimePolicyUpdate;
+    use dynamo_worker_selection::plugin::RuntimePolicyUpdate;
     let control = partition.scheduler().policy_control();
     let initial = control.get().await.unwrap();
     control
@@ -88,7 +88,7 @@ async fn shared_core_books_and_releases_with_the_builtin_default() {
 
 #[tokio::test]
 async fn runtime_updates_are_conditional_and_cancelled_writes_do_not_apply() {
-    use dynamo_kv_router::plugins::worker_selection::{RuntimePolicyError, RuntimePolicyUpdate};
+    use dynamo_worker_selection::plugin::{RuntimePolicyError, RuntimePolicyUpdate};
     let core = SelectionCore::try_new_local(
         KvRouterConfig {
             use_kv_events: false,
@@ -194,7 +194,7 @@ async fn scoring_error_does_not_book_and_allows_retry() {
         .unwrap();
     assert!(matches!(
         partition.scheduler().policy_control().get().await,
-        Err(dynamo_kv_router::plugins::worker_selection::RuntimePolicyError::Unsupported)
+        Err(dynamo_worker_selection::plugin::RuntimePolicyError::Unsupported)
     ));
     let error = core
         .select_and_reserve(reserve_request("request"))

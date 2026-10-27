@@ -38,6 +38,68 @@ pub mod remote;
 pub use self::embedding_cache::{
     EmbeddingCacheIndexer, preprocessed_multimodal_cache_keys, try_build_cache_indexer,
 };
+
+use dynamo_kv_indexer::{
+    CKF_MUTATION_HELP, CKF_MUTATION_LABELS, KV_CACHE_EVENT_WARNINGS_HELP,
+    KV_CACHE_EVENT_WARNINGS_LABELS, KV_CACHE_EVENTS_APPLIED_HELP, KV_CACHE_EVENTS_APPLIED_LABELS,
+};
+use dynamo_runtime::metrics::MetricsHierarchy;
+
+/// Component-registered indexer metrics, memoized per process so repeated indexer construction
+/// never double-registers the counters.
+pub trait KvIndexerMetricsExt {
+    fn from_component(component: &Component) -> Arc<KvIndexerMetrics>;
+}
+
+const KV_CACHE_EVENTS_APPLIED_SUFFIX: &str = "kv_cache_events_applied";
+const KV_CACHE_EVENT_WARNINGS_SUFFIX: &str = "kv_cache_event_warnings";
+const CKF_MUTATION_SUFFIX: &str = "ckf_mutation_total";
+static KV_INDEXER_METRICS: std::sync::OnceLock<Arc<KvIndexerMetrics>> = std::sync::OnceLock::new();
+
+impl KvIndexerMetricsExt for KvIndexerMetrics {
+    fn from_component(component: &Component) -> Arc<KvIndexerMetrics> {
+        {
+            KV_INDEXER_METRICS
+                .get_or_init(|| {
+                    match (
+                        component.metrics().create_intcountervec(
+                            KV_CACHE_EVENTS_APPLIED_SUFFIX,
+                            KV_CACHE_EVENTS_APPLIED_HELP,
+                            KV_CACHE_EVENTS_APPLIED_LABELS,
+                            &[],
+                        ),
+                        component.metrics().create_intcountervec(
+                            KV_CACHE_EVENT_WARNINGS_SUFFIX,
+                            KV_CACHE_EVENT_WARNINGS_HELP,
+                            KV_CACHE_EVENT_WARNINGS_LABELS,
+                            &[],
+                        ),
+                        component.metrics().create_intcountervec(
+                            CKF_MUTATION_SUFFIX,
+                            CKF_MUTATION_HELP,
+                            CKF_MUTATION_LABELS,
+                            &[],
+                        ),
+                    ) {
+                        (
+                            Ok(kv_cache_events_applied),
+                            Ok(kv_cache_event_warnings),
+                            Ok(ckf_mutation),
+                        ) => Arc::new(KvIndexerMetrics::from_counters(
+                            kv_cache_events_applied,
+                            kv_cache_event_warnings,
+                            ckf_mutation,
+                        )),
+                        (Err(e), _, _) | (_, Err(e), _) | (_, _, Err(e)) => {
+                            tracing::warn!("Failed to create kv indexer metrics from component: {}. Using unregistered metrics as fallback.", e);
+                            Arc::new(KvIndexerMetrics::new_unregistered())
+                        }
+                    }
+                })
+                .clone()
+        }
+    }
+}
 use self::remote::RemoteIndexer;
 pub use self::remote::{ServedIndexerHandle, ServedIndexerMode, ensure_served_indexer_service};
 #[cfg(feature = "ckf-diagnostics")]

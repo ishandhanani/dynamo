@@ -11,13 +11,14 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;
 
 use async_trait::async_trait;
-use dynamo_kv_router::plugins::RouterPluginRegistry;
-use dynamo_kv_router::plugins::request_classifier::{
-    ClassifierError, ClassifyEvent, ClassifyFuture, ClassifyRequest, RequestClassifier,
-    RequestClassifierContext, RequestClassifierFactory, RequestClassifierParameters,
-    RequestClassifierProviderError, RequestClassifierRegistryError, RequestProgress,
+use dynamo_admission::classifier::{
+    ClassifyEvent, ClassifyFuture, ClassifyRequest, RequestClassifier, RequestClassifierContext,
+    RequestClassifierFactory, RequestClassifierParameters, RequestClassifierProviderError,
+    RequestClassifierRegistryError, RequestProgress,
 };
-use dynamo_kv_router::plugins::worker_selection::WorkerCandidates;
+use dynamo_kv_router::plugins::RouterPluginRegistry;
+use dynamo_router_types::sched::ClassifierError;
+use dynamo_worker_selection::plugin::WorkerCandidates;
 use parking_lot::Mutex;
 use thiserror::Error;
 use tokio::sync::Notify;
@@ -340,8 +341,8 @@ impl RequestClassifier for ThunderAgentClassifier {
 mod tests {
     use std::time::Duration;
 
-    use dynamo_kv_router::plugins::worker_selection::{WorkerCapacity, WorkerInfo};
     use dynamo_router_types::protocols::WorkerWithDpRank;
+    use dynamo_worker_selection::plugin::{WorkerCapacity, WorkerInfo};
 
     use super::scheduler::ProgramLifecycle;
     use super::*;

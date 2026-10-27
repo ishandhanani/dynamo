@@ -74,8 +74,10 @@ required-features = ["media-ffmpeg"]
 dynamo-custom-policy-builtin = { workspace = true }
 # repo
 dynamo-http-server = { workspace = true }
-dynamo-kv-router = { workspace = true, features = ["metrics", "runtime-protocols", "standalone-selection"] }
-dynamo-kv-indexer = { workspace = true, features = ["metrics", "runtime-protocols"] }
+dynamo-kv-router = { workspace = true, features = ["metrics", "standalone-selection"] }
+dynamo-admission = { workspace = true }
+dynamo-worker-selection = { workspace = true }
+dynamo-kv-indexer = { workspace = true, features = ["metrics"] }
 dynamo-slot-tracker = { workspace = true }
 dynamo-router-types = { workspace = true }
 dynamo-memory = { workspace = true }
@@ -242,6 +244,7 @@ sysinfo = { workspace = true }
 [dev-dependencies]
 tokio-rustls = { workspace = true }
 dynamo-kv-router = { workspace = true, features = ["testing"] }
+dynamo-worker-selection = { workspace = true, features = ["testing"] }
 dynamo-runtime = { workspace = true, features = ["testing"] }
 tokio = { workspace = true, features = ["test-util"] }
 approx = "0.5"

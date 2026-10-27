@@ -463,11 +463,11 @@ pub(crate) fn find_invalid_argument_in_chain<'a>(
 
 fn find_queue_rejection_in_chain<'a>(
     err: &'a (dyn std::error::Error + 'static),
-) -> Option<&'a dynamo_kv_router::scheduling::QueueRejection> {
+) -> Option<&'a dynamo_router_types::protocols::QueueRejection> {
     let mut current = Some(err);
     while let Some(error) = current {
         if let Some(rejection) =
-            error.downcast_ref::<dynamo_kv_router::scheduling::QueueRejection>()
+            error.downcast_ref::<dynamo_router_types::protocols::QueueRejection>()
         {
             return Some(rejection);
         }
@@ -7691,7 +7691,7 @@ mod tests {
 
     #[test]
     fn queue_rejection_maps_to_structured_http_529() {
-        use dynamo_kv_router::scheduling::{QueueLimitKind, QueueRejection};
+        use dynamo_router_types::protocols::{QueueLimitKind, QueueRejection};
 
         let rejection = QueueRejection {
             policy_class: "latency".to_string(),

@@ -200,22 +200,6 @@ impl MaybeError for WorkerKvQueryResponse {
     }
 }
 
-#[cfg(feature = "runtime-protocols")]
-impl dynamo_runtime::protocols::maybe_error::MaybeError for WorkerKvQueryResponse {
-    fn from_err(err: impl std::error::Error + 'static) -> Self {
-        WorkerKvQueryResponse::Error(err.to_string())
-    }
-
-    fn err(&self) -> Option<dynamo_runtime::error::DynamoError> {
-        match self {
-            WorkerKvQueryResponse::Error(msg) => {
-                Some(dynamo_runtime::error::DynamoError::msg(msg.clone()))
-            }
-            _ => None,
-        }
-    }
-}
-
 /// Request to query a served KV indexer for overlap scores.
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct IndexerQueryRequest {
@@ -301,22 +285,6 @@ impl MaybeError for IndexerQueryResponse {
     }
 }
 
-#[cfg(feature = "runtime-protocols")]
-impl dynamo_runtime::protocols::maybe_error::MaybeError for IndexerQueryResponse {
-    fn from_err(err: impl std::error::Error + 'static) -> Self {
-        IndexerQueryResponse::Error(err.to_string())
-    }
-
-    fn err(&self) -> Option<dynamo_runtime::error::DynamoError> {
-        match self {
-            IndexerQueryResponse::Error(msg) => {
-                Some(dynamo_runtime::error::DynamoError::msg(msg.clone()))
-            }
-            _ => None,
-        }
-    }
-}
-
 /// Request to record a routing decision on a served approximate-mode indexer.
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct IndexerRecordRoutingDecisionRequest {
@@ -363,22 +331,6 @@ impl MaybeError for IndexerRecordRoutingDecisionResponse {
         match self {
             IndexerRecordRoutingDecisionResponse::Error(msg) => {
                 Some(Box::new(std::io::Error::other(msg.clone())))
-            }
-            _ => None,
-        }
-    }
-}
-
-#[cfg(feature = "runtime-protocols")]
-impl dynamo_runtime::protocols::maybe_error::MaybeError for IndexerRecordRoutingDecisionResponse {
-    fn from_err(err: impl std::error::Error + 'static) -> Self {
-        IndexerRecordRoutingDecisionResponse::Error(err.to_string())
-    }
-
-    fn err(&self) -> Option<dynamo_runtime::error::DynamoError> {
-        match self {
-            IndexerRecordRoutingDecisionResponse::Error(msg) => {
-                Some(dynamo_runtime::error::DynamoError::msg(msg.clone()))
             }
             _ => None,
         }

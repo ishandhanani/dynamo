@@ -15,9 +15,11 @@ use std::sync::Arc;
 use dynamo_kv_router::KvRouterConfig;
 use dynamo_kv_router::plugins::RouterPluginRegistry;
 use dynamo_kv_router::plugins::worker_selection::{
-    RuntimePolicyError, WorkerFilter, WorkerSelectionPolicy, WorkerSelectionPolicyFactory,
     WorkerSelectionPolicyParameters, WorkerSelectionPolicyProviderError,
     WorkerSelectionPolicyRegistryError,
+};
+use dynamo_worker_selection::plugin::{
+    RuntimePolicyError, WorkerFilter, WorkerSelectionPolicy, WorkerSelectionPolicyFactory,
 };
 use filter::MinimumDeviceOverlapFilter;
 use picker::RequestAwarePicker;

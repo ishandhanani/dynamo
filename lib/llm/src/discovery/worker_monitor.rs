@@ -9,7 +9,7 @@ use tokio_util::sync::CancellationToken;
 
 use arc_swap::ArcSwap;
 use dashmap::DashMap;
-use dynamo_kv_router::scheduling::BusyThresholds;
+use dynamo_router_types::busy::BusyThresholds;
 use dynamo_router_types::protocols::ActiveLoad;
 use dynamo_slot_tracker::SchedulerLoadSnapshot;
 use serde::{Deserialize, Serialize};

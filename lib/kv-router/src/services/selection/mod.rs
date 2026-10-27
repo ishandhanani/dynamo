@@ -6,7 +6,7 @@
 //! The service owns worker selection and reservation state, but never forwards
 //! model requests and never owns model responses.
 
-pub mod affinity;
+pub use dynamo_worker_selection::affinity;
 mod catalog;
 mod core;
 mod error;

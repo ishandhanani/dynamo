@@ -9,15 +9,13 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow};
+use dynamo_admission::policy_queue::{PolicyQueue, QueueSnapshot};
 use dynamo_kv_indexer::{
     KvIndexerInterface, LowerTierIndexers, LowerTierQueryOptions, TieredMatchDetails,
     query_lower_tiers_with_options,
 };
 use dynamo_kv_router::LocalBlockHash;
-use dynamo_kv_router::scheduling::{
-    OverlapAnalysis, OverlapSignals, PolicyClassConfig, PolicyProfile, PolicyQueue, QueueSnapshot,
-    ScheduleMode, WorkerPlacement,
-};
+use dynamo_kv_router::scheduling::OverlapAnalysis;
 use dynamo_kv_router::{
     ActiveSequencesMultiWorker, RadixTree, RoutingPartitionRef, SchedulingRequest, SequenceRequest,
     SessionContext, SessionPrefixIndexer, TrackingHashAlgorithm, TrackingHashContext,
@@ -25,10 +23,14 @@ use dynamo_kv_router::{
 };
 pub(in crate::replay) use dynamo_router_types::config::KvRouterConfig as ReplayKvRouterConfig;
 use dynamo_router_types::config::KvRouterConfig;
+use dynamo_router_types::config::policy::{PolicyClassConfig, PolicyProfile};
+use dynamo_router_types::overlap::OverlapSignals;
+use dynamo_router_types::protocols::WorkerPlacement;
 use dynamo_router_types::protocols::{
     BlockHashOptions, KvCacheEventData, PrefillLoadHint, RouterEvent, RoutingConstraints, WorkerId,
     WorkerWithDpRank, compute_block_hash_for_seq,
 };
+use dynamo_router_types::sched::ScheduleMode;
 use dynamo_slot_tracker::topology::WorkerDpRange;
 use dynamo_tokens::SequenceHash;
 use futures::executor::block_on;
@@ -2018,7 +2020,7 @@ models:
             .on_request_arrival(&ordinary_class_name, None, 0.0)
             .unwrap_err();
         let rejection = error
-            .downcast_ref::<dynamo_kv_router::scheduling::QueueRejection>()
+            .downcast_ref::<dynamo_router_types::protocols::QueueRejection>()
             .expect("replay should preserve the typed queue rejection");
         assert_eq!(rejection.policy_class, "latency_uncached");
         assert_eq!(rejection.current, 0);
@@ -2044,7 +2046,7 @@ models:
             .on_request_arrival(&rejected_after_shrink, Some(cached_hashes), 0.0)
             .unwrap_err();
         let rejection = error
-            .downcast_ref::<dynamo_kv_router::scheduling::QueueRejection>()
+            .downcast_ref::<dynamo_router_types::protocols::QueueRejection>()
             .expect("worker removal should retain the typed queue rejection");
         assert_eq!(rejection.current, 2);
         assert_eq!(rejection.limit, 1);

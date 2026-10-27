@@ -15,11 +15,6 @@ use std::time::Duration;
 use anyhow::{Context, Result};
 use dynamo_kv_router::WorkerType;
 use dynamo_kv_router::plugins::RouterPluginRegistry;
-use dynamo_kv_router::scheduling::queue::DEFAULT_MAX_BATCHED_TOKENS;
-use dynamo_kv_router::scheduling::{
-    NonMaxOverlapSelectionObserver, OverloadedWorkerProvider, QueueLimitKind, QueueRejection,
-    RejectThresholdsProvider, WorkerAvailabilityProvider,
-};
 use dynamo_kv_router::services::selection::{
     CatalogReconciler, DEFAULT_MODEL_NAME, HostCache, HostEligibility, HostLoad, HostReplication,
     HostTelemetry, KvEventIngress, KvIndexSource, SelectionHost, SelectionOperation,
@@ -27,9 +22,15 @@ use dynamo_kv_router::services::selection::{
     SelectionServiceBuilder, WorkerCatalogSource, WorkerRequest,
 };
 use dynamo_kv_router::{DEFAULT_ROUTING_GROUP, PrefillLoadEstimator, WorkerSelectionPolicyFactory};
+use dynamo_router_types::busy::RejectThresholdsProvider;
 use dynamo_router_types::config::KvRouterConfig;
 use dynamo_router_types::identity::RoutingPartitionId;
+use dynamo_router_types::protocols::{QueueLimitKind, QueueRejection};
 use dynamo_router_types::protocols::{WorkerConfigLike, WorkerId, WorkerWithDpRank};
+use dynamo_router_types::sched::{
+    NonMaxOverlapSelectionObserver, OverloadedWorkerProvider, WorkerAvailabilityProvider,
+};
+use dynamo_router_types::selection_inputs::DEFAULT_MAX_BATCHED_TOKENS;
 use dynamo_slot_tracker::{LocalWorkerLoad, ReplicaWorkerPolicy};
 use tokio_util::sync::CancellationToken;
 
@@ -55,7 +56,7 @@ pub(crate) struct EmbeddedSelectionArgs {
     pub available_worker_provider: WorkerAvailabilityProvider,
     pub registration_availability_provider: RegistrationAvailabilityProvider,
     pub shared_cache: Option<Arc<dyn dynamo_kv_router::SharedKvCache>>,
-    pub lora_worker_filter: Option<Arc<dyn dynamo_kv_router::scheduling::LoraWorkerFilter>>,
+    pub lora_worker_filter: Option<Arc<dyn dynamo_worker_selection::lora::LoraWorkerFilter>>,
     /// Builds and feeds the router's index from the runtime; the partition
     /// takes its index from it.
     pub ingress: Arc<dyn KvEventIngress>,
@@ -392,8 +393,7 @@ impl EmbeddedSelection {
         mode: crate::session_affinity::SessionAffinityMode,
     ) -> Result<crate::session_affinity::AffinityCoordinator> {
         let table = self.partition.session_affinity(
-            dynamo_kv_router::services::selection::affinity::SessionAffinityConfig::new(ttl)
-                .with_mode(mode),
+            dynamo_worker_selection::affinity::SessionAffinityConfig::new(ttl).with_mode(mode),
         )?;
         Ok(self
             .affinity

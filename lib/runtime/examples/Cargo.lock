@@ -326,6 +326,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "bs58"
+version = "0.5.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bf88ba1141d185c399bee5288d850d63b8369520c1eafc32a0430b5b6c287bf4"
+dependencies = [
+ "tinyvec",
+]
+
+[[package]]
 name = "bumpalo"
 version = "3.20.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -804,12 +813,47 @@ dependencies = [
 ]
 
 [[package]]
+name = "dynamo-kv-hashing"
+version = "1.7.0"
+dependencies = [
+ "derive_builder",
+ "dynamo-tokens",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+]
+
+[[package]]
 name = "dynamo-prometheus-names"
 version = "1.7.0"
 dependencies = [
  "anyhow",
  "once_cell",
  "regex",
+]
+
+[[package]]
+name = "dynamo-router-types"
+version = "1.7.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "blake3",
+ "derive_builder",
+ "dynamo-kv-hashing",
+ "dynamo-tokens",
+ "dynamo-truthy",
+ "fastrand",
+ "rmp-serde",
+ "rustc-hash",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "thiserror 2.0.18",
+ "tracing",
+ "uuid",
+ "xxhash-rust",
+ "zeroize",
 ]
 
 [[package]]
@@ -833,7 +877,9 @@ dependencies = [
  "derive_builder",
  "dynamo-http-server",
  "dynamo-prometheus-names",
+ "dynamo-router-types",
  "dynamo-truthy",
+ "dynamo-worker-selection",
  "educe",
  "either",
  "etcd-client",
@@ -893,10 +939,44 @@ dependencies = [
 ]
 
 [[package]]
+name = "dynamo-tokens"
+version = "1.7.0"
+dependencies = [
+ "bs58",
+ "bytemuck",
+ "dashmap",
+ "derive-getters",
+ "rustc-hash",
+ "serde",
+ "thiserror 2.0.18",
+ "uuid",
+ "xxhash-rust",
+]
+
+[[package]]
 name = "dynamo-truthy"
 version = "1.7.0"
 dependencies = [
  "anyhow",
+]
+
+[[package]]
+name = "dynamo-worker-selection"
+version = "1.7.0"
+dependencies = [
+ "async-trait",
+ "blake3",
+ "dashmap",
+ "dynamo-router-types",
+ "fastrand",
+ "parking_lot",
+ "rustc-hash",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+ "tokio-util",
+ "tracing",
 ]
 
 [[package]]

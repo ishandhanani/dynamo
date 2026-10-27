@@ -2,25 +2,27 @@
 // SPDX-License-Identifier: Apache-2.0
 
 pub use dynamo_router_types::config;
-mod filter;
+pub(crate) mod filter {
+    pub use dynamo_router_types::eligibility::*;
+}
 mod local;
-mod lora_filter;
+pub use dynamo_worker_selection::lora as lora_filter;
 pub mod overlap;
 pub mod overlap_refresh;
-pub mod policy;
 pub mod policy_config;
-pub mod policy_queue;
+pub use dynamo_admission::policy_queue;
 pub use dynamo_router_types::prefill_load;
 pub mod queue;
 mod queue_admission;
 pub mod request_classifier;
-pub mod selector;
+pub use dynamo_worker_selection::selector;
 
-mod types;
+pub(crate) mod types {
+    pub use dynamo_router_types::sched::*;
+}
 pub use filter::*;
 pub use local::LocalScheduler;
 pub use lora_filter::LoraWorkerFilter;
-#[cfg(feature = "standalone-selection")]
 pub use lora_filter::narrow_allowed_worker_ids_by_lora;
 pub use overlap::{
     CacheHitEstimates, OverlapAnalysis, OverlapScoresResponse, OverlapSignals,

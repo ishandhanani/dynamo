@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 
 pub mod annotated;
 pub mod maybe_error;
+pub mod router_responses;
 
 pub type LeaseId = i64;
 

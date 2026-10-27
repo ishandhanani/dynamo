@@ -71,7 +71,7 @@ pub(crate) mod routing_load;
 pub mod sequence;
 pub mod shared_cache;
 
-pub use dynamo_kv_router::scheduling::OverlapScoresResponse;
+pub use dynamo_router_types::overlap::OverlapScoresResponse;
 // TODO(v1.7): Remove these compatibility aliases; use kv_router::plugins instead.
 pub use encoder_router::EncoderRouter;
 pub use indexer::Indexer;
@@ -183,7 +183,7 @@ impl PreparedSelectionPolicy {
         let key = embedded::embedded_partition_key(model_name);
         let policy = inner(config, worker_type, key.as_ref());
         let inputs =
-            dynamo_kv_router::selector::WorkerSelector::<ModelRuntimeConfig>::required_worker_inputs(
+            dynamo_worker_selection::selector::WorkerSelector::<ModelRuntimeConfig>::required_worker_inputs(
                 &policy,
             );
         let slot = Arc::new(parking_lot::Mutex::new(Some(policy)));
@@ -592,7 +592,7 @@ fn cancelled_error(context_id: &str) -> anyhow::Error {
 pub struct KvRouter {
     indexer: Indexer,
     selection: embedded::EmbeddedSelection,
-    required_worker_inputs: dynamo_kv_router::selector::WorkerInputs,
+    required_worker_inputs: dynamo_worker_selection::plugin::WorkerInputs,
     workers_with_configs: RuntimeConfigWatch,
     block_size: u32,
     kv_router_config: KvRouterConfig,
@@ -1001,7 +1001,7 @@ impl KvRouter {
         self.selection.scheduler().policy_control()
     }
 
-    pub fn required_worker_inputs(&self) -> dynamo_kv_router::selector::WorkerInputs {
+    pub fn required_worker_inputs(&self) -> dynamo_worker_selection::plugin::WorkerInputs {
         self.required_worker_inputs
     }
 
@@ -2008,7 +2008,7 @@ impl Drop for KvRouter {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use dynamo_kv_router::plugins::worker_selection::WorkerCapacity;
+    use dynamo_worker_selection::plugin::WorkerCapacity;
     use std::collections::{HashMap, HashSet};
 
     use async_trait::async_trait;
@@ -2017,7 +2017,7 @@ mod tests {
     use tokio::sync::watch;
 
     use crate::local_model::runtime_config::ModelRuntimeConfig;
-    use dynamo_kv_router::selector::{
+    use dynamo_worker_selection::plugin::{
         WorkerCandidate, WorkerFilter, WorkerInputView, WorkerPicker, WorkerSelectionContext,
     };
 
@@ -2984,7 +2984,7 @@ mod tests {
     /// the scheduler's booking cleanup.
     #[tokio::test]
     async fn request_lease_manager_releases_bookings_only_once_scheduler_is_set() {
-        use dynamo_kv_router::scheduling::queue::SchedulerBookingDescriptor;
+        use dynamo_router_types::protocols::SchedulerBookingDescriptor;
 
         let router = tracked_router("lease-manager").await;
         let worker = WorkerWithDpRank::from_worker_id(1);
@@ -3611,7 +3611,7 @@ mod tests {
 
     #[tokio::test]
     async fn client_availability_distinguishes_startup_from_last_worker_removal() {
-        use dynamo_kv_router::scheduling::{RoutingEligibility, WorkerEligibilityError};
+        use dynamo_router_types::eligibility::{RoutingEligibility, WorkerEligibilityError};
 
         const DECODE_WORKER: u64 = 1;
         const PREFILL_WORKER: u64 = 2;

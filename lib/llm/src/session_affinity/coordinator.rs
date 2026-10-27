@@ -14,13 +14,13 @@ use std::{
     time::Duration,
 };
 
-use dynamo_kv_router::services::selection::affinity::{
-    AcquireStep, AffinityError, AffinityLease, Hold, SessionAffinity, SessionAffinityConfig,
-};
 use dynamo_runtime::{
     engine::{AsyncEngineContext, AsyncEngineContextProvider},
     error::{DynamoError, ErrorType},
     pipeline::{Error, ManyOut, ResponseStream},
+};
+use dynamo_worker_selection::affinity::{
+    AcquireStep, AffinityError, AffinityLease, Hold, SessionAffinity, SessionAffinityConfig,
 };
 use futures::Stream;
 
@@ -36,13 +36,13 @@ use crate::{
 };
 
 #[cfg(test)]
-pub(super) use dynamo_kv_router::services::selection::affinity::ReplicaApplyOutcome;
+pub(super) use dynamo_worker_selection::affinity::ReplicaApplyOutcome;
 
 /// The pipeline's routing target; the table's `AffinityTarget` has the same
 /// shape and the two convert at this boundary.
 pub type AffinityTarget = dynamo_runtime::pipeline::RouteTarget;
 
-type TableTarget = dynamo_kv_router::services::selection::affinity::AffinityTarget;
+type TableTarget = dynamo_worker_selection::affinity::AffinityTarget;
 
 pub(crate) fn to_table(target: AffinityTarget) -> TableTarget {
     TableTarget::new(target.worker_id, target.dp_rank)
@@ -240,14 +240,12 @@ impl AffinityCoordinator {
     #[cfg(test)]
     pub(super) fn next_version_for_test(
         &self,
-    ) -> dynamo_kv_router::services::selection::affinity::AffinityVersion {
+    ) -> dynamo_worker_selection::affinity::AffinityVersion {
         self.inner.table.next_version()
     }
 
     #[cfg(test)]
-    pub(super) fn table_for_test(
-        &self,
-    ) -> dynamo_kv_router::services::selection::affinity::WeakSessionAffinity {
+    pub(super) fn table_for_test(&self) -> dynamo_worker_selection::affinity::WeakSessionAffinity {
         self.inner.table.downgrade()
     }
 
@@ -268,7 +266,7 @@ impl AffinityCoordinator {
         sequence: u64,
         writer_id: u64,
     ) -> ReplicaApplyOutcome {
-        use dynamo_kv_router::services::selection::affinity::AffinityVersion;
+        use dynamo_worker_selection::affinity::AffinityVersion;
         self.inner.table.apply_replica_update(
             session_id.into(),
             to_table(target),

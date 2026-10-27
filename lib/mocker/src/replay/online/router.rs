@@ -12,9 +12,7 @@ use dynamo_kv_indexer::{
     KvIndexer, KvIndexerInterface, KvIndexerMetrics, LowerTierIndexers, LowerTierQueryOptions,
     MatchDetails, ThreadPoolIndexer, TieredMatchDetails, query_lower_tiers_with_options,
 };
-use dynamo_kv_router::scheduling::{
-    OverlapAnalysis, ScheduleMode, ScheduleRequest, SessionContext,
-};
+use dynamo_kv_router::scheduling::OverlapAnalysis;
 use dynamo_kv_router::{
     ConcurrentRadixTreeCompressed, RoutingPartitionRef, TrackingHashContext, TrackingHashScope,
 };
@@ -23,6 +21,7 @@ use dynamo_router_types::protocols::{
     BlockHashOptions, RouterEvent, RoutingConstraints, StorageTier, WorkerId,
     compute_block_hash_for_seq,
 };
+use dynamo_router_types::sched::{ScheduleMode, ScheduleRequest, SessionContext};
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;

@@ -8,6 +8,8 @@ members = [
     "lib/router/types",
     "lib/router/kv-indexer",
     "lib/router/slot-tracker",
+    "lib/router/admission",
+    "lib/router/worker-selection",
     "lib/llm",
     "lib/rl",
     "lib/runtime",
@@ -65,6 +67,8 @@ dynamo-prometheus-names = { path = "lib/prometheus-names", version = "1.7.0" }
 dynamo-router-types = { path = "lib/router/types", version = "1.7.0" }
 dynamo-kv-indexer = { path = "lib/router/kv-indexer", version = "1.7.0" }
 dynamo-slot-tracker = { path = "lib/router/slot-tracker", version = "1.7.0" }
+dynamo-admission = { path = "lib/router/admission", version = "1.7.0" }
+dynamo-worker-selection = { path = "lib/router/worker-selection", version = "1.7.0" }
 dynamo-runtime = { path = "lib/runtime", version = "1.7.0" }
 dynamo-llm = { path = "lib/llm", version = "1.7.0", default-features = false }
 dynamo-rl = { path = "lib/rl", version = "1.7.0" }

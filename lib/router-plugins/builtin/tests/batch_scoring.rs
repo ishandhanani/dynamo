@@ -290,7 +290,7 @@ fn picker_columns_and_costs_stay_aligned_after_a_scoring_error() {
         vec![Box::new(FailSecondScoreOnce(0))],
         Box::new(CheckColumns),
     );
-    let select = |request: &dynamo_kv_router::scheduling::SchedulingRequest| {
+    let select = |request: &dynamo_router_types::sched::SchedulingRequest| {
         policy.select_worker(support::selection_input(&workers, request, 16))
     };
     assert!(
