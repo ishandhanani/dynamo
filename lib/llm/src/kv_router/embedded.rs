@@ -39,7 +39,7 @@ use tokio_util::sync::CancellationToken;
 use crate::discovery::TopologyWatch;
 use crate::kv_router::metrics::{
     ActiveSequenceIngressMetrics, ROUTER_QUEUE_METRICS, RegistrationAvailabilityProvider,
-    RouterQueueMetricHandles, RouterRequestMetrics, WORKER_LOAD_METRICS,
+    RouterQueueMetricHandles, RouterQueueSource, RouterRequestMetrics, WORKER_LOAD_METRICS,
 };
 use crate::local_model::runtime_config::ModelRuntimeConfig;
 
@@ -93,56 +93,6 @@ fn record_queue_rejection(
     }
 }
 
-fn update_queue_metrics(
-    per_class: &[RouterQueueMetricHandles],
-    mut stats_for: impl FnMut(usize) -> Option<dynamo_scheduler::queue::ClassQueueStats>,
-) {
-    for (class_index, handles) in per_class.iter().enumerate() {
-        let Some(stats) = stats_for(class_index) else {
-            debug_assert!(
-                false,
-                "missing queue counters for policy class {class_index}"
-            );
-            continue;
-        };
-        handles.update_admission(stats.received_total, stats.rejected_due_time_passed_total);
-        handles.pending_requests.set(stats.pending_count as i64);
-        handles
-            .pending_isl_tokens
-            .set(stats.pending_isl_tokens as i64);
-        handles
-            .pending_cached_tokens
-            .set(stats.pending_cached_tokens as i64);
-    }
-}
-
-/// Refresh queue gauges on worker-config changes and at least once a minute.
-fn spawn_queue_metrics_updater(
-    partition: SelectionPartition,
-    handles: Vec<RouterQueueMetricHandles>,
-    cancellation_token: CancellationToken,
-) {
-    let mut queue_updates = partition.scheduler().subscribe_queue_updates();
-    tokio::spawn(async move {
-        let period = Duration::from_secs(60);
-        let mut recheck = tokio::time::interval_at(tokio::time::Instant::now() + period, period);
-        loop {
-            update_queue_metrics(&handles, |index| {
-                partition.scheduler().class_queue_stats(index)
-            });
-            tokio::select! {
-                _ = cancellation_token.cancelled() => break,
-                changed = queue_updates.changed() => {
-                    if changed.is_err() {
-                        break;
-                    }
-                }
-                _ = recheck.tick() => {}
-            }
-        }
-    });
-}
-
 fn non_max_overlap_observer(worker_type: &'static str) -> NonMaxOverlapSelectionObserver {
     Arc::new(move |request_id, selection| {
         let overlap_blocks_lost = selection.overlap_blocks_lost();
@@ -183,10 +133,12 @@ pub(crate) struct EmbeddedSelection {
     partition: SelectionPartition,
     affinity: OnceLock<crate::session_affinity::AffinityCoordinator>,
     worker_type: &'static str,
-    /// Queue gauges and rejection counters per policy class, index-aligned with
-    /// the scheduler's `class_queue_stats`.
+    /// Backpressure counters per policy class, index-aligned with the
+    /// scheduler's class indices.
     queue_metrics: Vec<RouterQueueMetricHandles>,
     queue_metric_indices: HashMap<String, usize>,
+    /// Keeps this partition's queue gauges and admission totals in the scrape.
+    _queue_source: Arc<RouterQueueSource>,
 }
 
 /// Bridges the partition's scheduler load snapshots to the router's
@@ -325,9 +277,22 @@ impl EmbeddedSelection {
             .enumerate()
             .map(|(index, class)| (class.name.clone(), index))
             .collect();
-        spawn_queue_metrics_updater(
-            partition.clone(),
-            queue_metrics.clone(),
+        let queue_source = ROUTER_QUEUE_METRICS.watch_queue(
+            profile
+                .classes()
+                .iter()
+                .map(|class| {
+                    [
+                        key.model_name.clone(),
+                        args.metric_worker_type.to_string(),
+                        class.name.clone(),
+                    ]
+                })
+                .collect(),
+            {
+                let partition = partition.clone();
+                Arc::new(move |index| partition.scheduler().class_queue_stats(index))
+            },
             cancellation_token.child_token(),
         );
         if worker_type == WorkerType::Prefill
@@ -375,6 +340,7 @@ impl EmbeddedSelection {
                 worker_type: args.metric_worker_type,
                 queue_metrics,
                 queue_metric_indices,
+                _queue_source: queue_source,
             },
             replica_ingress,
         ))
@@ -384,9 +350,6 @@ impl EmbeddedSelection {
         if let Some(rejection) = rejection {
             record_queue_rejection(&self.queue_metrics, &self.queue_metric_indices, rejection);
         }
-        update_queue_metrics(&self.queue_metrics, |index| {
-            self.partition.scheduler().class_queue_stats(index)
-        });
     }
 
     pub(crate) fn affinity_coordinator(
@@ -518,47 +481,6 @@ pub(crate) fn worker_request_from_runtime_config(
 mod tests {
     use super::*;
     use dynamo_scheduler::selection::SchedulerLoadSink;
-
-    #[test]
-    fn queue_metrics_are_updated_by_class_index() {
-        let handles = ["latency", "bulk"]
-            .map(|class| ROUTER_QUEUE_METRICS.handles("index-test", "decode", class));
-        let stats = [
-            dynamo_scheduler::queue::ClassQueueStats {
-                received_total: 10,
-                rejected_due_time_passed_total: 1,
-                pending_count: 2,
-                pending_isl_tokens: 128,
-                pending_cached_tokens: 64,
-            },
-            dynamo_scheduler::queue::ClassQueueStats {
-                received_total: 20,
-                rejected_due_time_passed_total: 3,
-                pending_count: 3,
-                pending_isl_tokens: 384,
-                pending_cached_tokens: 192,
-            },
-        ];
-
-        update_queue_metrics(&handles, |index| stats.get(index).copied());
-        update_queue_metrics(&handles, |index| stats.get(index).copied());
-        for (handles, stats) in handles.iter().zip(stats) {
-            assert_eq!(handles.received_total.get(), stats.received_total);
-            assert_eq!(
-                handles.rejected_due_time_passed_total.get(),
-                stats.rejected_due_time_passed_total
-            );
-            assert_eq!(handles.pending_requests.get(), stats.pending_count as i64);
-            assert_eq!(
-                handles.pending_isl_tokens.get(),
-                stats.pending_isl_tokens as i64
-            );
-            assert_eq!(
-                handles.pending_cached_tokens.get(),
-                stats.pending_cached_tokens as i64
-            );
-        }
-    }
 
     #[test]
     fn worker_request_mirrors_runtime_config() {
