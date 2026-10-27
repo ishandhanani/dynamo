@@ -11,10 +11,11 @@ use dynamo_runtime::engine::AsyncEngineContext;
 use futures::{Stream, StreamExt};
 use tonic::Status;
 
-use dynamo_http_server::disconnect::ConnectionHandle;
 use crate::http::service::error::SanitizedError;
-use dynamo_http_server::metrics::{InflightGuard, request_was_unavailable};
+use crate::http::service::metrics::request_was_unavailable;
 use crate::types::Annotated;
+use dynamo_http_server::disconnect::ConnectionHandle;
+use dynamo_http_server::metrics::InflightGuard;
 
 /// Map a dispatch error that is not a client-visible rejection onto its gRPC status.
 ///
@@ -109,12 +110,12 @@ mod tests {
 #[cfg(test)]
 mod monitor_tests {
     use super::*;
+    use crate::protocols::openai::completions::NvCreateCompletionResponse;
+    use crate::protocols::tensor::NvCreateTensorResponse;
     use dynamo_http_server::disconnect::create_connection_monitor;
     use dynamo_http_server::metrics::{
         CancellationLabels, Endpoint, ErrorType, Metrics, RequestType, Status as RequestStatus,
     };
-    use crate::protocols::openai::completions::NvCreateCompletionResponse;
-    use crate::protocols::tensor::NvCreateTensorResponse;
     use dynamo_runtime::pipeline::context::Controller;
     use std::time::Duration;
 

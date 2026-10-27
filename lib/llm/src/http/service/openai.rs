@@ -54,6 +54,7 @@ use super::{
     service_v2::{self, BackendErrorCheck},
 };
 use crate::engines::ValidateRequest;
+use crate::http::service::metrics::RequestMetricsContextExt as _;
 use crate::preprocessor::{
     PRESERVE_OMITTED_MAX_TOKENS_CONTEXT_KEY, REQUEST_PARSING_OPTIONS_CONTEXT_KEY,
     decode_base64_to_floats,
@@ -350,7 +351,7 @@ pub(super) fn record_local_failure(class: ErrorClass) {
     if class == ErrorClass::Cancelled {
         return;
     }
-    dynamo_http_server::metrics::record_failure(&DynamoError::builder().class(class).build());
+    crate::http::service::metrics::record_failure(&DynamoError::builder().class(class).build());
 }
 
 fn sanitized_error_class(error: SanitizedError) -> ErrorClass {
@@ -419,7 +420,7 @@ fn responses_error_code(status_code: StatusCode) -> ResponseErrorCode {
 }
 
 fn stream_error_type(error: &dynamo_runtime::error::DynamoError) -> ErrorType {
-    use dynamo_http_server::metrics::{
+    use crate::http::service::metrics::{
         request_was_cancelled, request_was_rejected, request_was_timed_out, request_was_unavailable,
     };
 
@@ -770,7 +771,7 @@ impl ErrorMessage {
         };
 
         if record_failure {
-            dynamo_http_server::metrics::record_failure(error);
+            crate::http::service::metrics::record_failure(error);
         }
 
         if matches!(
@@ -834,13 +835,13 @@ impl ErrorMessage {
             );
         }
 
-        if let Some(error) = dynamo_http_server::metrics::queue_deadline_error(err.as_ref()) {
-            dynamo_http_server::metrics::record_failure(error);
+        if let Some(error) = crate::http::service::metrics::queue_deadline_error(err.as_ref()) {
+            crate::http::service::metrics::record_failure(error);
             let code = StatusCode::TOO_MANY_REQUESTS;
             return (
                 code,
                 Json(ErrorMessage {
-                    message: dynamo_http_server::metrics::REQUEST_DEADLINE_EXCEEDED_MESSAGE
+                    message: crate::http::service::metrics::REQUEST_DEADLINE_EXCEEDED_MESSAGE
                         .to_string(),
                     error_type: map_error_code_to_error_type(code),
                     code: code.as_u16(),
@@ -850,7 +851,7 @@ impl ErrorMessage {
             );
         }
 
-        if dynamo_http_server::metrics::request_was_cancelled(err.as_ref()) {
+        if crate::http::service::metrics::request_was_cancelled(err.as_ref()) {
             return ErrorMessage::sanitized_with_details(
                 SanitizedError::Cancelled,
                 format!("{err:#}"),
@@ -866,7 +867,7 @@ impl ErrorMessage {
         }
 
         // Check for ResourceExhausted anywhere in the error chain → HTTP 529
-        if dynamo_http_server::metrics::request_was_rejected(err.as_ref()) {
+        if crate::http::service::metrics::request_was_rejected(err.as_ref()) {
             return ErrorMessage::sanitized_with_details(
                 SanitizedError::Overloaded,
                 format!("{err:#}"),
@@ -874,7 +875,7 @@ impl ErrorMessage {
         }
 
         // No backend workers are currently routable → HTTP 503.
-        if dynamo_http_server::metrics::request_was_unavailable(err.as_ref()) {
+        if crate::http::service::metrics::request_was_unavailable(err.as_ref()) {
             return ErrorMessage::sanitized_with_details(
                 SanitizedError::Unavailable,
                 format!("{err:#}"),
@@ -1346,7 +1347,7 @@ async fn completions_single(
 
     // issue the generate call on the engine
     let stream = engine.generate(request).await.map_err(|e| {
-        if dynamo_http_server::metrics::request_was_rejected(e.as_ref()) {
+        if crate::http::service::metrics::request_was_rejected(e.as_ref()) {
             state
                 .metrics_clone()
                 .inc_rejection(&model, dynamo_http_server::metrics::Endpoint::Completions);
@@ -1673,7 +1674,7 @@ async fn completions_batch(
 
         // Generate stream for this prompt
         let stream = engine.generate(single_request_context).await.map_err(|e| {
-            if dynamo_http_server::metrics::request_was_rejected(e.as_ref()) {
+            if crate::http::service::metrics::request_was_rejected(e.as_ref()) {
                 state
                     .metrics_clone()
                     .inc_rejection(&model, dynamo_http_server::metrics::Endpoint::Completions);
@@ -1917,7 +1918,7 @@ async fn embeddings(
 
     // issue the generate call on the engine
     let stream = engine.generate(request).await.map_err(|e| {
-        if dynamo_http_server::metrics::request_was_rejected(e.as_ref()) {
+        if crate::http::service::metrics::request_was_rejected(e.as_ref()) {
             state.metrics_clone().inc_rejection(
                 &model_name,
                 dynamo_http_server::metrics::Endpoint::Embeddings,
@@ -2060,7 +2061,7 @@ async fn classify(
 
     // issue the generate call on the engine
     let stream = engine.generate(request).await.map_err(|e| {
-        if dynamo_http_server::metrics::request_was_rejected(e.as_ref()) {
+        if crate::http::service::metrics::request_was_rejected(e.as_ref()) {
             state
                 .metrics_clone()
                 .inc_rejection(&model_name, dynamo_http_server::metrics::Endpoint::Classify);
@@ -2146,7 +2147,7 @@ async fn rerank(
     let mut response_collector = inflight.response_collector();
     let model_name = model.to_string();
     let stream = engine.generate(request).await.map_err(|error| {
-        if dynamo_http_server::metrics::request_was_rejected(error.as_ref()) {
+        if crate::http::service::metrics::request_was_rejected(error.as_ref()) {
             state
                 .metrics_clone()
                 .inc_rejection(&model_name, Endpoint::Rerank);
@@ -2426,7 +2427,7 @@ async fn pooling(
 
     // issue the generate call on the engine
     let stream = engine.generate(request).await.map_err(|e| {
-        if dynamo_http_server::metrics::request_was_rejected(e.as_ref()) {
+        if crate::http::service::metrics::request_was_rejected(e.as_ref()) {
             state
                 .metrics_clone()
                 .inc_rejection(&model_name, dynamo_http_server::metrics::Endpoint::Pooling);
@@ -2913,11 +2914,11 @@ fn extract_backend_error_if_present<T: serde::Serialize>(
         let overloaded = event
             .error
             .as_ref()
-            .is_some_and(|error| dynamo_http_server::metrics::request_was_rejected(error));
+            .is_some_and(|error| crate::http::service::metrics::request_was_rejected(error));
         let metric_error_type = event
             .error
             .as_ref()
-            .filter(|error| dynamo_http_server::metrics::request_was_timed_out(*error))
+            .filter(|error| crate::http::service::metrics::request_was_timed_out(*error))
             .map(|_| ErrorType::ResponseTimeout);
 
         // Parse the status-bearing node's own message. The diagnostic string
@@ -3213,7 +3214,7 @@ fn backend_error_response(backend_error: BackendErrorInfo, record_failure: bool)
             && let Some(error) = &semantic
             && error.class().normalized() == sanitized_error_class(variant)
         {
-            dynamo_http_server::metrics::record_failure(error);
+            crate::http::service::metrics::record_failure(error);
             render_record_failure = false;
         }
         return ErrorMessage::sanitized_with_details_recording(
@@ -3581,7 +3582,7 @@ async fn chat_completions(
         can_defer_all_output: stream_can_defer_all_output,
     } = controller.generate(request).await.map_err(|error| {
         if let ChatError::Generation(error) = &error
-            && dynamo_http_server::metrics::request_was_rejected(error.as_ref())
+            && crate::http::service::metrics::request_was_rejected(error.as_ref())
         {
             state.metrics_clone().inc_rejection(
                 &model,
@@ -4305,7 +4306,7 @@ async fn responses(
 
     // issue the generate call on the engine
     let engine_stream = engine.generate(request).await.map_err(|e| {
-        if dynamo_http_server::metrics::request_was_rejected(e.as_ref()) {
+        if crate::http::service::metrics::request_was_rejected(e.as_ref()) {
             state
                 .metrics_clone()
                 .inc_rejection(&model, dynamo_http_server::metrics::Endpoint::Responses);
@@ -5184,7 +5185,7 @@ async fn images_with_request(
     // NOT for client-facing SSE streaming. The stream is immediately folded into
     // a single response below.
     let stream = engine.generate(request).await.map_err(|e| {
-        if dynamo_http_server::metrics::request_was_rejected(e.as_ref()) {
+        if crate::http::service::metrics::request_was_rejected(e.as_ref()) {
             state
                 .metrics_clone()
                 .inc_rejection(&metric_model, dynamo_http_server::metrics::Endpoint::Images);
@@ -5309,7 +5310,7 @@ async fn videos(
 
     // issue the generate call on the engine
     let stream = engine.generate(request).await.map_err(|e| {
-        if dynamo_http_server::metrics::request_was_rejected(e.as_ref()) {
+        if crate::http::service::metrics::request_was_rejected(e.as_ref()) {
             state
                 .metrics_clone()
                 .inc_rejection(&metric_model, dynamo_http_server::metrics::Endpoint::Videos);
@@ -5435,7 +5436,7 @@ async fn video_stream(
     let mut response_collector = inflight.response_collector();
 
     let stream = engine.generate(request).await.map_err(|e| {
-        if dynamo_http_server::metrics::request_was_rejected(e.as_ref()) {
+        if crate::http::service::metrics::request_was_rejected(e.as_ref()) {
             state
                 .metrics_clone()
                 .inc_rejection(&metric_model, dynamo_http_server::metrics::Endpoint::Videos);
@@ -5730,7 +5731,7 @@ async fn audio_speech(
     let ctx = request.context();
     inflight.mark_error(ErrorType::Cancelled);
     let stream = engine.generate(request).await.map_err(|e| {
-        if dynamo_http_server::metrics::request_was_rejected(e.as_ref()) {
+        if crate::http::service::metrics::request_was_rejected(e.as_ref()) {
             state
                 .metrics_clone()
                 .inc_rejection(&metric_model, dynamo_http_server::metrics::Endpoint::Audios);
@@ -7056,7 +7057,7 @@ mod tests {
         ] {
             let err = delivered_refusal(error_type);
             assert!(
-                dynamo_http_server::metrics::request_was_rejected(err.as_ref()),
+                crate::http::service::metrics::request_was_rejected(err.as_ref()),
                 "{error_type:?}"
             );
             let response = ErrorMessage::from_anyhow(err, BACKUP_ERROR_MESSAGE);
@@ -7234,7 +7235,7 @@ mod tests {
 
         // The legacy shape has no capacity signal, so the overload override does
         // not engage.
-        assert!(!dynamo_http_server::metrics::request_was_rejected(
+        assert!(!crate::http::service::metrics::request_was_rejected(
             event.error.as_ref().expect("error is set")
         ));
 
@@ -7678,7 +7679,7 @@ mod tests {
             .message("internal deadline detail")
             .build()
             .into();
-        assert!(!dynamo_http_server::metrics::request_was_rejected(
+        assert!(!crate::http::service::metrics::request_was_rejected(
             error.as_ref()
         ));
 

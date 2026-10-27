@@ -9,7 +9,7 @@
 pub mod frontend_perf;
 pub mod otlp_export;
 pub mod prom_typed;
-pub mod prometheus_names;
+pub use dynamo_prometheus_names as prometheus_names;
 pub mod quic_response;
 pub mod request_plane;
 pub mod tokio_perf;

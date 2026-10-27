@@ -35,6 +35,7 @@ use super::{
     metrics::process_chat_response_and_observe_metrics as process_response_and_observe_metrics,
     service_v2::{self, BackendErrorCheck},
 };
+use crate::http::service::metrics::RequestMetricsContextExt as _;
 use crate::protocols::anthropic::types::{
     AnthropicContentBlock, AnthropicCountTokensRequest, AnthropicCountTokensResponse,
     AnthropicCreateMessageRequest, AnthropicErrorBody, AnthropicErrorResponse, AnthropicMessage,
@@ -670,16 +671,16 @@ async fn anthropic_messages(
         // keeps the deadline outcome, matching the OpenAI surface: HTTP 429
         // (`rate_limit_error`) with a `Cancelled` metric label and no
         // rejection accounting.
-        if let Some(error) = dynamo_http_server::metrics::queue_deadline_error(e.as_ref()) {
-            dynamo_http_server::metrics::record_failure(error);
+        if let Some(error) = crate::http::service::metrics::queue_deadline_error(e.as_ref()) {
+            crate::http::service::metrics::record_failure(error);
             inflight_guard.mark_error(dynamo_http_server::metrics::ErrorType::Cancelled);
             return anthropic_error_unrecorded(
                 StatusCode::TOO_MANY_REQUESTS,
                 "rate_limit_error",
-                dynamo_http_server::metrics::REQUEST_DEADLINE_EXCEEDED_MESSAGE,
+                crate::http::service::metrics::REQUEST_DEADLINE_EXCEEDED_MESSAGE,
             );
         }
-        if dynamo_http_server::metrics::request_was_rejected(e.as_ref()) {
+        if crate::http::service::metrics::request_was_rejected(e.as_ref()) {
             state.metrics_clone().inc_rejection(
                 &model,
                 dynamo_http_server::metrics::Endpoint::AnthropicMessages,
@@ -691,7 +692,7 @@ async fn anthropic_messages(
             )
             .into_marked_response(&mut inflight_guard);
         }
-        if dynamo_http_server::metrics::request_was_cancelled(e.as_ref()) {
+        if crate::http::service::metrics::request_was_cancelled(e.as_ref()) {
             return AnthropicHandlerError::sanitized(
                 SanitizedError::Cancelled,
                 format!("{e:#}"),
@@ -705,7 +706,7 @@ async fn anthropic_messages(
             inflight_guard.mark_error(super::openai::metric_error_type_for_class(error.class()));
             return response;
         }
-        if dynamo_http_server::metrics::request_was_unavailable(e.as_ref()) {
+        if crate::http::service::metrics::request_was_unavailable(e.as_ref()) {
             return AnthropicHandlerError::sanitized(
                 SanitizedError::Unavailable,
                 format!("{e:#}"),
@@ -934,7 +935,8 @@ async fn anthropic_messages(
             NvCreateChatCompletionResponse::from_annotated_stream(stream, aggregation_options)
                 .await
                 .map_err(|error| {
-                    let error_type = if dynamo_http_server::metrics::request_was_cancelled(&error) {
+                    let error_type = if crate::http::service::metrics::request_was_cancelled(&error)
+                    {
                         dynamo_http_server::metrics::ErrorType::Cancelled
                     } else {
                         super::openai::metric_error_type_for_class(error.class())
@@ -1355,7 +1357,7 @@ fn anthropic_stream_error_body(error: &dynamo_runtime::error::DynamoError) -> An
 }
 
 fn anthropic_non_streaming_aggregation_error(error: DynamoError) -> Response {
-    if dynamo_http_server::metrics::request_was_cancelled(&error) {
+    if crate::http::service::metrics::request_was_cancelled(&error) {
         return anthropic_sanitized_error_with_details(SanitizedError::Cancelled, error);
     }
     anthropic_semantic_error(&error)
@@ -1371,7 +1373,7 @@ fn anthropic_semantic_error(error: &dynamo_runtime::error::DynamoError) -> Optio
         return None;
     };
 
-    dynamo_http_server::metrics::record_failure(error);
+    crate::http::service::metrics::record_failure(error);
     if matches!(
         error.class(),
         dynamo_runtime::error::ErrorClass::Internal
@@ -1490,7 +1492,7 @@ mod tests {
             .class(ErrorClass::BackendProtocol)
             .diagnostic("PRIVATE_BACKEND_DIAGNOSTIC")
             .build();
-        let counter = dynamo_http_server::metrics::DYNAM_FAILURES_TOTAL
+        let counter = crate::http::service::metrics::DYNAM_FAILURES_TOTAL
             .with_label_values(&[error.class().as_str(), error.reason().as_str()]);
         let before = counter.get();
         let event = Annotated::<NvCreateChatCompletionStreamResponse> {

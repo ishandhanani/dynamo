@@ -114,21 +114,21 @@ fn error_response(code: StatusCode, message: String) -> Response {
 fn stream_error(error: &(dyn std::error::Error + 'static)) -> (ErrorType, String) {
     // Deadline is checked before overload so a chain carrying both markers keeps
     // the deadline outcome, matching the OpenAI surface.
-    let (error_type, message) = if dynamo_http_server::metrics::request_deadline_exceeded(error) {
+    let (error_type, message) = if crate::http::service::metrics::request_deadline_exceeded(error) {
         (
             ErrorType::Cancelled,
-            dynamo_http_server::metrics::REQUEST_DEADLINE_EXCEEDED_MESSAGE.to_string(),
+            crate::http::service::metrics::REQUEST_DEADLINE_EXCEEDED_MESSAGE.to_string(),
         )
-    } else if dynamo_http_server::metrics::request_was_rejected(error) {
+    } else if crate::http::service::metrics::request_was_rejected(error) {
         (ErrorType::Overload, SanitizedError::Overloaded.to_string())
-    } else if dynamo_http_server::metrics::request_was_unavailable(error) {
+    } else if crate::http::service::metrics::request_was_unavailable(error) {
         (
             ErrorType::Unavailable,
             SanitizedError::Unavailable.to_string(),
         )
     } else if let Some(error) = find_invalid_argument_in_chain(error) {
         (ErrorType::Validation, error.message().to_string())
-    } else if dynamo_http_server::metrics::request_was_cancelled(error) {
+    } else if crate::http::service::metrics::request_was_cancelled(error) {
         (ErrorType::Cancelled, SanitizedError::Cancelled.to_string())
     } else {
         (ErrorType::Internal, SanitizedError::Internal.to_string())
@@ -195,7 +195,7 @@ fn internal_error_response() -> Response {
 fn deadline_exceeded_response() -> Response {
     error_response(
         StatusCode::TOO_MANY_REQUESTS,
-        dynamo_http_server::metrics::REQUEST_DEADLINE_EXCEEDED_MESSAGE.to_string(),
+        crate::http::service::metrics::REQUEST_DEADLINE_EXCEEDED_MESSAGE.to_string(),
     )
 }
 
@@ -424,12 +424,12 @@ async fn dispatch(
         Ok(stream) => stream,
         Err(error) => {
             let deadline_exceeded =
-                dynamo_http_server::metrics::request_deadline_exceeded(error.as_ref());
+                crate::http::service::metrics::request_deadline_exceeded(error.as_ref());
             let was_cancelled = request_context.is_killed()
-                || dynamo_http_server::metrics::request_was_cancelled(error.as_ref());
-            let was_rejected = dynamo_http_server::metrics::request_was_rejected(error.as_ref());
+                || crate::http::service::metrics::request_was_cancelled(error.as_ref());
+            let was_rejected = crate::http::service::metrics::request_was_rejected(error.as_ref());
             let was_unavailable =
-                dynamo_http_server::metrics::request_was_unavailable(error.as_ref());
+                crate::http::service::metrics::request_was_unavailable(error.as_ref());
             let invalid_argument = find_invalid_argument_in_chain(error.as_ref());
             inflight_guard.mark_error(if deadline_exceeded || was_cancelled {
                 ErrorType::Cancelled

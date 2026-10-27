@@ -119,12 +119,12 @@ pub async fn tensor_response_stream(
         // keeps the deadline outcome. RESOURCE_EXHAUSTED mirrors the HTTP
         // surfaces' 429: the deadline elapsed waiting for capacity, so it is
         // backpressure rather than a gateway timeout. No rejection accounting.
-        if dynamo_http_server::metrics::request_deadline_exceeded(e.as_ref()) {
+        if crate::http::service::metrics::request_deadline_exceeded(e.as_ref()) {
             return Status::resource_exhausted(
-                dynamo_http_server::metrics::REQUEST_DEADLINE_EXCEEDED_MESSAGE,
+                crate::http::service::metrics::REQUEST_DEADLINE_EXCEEDED_MESSAGE,
             );
         }
-        if dynamo_http_server::metrics::request_was_rejected(e.as_ref()) {
+        if crate::http::service::metrics::request_was_rejected(e.as_ref()) {
             state
                 .metrics_clone()
                 .inc_rejection(&model_name, dynamo_http_server::metrics::Endpoint::Tensor);

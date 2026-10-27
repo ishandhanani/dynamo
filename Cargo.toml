@@ -4,6 +4,7 @@
 [workspace]
 members = [
     "lib/http-server",
+    "lib/prometheus-names",
     "lib/llm",
     "lib/rl",
     "lib/runtime",
@@ -57,6 +58,7 @@ aisimulate-core = { version = "=0.13.0-dev.202610240000000082" }
 
 # Local crates
 dynamo-http-server = { path = "lib/http-server", version = "1.7.0" }
+dynamo-prometheus-names = { path = "lib/prometheus-names", version = "1.7.0" }
 dynamo-runtime = { path = "lib/runtime", version = "1.7.0" }
 dynamo-llm = { path = "lib/llm", version = "1.7.0", default-features = false }
 dynamo-rl = { path = "lib/rl", version = "1.7.0" }

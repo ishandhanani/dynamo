@@ -9,6 +9,7 @@ use futures::{Stream, StreamExt, stream};
 use std::sync::Arc;
 
 use crate::grpc::service::dispatch_error_status;
+use crate::http::service::metrics::RequestMetricsContextExt as _;
 // Re-exported so the old per-module path keeps resolving for outside users.
 pub use crate::grpc::service::grpc_monitor_for_disconnects;
 use crate::http::service::metadata::extract_metadata_from_grpc;
@@ -118,12 +119,12 @@ pub async fn completion_response_stream(
         // keeps the deadline outcome. RESOURCE_EXHAUSTED mirrors the HTTP
         // surfaces' 429: the deadline elapsed waiting for capacity, so it is
         // backpressure rather than a gateway timeout. No rejection accounting.
-        if dynamo_http_server::metrics::request_deadline_exceeded(e.as_ref()) {
+        if crate::http::service::metrics::request_deadline_exceeded(e.as_ref()) {
             return Status::resource_exhausted(
-                dynamo_http_server::metrics::REQUEST_DEADLINE_EXCEEDED_MESSAGE,
+                crate::http::service::metrics::REQUEST_DEADLINE_EXCEEDED_MESSAGE,
             );
         }
-        if dynamo_http_server::metrics::request_was_rejected(e.as_ref()) {
+        if crate::http::service::metrics::request_was_rejected(e.as_ref()) {
             state.metrics_clone().inc_rejection(
                 &model_name,
                 dynamo_http_server::metrics::Endpoint::Completions,

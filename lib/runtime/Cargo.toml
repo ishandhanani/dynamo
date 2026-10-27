@@ -32,6 +32,8 @@ nvtx = ["dep:nvtx"]
 [dependencies]
 # repo
 dynamo-truthy = { workspace = true }
+dynamo-http-server = { workspace = true }
+dynamo-prometheus-names = { workspace = true }
 
 # Use workspace dependencies where available
 anyhow = { workspace = true }

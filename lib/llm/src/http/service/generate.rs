@@ -201,7 +201,7 @@ fn generate_deadline_exceeded_response() -> Response {
     generate_error_response(
         StatusCode::TOO_MANY_REQUESTS,
         "deadline_exceeded",
-        dynamo_http_server::metrics::REQUEST_DEADLINE_EXCEEDED_MESSAGE.to_string(),
+        crate::http::service::metrics::REQUEST_DEADLINE_EXCEEDED_MESSAGE.to_string(),
     )
 }
 
@@ -1081,12 +1081,12 @@ async fn generate_dispatch(
             // Deadline is checked before overload so a chain carrying both
             // markers keeps the deadline outcome, matching the OpenAI surface.
             let deadline_exceeded =
-                dynamo_http_server::metrics::request_deadline_exceeded(error.as_ref());
+                crate::http::service::metrics::request_deadline_exceeded(error.as_ref());
             let was_cancelled = request_context.is_killed()
-                || dynamo_http_server::metrics::request_was_cancelled(error.as_ref());
-            let was_rejected = dynamo_http_server::metrics::request_was_rejected(error.as_ref());
+                || crate::http::service::metrics::request_was_cancelled(error.as_ref());
+            let was_rejected = crate::http::service::metrics::request_was_rejected(error.as_ref());
             let was_unavailable =
-                dynamo_http_server::metrics::request_was_unavailable(error.as_ref());
+                crate::http::service::metrics::request_was_unavailable(error.as_ref());
             let invalid_request = generate_invalid_request_response(error.as_ref());
             inflight_guard.mark_error(if deadline_exceeded || was_cancelled {
                 ErrorType::Cancelled
@@ -1170,12 +1170,12 @@ async fn generate_dispatch(
         Err(error) => {
             if request_context.is_killed()
                 || engine_context.is_killed()
-                || dynamo_http_server::metrics::request_was_cancelled(error.as_ref())
+                || crate::http::service::metrics::request_was_cancelled(error.as_ref())
             {
                 inflight_guard.mark_error(ErrorType::Cancelled);
                 return generate_cancelled_response();
             }
-            if dynamo_http_server::metrics::request_was_unavailable(error.as_ref()) {
+            if crate::http::service::metrics::request_was_unavailable(error.as_ref()) {
                 inflight_guard.mark_error(ErrorType::Unavailable);
                 tracing::warn!(%request_id, %error, "generate stream failed: no worker available");
                 return generate_unavailable_response();

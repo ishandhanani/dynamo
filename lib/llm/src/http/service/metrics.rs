@@ -12,7 +12,7 @@ use dynamo_runtime::metrics::prometheus_names::{
     frontend_service, name_prefix, sanitize_frontend_prometheus_prefix,
 };
 use prometheus::{
-    Encoder, IntGaugeVec, Opts,
+    Encoder, IntCounterVec, IntGaugeVec, Opts,
     core::{Collector, Desc},
     proto::{Gauge, LabelPair, Metric, MetricFamily, MetricType},
 };
@@ -31,8 +31,121 @@ use crate::{
 
 use super::RouteDoc;
 use dynamo_http_server::metrics::{
-    HttpQueueGuard, Metrics, Registry, ResponseMetricCollector, ServingLoadCollector,
+    HttpQueueGuard, Metrics, Registry, RequestMetrics, ResponseMetricCollector,
+    ServingLoadCollector,
 };
+use dynamo_runtime::{
+    engine::Data,
+    error::{DynamoError, ErrorType as DynamoErrorType},
+    pipeline::Context,
+};
+
+pub use dynamo_http_server::metrics::DYNAM_FAILURES_TOTAL;
+
+fn record_failure_into(counter: &IntCounterVec, error: &DynamoError) {
+    dynamo_http_server::metrics::record_failure_labels(
+        counter,
+        error.class().as_str(),
+        error.reason().as_str(),
+    );
+}
+
+/// Count a terminal semantic failure on the process-wide counter.
+pub fn record_failure(error: &DynamoError) {
+    record_failure_into(&DYNAM_FAILURES_TOTAL, error);
+}
+
+/// Check whether an error chain indicates the request was rejected.
+pub fn request_was_rejected(err: &(dyn std::error::Error + 'static)) -> bool {
+    // Both overload flavors are client-visible rejections (HTTP 529). They differ
+    // only in whether migration may retry elsewhere.
+    const REJECTION: &[DynamoErrorType] = &[
+        DynamoErrorType::ResourceExhausted,
+        DynamoErrorType::WorkerOverloaded,
+    ];
+    const NON_REJECTION: &[DynamoErrorType] = &[];
+    dynamo_runtime::error::match_error_chain(err, REJECTION, NON_REJECTION)
+}
+
+/// User-facing body for a request whose caller-supplied deadline elapsed
+/// before dispatch; shared by every HTTP surface so the wording stays uniform.
+pub const REQUEST_DEADLINE_EXCEEDED_MESSAGE: &str = "request deadline exceeded";
+
+/// Identify a deadline that expired while waiting in the router's queue.
+pub fn request_deadline_exceeded(err: &(dyn std::error::Error + 'static)) -> bool {
+    queue_deadline_error(err).is_some()
+}
+
+pub fn queue_deadline_error<'a>(
+    err: &'a (dyn std::error::Error + 'static),
+) -> Option<&'a DynamoError> {
+    let mut current = Some(err);
+    while let Some(error) = current {
+        if let Some(error) = error.downcast_ref::<DynamoError>()
+            && error.reason().as_str() == "router.queue_deadline_exceeded"
+        {
+            return Some(error);
+        }
+        current = error.source();
+    }
+    None
+}
+
+/// Check whether an error chain indicates that no backend worker is available
+/// to this request. Both flavors are HTTP 503; they differ only in whether
+/// migration may retry elsewhere.
+pub fn request_was_unavailable(err: &(dyn std::error::Error + 'static)) -> bool {
+    const UNAVAILABLE: &[DynamoErrorType] = &[
+        DynamoErrorType::Unavailable,
+        DynamoErrorType::WorkerUnavailable,
+    ];
+    const AVAILABLE: &[DynamoErrorType] = &[];
+    dynamo_runtime::error::match_error_chain(err, UNAVAILABLE, AVAILABLE)
+}
+
+/// Check whether an error chain indicates the request was cancelled.
+pub fn request_was_cancelled(err: &(dyn std::error::Error + 'static)) -> bool {
+    const CANCELLATION: &[DynamoErrorType] = &[
+        DynamoErrorType::Cancelled,
+        DynamoErrorType::Backend(dynamo_runtime::error::BackendError::Cancelled),
+    ];
+    const NON_CANCELLATION: &[DynamoErrorType] = &[];
+    dynamo_runtime::error::match_error_chain(err, CANCELLATION, NON_CANCELLATION)
+}
+
+pub fn request_was_timed_out(err: &(dyn std::error::Error + 'static)) -> bool {
+    use dynamo_runtime::error::BackendError;
+
+    const TIMEOUT: &[DynamoErrorType] = &[
+        DynamoErrorType::ResponseTimeout,
+        DynamoErrorType::ConnectionTimeout,
+        DynamoErrorType::Backend(BackendError::ResponseTimeout),
+        DynamoErrorType::Backend(BackendError::ConnectionTimeout),
+    ];
+    const NON_TIMEOUT: &[DynamoErrorType] = &[];
+    dynamo_runtime::error::match_error_chain(err, TIMEOUT, NON_TIMEOUT)
+}
+
+const REQUEST_METRICS_KEY: &str = "frontend.request_metrics";
+
+/// Carries a request's metrics handle through the pipeline `Context` so later stages (the
+/// preprocessor, the response path) can update the same counters the HTTP guard owns.
+pub trait RequestMetricsContextExt: Sized {
+    fn attach_to<T: Data>(self: &Arc<Self>, context: &mut Context<T>);
+    fn from_context<T: Data>(context: &Context<T>) -> Option<Arc<Self>>;
+}
+
+impl RequestMetricsContextExt for RequestMetrics {
+    fn attach_to<T: Data>(self: &Arc<Self>, context: &mut Context<T>) {
+        context.insert_arc(REQUEST_METRICS_KEY, self.clone());
+    }
+
+    fn from_context<T: Data>(context: &Context<T>) -> Option<Arc<Self>> {
+        context
+            .get_optional(REQUEST_METRICS_KEY)
+            .expect("request metrics have a fixed registry type")
+    }
+}
 
 const MODEL_READY_HELP: &str = "Whether the frontend can route at least one inference request for the model (1 = ready, 0 = not ready)";
 
@@ -2065,5 +2178,62 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn semantic_failure_metric_has_only_class_and_reason_labels() {
+        use dynamo_runtime::error::{ErrorClass, ErrorReason};
+
+        let registry = prometheus::Registry::new();
+        let counter = dynamo_http_server::metrics::new_failure_counter(None);
+        registry.register(Box::new(counter.clone())).unwrap();
+        let error = DynamoError::builder()
+            .class(ErrorClass::InvalidRequest)
+            .reason(ErrorReason::new("request.invalid").unwrap())
+            .build();
+
+        record_failure_into(&counter, &error);
+
+        let family = registry
+            .gather()
+            .into_iter()
+            .find(|family| family.name() == "dynamo_frontend_failures_total")
+            .expect("dynamo_frontend_failures_total metric");
+        let metric = family
+            .get_metric()
+            .iter()
+            .find(|metric| {
+                metric
+                    .get_label()
+                    .iter()
+                    .any(|label| label.name() == "reason" && label.value() == "request.invalid")
+            })
+            .expect("request.invalid sample");
+        let labels: Vec<_> = metric
+            .get_label()
+            .iter()
+            .map(|label| (label.name(), label.value()))
+            .collect();
+        assert_eq!(
+            labels,
+            vec![("class", "InvalidRequest"), ("reason", "request.invalid")]
+        );
+        assert_eq!(metric.get_counter().value(), 1.0);
+    }
+
+    #[test]
+    fn request_metrics_round_trip_through_pipeline_context() {
+        let metrics = Arc::new(Metrics::new());
+        let guard = metrics
+            .clone()
+            .create_inflight_guard("model", Endpoint::Completions, true, "");
+        let request = guard.request_metrics().clone();
+        let mut context = Context::new(());
+        assert!(RequestMetrics::from_context(&context).is_none());
+        request.attach_to(&mut context);
+        assert!(Arc::ptr_eq(
+            &request,
+            &RequestMetrics::from_context(&context).unwrap()
+        ));
     }
 }

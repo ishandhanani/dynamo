@@ -134,7 +134,7 @@ impl StreamErrorSignal {
         };
         if let Some(error) = &failure.semantic_error {
             if error.class() != ErrorClass::Cancelled {
-                dynamo_http_server::metrics::record_failure(error);
+                crate::http::service::metrics::record_failure(error);
             }
             return;
         }
@@ -149,7 +149,7 @@ impl StreamErrorSignal {
             ErrorType::NotImplemented => ErrorClass::NotImplemented,
             ErrorType::None | ErrorType::Internal => ErrorClass::Internal,
         };
-        dynamo_http_server::metrics::record_failure(&DynamoError::builder().class(class).build());
+        crate::http::service::metrics::record_failure(&DynamoError::builder().class(class).build());
     }
 }
 
@@ -1071,7 +1071,7 @@ mod tests {
         connection_handle.disarm();
         drop(connection_handle);
         let error_signal = StreamErrorSignal::default();
-        let semantic_counter = dynamo_http_server::metrics::DYNAM_FAILURES_TOTAL
+        let semantic_counter = crate::http::service::metrics::DYNAM_FAILURES_TOTAL
             .with_label_values(&["Internal", "runtime.internal"]);
         let semantic_before = semantic_counter.get();
         let producer_error_signal = error_signal.clone();

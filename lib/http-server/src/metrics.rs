@@ -1,17 +1,12 @@
 // SPDX-FileCopyrightText: Copyright (c) 2024-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
+use crate::env::metrics as env_metrics;
 use crate::load::{
     FrontendLoadFrame, FrontendModelLoad, ModelLoadView, RequestGauges, RequestTotals,
 };
-use dynamo_runtime::metrics::prometheus_names::{
+use dynamo_prometheus_names::{
     clamp_u64_to_i64, frontend_service, name_prefix, sanitize_frontend_prometheus_prefix,
-};
-use dynamo_runtime::{
-    config::environment_names::llm::metrics as env_metrics,
-    engine::Data,
-    error::{DynamoError, ErrorType as DynamoErrorType},
-    pipeline::Context,
 };
 use prometheus::{
     GaugeVec, HistogramOpts, HistogramVec, IntCounterVec, IntGaugeVec, Opts,
@@ -27,7 +22,9 @@ use std::{
     time::{Duration, Instant},
 };
 
-fn new_failure_counter(metrics_prefix: Option<&str>) -> IntCounterVec {
+/// Build the semantic failure counter (`<prefix>_failures_total{class,reason}`).
+#[doc(hidden)]
+pub fn new_failure_counter(metrics_prefix: Option<&str>) -> IntCounterVec {
     let prefix =
         sanitize_frontend_prometheus_prefix(metrics_prefix.unwrap_or(name_prefix::FRONTEND));
     IntCounterVec::new(
@@ -51,85 +48,10 @@ pub static DYNAM_FAILURES_TOTAL: LazyLock<IntCounterVec> = LazyLock::new(|| {
     new_failure_counter(Some(prefix.as_str()))
 });
 
-fn record_failure_into(counter: &IntCounterVec, error: &DynamoError) {
-    counter
-        .with_label_values(&[error.class().as_str(), error.reason().as_str()])
-        .inc();
-}
-
-pub fn record_failure(error: &DynamoError) {
-    record_failure_into(&DYNAM_FAILURES_TOTAL, error);
-}
-
-/// Check whether an error chain indicates the request was rejected.
-pub fn request_was_rejected(err: &(dyn std::error::Error + 'static)) -> bool {
-    // Both overload flavors are client-visible rejections (HTTP 529). They differ
-    // only in whether migration may retry elsewhere.
-    const REJECTION: &[DynamoErrorType] = &[
-        DynamoErrorType::ResourceExhausted,
-        DynamoErrorType::WorkerOverloaded,
-    ];
-    const NON_REJECTION: &[DynamoErrorType] = &[];
-    dynamo_runtime::error::match_error_chain(err, REJECTION, NON_REJECTION)
-}
-
-/// User-facing body for a request whose caller-supplied deadline elapsed
-/// before dispatch; shared by every HTTP surface so the wording stays uniform.
-pub const REQUEST_DEADLINE_EXCEEDED_MESSAGE: &str = "request deadline exceeded";
-
-/// Identify a deadline that expired while waiting in the router's queue.
-pub fn request_deadline_exceeded(err: &(dyn std::error::Error + 'static)) -> bool {
-    queue_deadline_error(err).is_some()
-}
-
-pub fn queue_deadline_error<'a>(
-    err: &'a (dyn std::error::Error + 'static),
-) -> Option<&'a DynamoError> {
-    let mut current = Some(err);
-    while let Some(error) = current {
-        if let Some(error) = error.downcast_ref::<DynamoError>()
-            && error.reason().as_str() == "router.queue_deadline_exceeded"
-        {
-            return Some(error);
-        }
-        current = error.source();
-    }
-    None
-}
-
-/// Check whether an error chain indicates that no backend worker is available
-/// to this request. Both flavors are HTTP 503; they differ only in whether
-/// migration may retry elsewhere.
-pub fn request_was_unavailable(err: &(dyn std::error::Error + 'static)) -> bool {
-    const UNAVAILABLE: &[DynamoErrorType] = &[
-        DynamoErrorType::Unavailable,
-        DynamoErrorType::WorkerUnavailable,
-    ];
-    const AVAILABLE: &[DynamoErrorType] = &[];
-    dynamo_runtime::error::match_error_chain(err, UNAVAILABLE, AVAILABLE)
-}
-
-/// Check whether an error chain indicates the request was cancelled.
-pub fn request_was_cancelled(err: &(dyn std::error::Error + 'static)) -> bool {
-    const CANCELLATION: &[DynamoErrorType] = &[
-        DynamoErrorType::Cancelled,
-        DynamoErrorType::Backend(dynamo_runtime::error::BackendError::Cancelled),
-    ];
-    const NON_CANCELLATION: &[DynamoErrorType] = &[];
-    dynamo_runtime::error::match_error_chain(err, CANCELLATION, NON_CANCELLATION)
-}
-
-pub fn request_was_timed_out(err: &(dyn std::error::Error + 'static)) -> bool {
-    use dynamo_runtime::error::BackendError;
-
-    const TIMEOUT: &[DynamoErrorType] = &[
-        DynamoErrorType::ResponseTimeout,
-        DynamoErrorType::ConnectionTimeout,
-        DynamoErrorType::Backend(BackendError::ResponseTimeout),
-        DynamoErrorType::Backend(BackendError::ConnectionTimeout),
-    ];
-    const NON_TIMEOUT: &[DynamoErrorType] = &[];
-    dynamo_runtime::error::match_error_chain(err, TIMEOUT, NON_TIMEOUT)
+/// Count one terminal semantic failure under `class` and `reason`. Hosts map their error
+/// taxonomy onto the two labels; this crate does not know the error type.
+pub fn record_failure_labels(counter: &IntCounterVec, class: &str, reason: &str) {
+    counter.with_label_values(&[class, reason]).inc();
 }
 
 pub use prometheus::Registry;
@@ -543,7 +465,6 @@ pub struct RequestMetrics {
 const STATE_AWAITING_FIRST_TOKEN: &str = "awaiting_first_token";
 const STATE_GENERATING: &str = "generating";
 
-const REQUEST_METRICS_KEY: &str = "frontend.request_metrics";
 const FINISHED: u64 = 1 << 63;
 const GENERATING: u64 = 1 << 62;
 const INPUT_TOKENS: u64 = GENERATING - 1;
@@ -568,16 +489,6 @@ impl RequestMetrics {
             input_tokens: metrics.input_tokens_counter.with_label_values(labels),
             output_tokens: metrics.output_tokens_counter.with_label_values(labels),
         }
-    }
-
-    pub fn attach_to<T: Data>(self: &Arc<Self>, context: &mut Context<T>) {
-        context.insert_arc(REQUEST_METRICS_KEY, self.clone());
-    }
-
-    pub fn from_context<T: Data>(context: &Context<T>) -> Option<Arc<Self>> {
-        context
-            .get_optional(REQUEST_METRICS_KEY)
-            .expect("request metrics have a fixed registry type")
     }
 
     /// Count a prompt of `tokens` tokens as soon as it is tokenized. A batched
@@ -3138,63 +3049,6 @@ mod tests {
     }
 
     #[test]
-    fn frontend_request_metrics_ignore_updates_after_guard_finishes() {
-        let metrics = Arc::new(Metrics::new());
-        let mut guard =
-            metrics
-                .clone()
-                .create_inflight_guard("model", Endpoint::Completions, true, "");
-        let request = guard.request_metrics().clone();
-        let mut context = Context::new(());
-        request.attach_to(&mut context);
-        assert!(Arc::ptr_eq(
-            &request,
-            &RequestMetrics::from_context(&context).unwrap()
-        ));
-        request.add_input_tokens(3);
-        request.add_input_tokens(5);
-        request.observe_input_tokens(5);
-        request.observe_input_tokens(3);
-        assert_eq!(
-            metrics
-                .input_tokens_counter
-                .with_label_values(&["model"])
-                .get(),
-            8
-        );
-        assert_eq!(
-            metrics
-                .input_sequence_length
-                .with_label_values(&["model"])
-                .get_sample_sum(),
-            0.0
-        );
-        guard.mark_error(ErrorType::Cancelled);
-        drop(guard);
-        request.add_input_tokens(9);
-        request.add_output_tokens(1);
-        let frame = metrics.frontend_load(
-            0,
-            true,
-            vec![crate::load::ModelLoadView {
-                name: "model".into(),
-                is_ready: true,
-                aliases: vec![],
-            }],
-        );
-        assert_eq!(frame.models[0].gauges, RequestGauges::default());
-        assert_eq!(
-            frame.models[0].totals,
-            RequestTotals {
-                requests_started: 1,
-                requests_cancelled: 1,
-                input_tokens: 8,
-                ..Default::default()
-            }
-        );
-    }
-
-    #[test]
     fn frontend_gauges_settle_after_concurrent_request_transitions() {
         let metrics = Arc::new(Metrics::new());
         for _ in 0..32 {
@@ -3931,47 +3785,6 @@ mod tests {
     }
 
     #[test]
-    fn semantic_failure_metric_has_only_class_and_reason_labels() {
-        use dynamo_runtime::error::{DynamoError, ErrorClass, ErrorReason};
-
-        let registry = prometheus::Registry::new();
-        let counter = new_failure_counter(None);
-        registry.register(Box::new(counter.clone())).unwrap();
-        let error = DynamoError::builder()
-            .class(ErrorClass::InvalidRequest)
-            .reason(ErrorReason::new("request.invalid").unwrap())
-            .build();
-
-        record_failure_into(&counter, &error);
-
-        let family = registry
-            .gather()
-            .into_iter()
-            .find(|family| family.name() == "dynamo_frontend_failures_total")
-            .expect("dynamo_frontend_failures_total metric");
-        let metric = family
-            .get_metric()
-            .iter()
-            .find(|metric| {
-                metric
-                    .get_label()
-                    .iter()
-                    .any(|label| label.name() == "reason" && label.value() == "request.invalid")
-            })
-            .expect("request.invalid sample");
-        let labels: Vec<_> = metric
-            .get_label()
-            .iter()
-            .map(|label| (label.name(), label.value()))
-            .collect();
-        assert_eq!(
-            labels,
-            vec![("class", "InvalidRequest"), ("reason", "request.invalid")]
-        );
-        assert_eq!(metric.get_counter().value(), 1.0);
-    }
-
-    #[test]
     fn test_multiple_requests_different_error_types() {
         let metrics = Arc::new(Metrics::new());
         let registry = prometheus::Registry::new();
@@ -4172,6 +3985,57 @@ mod tests {
         assert_eq!(
             collector.decode_worker_type.as_deref(),
             Some("decode-first")
+        );
+    }
+
+    #[test]
+    fn frontend_request_metrics_ignore_updates_after_guard_finishes() {
+        let metrics = Arc::new(Metrics::new());
+        let mut guard =
+            metrics
+                .clone()
+                .create_inflight_guard("model", Endpoint::Completions, true, "");
+        let request = guard.request_metrics().clone();
+        request.add_input_tokens(3);
+        request.add_input_tokens(5);
+        request.observe_input_tokens(5);
+        request.observe_input_tokens(3);
+        assert_eq!(
+            metrics
+                .input_tokens_counter
+                .with_label_values(&["model"])
+                .get(),
+            8
+        );
+        assert_eq!(
+            metrics
+                .input_sequence_length
+                .with_label_values(&["model"])
+                .get_sample_sum(),
+            0.0
+        );
+        guard.mark_error(ErrorType::Cancelled);
+        drop(guard);
+        request.add_input_tokens(9);
+        request.add_output_tokens(1);
+        let frame = metrics.frontend_load(
+            0,
+            true,
+            vec![crate::load::ModelLoadView {
+                name: "model".into(),
+                is_ready: true,
+                aliases: vec![],
+            }],
+        );
+        assert_eq!(frame.models[0].gauges, RequestGauges::default());
+        assert_eq!(
+            frame.models[0].totals,
+            RequestTotals {
+                requests_started: 1,
+                requests_cancelled: 1,
+                input_tokens: 8,
+                ..Default::default()
+            }
         );
     }
 }

@@ -165,6 +165,26 @@ pub trait AsyncEngineContext: Send + Sync + Debug {
     }
 }
 
+impl dynamo_http_server::disconnect::RequestCancel for crate::pipeline::context::Controller {
+    fn request_id(&self) -> &str {
+        self.id()
+    }
+
+    fn kill(&self) {
+        AsyncEngineContext::kill(self)
+    }
+}
+
+impl dynamo_http_server::disconnect::RequestCancel for dyn AsyncEngineContext {
+    fn request_id(&self) -> &str {
+        self.id()
+    }
+
+    fn kill(&self) {
+        AsyncEngineContext::kill(self)
+    }
+}
+
 /// Provides access to the [`AsyncEngineContext`] associated with an engine operation.
 ///
 /// This trait is implemented by both unary and streaming engine results, allowing

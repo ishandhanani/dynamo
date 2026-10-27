@@ -2478,11 +2478,11 @@ dependencies = [
 
 [[package]]
 name = "dynamo-http-server"
-version = "1.6.0"
+version = "1.7.0"
 dependencies = [
  "anyhow",
  "axum 0.8.4",
- "dynamo-runtime",
+ "dynamo-prometheus-names",
  "futures",
  "hyper-util",
  "parking_lot",
@@ -2803,6 +2803,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "dynamo-prometheus-names"
+version = "1.7.0"
+dependencies = [
+ "anyhow",
+ "once_cell",
+ "regex",
+]
+
+[[package]]
 name = "dynamo-protocols"
 version = "8.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2877,6 +2886,8 @@ dependencies = [
  "dashmap",
  "derive-getters",
  "derive_builder",
+ "dynamo-http-server",
+ "dynamo-prometheus-names",
  "dynamo-truthy",
  "educe",
  "either",

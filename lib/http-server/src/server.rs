@@ -8,11 +8,10 @@
 //! [`CancellationToken`]s, whose lock and `Notify` no other connection touches. A shared
 //! `tokio::sync::Notify` would lock its waiter list on every poll of a pending waiter.
 
+use crate::env as env_llm;
 use crate::lifecycle::ServiceObserver;
-use anyhow::{Context, Result};
-use dynamo_runtime::config::environment_names::llm as env_llm;
+use anyhow::Result;
 use std::net::{IpAddr, SocketAddr};
-use std::path::PathBuf;
 use std::sync::Arc;
 
 use std::{future::Future, pin::pin, time::Duration};
@@ -147,10 +146,15 @@ async fn serve_io<I>(
 pub struct HttpServerConfig {
     pub host: String,
     pub port: u16,
-    pub enable_tls: bool,
-    pub tls_cert_path: Option<PathBuf>,
-    pub tls_key_path: Option<PathBuf>,
-    pub tls_client_ca_cert_path: Option<PathBuf>,
+    /// Prebuilt TLS acceptor; `None` serves plain HTTP. Build one with [`tls_acceptor`].
+    pub tls: Option<TlsAcceptor>,
+}
+
+/// Wrap a rustls server config in the acceptor this server expects, advertising HTTP/2 and
+/// HTTP/1.1 over ALPN. The host owns certificate loading; this crate only terminates TLS.
+pub fn tls_acceptor(mut server_config: tokio_rustls::rustls::ServerConfig) -> TlsAcceptor {
+    server_config.alpn_protocols = vec![b"h2".to_vec(), b"http/1.1".to_vec()];
+    TlsAcceptor::from(Arc::new(server_config))
 }
 
 pub struct HttpServer {
@@ -168,29 +172,14 @@ impl HttpServer {
         listener: Option<TcpListener>,
     ) -> Result<Self> {
         let address = format!("{}:{}", config.host, config.port);
-        let protocol = if config.enable_tls { "HTTPS" } else { "HTTP" };
+        let protocol = if config.tls.is_some() {
+            "HTTPS"
+        } else {
+            "HTTP"
+        };
         tracing::info!(protocol, address, "Starting HTTP(S) service");
 
-        let tls = if config.enable_tls {
-            let cert_path = config
-                .tls_cert_path
-                .as_ref()
-                .ok_or_else(|| anyhow::anyhow!("TLS certificate path not provided"))?;
-            let key_path = config
-                .tls_key_path
-                .as_ref()
-                .ok_or_else(|| anyhow::anyhow!("TLS private key path not provided"))?;
-            let mut server_config = dynamo_runtime::tls_utils::server_tls_config(
-                cert_path,
-                key_path,
-                config.tls_client_ca_cert_path.as_deref(),
-            )
-            .context("Failed to create TLS config")?;
-            server_config.alpn_protocols = vec![b"h2".to_vec(), b"http/1.1".to_vec()];
-            Some(tokio_rustls::TlsAcceptor::from(Arc::new(server_config)))
-        } else {
-            None
-        };
+        let tls = config.tls;
 
         let listener = match listener {
             Some(l) => l,

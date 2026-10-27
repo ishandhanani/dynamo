@@ -4,7 +4,6 @@
 //! Connection monitoring for HTTP and gRPC services.
 
 use crate::metrics::{CancellationLabels, Metrics};
-use dynamo_runtime::engine::AsyncEngineContext;
 use std::sync::Arc;
 
 #[derive(Clone, Copy)]
@@ -63,14 +62,26 @@ impl Drop for ConnectionHandle {
     }
 }
 
+/// The request-side handle the connection monitor cancels when the client goes away.
+///
+/// `dynamo-runtime` implements this for `dyn AsyncEngineContext`; another host implements it for
+/// whatever owns its request's cancellation. Kept to the two operations the monitor needs so the
+/// server core does not depend on any engine abstraction.
+pub trait RequestCancel: Send + Sync {
+    /// Request identifier recorded on the monitor's tracing span.
+    fn request_id(&self) -> &str;
+    /// Cancel the request immediately; the client is gone.
+    fn kill(&self);
+}
+
 /// Creates a pair of handles which will monitor for disconnects from the client.
 ///
 /// The first handle is armed and will issue a [`ConnectionStatus::ClosedUnexpectedly`] signal when dropped.
 /// The second handle is disarmed and will issue a [`ConnectionStatus::ClosedGracefully`] signal when dropped.
 ///
 /// The handles are returned in the order of the first being armed and the second being disarmed.
-pub async fn create_connection_monitor(
-    engine_context: Arc<dyn AsyncEngineContext>,
+pub async fn create_connection_monitor<C: RequestCancel + ?Sized + 'static>(
+    engine_context: Arc<C>,
     metrics: Option<Arc<Metrics>>,
     cancellation_labels: CancellationLabels,
 ) -> (ConnectionHandle, ConnectionHandle) {
@@ -97,9 +108,9 @@ pub async fn create_connection_monitor(
 }
 
 /// Monitor handler and response-body completion and cancel on unexpected drops.
-#[tracing::instrument(level = "trace", skip_all, fields(request_id = %engine_context.id()))]
-pub async fn connection_monitor(
-    engine_context: Arc<dyn AsyncEngineContext>,
+#[tracing::instrument(level = "trace", skip_all, fields(request_id = %engine_context.request_id()))]
+pub async fn connection_monitor<C: RequestCancel + ?Sized + 'static>(
+    engine_context: Arc<C>,
     connection_rx: tokio::sync::oneshot::Receiver<ConnectionStatus>,
     stream_rx: tokio::sync::oneshot::Receiver<ConnectionStatus>,
     metrics: Option<Arc<Metrics>>,

@@ -20,7 +20,7 @@ tower = { workspace = true }
 parking_lot = { workspace = true }
 rand = { workspace = true }
 serde = { workspace = true }
-dynamo-runtime = { workspace = true }
+dynamo-prometheus-names = { workspace = true }
 futures = { workspace = true }
 prometheus = { workspace = true }
 tokio = { workspace = true }

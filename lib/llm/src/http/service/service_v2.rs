@@ -25,7 +25,7 @@ use crate::endpoint_type::EndpointType;
 use crate::kv_router::metrics::{RoutingOverheadMetrics, register_router_queue_metrics};
 use crate::reasoning_field::ReasoningField;
 use crate::request_template::RequestTemplate;
-use anyhow::Result;
+use anyhow::{Context as _, Result};
 use derive_builder::Builder;
 use dynamo_http_server::lifecycle::{
     InflightPermit, ServiceObserver, ServiceStage, echo_request_id_header, track_inflight_response,
@@ -787,15 +787,32 @@ impl HttpService {
             anyhow::bail!("TLS must be enabled when a client CA certificate is configured");
         }
 
+        let tls = if self.enable_tls {
+            let cert_path = self
+                .tls_cert_path
+                .as_ref()
+                .ok_or_else(|| anyhow::anyhow!("TLS certificate path not provided"))?;
+            let key_path = self
+                .tls_key_path
+                .as_ref()
+                .ok_or_else(|| anyhow::anyhow!("TLS private key path not provided"))?;
+            let server_config = dynamo_runtime::tls_utils::server_tls_config(
+                cert_path,
+                key_path,
+                self.tls_client_ca_cert_path.as_deref(),
+            )
+            .context("Failed to create TLS config")?;
+            Some(dynamo_http_server::server::tls_acceptor(server_config))
+        } else {
+            None
+        };
+
         let server = HttpServer::prepare(
             self.router.clone(),
             HttpServerConfig {
                 host: self.host.clone(),
                 port: self.port,
-                enable_tls: self.enable_tls,
-                tls_cert_path: self.tls_cert_path.clone(),
-                tls_key_path: self.tls_key_path.clone(),
-                tls_client_ca_cert_path: self.tls_client_ca_cert_path.clone(),
+                tls,
             },
             listener,
         )

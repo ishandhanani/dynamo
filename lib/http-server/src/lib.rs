@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 pub mod disconnect;
+pub mod env;
 pub mod lifecycle;
 pub mod load;
 pub mod metrics;
