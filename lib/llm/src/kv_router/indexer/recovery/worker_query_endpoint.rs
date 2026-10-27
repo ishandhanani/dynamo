@@ -601,7 +601,7 @@ mod tests {
             local_indexer: Arc::new(LocalKvIndexer::new(
                 tokio_util::sync::CancellationToken::new(),
                 4,
-                Arc::new(dynamo_kv_router::indexer::KvIndexerMetrics::new_unregistered()),
+                Arc::new(dynamo_kv_indexer::KvIndexerMetrics::new_unregistered()),
                 16,
             )),
             status: None,

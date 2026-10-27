@@ -8,7 +8,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
-use dynamo_kv_router::indexer::cuckoo::ProducerIdentity;
+use dynamo_kv_indexer::cuckoo::ProducerIdentity;
 use tokio::sync::{OwnedSemaphorePermit, Semaphore, watch};
 use tokio_util::sync::CancellationToken;
 
@@ -308,7 +308,7 @@ impl RelayPublicationSource for RegistryPublicationSource {
 mod tests {
     use std::time::Duration;
 
-    use dynamo_kv_router::indexer::cuckoo::{CkfConfig, DcCkfState};
+    use dynamo_kv_indexer::cuckoo::{CkfConfig, DcCkfState};
     use dynamo_router_types::identity::{
         CacheSemanticsId, DcId, IdentitySource, IndexerDomainId, PoolId, RoutingScopeId,
     };

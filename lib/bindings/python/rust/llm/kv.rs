@@ -29,7 +29,7 @@ use dynamo_kv_router::plugins::RouterPlugins;
 use dynamo_router_types::protocols::compute_block_hash_for_seq;
 use dynamo_router_types::protocols::*;
 #[cfg(feature = "kv-indexer")]
-use dynamo_kv_router::services::indexer::{self, IndexerConfig};
+use dynamo_kv_indexer::http::{self as indexer, IndexerConfig};
 #[cfg(feature = "select-service")]
 use dynamo_kv_router::services::selection::{
     self, OverlapScoresRequest, PotentialLoadsRequest, PromptRequest, ReservationRequest,
@@ -39,7 +39,7 @@ use dynamo_kv_router::services::selection::{
     warn_for_unserved_worker_selection_policies,
 };
 #[cfg(feature = "slot-tracker")]
-use dynamo_kv_router::services::slot_tracker::{self, SlotTrackerConfig};
+use dynamo_slot_tracker::http::{self as slot_tracker, SlotTrackerConfig};
 #[cfg(feature = "select-service")]
 use dynamo_kv_router::{TrackingHashAlgorithm, WorkerType};
 use rs::pipeline::{AsyncEngine, SingleIn};
@@ -238,7 +238,7 @@ where
         )?;
 
         let trace_id_header =
-            dynamo_kv_router::services::indexer::logging::parse_header_name(&cli.trace_id_header)
+            dynamo_kv_indexer::http::logging::parse_header_name(&cli.trace_id_header)
                 .map_err(|e| {
                 anyhow::anyhow!("invalid --trace-id-header '{}': {e}", cli.trace_id_header)
             })?;
@@ -1564,7 +1564,7 @@ impl RadixTree {
 
         // Spawn dedicated thread with simplified sync processing
         std::thread::spawn(move || {
-            let mut radix_tree = dynamo_kv_router::indexer::RadixTree::new();
+            let mut radix_tree = dynamo_kv_indexer::RadixTree::new();
 
             loop {
                 match request_rx.recv() {
@@ -1729,7 +1729,7 @@ impl RadixTree {
 
 impl RadixTree {
     fn handle_request(
-        radix_tree: &mut dynamo_kv_router::indexer::RadixTree,
+        radix_tree: &mut dynamo_kv_indexer::RadixTree,
         request: RadixTreeRequest,
     ) {
         match request {

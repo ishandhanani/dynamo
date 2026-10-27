@@ -6,7 +6,7 @@ use std::sync::{Arc, LazyLock};
 
 use anyhow::Result;
 use dashmap::DashMap;
-use dynamo_kv_router::indexer::{
+use dynamo_kv_indexer::{
     IndexerQueryRequest, IndexerQueryResponse, IndexerRecordRoutingDecisionRequest,
     IndexerRecordRoutingDecisionResponse, KV_INDEXER_QUERY_ENDPOINT,
     KV_INDEXER_RECORD_ROUTING_DECISION_ENDPOINT,
@@ -166,7 +166,7 @@ impl RemoteIndexer {
 }
 
 #[async_trait::async_trait]
-impl dynamo_kv_router::services::indexer::backend::RemotePrimary for RemoteIndexer {
+impl dynamo_kv_indexer::ingest::backend::RemotePrimary for RemoteIndexer {
     async fn find_matches_by_tier(
         &self,
         block_hashes: Vec<LocalBlockHash>,
@@ -205,7 +205,7 @@ impl dynamo_kv_router::services::indexer::backend::RemotePrimary for RemoteIndex
     async fn record_routing_decision(
         &self,
         worker: WorkerWithDpRank,
-        hashes: dynamo_kv_router::indexer::RoutingDecisionHashes,
+        hashes: dynamo_kv_indexer::RoutingDecisionHashes,
     ) -> Result<()> {
         self.record_hashed_routing_decision(worker, hashes.local_hashes, hashes.sequence_hashes)
             .await
@@ -544,7 +544,7 @@ mod tests {
     use crate::kv_router::indexer::{LowerTierIndexers, SideIndexer};
     use std::time::Duration;
 
-    use dynamo_kv_router::indexer::{
+    use dynamo_kv_indexer::{
         KvIndexer, KvIndexerInterface, KvIndexerMetrics, pruning::PruneConfig,
     };
     use dynamo_router_types::protocols::{

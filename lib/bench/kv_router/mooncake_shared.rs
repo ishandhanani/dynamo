@@ -3,9 +3,9 @@
 
 use std::sync::Arc;
 
+use dynamo_kv_indexer::pruning::PruneConfig;
+use dynamo_kv_indexer::{KvIndexer, KvIndexerInterface, KvIndexerMetrics};
 use dynamo_kv_router::LocalBlockHash;
-use dynamo_kv_router::indexer::pruning::PruneConfig;
-use dynamo_kv_router::indexer::{KvIndexer, KvIndexerInterface, KvIndexerMetrics};
 use dynamo_kv_router::{
     BranchShardedIndexer, ConcurrentRadixTreeCompressed, PositionalIndexer, ThreadPoolIndexer,
 };

@@ -11,7 +11,7 @@ use std::thread::sleep;
 use std::time::{Duration, Instant};
 
 use async_stream::stream;
-use dynamo_kv_router::indexer::cuckoo::ProducerIdentity;
+use dynamo_kv_indexer::cuckoo::ProducerIdentity;
 use futures::Stream;
 use tokio::sync::{OwnedSemaphorePermit, mpsc};
 use tokio::task::{JoinError, JoinHandle};
@@ -324,7 +324,7 @@ impl Drop for SnapshotBootstrap {
 mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
-    use dynamo_kv_router::indexer::cuckoo::{CkfConfig, DcCkfState};
+    use dynamo_kv_indexer::cuckoo::{CkfConfig, DcCkfState};
     use dynamo_router_types::identity::{
         CacheSemanticsId, DcId, IdentitySource, IndexerDomainId, PoolId, RoutingScopeId,
     };

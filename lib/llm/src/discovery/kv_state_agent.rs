@@ -323,7 +323,7 @@ pub fn resolve_kv_state_projection(
 
 #[cfg(test)]
 mod tests {
-    use dynamo_kv_router::indexer::{KvStateAgentIdentity, KvStateAttachmentStatus};
+    use dynamo_kv_indexer::{KvStateAgentIdentity, KvStateAttachmentStatus};
     use dynamo_router_types::identity::{
         CacheSemanticsId, DcId, IdentitySource, IndexerDomainId, PoolId, RoutingScopeId,
         StableDpSlotId,

@@ -258,7 +258,7 @@ impl KvStateAgentHost {
         let control_target = control.instance().clone();
         let discovery_id = host_discovery_id(component.drt().connection_id());
         let host_ad = KvStateHostAdvertisement {
-            protocol_version: dynamo_kv_router::indexer::KvStateProtocolVersion::V2,
+            protocol_version: dynamo_kv_indexer::KvStateProtocolVersion::V2,
             host_instance: control_target.clone(),
             control_target: control_target.clone(),
             max_slots: config.max_slots,

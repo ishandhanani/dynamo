@@ -20,7 +20,6 @@ use dynamo_kv_router::scheduling::{
     NonMaxOverlapSelectionObserver, OverloadedWorkerProvider, QueueLimitKind, QueueRejection,
     RejectThresholdsProvider, WorkerAvailabilityProvider,
 };
-use dynamo_kv_router::sequences::{LocalWorkerLoad, ReplicaWorkerPolicy};
 use dynamo_kv_router::services::selection::{
     CatalogReconciler, DEFAULT_MODEL_NAME, HostCache, HostEligibility, HostLoad, HostReplication,
     HostTelemetry, KvEventIngress, KvIndexSource, SelectionHost, SelectionOperation,
@@ -31,6 +30,7 @@ use dynamo_kv_router::{DEFAULT_ROUTING_GROUP, PrefillLoadEstimator, WorkerSelect
 use dynamo_router_types::config::KvRouterConfig;
 use dynamo_router_types::identity::RoutingPartitionId;
 use dynamo_router_types::protocols::{WorkerConfigLike, WorkerId, WorkerWithDpRank};
+use dynamo_slot_tracker::{LocalWorkerLoad, ReplicaWorkerPolicy};
 use tokio_util::sync::CancellationToken;
 
 use crate::discovery::RuntimeConfigWatch;
@@ -195,11 +195,11 @@ struct SenderLoadSink {
 }
 
 impl dynamo_kv_router::services::selection::SchedulerLoadSink for SenderLoadSink {
-    fn publish(&self, snapshot: dynamo_kv_router::sequences::SchedulerLoadSnapshot) {
+    fn publish(&self, snapshot: dynamo_slot_tracker::SchedulerLoadSnapshot) {
         self.sender.publish(snapshot);
     }
 
-    fn publish_batch(&self, snapshots: Vec<dynamo_kv_router::sequences::SchedulerLoadSnapshot>) {
+    fn publish_batch(&self, snapshots: Vec<dynamo_slot_tracker::SchedulerLoadSnapshot>) {
         self.sender.publish_batch(snapshots);
     }
 
@@ -216,7 +216,7 @@ impl EmbeddedSelection {
     pub(crate) async fn start(
         args: EmbeddedSelectionArgs,
         workers_with_configs: RuntimeConfigWatch,
-        request_leases: Option<Arc<dyn dynamo_kv_router::sequences::ReplicaRequestLeaseObserver>>,
+        request_leases: Option<Arc<dyn dynamo_slot_tracker::ReplicaRequestLeaseObserver>>,
         cancellation_token: CancellationToken,
     ) -> Result<(Self, crate::kv_router::sequence::ReplicaIngress)> {
         let worker_registration =

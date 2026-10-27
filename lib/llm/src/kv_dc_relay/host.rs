@@ -23,7 +23,7 @@ use std::time::{Duration, Instant};
 #[cfg(feature = "ckf-diagnostics")]
 use std::sync::atomic::Ordering;
 
-use dynamo_kv_router::indexer::cuckoo::{CkfConfig, CkfFailureAction};
+use dynamo_kv_indexer::cuckoo::{CkfConfig, CkfFailureAction};
 use dynamo_router_types::identity::PoolId;
 use dynamo_router_types::protocols::{DpRank, KvCacheEventError, SchedulerLoad, WorkerId};
 use dynamo_runtime::component::Component;
@@ -113,7 +113,7 @@ pub enum KvDcRelayError {
         message: String,
     },
     #[error(transparent)]
-    Build(#[from] dynamo_kv_router::indexer::cuckoo::CkfBuildError),
+    Build(#[from] dynamo_kv_indexer::cuckoo::CkfBuildError),
     #[error(transparent)]
     Event(#[from] KvCacheEventError),
     #[error("KV DC Relay publisher requires a replacement snapshot: {0}")]

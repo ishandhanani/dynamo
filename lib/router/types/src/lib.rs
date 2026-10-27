@@ -8,6 +8,7 @@
 //! busy thresholds, and the indexer's query and recovery DTOs. Stage crates depend on this
 //! crate and never on each other for a type. No tokio, no transport, no runtime.
 
+pub mod affinity;
 pub mod busy;
 pub mod cache;
 pub mod config;
@@ -24,3 +25,5 @@ pub mod worker_type;
 pub mod test_utils;
 
 pub use worker_type::WorkerType;
+
+pub const CLEANUP_INTERVAL_MS: u64 = 5 * 60 * 1000;

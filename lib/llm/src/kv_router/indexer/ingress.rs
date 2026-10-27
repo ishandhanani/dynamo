@@ -9,7 +9,7 @@
 use std::sync::Arc;
 
 use anyhow::Result;
-use dynamo_kv_router::services::indexer::registry::WorkerRegistry;
+use dynamo_kv_indexer::ingest::registry::WorkerRegistry;
 use dynamo_kv_router::services::selection::KvEventIngress;
 use dynamo_kv_router::{SessionPrefixIndexer, WorkerInputs, WorkerType};
 use dynamo_router_types::config::KvRouterConfig;

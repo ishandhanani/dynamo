@@ -6,7 +6,7 @@ use std::io::{BufReader, Read};
 use std::path::Path;
 
 use anyhow::{Context, bail};
-use dynamo_kv_router::indexer::cuckoo::CanonicalSequenceBlockHash;
+use dynamo_kv_indexer::cuckoo::CanonicalSequenceBlockHash;
 use dynamo_mocker::loadgen::{SessionTrace, Trace};
 use dynamo_mocker::replay::ReplayWorkerArtifacts;
 use dynamo_router_types::protocols::{

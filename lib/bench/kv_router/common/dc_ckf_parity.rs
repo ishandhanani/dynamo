@@ -12,8 +12,8 @@ use std::collections::VecDeque;
 use std::convert::Infallible;
 
 use anyhow::{Context, Result, anyhow, bail};
-use dynamo_kv_router::indexer::cuckoo::{CkfConfig, PrefixSearchConfig};
-use dynamo_kv_router::indexer::cuckoo::{
+use dynamo_kv_indexer::cuckoo::{CkfConfig, PrefixSearchConfig};
+use dynamo_kv_indexer::cuckoo::{
     ConsumerInstanceId, DcCkfDelta, DcCkfDeltaSink, DcCkfPublicationBatch, DcCkfPublishError,
     DcCkfPublisher, DcCkfState, GlobalCkfIndexer, GlobalCkfIngestOutcome, GlobalCkfLaneIngestor,
     GlobalCkfManifest, LaneLease, ProducerIdentity,
@@ -292,7 +292,7 @@ impl DirectCkfParityIndexer {
 
 fn map_publish_result(
     result: std::result::Result<
-        dynamo_kv_router::indexer::cuckoo::PublisherEmitOutcome,
+        dynamo_kv_indexer::cuckoo::PublisherEmitOutcome,
         DcCkfPublishError<Infallible>,
     >,
 ) -> Result<()> {

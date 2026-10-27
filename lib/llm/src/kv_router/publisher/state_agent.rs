@@ -1741,7 +1741,7 @@ struct NormalizedRawBatch {
 }
 
 fn normalize_raw_batch(
-    raw_events: Vec<dynamo_kv_router::zmq_wire::RawKvEvent>,
+    raw_events: Vec<dynamo_kv_indexer::zmq_wire::RawKvEvent>,
     worker: WorkerWithDpRank,
     kv_block_size: u32,
     ingress_protocol: KvStateIngressProtocol,
@@ -1774,7 +1774,7 @@ fn normalize_raw_batch(
             )
             && !matches!(
                 raw_event,
-                dynamo_kv_router::zmq_wire::RawKvEvent::AllBlocksCleared { .. }
+                dynamo_kv_indexer::zmq_wire::RawKvEvent::AllBlocksCleared { .. }
             )
         {
             cache_owner_fault.get_or_insert("KVCR ownership has an unsupported storage medium");
@@ -1798,7 +1798,7 @@ fn normalize_raw_batch(
             Err(_) => continue,
         };
         if ownership == KvEventOwnership::Kvcr
-            && let dynamo_kv_router::zmq_wire::RawKvEvent::BlockStored {
+            && let dynamo_kv_indexer::zmq_wire::RawKvEvent::BlockStored {
                 block_size,
                 group_idx,
                 kv_cache_spec_kind,
@@ -2255,7 +2255,7 @@ mod tests {
             ZmqEventNormalizer::new(4)
                 .preprocess_with_reason(raw_store(Some("CPU"), Some("kvcr"), 107), worker)
                 .unwrap_err(),
-            dynamo_kv_router::zmq_wire::ZmqEventFilterReason::UnsupportedOwnership
+            dynamo_kv_indexer::zmq_wire::ZmqEventFilterReason::UnsupportedOwnership
         );
 
         let normalized = normalize_raw_batch(
@@ -2339,7 +2339,7 @@ mod tests {
             Some(3i32),
         );
         let payload = rmp_serde::to_vec_named(&wire).unwrap();
-        let batch = dynamo_kv_router::zmq_wire::decode_event_batch(&payload).unwrap();
+        let batch = dynamo_kv_indexer::zmq_wire::decode_event_batch(&payload).unwrap();
         let worker = WorkerWithDpRank::new(17, 3);
         let mut framework = ZmqEventNormalizer::new(4);
         let mut cache_owner = ZmqEventNormalizer::new(4);
@@ -2460,7 +2460,7 @@ mod tests {
             Some(3i32),
         );
         let payload = rmp_serde::to_vec_named(&boundary_wire).unwrap();
-        let batch = dynamo_kv_router::zmq_wire::decode_event_batch(&payload).unwrap();
+        let batch = dynamo_kv_indexer::zmq_wire::decode_event_batch(&payload).unwrap();
         let normalized = normalize_raw_batch(
             batch.events,
             worker,

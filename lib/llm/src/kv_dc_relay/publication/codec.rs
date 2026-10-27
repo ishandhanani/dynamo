@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use bytes::Bytes;
-use dynamo_kv_router::indexer::cuckoo::{DcCkfDelta, DcCkfFormatIdentity, ProducerIdentity};
+use dynamo_kv_indexer::cuckoo::{DcCkfDelta, DcCkfFormatIdentity, ProducerIdentity};
 
 use super::cbi1 as images;
 use super::hub::HubSnapshot;
@@ -207,10 +207,10 @@ fn filter_format(format: DcCkfFormatIdentity) -> Result<images::FilterFormat, Cb
 
 #[cfg(test)]
 mod tests {
-    use dynamo_kv_router::LocalBlockHash;
-    use dynamo_kv_router::indexer::cuckoo::{
+    use dynamo_kv_indexer::cuckoo::{
         CkfConfig, ConsumerInstanceId, DcCkfState, LaneLease, ProducerIdentity,
     };
+    use dynamo_kv_router::LocalBlockHash;
     use dynamo_router_types::identity::{
         CacheSemanticsId, DcId, IdentitySource, IndexerDomainId, PoolId, RoutingScopeId,
     };

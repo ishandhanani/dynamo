@@ -17,7 +17,7 @@ use std::time::Duration;
 #[cfg(test)]
 mod test_event_processing {
     use super::*;
-    use dynamo_kv_router::zmq_wire::StoredBlockOptions;
+    use dynamo_kv_indexer::zmq_wire::StoredBlockOptions;
     use dynamo_router_types::protocols::{BlockHashOptions, compute_block_hash_for_seq};
 
     #[tokio::test]
@@ -863,7 +863,7 @@ mod tests_startup_helpers {
     use super::*;
     use crate::utils::zmq::{bind_pub_socket, send_multipart};
     use bytes::Bytes;
-    use dynamo_kv_router::indexer::{
+    use dynamo_kv_indexer::{
         GetWorkersRequest, KvIndexer, KvIndexerInterface, WorkerKvQueryResponse,
     };
     use dynamo_router_types::protocols::{ExternalSequenceBlockHash, LocalBlockHash};
@@ -2032,9 +2032,9 @@ mod tests_startup_helpers {
             .get_events_in_id_range(Some(last_known_id + 1), None)
             .await;
         let missed_events = match response {
-            dynamo_kv_router::indexer::WorkerKvQueryResponse::Events { events: e, .. } => e,
-            dynamo_kv_router::indexer::WorkerKvQueryResponse::TreeDump { events: e, .. } => e,
-            dynamo_kv_router::indexer::WorkerKvQueryResponse::Error(message) => {
+            dynamo_kv_indexer::WorkerKvQueryResponse::Events { events: e, .. } => e,
+            dynamo_kv_indexer::WorkerKvQueryResponse::TreeDump { events: e, .. } => e,
+            dynamo_kv_indexer::WorkerKvQueryResponse::Error(message) => {
                 panic!("Unexpected error response: {message}")
             }
             other => panic!("Unexpected response: {:?}", other),

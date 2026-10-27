@@ -541,7 +541,7 @@ fn filter_update(frame: &PublicationFrame, relay: DcRelayIdentity) -> proto::Fil
 }
 
 fn heartbeat_update(
-    identity: dynamo_kv_router::indexer::cuckoo::ProducerIdentity,
+    identity: dynamo_kv_indexer::cuckoo::ProducerIdentity,
     sequence: u64,
     relay: DcRelayIdentity,
 ) -> proto::FilterUpdate {

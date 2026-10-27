@@ -6,7 +6,7 @@ use std::future::Future;
 use std::sync::{Arc, Weak};
 use std::time::{Duration, Instant};
 
-use dynamo_kv_router::indexer::cuckoo::{CkfBuildError, CkfConfig, DcCkfState, ProducerIdentity};
+use dynamo_kv_indexer::cuckoo::{CkfBuildError, CkfConfig, DcCkfState, ProducerIdentity};
 use dynamo_router_types::identity::PoolId;
 use dynamo_router_types::protocols::{ActiveLoad, SchedulerLoad, WorkerId, WorkerWithDpRank};
 use dynamo_runtime::protocols::EndpointId;

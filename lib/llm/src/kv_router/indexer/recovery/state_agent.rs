@@ -2398,7 +2398,7 @@ async fn clear_cache_owner(indexer: &Indexer, owner: CacheOwnerId, event_id: u64
 mod tests {
     use std::{collections::HashMap, sync::Arc};
 
-    use dynamo_kv_router::indexer::{
+    use dynamo_kv_indexer::{
         KvIndexer, KvIndexerInterface, KvIndexerMetrics, KvStateAttachmentStatus,
         KvStateRecoveryReceipt, LowerTierIndexers, LowerTierQueryOptions, MatchDetails,
         query_lower_tiers_with_options,

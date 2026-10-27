@@ -40,5 +40,10 @@ dynamo-truthy = { workspace = true }
 serde_yaml = "0.9.34"
 
 [dev-dependencies]
+criterion = "0.5"
 rstest = "0.18.2"
 tempfile = { workspace = true }
+
+[[bench]]
+name = "tracking_hash"
+harness = false

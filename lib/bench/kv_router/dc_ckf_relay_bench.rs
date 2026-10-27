@@ -26,7 +26,7 @@ use dynamo_bench::kv_router_common::issuer::{
     contiguous_worker_issuer, pin_current_thread, pin_current_thread_to_cpus,
 };
 use dynamo_bench::kv_router_common::replay::generate_replay_artifacts;
-use dynamo_kv_router::indexer::cuckoo::{
+use dynamo_kv_indexer::cuckoo::{
     CanonicalSequenceBlockHash, CkfConfig, ConsumerInstanceId, DcCkfDelta, DcCkfDeltaSink,
     DcCkfPublicationBatch, DcCkfPublisher, DcCkfState, LaneLease, ProducerIdentity,
 };

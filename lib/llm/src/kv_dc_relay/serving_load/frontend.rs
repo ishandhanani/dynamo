@@ -510,7 +510,7 @@ mod tests {
     use std::cell::Cell;
     use std::sync::Arc;
 
-    use dynamo_kv_router::indexer::cuckoo::{CkfConfig, DcCkfState, ProducerIdentity};
+    use dynamo_kv_indexer::cuckoo::{CkfConfig, DcCkfState, ProducerIdentity};
     use dynamo_router_types::identity::{
         CacheSemanticsId, DcId, IdentitySource, IndexerDomainId, RoutingScopeId,
     };

@@ -24,8 +24,8 @@ These tests should be the first line of defense for narrowly scoped logic. They 
 
 Examples:
 
-- `lib/kv-router/src/indexer/tests.rs`
-- `lib/kv-router/src/sequences/*`
+- `lib/router/kv-indexer/src/tests.rs`
+- `lib/router/slot-tracker/src/*`
 - `lib/llm/src/kv_router/indexer/worker_query.rs`
 
 Typical commands:

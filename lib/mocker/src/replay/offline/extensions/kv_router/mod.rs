@@ -9,16 +9,15 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow};
-use dynamo_kv_router::LocalBlockHash;
-use dynamo_kv_router::indexer::{
+use dynamo_kv_indexer::{
     KvIndexerInterface, LowerTierIndexers, LowerTierQueryOptions, TieredMatchDetails,
     query_lower_tiers_with_options,
 };
+use dynamo_kv_router::LocalBlockHash;
 use dynamo_kv_router::scheduling::{
     OverlapAnalysis, OverlapSignals, PolicyClassConfig, PolicyProfile, PolicyQueue, QueueSnapshot,
     ScheduleMode, WorkerPlacement,
 };
-use dynamo_kv_router::sequences::topology::WorkerDpRange;
 use dynamo_kv_router::{
     ActiveSequencesMultiWorker, RadixTree, RoutingPartitionRef, SchedulingRequest, SequenceRequest,
     SessionContext, SessionPrefixIndexer, TrackingHashAlgorithm, TrackingHashContext,
@@ -30,6 +29,7 @@ use dynamo_router_types::protocols::{
     BlockHashOptions, KvCacheEventData, PrefillLoadHint, RouterEvent, RoutingConstraints, WorkerId,
     WorkerWithDpRank, compute_block_hash_for_seq,
 };
+use dynamo_slot_tracker::topology::WorkerDpRange;
 use dynamo_tokens::SequenceHash;
 use futures::executor::block_on;
 use futures::future::try_join_all;

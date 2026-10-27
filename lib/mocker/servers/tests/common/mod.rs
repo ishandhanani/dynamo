@@ -9,7 +9,7 @@ use std::time::Duration;
 use dynamo_backend_common::{
     GenerateContext, KvEventSource, LLMEngine, PreprocessedRequest, SamplingOptions, StopConditions,
 };
-use dynamo_kv_router::indexer::{KvIndexerInterface, KvIndexerMetrics, LocalKvIndexer};
+use dynamo_kv_indexer::{KvIndexerInterface, KvIndexerMetrics, LocalKvIndexer};
 use dynamo_llm::kv_router::publisher::{KvEventPublisher, KvEventSourceConfig};
 use dynamo_router_types::protocols::{
     KV_EVENT_SUBJECT, KvCacheEventData, RouterEvent, compute_block_hash_for_seq,

@@ -24,6 +24,7 @@ use tokio::time::Instant;
 use tokio_util::sync::CancellationToken;
 
 pub use crate::protocols::WorkerAffinityTarget as AffinityTarget;
+pub use dynamo_router_types::affinity::{AffinityReplicaSink, AffinityVersion};
 
 pub const MAX_SESSION_AFFINITY_TTL_SECS: u64 = 31_536_000;
 pub const MAX_SESSION_AFFINITY_ENTRIES: usize = 65_536;
@@ -72,18 +73,6 @@ pub enum AffinityError {
     ResourceExhausted(String),
     #[error("session affinity table dropped")]
     Dropped,
-}
-
-/// Ordering for replicated bindings: higher wins, ties broken by writer.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
-pub struct AffinityVersion {
-    pub sequence: u64,
-    pub writer_id: u64,
-}
-
-/// Receives every binding this table publishes for its replicas.
-pub trait AffinityReplicaSink: Send + Sync {
-    fn publish(&self, session_id: &str, target: AffinityTarget, version: AffinityVersion);
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

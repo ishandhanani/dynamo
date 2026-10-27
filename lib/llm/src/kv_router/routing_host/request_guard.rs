@@ -739,7 +739,7 @@ impl RequestGuard {
     pub(super) async fn acquire_approximate_lru(
         &mut self,
         hashes: RoutingDecisionHashes,
-    ) -> Result<(), dynamo_kv_router::indexer::KvRouterError> {
+    ) -> Result<(), dynamo_kv_indexer::KvRouterError> {
         let parent_hash = hashes.sequence_hashes.last().copied();
         let private_blocks = self
             .output_hashes

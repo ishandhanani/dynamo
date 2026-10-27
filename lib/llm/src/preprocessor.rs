@@ -1139,7 +1139,7 @@ fn apply_tracked_mm_replacements(
     usize,
     Vec<Option<dynamo_router_types::protocols::BlockExtraInfo>>,
 )> {
-    use dynamo_kv_router::zmq_wire::{normalize_mm_placeholder_runs, normalize_mm_token_runs};
+    use dynamo_kv_indexer::zmq_wire::{normalize_mm_placeholder_runs, normalize_mm_token_runs};
     use dynamo_router_types::protocols::{BlockExtraInfo, BlockMmObjectInfo};
 
     anyhow::ensure!(block_size > 0, "MM routing block size must be positive");

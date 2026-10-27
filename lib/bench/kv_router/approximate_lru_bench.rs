@@ -14,7 +14,7 @@ use dynamo_bench::kv_router_common::issuer::{
     parse_cpu_list, pin_current_thread, pin_current_thread_to_cpus,
 };
 use dynamo_bench::kv_router_common::replay::{WorkerReplayArtifacts, generate_replay_artifacts};
-use dynamo_kv_router::indexer::{
+use dynamo_kv_indexer::{
     ApproximateAcquireMode, ApproximateLruBlock, ApproximateLruLease, ApproximateLruStats,
     ApproximateRetentionConfig, KvIndexerInterface, KvIndexerMetrics,
 };

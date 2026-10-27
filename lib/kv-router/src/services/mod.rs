@@ -9,7 +9,7 @@ pub(crate) mod common;
 pub mod indexer;
 
 #[cfg(feature = "standalone-indexer")]
-pub mod overlap;
+pub use dynamo_kv_indexer::overlap;
 
 #[cfg(feature = "standalone-indexer")]
 pub mod shared_cache;

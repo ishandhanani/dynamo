@@ -2294,9 +2294,11 @@ dependencies = [
  "clap",
  "crossbeam-channel",
  "dynamo-data-gen",
+ "dynamo-kv-indexer",
  "dynamo-kv-router",
  "dynamo-mocker",
  "dynamo-router-types",
+ "dynamo-slot-tracker",
  "dynamo-tokens",
  "flate2",
  "futures-util",
@@ -2447,6 +2449,7 @@ dependencies = [
  "dashmap",
  "dynamo-custom-policy-builtin",
  "dynamo-http-server",
+ "dynamo-kv-indexer",
  "dynamo-kv-router",
  "dynamo-llm",
  "dynamo-protocols",
@@ -2517,6 +2520,44 @@ dependencies = [
 ]
 
 [[package]]
+name = "dynamo-kv-indexer"
+version = "1.7.0"
+dependencies = [
+ "anyhow",
+ "arc-swap",
+ "async-trait",
+ "axum 0.8.4",
+ "chrono",
+ "criterion",
+ "dashmap",
+ "dynamo-router-types",
+ "dynamo-runtime",
+ "dynamo-tokens",
+ "dynamo-truthy",
+ "fastrand",
+ "flume",
+ "parking_lot",
+ "prometheus",
+ "reqwest 0.12.28",
+ "rmp-serde",
+ "rstest 0.18.2",
+ "rstest_reuse",
+ "rustc-hash 2.1.2",
+ "serde",
+ "serde_json",
+ "slotmap",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tokio",
+ "tokio-util",
+ "tower 0.5.3",
+ "tracing",
+ "tracing-appender",
+ "xxhash-rust",
+ "zmq",
+]
+
+[[package]]
 name = "dynamo-kv-router"
 version = "1.7.0"
 dependencies = [
@@ -2525,15 +2566,16 @@ dependencies = [
  "async-trait",
  "axum 0.8.4",
  "blake3",
- "chrono",
  "criterion",
  "crossbeam-queue",
  "crossbeam-utils",
  "dashmap",
  "derive_builder",
  "dynamo-kv-hashing",
+ "dynamo-kv-indexer",
  "dynamo-router-types",
  "dynamo-runtime",
+ "dynamo-slot-tracker",
  "dynamo-tokens",
  "dynamo-truthy",
  "fastrand",
@@ -2544,7 +2586,6 @@ dependencies = [
  "ordered-float 4.6.0",
  "parking_lot",
  "prometheus",
- "reqwest 0.12.28",
  "rmp-serde",
  "rstest 0.18.2",
  "rstest_reuse",
@@ -2560,11 +2601,9 @@ dependencies = [
  "tokio-util",
  "tower 0.5.3",
  "tracing",
- "tracing-appender",
  "uuid",
  "xxhash-rust",
  "zeroize",
- "zmq",
 ]
 
 [[package]]
@@ -2601,6 +2640,7 @@ dependencies = [
  "dynamo-bench",
  "dynamo-custom-policy-builtin",
  "dynamo-http-server",
+ "dynamo-kv-indexer",
  "dynamo-kv-router",
  "dynamo-memory",
  "dynamo-mocker",
@@ -2611,6 +2651,7 @@ dependencies = [
  "dynamo-rl",
  "dynamo-router-types",
  "dynamo-runtime",
+ "dynamo-slot-tracker",
  "dynamo-tokenizers",
  "dynamo-tokens",
  "either",
@@ -2723,8 +2764,10 @@ dependencies = [
  "bytes",
  "dashmap",
  "dynamo-custom-policy-builtin",
+ "dynamo-kv-indexer",
  "dynamo-kv-router",
  "dynamo-router-types",
+ "dynamo-slot-tracker",
  "dynamo-tokens",
  "futures",
  "ndarray 0.16.1",
@@ -2880,6 +2923,7 @@ dependencies = [
  "anyhow",
  "async-trait",
  "blake3",
+ "criterion",
  "derive_builder",
  "dynamo-kv-hashing",
  "dynamo-runtime",
@@ -3098,6 +3142,35 @@ dependencies = [
  "tonic 0.13.1",
  "tonic 0.14.6",
  "tonic-health 0.14.6",
+]
+
+[[package]]
+name = "dynamo-slot-tracker"
+version = "1.7.0"
+dependencies = [
+ "anyhow",
+ "axum 0.8.4",
+ "crossbeam-utils",
+ "dashmap",
+ "dynamo-kv-indexer",
+ "dynamo-router-types",
+ "dynamo-tokens",
+ "fastrand",
+ "indexmap 2.14.0",
+ "parking_lot",
+ "rmp-serde",
+ "rstest 0.18.2",
+ "rustc-hash 2.1.2",
+ "seqlock",
+ "serde",
+ "serde_json",
+ "slotmap",
+ "thiserror 2.0.18",
+ "tokio",
+ "tokio-util",
+ "tower 0.5.3",
+ "tracing",
+ "zmq",
 ]
 
 [[package]]

@@ -20,12 +20,12 @@ use dynamo_kv_router::{
 
 // Re-export tiered-match types so internal callers (`indexer::TieredMatchDetails`)
 // keep working after these types moved to `dynamo-kv-router`.
-pub(crate) use dynamo_kv_router::indexer::TieredMatchDetails;
+pub(crate) use dynamo_kv_indexer::TieredMatchDetails;
 #[allow(unused_imports)]
-pub(crate) use dynamo_kv_router::indexer::WireTieredMatchDetails;
-pub use dynamo_kv_router::services::indexer::backend::{Indexer, RemotePrimary, SideIndexer};
-pub(crate) use dynamo_kv_router::services::indexer::recording::ApproximateRequestLease;
-use dynamo_kv_router::services::indexer::session_updates::SessionUpdateSender;
+pub(crate) use dynamo_kv_indexer::WireTieredMatchDetails;
+pub use dynamo_kv_indexer::ingest::backend::{Indexer, RemotePrimary, SideIndexer};
+pub(crate) use dynamo_kv_indexer::ingest::recording::ApproximateRequestLease;
+use dynamo_kv_indexer::ingest::session_updates::SessionUpdateSender;
 use dynamo_runtime::component::Component;
 pub(crate) use ingress::{RuntimeIngress, RuntimeIngressArgs};
 use tokio_util::sync::CancellationToken;

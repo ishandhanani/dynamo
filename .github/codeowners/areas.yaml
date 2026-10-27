@@ -54,11 +54,11 @@ areas:
   - components/src/dynamo/thunderagent_router/
   - lib/kv-router/
   - lib/router/
-  - lib/kv-router/src/indexer/
-  - lib/kv-router/src/recovery/
+  - lib/router/kv-indexer/src/
+  - lib/router/kv-indexer/src/recovery/
   - lib/kv-router/src/scheduling/
-  - lib/kv-router/src/sequences/
-  - lib/kv-router/src/zmq_wire/
+  - lib/router/slot-tracker/src/
+  - lib/router/kv-indexer/src/zmq_wire/
   - lib/kv-router/tests/
   - lib/llm/src/kv_router.rs
   - lib/llm/src/kv_router/
@@ -1044,7 +1044,7 @@ shared:
   owners:
   - router
   - kv-memory
-- glob: lib/kv-router/src/zmq_wire/extra_keys.rs
+- glob: lib/router/kv-indexer/src/zmq_wire/extra_keys.rs
   owners:
   - router
   - multimodal

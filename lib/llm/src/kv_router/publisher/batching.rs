@@ -4,7 +4,7 @@
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use dynamo_kv_router::indexer::LocalKvIndexer;
+use dynamo_kv_indexer::LocalKvIndexer;
 use dynamo_router_types::protocols::{KvCacheEventData, Placement, PlacementEvent, RouterEvent};
 
 use super::dedup::{EventDedupFilter, EventDedupPolicy};

@@ -105,7 +105,7 @@ fn model_to_wire(model: &ModelServingLoad) -> proto::ModelServingLoad {
 
 #[cfg(test)]
 mod tests {
-    use dynamo_kv_router::indexer::cuckoo::{CkfConfig, DcCkfState, ProducerIdentity};
+    use dynamo_kv_indexer::cuckoo::{CkfConfig, DcCkfState, ProducerIdentity};
     use dynamo_router_types::identity::{
         CacheSemanticsId, DcId, IdentitySource, IndexerDomainId, PoolId, RoutingScopeId,
     };

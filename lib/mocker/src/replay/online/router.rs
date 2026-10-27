@@ -8,7 +8,7 @@ use std::sync::atomic::AtomicBool;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use anyhow::{Context, Result, anyhow};
-use dynamo_kv_router::indexer::{
+use dynamo_kv_indexer::{
     KvIndexer, KvIndexerInterface, KvIndexerMetrics, LowerTierIndexers, LowerTierQueryOptions,
     MatchDetails, ThreadPoolIndexer, TieredMatchDetails, query_lower_tiers_with_options,
 };

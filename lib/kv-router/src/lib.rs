@@ -6,19 +6,15 @@
 //! This crate provides the core radix tree implementation and protocols for
 //! efficient KV cache lookup and routing in distributed LLM inference systems.
 
-mod active_set;
-pub(crate) mod cleanup;
 pub mod conditional_disagg;
 
-pub mod indexer;
+pub use dynamo_kv_indexer as indexer;
+pub use dynamo_kv_indexer::{recovery, session_prefix_index, zmq_wire};
 pub use dynamo_router_types::{identity, kv_hints, protocols, tracking_hash, worker_type};
+pub use dynamo_slot_tracker as sequences;
 pub mod plugins;
-pub mod recovery;
 pub mod scheduling;
-pub mod sequences;
 pub mod services;
-pub mod session_prefix_index;
-pub mod zmq_wire;
 
 // Backward-compat re-exports: old top-level module paths still work
 pub use indexer::concurrent_radix_tree_compressed;

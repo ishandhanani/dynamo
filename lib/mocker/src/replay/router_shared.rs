@@ -7,12 +7,12 @@ use std::sync::Arc;
 
 use crate::common::protocols::MockerConfig;
 use dynamo_kv_router::scheduling::queue::DEFAULT_MAX_BATCHED_TOKENS;
-use dynamo_kv_router::sequences::{LocalWorkerLoad, SchedulerLoadSnapshot};
 use dynamo_kv_router::{ActiveSequencesMultiWorker, LocalScheduler, SequencePublisher};
 use dynamo_router_types::config::KvRouterConfig;
 use dynamo_router_types::protocols::{
     ActiveSequenceEvent, WorkerConfigLike, WorkerId, WorkerWithDpRank,
 };
+use dynamo_slot_tracker::{LocalWorkerLoad, SchedulerLoadSnapshot};
 
 #[derive(Clone, Copy, Debug, Default)]
 pub(super) struct ReplayNoopPublisher;

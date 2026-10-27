@@ -64,8 +64,8 @@ multiturn = [
   "dep:rand",
 ]
 offline-replay = ["dep:blake3", "dep:dynamo-mocker", "dep:libc"]
-router-bench = ["dynamo-kv-router/bench"]
-router-metrics = ["dynamo-kv-router/metrics"]
+router-bench = ["dynamo-kv-router/bench", "dynamo-kv-indexer/bench", "dynamo-slot-tracker/bench"]
+router-metrics = ["dynamo-kv-router/metrics", "dynamo-kv-indexer/metrics"]
 router-test-support = [
   "router-bench",
   "router-metrics",
@@ -190,6 +190,8 @@ dynamo-tokens = { workspace = true, optional = true }
 dynamo-data-gen = { workspace = true, optional = true }
 dynamo-mocker = { workspace = true, optional = true }
 dynamo-kv-router = { workspace = true }
+dynamo-kv-indexer = { workspace = true }
+dynamo-slot-tracker = { workspace = true }
 dynamo-router-types = { workspace = true }
 
 [target.'cfg(target_os = "linux")'.dependencies]

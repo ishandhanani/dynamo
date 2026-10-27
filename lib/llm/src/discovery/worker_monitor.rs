@@ -10,8 +10,8 @@ use tokio_util::sync::CancellationToken;
 use arc_swap::ArcSwap;
 use dashmap::DashMap;
 use dynamo_kv_router::scheduling::BusyThresholds;
-use dynamo_kv_router::sequences::SchedulerLoadSnapshot;
 use dynamo_router_types::protocols::ActiveLoad;
+use dynamo_slot_tracker::SchedulerLoadSnapshot;
 use serde::{Deserialize, Serialize};
 
 use crate::kv_router::RouterLoadSource;
@@ -1267,8 +1267,8 @@ mod tests {
         WorkerLoadState, cleanup_worker_metrics, collect_overloaded_workers,
         overload_reconciliation_needed, publish_overloaded_instances_if_needed,
     };
-    use dynamo_kv_router::sequences::SchedulerLoadSnapshot;
     use dynamo_router_types::protocols::{ActiveLoad, WorkerWithDpRank};
+    use dynamo_slot_tracker::SchedulerLoadSnapshot;
     use std::collections::HashSet;
 
     #[test]
@@ -2032,7 +2032,7 @@ mod tests {
 
     #[test]
     fn cleanup_removes_every_load_series_for_the_worker_ranks() {
-        use dynamo_kv_router::sequences::LocalWorkerLoad;
+        use dynamo_slot_tracker::LocalWorkerLoad;
         use prometheus::core::Collector;
 
         const WORKER_ID: u64 = 0x10696;

@@ -1,0 +1,60 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+[package]
+name = "dynamo-slot-tracker"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+homepage.workspace = true
+repository.workspace = true
+description = "Active-sequence slot tracker for the Dynamo router: write model, prompt-registry read model, replica mesh, and the standalone slot-tracker service"
+
+[features]
+default = []
+bench = ["dynamo-router-types/bench", "dynamo-kv-indexer/bench"]
+# The ZMQ replica mesh (PeerManager) and the registry built on it.
+replica-sync-zmq = ["dep:zmq", "dep:dynamo-kv-indexer", "dynamo-kv-indexer/ingest-zmq"]
+# The standalone HTTP slot-tracker service.
+http = ["replica-sync-zmq", "dep:axum"]
+# Test helpers consumed by dependent crates' tests; never enable in release.
+testing = []
+
+[dependencies]
+dynamo-router-types = { workspace = true }
+anyhow = { workspace = true }
+dashmap = { workspace = true }
+indexmap = { workspace = true }
+fastrand = "2"
+seqlock = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+tokio-util = { workspace = true }
+tracing = { workspace = true }
+crossbeam-utils = "0.8"
+parking_lot = { workspace = true }
+rmp-serde = { workspace = true }
+rustc-hash = "2.1.1"
+slotmap = "1"
+dynamo-tokens = { workspace = true }
+dynamo-kv-indexer = { workspace = true, optional = true }
+zmq = { version = "0.10", optional = true }
+axum = { version = "=0.8.4", default-features = false, features = [
+  "http1",
+  "json",
+  "matched-path",
+  "query",
+  "tokio",
+  "tracing",
+], optional = true }
+
+
+[dev-dependencies]
+dynamo-router-types = { workspace = true, features = ["testing"] }
+rstest = "0.18.2"
+tokio = { workspace = true, features = ["rt", "macros", "time", "test-util"] }
+serde_json = { workspace = true }
+tower = { version = "0.5", features = ["util"] }

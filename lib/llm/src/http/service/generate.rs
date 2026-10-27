@@ -562,7 +562,7 @@ fn generate_mm_routing_info(
             }
         }
 
-        let normalized_tokens = dynamo_kv_router::zmq_wire::normalize_mm_token_runs(
+        let normalized_tokens = dynamo_kv_indexer::zmq_wire::normalize_mm_token_runs(
             block_tokens,
             image_token_id,
             &worker_objects,
@@ -592,7 +592,7 @@ fn generate_mm_routing_info(
         },
         marked_image_hashes: ranges
             .iter()
-            .map(|(_, _, hash, _)| dynamo_kv_router::zmq_wire::mark_mm_hash_for_extra_key(*hash))
+            .map(|(_, _, hash, _)| dynamo_kv_indexer::zmq_wire::mark_mm_hash_for_extra_key(*hash))
             .collect(),
     }))
 }
@@ -2105,8 +2105,8 @@ pub(crate) mod tests {
             .expect("frontend-approved marked MM hash")
             .to_string();
         let event_mm_info =
-            dynamo_kv_router::zmq_wire::extra_keys_to_block_mm_infos(Some(vec![Some(vec![
-                dynamo_kv_router::zmq_wire::ExtraKeyItem::HashWithUnsignedOffset((
+            dynamo_kv_indexer::zmq_wire::extra_keys_to_block_mm_infos(Some(vec![Some(vec![
+                dynamo_kv_indexer::zmq_wire::ExtraKeyItem::HashWithUnsignedOffset((
                     marked_identifier,
                     1,
                 )),
@@ -2116,11 +2116,11 @@ pub(crate) mod tests {
             .next()
             .flatten()
             .expect("block MM metadata");
-        let event_block = dynamo_kv_router::zmq_wire::create_stored_block_from_parts(
+        let event_block = dynamo_kv_indexer::zmq_wire::create_stored_block_from_parts(
             4,
             7,
             &[10, 99, 99, 20],
-            dynamo_kv_router::zmq_wire::StoredBlockOptions {
+            dynamo_kv_indexer::zmq_wire::StoredBlockOptions {
                 mm_extra_info: Some(event_mm_info),
                 image_token_id: Some(99),
                 ..Default::default()

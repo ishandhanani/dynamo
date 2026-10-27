@@ -9,16 +9,16 @@
 
 mod direct_zmq;
 
-pub use dynamo_kv_router::multi_worker_sequence::{
-    ActiveSequencesMultiWorker, ReplicaRequestLeaseObserver, SchedulerLoadSnapshot, SequenceError,
-    SequencePublishQueueError, SequencePublisher, SequenceRequest, SequenceSubscriber,
-};
-pub use dynamo_kv_router::sequence::{ActiveSequences, RequestId};
 use dynamo_kv_router::services::selection::{ModelLoadResponse, SelectionService};
 use dynamo_router_types::protocols::{
     ActiveSequenceEvent, ActiveSequenceEventBatch, MAX_REPLICA_BATCH_DURATION,
     MAX_REPLICA_BATCH_EVENTS, SchedulerGroup, SchedulerLoad, WorkerWithDpRank,
 };
+pub use dynamo_slot_tracker::multi_worker::{
+    ActiveSequencesMultiWorker, ReplicaRequestLeaseObserver, SchedulerLoadSnapshot, SequenceError,
+    SequencePublishQueueError, SequencePublisher, SequenceRequest, SequenceSubscriber,
+};
+pub use dynamo_slot_tracker::single::{ActiveSequences, RequestId};
 
 use anyhow::Result;
 use dynamo_runtime::component::Endpoint;

@@ -99,7 +99,7 @@ mod tests {
     use std::sync::Arc;
 
     use aisimulate_core::engine::{KvBlock, StoredBlocks};
-    use dynamo_kv_router::indexer::{KvIndexer, KvIndexerInterface, KvIndexerMetrics};
+    use dynamo_kv_indexer::{KvIndexer, KvIndexerInterface, KvIndexerMetrics};
     use dynamo_router_types::protocols::{
         KvCacheEventData, LocalBlockHash, RouterEvent, WorkerWithDpRank,
     };
