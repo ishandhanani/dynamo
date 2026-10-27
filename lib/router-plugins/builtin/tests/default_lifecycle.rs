@@ -1,7 +1,8 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 use dynamo_custom_policy_builtin::default_factory;
-use dynamo_kv_router::{KvRouterConfig, RoutingPartitionId};
+use dynamo_router_types::config::KvRouterConfig;
+use dynamo_router_types::identity::RoutingPartitionId;
 use dynamo_router_types::protocols::RoutingConstraints;
 use dynamo_scheduler::selection::{
     PromptRequest, SelectAndReserveRequest, SelectionCacheConfig, SelectionCore, WorkerRequest,
@@ -138,9 +139,10 @@ async fn runtime_updates_are_conditional_and_cancelled_writes_do_not_apply() {
 
 #[tokio::test]
 async fn scoring_error_does_not_book_and_allows_retry() {
-    use dynamo_kv_router::{
+    use dynamo_router_types::sched::WorkerSelectionPolicyError;
+    use dynamo_worker_selection::plugin::{
         WorkerCandidates, WorkerInputView, WorkerPicker, WorkerScorer, WorkerSelectionContext,
-        WorkerSelectionPolicy, WorkerSelectionPolicyError,
+        WorkerSelectionPolicy,
     };
     use std::sync::Arc;
 

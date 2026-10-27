@@ -9,14 +9,12 @@
 
 use std::collections::HashSet;
 
-use dynamo_kv_router::{
-    identity::{CacheOwnerId, IndexerDomainId},
-    indexer::{
-        KvStateAgentIdentity, KvStateAgentStatus, KvStateProtocolVersion, KvStateRecoveryReceipt,
-    },
-    protocols::{
-        ResidencyProjection, ResidencyProjectionError, RouterHintSourceMetadata, WorkerWithDpRank,
-    },
+use dynamo_kv_indexer::{
+    KvStateAgentIdentity, KvStateAgentStatus, KvStateProtocolVersion, KvStateRecoveryReceipt,
+};
+use dynamo_router_types::identity::{CacheOwnerId, IndexerDomainId};
+use dynamo_router_types::protocols::{
+    ResidencyProjection, ResidencyProjectionError, RouterHintSourceMetadata, WorkerWithDpRank,
 };
 use dynamo_runtime::component::Instance;
 use serde::{Deserialize, Serialize};

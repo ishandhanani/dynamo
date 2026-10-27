@@ -161,7 +161,7 @@ Send the request twice to populate and then reuse the worker's KV cache. Exact r
 
 ## Verify Video Routing
 
-The vLLM and SGLang multimodal router launchers enable routing debug logs by default. For a custom launch, set `DYN_LOG=info,mm_routing=debug,dynamo_kv_router::scheduling=debug,dynamo_llm::kv_router=debug`, then check for:
+The vLLM and SGLang multimodal router launchers enable routing debug logs by default. For a custom launch, set `DYN_LOG=info,mm_routing=debug,dynamo_schedulerdebug,dynamo_admissiondebug,dynamo_worker_selectiondebug,dynamo_llm::kv_router=debug`, then check for:
 
 - `exact video-aware KV routing enabled` during worker registration.
 - `video routing metadata resolved` after the frontend decodes an eligible request.

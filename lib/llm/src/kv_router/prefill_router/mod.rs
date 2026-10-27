@@ -11,10 +11,9 @@ use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
-use dynamo_kv_router::{
-    PrefillLoadEstimator, conditional_disagg::ConditionalDisaggPolicy,
-    config::RouterConfigOverride, protocols::RoutingConstraints,
-};
+use dynamo_router_types::config::RouterConfigOverride;
+use dynamo_router_types::prefill_load::PrefillLoadEstimator;
+use dynamo_router_types::protocols::RoutingConstraints;
 use dynamo_runtime::{
     error::{DynamoError, ErrorClass, ErrorType, match_error_chain},
     pipeline::{
@@ -23,6 +22,7 @@ use dynamo_runtime::{
     },
     protocols::{EndpointId, annotated::Annotated},
 };
+use dynamo_worker_selection::conditional_disagg::ConditionalDisaggPolicy;
 use futures::stream::{self, StreamExt};
 
 use crate::{

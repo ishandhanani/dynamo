@@ -4,8 +4,9 @@
 mod support;
 use criterion::{BenchmarkId, Criterion, black_box, criterion_group, criterion_main};
 use dynamo_custom_policy_builtin::default_policy;
-use dynamo_kv_router::{KvRouterConfig, WorkerSelector};
+use dynamo_router_types::config::KvRouterConfig;
 use dynamo_router_types::protocols::SelectionTraceSpec;
+use dynamo_worker_selection::selector::WorkerSelector;
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::Duration;
@@ -62,8 +63,10 @@ fn bench(c: &mut Criterion) {
                 overlap_score_credit_decay: decay,
                 ..Default::default()
             };
-            let reference =
-                dynamo_kv_router::DefaultWorkerSelector::new(Some(config.clone()), "prefill");
+            let reference = dynamo_worker_selection::selector::DefaultWorkerSelector::new(
+                Some(config.clone()),
+                "prefill",
+            );
             let plugin = default_policy(config, "prefill");
             let reference_allocs = allocations(|| {
                 black_box(
@@ -157,16 +160,16 @@ fn bench(c: &mut Criterion) {
 }
 
 struct LoadScorer(f64);
-impl dynamo_kv_router::WorkerScorer for LoadScorer {
-    fn required_worker_inputs(&self) -> dynamo_kv_router::WorkerInputs {
-        dynamo_kv_router::WorkerInputs::LOAD
+impl dynamo_worker_selection::plugin::WorkerScorer for LoadScorer {
+    fn required_worker_inputs(&self) -> dynamo_worker_selection::plugin::WorkerInputs {
+        dynamo_worker_selection::plugin::WorkerInputs::LOAD
     }
     fn score(
         &mut self,
-        _: &dynamo_kv_router::WorkerSelectionContext<'_>,
-        candidates: dynamo_kv_router::WorkerCandidates<'_>,
+        _: &dynamo_worker_selection::plugin::WorkerSelectionContext<'_>,
+        candidates: dynamo_worker_selection::plugin::WorkerCandidates<'_>,
         costs: &mut [f64],
-    ) -> Result<(), dynamo_kv_router::WorkerSelectionPolicyError> {
+    ) -> Result<(), dynamo_router_types::sched::WorkerSelectionPolicyError> {
         for (candidate, cost) in candidates.iter().zip(costs) {
             *cost = candidate.load().unwrap().active_requests() as f64 * self.0;
         }
@@ -175,12 +178,12 @@ impl dynamo_kv_router::WorkerScorer for LoadScorer {
 }
 
 struct MinimumPicker;
-impl dynamo_kv_router::WorkerPicker for MinimumPicker {
+impl dynamo_worker_selection::plugin::WorkerPicker for MinimumPicker {
     fn pick(
         &mut self,
-        _: &dynamo_kv_router::WorkerSelectionContext<'_>,
-        input: dynamo_kv_router::WorkerInputView<'_>,
-    ) -> Result<usize, dynamo_kv_router::WorkerSelectionPolicyError> {
+        _: &dynamo_worker_selection::plugin::WorkerSelectionContext<'_>,
+        input: dynamo_worker_selection::plugin::WorkerInputView<'_>,
+    ) -> Result<usize, dynamo_router_types::sched::WorkerSelectionPolicyError> {
         Ok(input
             .candidates()
             .iter()
@@ -204,10 +207,10 @@ fn stacked(c: &mut Criterion) {
             let scorers = (0..scorer_count)
                 .map(|index| {
                     Box::new(LoadScorer((index + 1) as f64))
-                        as Box<dyn dynamo_kv_router::WorkerScorer>
+                        as Box<dyn dynamo_worker_selection::plugin::WorkerScorer>
                 })
                 .collect();
-            let policy = dynamo_kv_router::WorkerSelectionPolicy::new(
+            let policy = dynamo_worker_selection::plugin::WorkerSelectionPolicy::new(
                 KvRouterConfig::default(),
                 "prefill",
                 scorers,
@@ -248,10 +251,11 @@ fn shared_cache(c: &mut Criterion) {
                     if !tier_matches {
                         request.overlap.tier_overlap_blocks = Default::default();
                     }
-                    request.shared_cache_hits =
-                        Some(dynamo_kv_router::SharedCacheHits::from_ranges(
+                    request.shared_cache_hits = Some(
+                        dynamo_router_types::protocols::SharedCacheHits::from_ranges(
                             (0..range_count).map(|i| i * 4..i * 4 + 2).collect(),
-                        ));
+                        ),
+                    );
                     let policy = default_policy(
                         KvRouterConfig {
                             shared_cache_multiplier: Some(credit),

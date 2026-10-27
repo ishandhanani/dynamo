@@ -1,12 +1,12 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-use dynamo_kv_router::{
-    protocols::{WorkerSelectionResult, WorkerWithDpRank},
-    scheduling::KvSchedulerError,
-    selector::{HostedSelectionInputs, WorkerInputs, WorkerSelectionInput, WorkerSelector},
-};
+use dynamo_router_types::protocols::{WorkerSelectionResult, WorkerWithDpRank};
+use dynamo_router_types::sched::KvSchedulerError;
 use dynamo_runtime::pipeline::{BuiltinRoutePicker, RouterMode};
+use dynamo_worker_selection::selector::{
+    HostedSelectionInputs, WorkerInputs, WorkerSelectionInput, WorkerSelector,
+};
 
 use crate::local_model::runtime_config::ModelRuntimeConfig;
 
@@ -50,10 +50,12 @@ impl BuiltinWorkerSelector {
             .contains(WorkerInputs::OCCUPANCY)
             && occupancy.is_none()
         {
-            return Err(dynamo_kv_router::WorkerSelectionPolicyError::failed(
-                "selector requires hosted OCCUPANCY input",
-            )
-            .into());
+            return Err(
+                dynamo_router_types::sched::WorkerSelectionPolicyError::failed(
+                    "selector requires hosted OCCUPANCY input",
+                )
+                .into(),
+            );
         }
         Ok((worker_ids, occupancy))
     }

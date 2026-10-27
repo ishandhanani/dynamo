@@ -6,11 +6,13 @@ mod support;
 
 use std::sync::{Arc, Mutex};
 
-use dynamo_kv_router::{
-    KvRouterConfig, WorkerCandidate, WorkerCandidates, WorkerFilter, WorkerInputView, WorkerInputs,
-    WorkerPicker, WorkerScorer, WorkerSelectionContext, WorkerSelectionPolicy,
-    WorkerSelectionPolicyError, WorkerSelector,
+use dynamo_router_types::config::KvRouterConfig;
+use dynamo_router_types::sched::WorkerSelectionPolicyError;
+use dynamo_worker_selection::plugin::{
+    WorkerCandidate, WorkerCandidates, WorkerFilter, WorkerInputView, WorkerInputs, WorkerPicker,
+    WorkerScorer, WorkerSelectionContext, WorkerSelectionPolicy,
 };
+use dynamo_worker_selection::selector::WorkerSelector;
 use support::fixture;
 
 #[derive(Debug, PartialEq)]
@@ -356,7 +358,7 @@ fn unwritten_costs_cannot_reuse_a_previous_selection_or_scorer() {
     let error = select().unwrap_err();
     assert!(matches!(
         error,
-        dynamo_kv_router::KvSchedulerError::WorkerSelectionPolicy(
+        dynamo_router_types::sched::KvSchedulerError::WorkerSelectionPolicy(
             WorkerSelectionPolicyError::NonFiniteCost {
                 scorer_index: 1,
                 row: 0

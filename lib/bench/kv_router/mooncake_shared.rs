@@ -4,11 +4,11 @@
 use std::sync::Arc;
 
 use dynamo_kv_indexer::pruning::PruneConfig;
-use dynamo_kv_indexer::{KvIndexer, KvIndexerInterface, KvIndexerMetrics};
-use dynamo_kv_router::LocalBlockHash;
-use dynamo_kv_router::{
+use dynamo_kv_indexer::{
     BranchShardedIndexer, ConcurrentRadixTreeCompressed, PositionalIndexer, ThreadPoolIndexer,
 };
+use dynamo_kv_indexer::{KvIndexer, KvIndexerInterface, KvIndexerMetrics};
+use dynamo_router_types::protocols::LocalBlockHash;
 use dynamo_router_types::protocols::{KvCacheEvent, KvCacheEventData, StorageTier};
 use tokio_util::sync::CancellationToken;
 

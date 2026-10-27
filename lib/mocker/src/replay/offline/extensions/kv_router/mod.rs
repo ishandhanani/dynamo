@@ -14,25 +14,29 @@ use dynamo_kv_indexer::{
     KvIndexerInterface, LowerTierIndexers, LowerTierQueryOptions, TieredMatchDetails,
     query_lower_tiers_with_options,
 };
-use dynamo_kv_router::LocalBlockHash;
-use dynamo_kv_router::{
-    ActiveSequencesMultiWorker, RadixTree, RoutingPartitionRef, SchedulingRequest, SequenceRequest,
-    SessionContext, SessionPrefixIndexer, TrackingHashAlgorithm, TrackingHashContext,
-    TrackingHashScope, WorkerLoadProjection, WorkerSelectionInput, WorkerSelector,
-};
+use dynamo_kv_indexer::{RadixTree, SessionPrefixIndexer};
 pub(in crate::replay) use dynamo_router_types::config::KvRouterConfig as ReplayKvRouterConfig;
 use dynamo_router_types::config::KvRouterConfig;
 use dynamo_router_types::config::policy::{PolicyClassConfig, PolicyProfile};
+use dynamo_router_types::identity::RoutingPartitionRef;
 use dynamo_router_types::overlap::OverlapSignals;
+use dynamo_router_types::protocols::LocalBlockHash;
+use dynamo_router_types::protocols::WorkerLoadProjection;
 use dynamo_router_types::protocols::WorkerPlacement;
 use dynamo_router_types::protocols::{
     BlockHashOptions, KvCacheEventData, PrefillLoadHint, RouterEvent, RoutingConstraints, WorkerId,
     WorkerWithDpRank, compute_block_hash_for_seq,
 };
 use dynamo_router_types::sched::ScheduleMode;
+use dynamo_router_types::sched::{SchedulingRequest, SessionContext};
+use dynamo_router_types::tracking_hash::{
+    TrackingHashAlgorithm, TrackingHashContext, TrackingHashScope,
+};
 use dynamo_scheduler::overlap::OverlapAnalysis;
 use dynamo_slot_tracker::topology::WorkerDpRange;
+use dynamo_slot_tracker::{ActiveSequencesMultiWorker, SequenceRequest};
 use dynamo_tokens::SequenceHash;
+use dynamo_worker_selection::selector::{WorkerSelectionInput, WorkerSelector};
 use futures::executor::block_on;
 use futures::future::try_join_all;
 use rustc_hash::FxHashMap;
@@ -1327,13 +1331,14 @@ mod tests {
     use std::sync::Arc;
     use std::time::Duration;
 
-    use dynamo_kv_router::{PrefillLoadEstimator, TrackingHashAlgorithm};
     use dynamo_router_types::config::{KvRouterConfig, RouterPrefillLoadModel, RouterQueuePolicy};
+    use dynamo_router_types::prefill_load::PrefillLoadEstimator;
     use dynamo_router_types::protocols::{
         BlockHashOptions, ExternalSequenceBlockHash, KvCacheEvent, KvCacheEventData,
         KvCacheStoreData, KvCacheStoredBlockData, LocalBlockHash, RouterEvent, StorageTier,
         WorkerId, WorkerWithDpRank, compute_block_hash_for_seq,
     };
+    use dynamo_router_types::tracking_hash::TrackingHashAlgorithm;
     use rustc_hash::FxHashMap;
     use serde_json::Value;
     use tempfile::NamedTempFile;

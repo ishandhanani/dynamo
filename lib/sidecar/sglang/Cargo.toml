@@ -48,7 +48,6 @@ tonic-build = { workspace = true }
 
 [dev-dependencies]
 dynamo-backend-common = { workspace = true, features = ["testing"] }
-dynamo-kv-router = { workspace = true }
 dynamo-router-types = { workspace = true }
 rmp-serde = { workspace = true }
 tempfile = { workspace = true }

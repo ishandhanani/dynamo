@@ -22,11 +22,13 @@ use crate::{
         completions::{NvCreateCompletionRequest, NvCreateCompletionResponse},
     },
 };
-use dynamo_kv_router::{
-    KvRouterConfig, RoutingPartitionRef, WorkerSelectionPolicy, WorkerType,
-    plugins::{RouterPlugins, request_classifier::RequestClassifierFactory},
-};
+use dynamo_admission::classifier::RequestClassifierFactory;
+use dynamo_router_types::WorkerType;
+use dynamo_router_types::config::KvRouterConfig;
+use dynamo_router_types::identity::RoutingPartitionRef;
 use dynamo_runtime::{DistributedRuntime, metrics::MetricsHierarchy};
+use dynamo_scheduler::plugins::RouterPlugins;
+use dynamo_worker_selection::plugin::WorkerSelectionPolicy;
 
 /// Dynamo's complete discovery-backed HTTP frontend.
 ///
@@ -351,7 +353,9 @@ async fn run_watcher(
     http_service: Arc<HttpService>,
     metrics: Arc<dynamo_http_server::metrics::Metrics>,
     chat_engine_factory: Option<ChatEngineFactoryCallback>,
-    prefill_load_estimator: Option<Arc<dyn dynamo_kv_router::PrefillLoadEstimator>>,
+    prefill_load_estimator: Option<
+        Arc<dyn dynamo_router_types::prefill_load::PrefillLoadEstimator>,
+    >,
     local_model_path: Option<PathBuf>,
     tokenizer_backend: Option<TokenizerBackend>,
     tokenizer_fallback_enabled: Option<bool>,

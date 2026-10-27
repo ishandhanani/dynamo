@@ -8,13 +8,11 @@ use std::sync::{
 
 use arc_swap::ArcSwap;
 use async_trait::async_trait;
-use dynamo_kv_router::{
-    indexer::{
-        KvStateAgentStatus, KvStateRecoveryReceipt, LocalKvIndexer, WorkerKvQueryKind,
-        WorkerKvQueryRequest, WorkerKvQueryResponse,
-    },
-    protocols::DpRank,
+use dynamo_kv_indexer::{
+    KvStateAgentStatus, KvStateRecoveryReceipt, LocalKvIndexer, WorkerKvQueryKind,
+    WorkerKvQueryRequest, WorkerKvQueryResponse,
 };
+use dynamo_router_types::protocols::DpRank;
 use dynamo_runtime::{
     component::{Component, StartedEndpoint},
     pipeline::{

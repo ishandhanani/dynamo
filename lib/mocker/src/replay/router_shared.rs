@@ -6,12 +6,13 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::common::protocols::MockerConfig;
-use dynamo_kv_router::{ActiveSequencesMultiWorker, LocalScheduler, SequencePublisher};
 use dynamo_router_types::config::KvRouterConfig;
 use dynamo_router_types::protocols::{
     ActiveSequenceEvent, WorkerConfigLike, WorkerId, WorkerWithDpRank,
 };
 use dynamo_router_types::selection_inputs::DEFAULT_MAX_BATCHED_TOKENS;
+use dynamo_scheduler::local::LocalScheduler;
+use dynamo_slot_tracker::{ActiveSequencesMultiWorker, SequencePublisher};
 use dynamo_slot_tracker::{LocalWorkerLoad, SchedulerLoadSnapshot};
 
 #[derive(Clone, Copy, Debug, Default)]

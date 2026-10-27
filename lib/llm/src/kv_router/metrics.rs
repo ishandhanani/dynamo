@@ -67,7 +67,8 @@ use dynamo_http_server::metrics::generate_log_buckets;
 
 mod worker_registered;
 use crate::protocols::common::timing::WORKER_TYPE_PREFILL;
-use dynamo_kv_router::{indexer::ApproximateLruStats, sequences::LocalWorkerLoad};
+use dynamo_kv_indexer::ApproximateLruStats;
+use dynamo_slot_tracker::LocalWorkerLoad;
 use worker_registered::RouterWorkerRegistered;
 pub(crate) use worker_registered::{RegistrationAvailabilityProvider, RouterWorkerRegistration};
 

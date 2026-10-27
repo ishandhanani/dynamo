@@ -12,7 +12,7 @@ use std::time::Instant;
 use dynamo_kv_indexer::{
     KvIndexerInterface, ObservationError, SyncIndexer, ThreadPoolIndexer, ThreadPoolObservationPlan,
 };
-use dynamo_kv_router::LocalBlockHash;
+use dynamo_router_types::protocols::LocalBlockHash;
 use dynamo_router_types::protocols::{KvCacheEventData, RouterEvent};
 use serde::Serialize;
 use tokio::sync::{Notify, oneshot};

@@ -31,17 +31,17 @@ use std::{
 };
 
 use anyhow::{Context, Result};
-use dynamo_kv_router::{
-    identity::{CacheOwnerId, CanonicalIdentityMaterial, ExplicitIdentityMap, StableDpSlotId},
-    indexer::{
-        KvIndexerMetrics, KvStateAgentIdentity, KvStateAgentStatus, KvStateAttachmentStatus,
-        KvStateProtocolVersion, LocalKvIndexer,
-    },
-    protocols::{
-        KvCacheEvent, KvCacheEventData, PlacementEvent, ResidencyDomain, ResidencyOwner,
-        RouterEvent, RouterHintSourceMetadata, StorageTier, WorkerWithDpRank,
-    },
-    zmq_wire::{KvEventOwnership, ZmqEventFilterReason, ZmqEventNormalizer},
+use dynamo_kv_indexer::zmq_wire::{KvEventOwnership, ZmqEventFilterReason, ZmqEventNormalizer};
+use dynamo_kv_indexer::{
+    KvIndexerMetrics, KvStateAgentIdentity, KvStateAgentStatus, KvStateAttachmentStatus,
+    KvStateProtocolVersion, LocalKvIndexer,
+};
+use dynamo_router_types::identity::{
+    CacheOwnerId, CanonicalIdentityMaterial, ExplicitIdentityMap, StableDpSlotId,
+};
+use dynamo_router_types::protocols::{
+    KvCacheEvent, KvCacheEventData, PlacementEvent, ResidencyDomain, ResidencyOwner, RouterEvent,
+    RouterHintSourceMetadata, StorageTier, WorkerWithDpRank,
 };
 use dynamo_runtime::{
     component::{Component, Endpoint, StartedEndpoint},
@@ -1888,17 +1888,15 @@ mod tests {
         },
     };
 
-    use dynamo_kv_router::{
-        identity::{
-            CacheSemanticsId, DcId, IdentitySource, IndexerDomainId, PoolId, RoutingScopeId,
-            StableDpSlotId,
-        },
-        indexer::WorkerKvQueryResponse,
-        protocols::{
-            ExternalSequenceBlockHash, KvCacheStoreData, KvCacheStoredBlockData, LocalBlockHash,
-            Placement, PlacementOwner,
-        },
-        zmq_wire::{BlockHashValue, RawKvEvent},
+    use dynamo_kv_indexer::WorkerKvQueryResponse;
+    use dynamo_kv_indexer::zmq_wire::{BlockHashValue, RawKvEvent};
+    use dynamo_router_types::identity::{
+        CacheSemanticsId, DcId, IdentitySource, IndexerDomainId, PoolId, RoutingScopeId,
+        StableDpSlotId,
+    };
+    use dynamo_router_types::protocols::{
+        ExternalSequenceBlockHash, KvCacheStoreData, KvCacheStoredBlockData, LocalBlockHash,
+        Placement, PlacementOwner,
     };
 
     use super::*;

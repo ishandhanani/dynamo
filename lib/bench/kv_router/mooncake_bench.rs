@@ -12,7 +12,7 @@ use dynamo_bench::kv_router_common::issuer::pin_current_thread_to_cpus;
 use dynamo_bench::kv_router_common::replay::generate_replay_artifacts;
 use dynamo_bench::kv_router_common::sweep::compute_sweep_durations;
 use dynamo_kv_indexer::KvIndexerMetrics;
-use dynamo_kv_router::{ConcurrentRadixTreeCompressed, PositionalIndexer, ThreadPoolIndexer};
+use dynamo_kv_indexer::{ConcurrentRadixTreeCompressed, PositionalIndexer, ThreadPoolIndexer};
 use mooncake_open_loop::{
     OpenLoopConfig, OpenLoopResult, RunProvenance, parse_cpu_list, prepare_mooncake_corpus,
     prepare_open_loop_trial, run_open_loop, validate_cpu_partition,

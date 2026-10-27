@@ -1127,7 +1127,7 @@ mod tests {
                     router_queue_threshold: None,
                     ..Default::default()
                 },
-                dynamo_kv_router::WorkerType::Aggregated,
+                dynamo_router_types::WorkerType::Aggregated,
                 dynamo_custom_policy_builtin::default_registry(),
             )
             .indexer_threads(1)

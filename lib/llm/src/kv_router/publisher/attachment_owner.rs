@@ -13,11 +13,9 @@ use std::{
 };
 
 use anyhow::{Context, Result};
-use dynamo_kv_router::{
-    identity::{CacheOwnerId, IndexerDomainId},
-    indexer::KvStateProtocolVersion,
-    protocols::{RouterHintSourceMetadata, WorkerId, WorkerWithDpRank},
-};
+use dynamo_kv_indexer::KvStateProtocolVersion;
+use dynamo_router_types::identity::{CacheOwnerId, IndexerDomainId};
+use dynamo_router_types::protocols::{RouterHintSourceMetadata, WorkerId, WorkerWithDpRank};
 use dynamo_runtime::{
     component::{Endpoint, Instance, build_transport_type},
     config::environment_names::llm::DYN_KV_STATE_AGENT_HOST_DISCOVERY_TIMEOUT_SECS as HOST_DISCOVERY_TIMEOUT_ENV,

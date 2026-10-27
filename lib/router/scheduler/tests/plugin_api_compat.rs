@@ -7,12 +7,17 @@
 
 use std::sync::Arc;
 
-use dynamo_kv_router::plugins::{RouterPluginRegistry, request_classifier, worker_selection};
-use dynamo_kv_router::scheduling::{ClassifyFuture, ClassifyRequest, RequestClassifier};
-use dynamo_kv_router::{
-    KvRouterConfig, RoutingPartitionRef, WorkerCandidate, WorkerCandidates, WorkerFilter,
-    WorkerInputView, WorkerInputs, WorkerPicker, WorkerScorer, WorkerSelectionContext,
-    WorkerSelectionPolicy, WorkerSelectionPolicyError, WorkerType,
+use dynamo_admission::classifier as request_classifier;
+use dynamo_router_types::WorkerType;
+use dynamo_router_types::config::KvRouterConfig;
+use dynamo_router_types::identity::RoutingPartitionRef;
+use dynamo_router_types::sched::WorkerSelectionPolicyError;
+use dynamo_scheduler::plugins::RouterPluginRegistry;
+use dynamo_scheduler::scheduling_compat::{ClassifyFuture, ClassifyRequest, RequestClassifier};
+use dynamo_worker_selection::plugin as worker_selection;
+use dynamo_worker_selection::plugin::{
+    WorkerCandidate, WorkerCandidates, WorkerFilter, WorkerInputView, WorkerInputs, WorkerPicker,
+    WorkerScorer, WorkerSelectionContext, WorkerSelectionPolicy,
 };
 
 struct LegacyPolicy;
@@ -27,7 +32,7 @@ impl WorkerFilter for LegacyPolicy {
         context: &WorkerSelectionContext<'_>,
         candidate: WorkerCandidate<'_>,
     ) -> Result<bool, WorkerSelectionPolicyError> {
-        let _: Option<&dynamo_kv_router::SessionContext> = context.session_context();
+        let _: Option<&dynamo_router_types::sched::SessionContext> = context.session_context();
         let _: Option<u32> = context.expected_output_tokens();
         let cache = candidate.cache().expect("requested cache inputs");
         Ok(cache.device_overlap_blocks() + cache.host_overlap_blocks() >= 0.0)
@@ -82,7 +87,7 @@ impl RequestClassifier for LegacyClassifier {
         let _: Option<&str> = request.request_id();
         let _: usize = request.isl_tokens();
         let _: Option<&[u64]> = request.sequence_hashes();
-        let _: &dynamo_kv_router::scheduling::RequestProgress = request.progress();
+        let _: &dynamo_scheduler::scheduling_compat::RequestProgress = request.progress();
         let _: &request_classifier::RequestProgress = request.progress();
         let _: Option<tokio::time::Instant> = request.due_at();
         Box::pin(async move { Ok(request) })
@@ -90,10 +95,10 @@ impl RequestClassifier for LegacyClassifier {
 }
 
 fn legacy_provider(
-    _parameters: &dynamo_kv_router::plugins::WorkerSelectionPolicyParameters,
+    _parameters: &dynamo_scheduler::plugins::WorkerSelectionPolicyParameters,
 ) -> Result<
-    dynamo_kv_router::WorkerSelectionPolicyFactory,
-    dynamo_kv_router::plugins::WorkerSelectionPolicyProviderError,
+    dynamo_worker_selection::plugin::WorkerSelectionPolicyFactory,
+    dynamo_scheduler::plugins::WorkerSelectionPolicyProviderError,
 > {
     Ok(Arc::new(|config, worker_type, _partition| {
         WorkerSelectionPolicy::new_with_filters(
@@ -114,7 +119,7 @@ fn legacy_plugins_resolve_through_the_common_registry() {
     let _: Box<dyn worker_selection::WorkerPicker> = Box::new(LegacyPolicy);
     let _: Box<dyn request_classifier::RequestClassifier> = Box::new(LegacyClassifier);
 
-    let mut registry = dynamo_kv_router::plugins::WorkerSelectionPolicyRegistry::default();
+    let mut registry = dynamo_scheduler::plugins::WorkerSelectionPolicyRegistry::default();
     registry
         .register("legacy", Arc::new(legacy_provider))
         .unwrap();
@@ -134,10 +139,9 @@ fn legacy_plugins_resolve_through_the_common_registry() {
     );
 }
 
-#[cfg(feature = "standalone-selection")]
 #[test]
 fn legacy_service_catalog_registers_into_the_common_registry() {
-    use dynamo_kv_router::services::selection::{
+    use dynamo_scheduler::selection::{
         WorkerSelectionPolicyProvider, WorkerSelectionPolicyRegistry,
     };
 

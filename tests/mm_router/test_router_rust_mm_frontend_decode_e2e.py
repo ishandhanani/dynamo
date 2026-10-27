@@ -81,7 +81,7 @@ def _make_process_env(**extra: str) -> dict[str, str]:
     env = os.environ.copy()
     env["DYN_LOG"] = (
         "info,mm_routing=debug,"
-        "dynamo_kv_router::scheduling=debug,"
+        "dynamo_schedulerdebug,dynamo_admissiondebug,dynamo_worker_selectiondebug,"
         "dynamo_llm::kv_router=debug"
     )
     env["DYN_NAMESPACE"] = NAMESPACE

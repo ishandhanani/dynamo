@@ -2317,7 +2317,6 @@ dependencies = [
  "crossbeam-channel",
  "dynamo-data-gen",
  "dynamo-kv-indexer",
- "dynamo-kv-router",
  "dynamo-mocker",
  "dynamo-router-types",
  "dynamo-slot-tracker",
@@ -2358,7 +2357,6 @@ dependencies = [
  "async-trait",
  "criterion",
  "dynamo-admission",
- "dynamo-kv-router",
  "dynamo-router-types",
  "dynamo-scheduler",
  "dynamo-worker-selection",
@@ -2381,7 +2379,6 @@ dependencies = [
  "dynamo-custom-policy-example-simple-filter-score-pick",
  "dynamo-custom-policy-example-simple-stacked-score-pick",
  "dynamo-custom-policy-example-soft-pin-repin",
- "dynamo-kv-router",
  "dynamo-scheduler",
 ]
 
@@ -2389,7 +2386,6 @@ dependencies = [
 name = "dynamo-custom-policy-example-disagg-filter-score-pick"
 version = "1.7.0"
 dependencies = [
- "dynamo-kv-router",
  "dynamo-router-types",
  "dynamo-scheduler",
  "dynamo-worker-selection",
@@ -2403,7 +2399,6 @@ dependencies = [
  "anyhow",
  "dynamo-custom-policy-example-catalog",
  "dynamo-ext-proc",
- "dynamo-kv-router",
  "dynamo-scheduler",
  "tokio",
 ]
@@ -2412,7 +2407,7 @@ dependencies = [
 name = "dynamo-custom-policy-example-simple-filter-score-pick"
 version = "1.7.0"
 dependencies = [
- "dynamo-kv-router",
+ "dynamo-router-types",
  "dynamo-scheduler",
  "dynamo-worker-selection",
  "serde",
@@ -2423,7 +2418,7 @@ dependencies = [
 name = "dynamo-custom-policy-example-simple-stacked-score-pick"
 version = "1.7.0"
 dependencies = [
- "dynamo-kv-router",
+ "dynamo-router-types",
  "dynamo-scheduler",
  "dynamo-worker-selection",
  "serde",
@@ -2433,7 +2428,6 @@ dependencies = [
 name = "dynamo-custom-policy-example-soft-pin-repin"
 version = "1.7.0"
 dependencies = [
- "dynamo-kv-router",
  "dynamo-router-types",
  "dynamo-scheduler",
  "dynamo-worker-selection",
@@ -2485,7 +2479,6 @@ dependencies = [
  "dynamo-custom-policy-builtin",
  "dynamo-http-server",
  "dynamo-kv-indexer",
- "dynamo-kv-router",
  "dynamo-llm",
  "dynamo-protocols",
  "dynamo-router-types",
@@ -2594,20 +2587,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "dynamo-kv-router"
-version = "1.7.0"
-dependencies = [
- "dynamo-admission",
- "dynamo-kv-indexer",
- "dynamo-router-types",
- "dynamo-scheduler",
- "dynamo-slot-tracker",
- "dynamo-worker-selection",
- "tempfile",
- "tokio",
-]
-
-[[package]]
 name = "dynamo-llm"
 version = "1.7.0"
 dependencies = [
@@ -2643,7 +2622,6 @@ dependencies = [
  "dynamo-custom-policy-builtin",
  "dynamo-http-server",
  "dynamo-kv-indexer",
- "dynamo-kv-router",
  "dynamo-memory",
  "dynamo-mocker",
  "dynamo-parsers",
@@ -2770,7 +2748,6 @@ dependencies = [
  "dynamo-admission",
  "dynamo-custom-policy-builtin",
  "dynamo-kv-indexer",
- "dynamo-kv-router",
  "dynamo-router-types",
  "dynamo-scheduler",
  "dynamo-slot-tracker",
@@ -3084,10 +3061,12 @@ dependencies = [
  "async-stream",
  "clap",
  "dynamo-backend-common",
- "dynamo-kv-router",
+ "dynamo-kv-indexer",
  "dynamo-llm",
  "dynamo-mocker",
+ "dynamo-router-types",
  "dynamo-runtime",
+ "dynamo-scheduler",
  "dynamo-sglang-sidecar",
  "futures",
  "serde_json",
@@ -3108,7 +3087,6 @@ dependencies = [
  "async-trait",
  "clap",
  "dynamo-backend-common",
- "dynamo-kv-router",
  "dynamo-llm",
  "dynamo-router-types",
  "dynamo-runtime",
@@ -3333,10 +3311,12 @@ dependencies = [
  "async-stream",
  "clap",
  "dynamo-backend-common",
- "dynamo-kv-router",
+ "dynamo-kv-indexer",
  "dynamo-llm",
  "dynamo-mocker",
+ "dynamo-router-types",
  "dynamo-runtime",
+ "dynamo-scheduler",
  "dynamo-sidecar-common",
  "dynamo-vllm-sidecar",
  "futures",
@@ -3406,7 +3386,6 @@ dependencies = [
 name = "dynamo-worker-selection-policy-catalog"
 version = "1.7.0"
 dependencies = [
- "dynamo-kv-router",
  "dynamo-scheduler",
 ]
 
@@ -5482,7 +5461,6 @@ dependencies = [
  "anyhow",
  "async-once-cell",
  "cbindgen",
- "dynamo-kv-router",
  "dynamo-llm",
  "dynamo-router-types",
  "dynamo-runtime",

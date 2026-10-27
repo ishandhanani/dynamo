@@ -74,9 +74,7 @@
 
 # === router  (@ai-dynamo/dynamo-router-codeowners) ===
 /lib/router/                                                                                            @ai-dynamo/dynamo-router-codeowners
-/lib/kv-router/                                                                                         @ai-dynamo/dynamo-router-codeowners
 /lib/router-plugins/                                                                                    @ai-dynamo/dynamo-router-codeowners
-/lib/kv-router/tests/                                                                                   @ai-dynamo/dynamo-router-codeowners
 /lib/router/scheduler/src/                                                                              @ai-dynamo/dynamo-router-codeowners
 /lib/router/kv-indexer/src/                                                                             @ai-dynamo/dynamo-router-codeowners
 /lib/router/slot-tracker/src/                                                                           @ai-dynamo/dynamo-router-codeowners

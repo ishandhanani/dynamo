@@ -7,10 +7,8 @@ use std::sync::atomic::Ordering;
 use anyhow::{Context as _, Result};
 use tokio::sync::{oneshot, watch};
 
-use dynamo_kv_router::{
-    PrefillLoadEstimator, conditional_disagg::make_conditional_disagg_policy,
-    config::KvRouterConfig,
-};
+use dynamo_router_types::config::KvRouterConfig;
+use dynamo_router_types::prefill_load::PrefillLoadEstimator;
 use dynamo_runtime::{
     component::Endpoint,
     discovery::DiscoveryQuery,
@@ -18,6 +16,7 @@ use dynamo_runtime::{
     prelude::DistributedRuntimeProvider,
     protocols::annotated::Annotated,
 };
+use dynamo_worker_selection::conditional_disagg::make_conditional_disagg_policy;
 
 use super::{PrefillBinding, PrefillBuildContext, PrefillLifecycleState, PrefillRouter};
 

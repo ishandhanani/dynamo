@@ -9,11 +9,9 @@ use std::{
 
 use anyhow::{Context, Result};
 use dashmap::DashMap;
-use dynamo_kv_router::{
-    indexer::WorkerKvQueryResponse,
-    protocols::{ResetScope, RouterEvent},
-    recovery::CursorState,
-};
+use dynamo_kv_indexer::WorkerKvQueryResponse;
+use dynamo_kv_indexer::recovery::CursorState;
+use dynamo_router_types::protocols::{ResetScope, RouterEvent};
 use dynamo_runtime::component::{Component, Instance};
 use rand::Rng;
 use tokio::sync::{Mutex, Semaphore, watch};
@@ -1080,17 +1078,15 @@ fn recovery_events_match_source(key: RecoveryKey, events: &[RouterEvent]) -> boo
 mod tests {
     use super::*;
     use async_trait::async_trait;
-    use dynamo_kv_router::{
-        identity::{
-            CacheOwnerId, CacheSemanticsId, DcId, IdentitySource, IndexerDomainId, PoolId,
-            RoutingScopeId, StableDpSlotId,
-        },
-        indexer::{KvIndexer, KvIndexerInterface, KvIndexerMetrics, LocalKvIndexer},
-        protocols::{
-            DpRank, ExternalSequenceBlockHash, KvCacheEvent, KvCacheEventData, KvCacheRemoveData,
-            KvCacheStoreData, KvCacheStoredBlockData, LocalBlockHash, ResidencyDomain, StorageTier,
-            WorkerId, WorkerWithDpRank,
-        },
+    use dynamo_kv_indexer::{KvIndexer, KvIndexerInterface, KvIndexerMetrics, LocalKvIndexer};
+    use dynamo_router_types::identity::{
+        CacheOwnerId, CacheSemanticsId, DcId, IdentitySource, IndexerDomainId, PoolId,
+        RoutingScopeId, StableDpSlotId,
+    };
+    use dynamo_router_types::protocols::{
+        DpRank, ExternalSequenceBlockHash, KvCacheEvent, KvCacheEventData, KvCacheRemoveData,
+        KvCacheStoreData, KvCacheStoredBlockData, LocalBlockHash, ResidencyDomain, StorageTier,
+        WorkerId, WorkerWithDpRank,
     };
     use dynamo_runtime::{
         DistributedRuntime, Runtime,

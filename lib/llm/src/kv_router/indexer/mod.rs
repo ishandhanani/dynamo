@@ -8,15 +8,12 @@
 use std::{sync::Arc, time::Duration};
 
 use anyhow::Result;
-use dynamo_kv_router::{
-    ConcurrentRadixTreeCompressed, SessionPrefixIndexer,
-    approx::PruneConfig,
-    config::{ApproximateCachePolicyKind, KvRouterConfig},
-    indexer::{
-        ApproximateRetentionConfig, KvIndexer, KvIndexerMetrics, LowerTierIndexers,
-        ThreadPoolIndexer,
-    },
+use dynamo_kv_indexer::pruning::PruneConfig;
+use dynamo_kv_indexer::{
+    ApproximateRetentionConfig, ConcurrentRadixTreeCompressed, KvIndexer, KvIndexerMetrics,
+    LowerTierIndexers, SessionPrefixIndexer, ThreadPoolIndexer,
 };
+use dynamo_router_types::config::{ApproximateCachePolicyKind, KvRouterConfig};
 
 // Re-export tiered-match types so internal callers (`indexer::TieredMatchDetails`)
 // keep working after these types moved to `dynamo-kv-router`.

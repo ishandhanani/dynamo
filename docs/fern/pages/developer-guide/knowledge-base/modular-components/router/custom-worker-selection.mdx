@@ -24,7 +24,7 @@ flowchart LR
     Validate --> Reserve["Accounting and reservation"]
 ```
 
-For multiple compile-checked policies, see the [custom policy examples](https://github.com/ai-dynamo/dynamo/tree/main/examples/router/custom-policy-example). Repository contributors who use a coding agent must also provide the [worker-selection API rules](https://github.com/ai-dynamo/dynamo/blob/main/lib/kv-router/src/scheduling/CLAUDE.md).
+For multiple compile-checked policies, see the [custom policy examples](https://github.com/ai-dynamo/dynamo/tree/main/examples/router/custom-policy-example). Repository contributors who use a coding agent must also provide the [worker-selection API rules](https://github.com/ai-dynamo/dynamo/blob/main/lib/router/scheduler/src/queue/CLAUDE.md).
 
 ## Use a Built-In Policy First
 
@@ -47,16 +47,16 @@ An external policy owns its filters, scorers, and picker. Dynamo's default score
 
 ## Public Plugin API and Compatibility
 
-Use `dynamo_kv_router::plugins` for plugin registration and these modules for plugin contracts:
+Use `dynamo_scheduler::plugins` for plugin registration and these crates for plugin contracts:
 
 | Module | Public API |
 |---|---|
-| `plugins::worker_selection` | `WorkerFilter`, `WorkerScorer`, `WorkerPicker`, `WorkerSelectionPolicy`, request context, worker signal accessors, configuration, and factories |
-| `plugins` | `RouterPluginRegistry` and the resolved `RouterPlugins` bundle |
+| `dynamo_worker_selection::plugin` | `WorkerFilter`, `WorkerScorer`, `WorkerPicker`, `WorkerSelectionPolicy`, request context, worker signal accessors, configuration, and factories |
+| `dynamo_scheduler::plugins` | `RouterPluginRegistry` and the resolved `RouterPlugins` bundle |
 
 Dynamo owns scheduler queues, eligibility checks, reservations, lifecycle synchronization, and the default selector implementation. Low-level host interfaces such as `WorkerSelector` are used to connect Dynamo components; external plugins use `WorkerSelectionPolicy`.
 
-Existing plugin imports and the `WorkerSelectionPolicyRegistry` name remain available through compatibility re-exports until version 1.7. They refer to the same types and traits, so existing policies can register into `RouterPluginRegistry` without adapters. Migrate imports to `plugins::worker_selection`, rename the registry to `RouterPluginRegistry`, and use `register_worker_selection` for worker policies. The compatibility exports, registry alias, worker-only `register` method, and frontend `worker_selection_policy_factory` setter are scheduled for removal in 1.7.
+The `dynamo-kv-router` crate and its compatibility re-exports no longer exist: policies import the plugin contracts from `dynamo_worker_selection::plugin` and register into `dynamo_scheduler::plugins::RouterPluginRegistry` with `register_worker_selection`. The `WorkerSelectionPolicyRegistry` alias, the worker-only `register` method, and the frontend `worker_selection_policy_factory` setter remain available in `dynamo_scheduler::plugins` and are scheduled for removal in 1.7.
 
 ## Build the Policy
 
@@ -75,14 +75,18 @@ cargo init --lib --name acme-routing-policy "$POLICY_DIR/policy"
 cargo init --lib --name acme-routing-catalog "$POLICY_DIR/catalog"
 ```
 
-Add `dynamo-kv-router` from the same checkout that builds the frontend or EPP:
+Add the router crates from the same checkout that builds the frontend or EPP:
 
 ```bash
-# Add the worker-selection API to the policy crate.
+# Add the worker-selection API and the shared router types to the policy crate.
 cargo add \
   --manifest-path "$POLICY_DIR/policy/Cargo.toml" \
-  --path "$DYNAMO_DIR/lib/kv-router" \
-  dynamo-kv-router
+  --path "$DYNAMO_DIR/lib/router/worker-selection" \
+  dynamo-worker-selection
+cargo add \
+  --manifest-path "$POLICY_DIR/policy/Cargo.toml" \
+  --path "$DYNAMO_DIR/lib/router/types" \
+  dynamo-router-types
 
 # Add parameter deserialization to the policy crate.
 cargo add \
@@ -98,8 +102,12 @@ cargo add \
 # Add the registry API to the catalog.
 cargo add \
   --manifest-path "$POLICY_DIR/catalog/Cargo.toml" \
-  --path "$DYNAMO_DIR/lib/kv-router" \
-  dynamo-kv-router
+  --path "$DYNAMO_DIR/lib/router/scheduler" \
+  dynamo-scheduler
+cargo add \
+  --manifest-path "$POLICY_DIR/catalog/Cargo.toml" \
+  --path "$DYNAMO_DIR/lib/router/worker-selection" \
+  dynamo-worker-selection
 ```
 
 ### Filter Workers
@@ -551,7 +559,7 @@ cargo add --manifest-path "$POLICY_DIR/epp/Cargo.toml" tokio@=1.48.0 --features 
 
 # Add the policy catalog and worker-selection API.
 cargo add --manifest-path "$POLICY_DIR/epp/Cargo.toml" --path "$POLICY_DIR/catalog" acme-routing-catalog
-cargo add --manifest-path "$POLICY_DIR/epp/Cargo.toml" --path "$DYNAMO_DIR/lib/kv-router" --features standalone-selection dynamo-kv-router
+cargo add --manifest-path "$POLICY_DIR/epp/Cargo.toml" --path "$DYNAMO_DIR/lib/router/scheduler" --features http dynamo-scheduler
 
 # Add the standard EPP runner.
 cargo add --manifest-path "$POLICY_DIR/epp/Cargo.toml" --path "$DYNAMO_DIR/deploy/inference-gateway/ext-proc" dynamo-ext-proc

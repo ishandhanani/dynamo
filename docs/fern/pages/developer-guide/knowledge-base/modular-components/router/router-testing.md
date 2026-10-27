@@ -11,7 +11,7 @@ The router has three useful test layers. When you add a non-trivial or potential
 
 ## 1. Rust Unit and Integration Tests
 
-Use Rust tests in `lib/kv-router` and `lib/llm` for local correctness:
+Use Rust tests in the router crates under `lib/router/` and in `lib/llm` for local correctness:
 
 - cost-model math
 - indexer behavior
@@ -31,7 +31,7 @@ Examples:
 Typical commands:
 
 ```bash
-cargo test -p dynamo-kv-router
+cargo test -p dynamo-scheduler -p dynamo-kv-indexer -p dynamo-slot-tracker -p dynamo-admission -p dynamo-worker-selection -p dynamo-router-types
 cargo test -p dynamo-llm --no-default-features
 ```
 

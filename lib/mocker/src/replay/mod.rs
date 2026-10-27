@@ -14,7 +14,7 @@ use std::collections::VecDeque;
 use std::sync::Arc;
 
 use crate::common::protocols::{DirectRequest, MockerConfig};
-use dynamo_kv_router::PrefillLoadEstimator;
+use dynamo_router_types::prefill_load::PrefillLoadEstimator;
 
 pub use agentic::AgenticReplayOptions;
 /// Backward-compatible Dynamo Mocker name for [`aisimulate_core::ReplayReport`].

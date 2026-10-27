@@ -3,7 +3,7 @@
 
 use std::sync::Arc;
 
-use dynamo_kv_router::WorkerType;
+use dynamo_router_types::WorkerType;
 use dynamo_scheduler::plugins::RouterPluginRegistry;
 use dynamo_scheduler::plugins::{
     WorkerSelectionPolicyParameters, WorkerSelectionPolicyProviderError,
@@ -107,13 +107,13 @@ pub(crate) fn register(
 mod tests {
     use std::collections::HashMap;
 
-    use dynamo_kv_router::{
-        KvRouterConfig, WorkerLoadProjection, WorkerSelectionInput, WorkerSelectionPolicy,
-        WorkerSelector,
-    };
+    use dynamo_router_types::config::KvRouterConfig;
     use dynamo_router_types::overlap::OverlapSignals;
+    use dynamo_router_types::protocols::WorkerLoadProjection;
     use dynamo_router_types::protocols::{RoutingConstraints, WorkerConfigLike, WorkerWithDpRank};
     use dynamo_router_types::sched::{ScheduleMode, SchedulingRequest};
+    use dynamo_worker_selection::plugin::WorkerSelectionPolicy;
+    use dynamo_worker_selection::selector::{WorkerSelectionInput, WorkerSelector};
 
     use super::*;
 

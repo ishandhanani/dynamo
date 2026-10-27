@@ -12,8 +12,9 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result, anyhow};
 
-use dynamo_kv_router::{DEFAULT_ROUTING_GROUP, WorkerType};
+use dynamo_router_types::WorkerType;
 use dynamo_router_types::config::KvRouterConfig;
+use dynamo_router_types::identity::DEFAULT_ROUTING_GROUP;
 use dynamo_router_types::protocols::RoutingConstraints;
 use dynamo_scheduler::config::try_kv_router_config_from_dynamo_env;
 use dynamo_scheduler::plugins::WorkerSelectionPolicyRegistry;
@@ -264,12 +265,13 @@ mod tests {
     use std::sync::Mutex;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
-    use dynamo_kv_router::{
-        WorkerInputView, WorkerPicker, WorkerSelectionContext, WorkerSelectionPolicy,
-        WorkerSelectionPolicyError, WorkerSelectionPolicyFactory,
-    };
+    use dynamo_router_types::sched::WorkerSelectionPolicyError;
     use dynamo_scheduler::plugins::WorkerSelectionPolicyParameters;
     use dynamo_scheduler::selection::{CatalogReconciler, WorkerRequest};
+    use dynamo_worker_selection::plugin::{
+        WorkerInputView, WorkerPicker, WorkerSelectionContext, WorkerSelectionPolicy,
+        WorkerSelectionPolicyFactory,
+    };
 
     use super::*;
 
@@ -381,7 +383,7 @@ models:
     /// non-zero `block_size`, and a well-formed KV-event endpoint per dp_rank.
     /// The KV-event endpoint is only a `tcp://` address string — the core's ZMQ
     /// SUB listener connects lazily and never needs a live publisher (see the
-    /// `WorkerRegistry` register tests in `lib/kv-router`), so no network infra is
+    /// `WorkerRegistry` register tests in `lib/router/kv-indexer`), so no network infra is
     /// required. Queueing is disabled under the default router policy, so
     /// `max_num_batched_tokens` is not required here.
     fn schedulable_registration(worker_id: u64) -> WorkerRequest {

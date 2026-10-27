@@ -13,11 +13,12 @@ use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
 use anyhow::{Context, Result};
-use dynamo_kv_router::WorkerType;
-use dynamo_kv_router::{DEFAULT_ROUTING_GROUP, PrefillLoadEstimator, WorkerSelectionPolicyFactory};
+use dynamo_router_types::WorkerType;
 use dynamo_router_types::busy::RejectThresholdsProvider;
 use dynamo_router_types::config::KvRouterConfig;
+use dynamo_router_types::identity::DEFAULT_ROUTING_GROUP;
 use dynamo_router_types::identity::RoutingPartitionId;
+use dynamo_router_types::prefill_load::PrefillLoadEstimator;
 use dynamo_router_types::protocols::{QueueLimitKind, QueueRejection};
 use dynamo_router_types::protocols::{WorkerConfigLike, WorkerId, WorkerWithDpRank};
 use dynamo_router_types::sched::{
@@ -32,6 +33,7 @@ use dynamo_scheduler::selection::{
     SelectionServiceBuilder, WorkerCatalogSource, WorkerRequest,
 };
 use dynamo_slot_tracker::{LocalWorkerLoad, ReplicaWorkerPolicy};
+use dynamo_worker_selection::plugin::WorkerSelectionPolicyFactory;
 use tokio_util::sync::CancellationToken;
 
 use crate::discovery::RuntimeConfigWatch;
@@ -55,7 +57,7 @@ pub(crate) struct EmbeddedSelectionArgs {
     pub reject_thresholds: Option<RejectThresholdsProvider>,
     pub available_worker_provider: WorkerAvailabilityProvider,
     pub registration_availability_provider: RegistrationAvailabilityProvider,
-    pub shared_cache: Option<Arc<dyn dynamo_kv_router::SharedKvCache>>,
+    pub shared_cache: Option<Arc<dyn dynamo_kv_indexer::SharedKvCache>>,
     pub lora_worker_filter: Option<Arc<dyn dynamo_worker_selection::lora::LoraWorkerFilter>>,
     /// Builds and feeds the router's index from the runtime; the partition
     /// takes its index from it.

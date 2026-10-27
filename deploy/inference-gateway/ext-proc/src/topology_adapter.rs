@@ -10,7 +10,7 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use dynamo_kv_router::DEFAULT_ROUTING_GROUP;
+use dynamo_router_types::identity::DEFAULT_ROUTING_GROUP;
 use dynamo_scheduler::selection::{CatalogReconciler, WorkerCatalogSource, WorkerRequest};
 use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;

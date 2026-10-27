@@ -5,13 +5,15 @@
 
 mod support;
 use dynamo_custom_policy_builtin::DefaultWorkerSelector;
-use dynamo_kv_router::{KvRouterConfig, WorkerLoadProjection, WorkerSelector};
+use dynamo_router_types::config::KvRouterConfig;
 use dynamo_router_types::kv_hints::{KvTransferCandidateSource, KvTransferCandidates};
+use dynamo_router_types::protocols::WorkerLoadProjection;
 use dynamo_router_types::protocols::{
     ExternalSequenceBlockHash, KvHintTransferWorkerMetadata, KvTransferEnforcement,
     WorkerConfigLike, WorkerWithDpRank,
 };
 use dynamo_router_types::sched::SchedulingRequest;
+use dynamo_worker_selection::selector::WorkerSelector;
 use std::collections::HashMap;
 
 const BLOCK_SIZE: u32 = 16;
@@ -216,7 +218,7 @@ fn seeded_selection_matches_reference_with_fetchable_prefixes() {
                 router_temperature: temperature,
                 ..config(multiplier)
             };
-            let reference = dynamo_kv_router::DefaultWorkerSelector::new_seeded(
+            let reference = dynamo_worker_selection::selector::DefaultWorkerSelector::new_seeded(
                 Some(config.clone()),
                 "test",
                 42,

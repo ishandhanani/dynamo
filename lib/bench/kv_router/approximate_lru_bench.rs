@@ -14,11 +14,12 @@ use dynamo_bench::kv_router_common::issuer::{
     parse_cpu_list, pin_current_thread, pin_current_thread_to_cpus,
 };
 use dynamo_bench::kv_router_common::replay::{WorkerReplayArtifacts, generate_replay_artifacts};
+use dynamo_kv_indexer::pruning::PruneConfig;
 use dynamo_kv_indexer::{
     ApproximateAcquireMode, ApproximateLruBlock, ApproximateLruLease, ApproximateLruStats,
     ApproximateRetentionConfig, KvIndexerInterface, KvIndexerMetrics,
 };
-use dynamo_kv_router::{ConcurrentRadixTreeCompressed, ThreadPoolIndexer, approx::PruneConfig};
+use dynamo_kv_indexer::{ConcurrentRadixTreeCompressed, ThreadPoolIndexer};
 use dynamo_router_types::protocols::AttemptId;
 use dynamo_router_types::protocols::{LocalBlockHash, WorkerWithDpRank};
 use dynamo_tokens::SequenceHash;

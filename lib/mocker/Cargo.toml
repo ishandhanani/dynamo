@@ -17,12 +17,7 @@ default = []
 profile = []
 # Benchmark builds for replay parity tooling. Canonical (seeded) replay needs no
 # feature: a caller opts in per replay with ReplayDeterminism::CanonicalV1.
-replay-bench = [
-  "aisimulate-core/replay-bench",
-  "dynamo-kv-router/bench",
-  "dynamo-kv-indexer/bench",
-  "dynamo-slot-tracker/bench",
-]
+replay-bench = ["aisimulate-core/replay-bench", "dynamo-scheduler/bench", "dynamo-kv-indexer/bench", "dynamo-slot-tracker/bench"]
 test-support = []
 zmq-events = ["dep:tmq"]
 
@@ -30,7 +25,6 @@ zmq-events = ["dep:tmq"]
 dynamo-custom-policy-builtin = { workspace = true }
 # repo
 aisimulate-core = { workspace = true }
-dynamo-kv-router = { workspace = true }
 dynamo-scheduler = { workspace = true }
 dynamo-admission = { workspace = true }
 dynamo-worker-selection = { workspace = true }
@@ -67,7 +61,6 @@ rustc-hash = "2"
 tokio-timerfd = "0.2"
 
 [dev-dependencies]
-dynamo-kv-router = { workspace = true, features = ["metrics"] }
 rstest = "0.18.2"
 tempfile = { workspace = true }
 tmq = { workspace = true }

@@ -11,12 +11,12 @@ use std::{
 
 use arc_swap::ArcSwap;
 use dashmap::{DashMap, mapref::entry::Entry};
-use dynamo_kv_router::{
-    PrefillLoadEstimator,
-    config::KvRouterConfig,
-    protocols::{KvTransferEnforcement, RoutingConstraints, WorkerId, WorkerWithDpRank},
-    selector::WorkerInputs,
+use dynamo_router_types::config::KvRouterConfig;
+use dynamo_router_types::prefill_load::PrefillLoadEstimator;
+use dynamo_router_types::protocols::{
+    KvTransferEnforcement, RoutingConstraints, WorkerId, WorkerWithDpRank,
 };
+use dynamo_worker_selection::selector::WorkerInputs;
 use tokio_util::sync::CancellationToken;
 
 use super::worker_monitor::LoadThresholdConfig;
@@ -2388,14 +2388,14 @@ impl ModelManager {
         // A policy that does not consume cache input must not create a shared-cache client or
         // subscribe to its updates.
         let wants_cache = policy.inputs().contains(WorkerInputs::CACHE);
-        let shared_cache: Option<Arc<dyn dynamo_kv_router::SharedKvCache>> = if wants_cache {
+        let shared_cache: Option<Arc<dyn dynamo_kv_indexer::SharedKvCache>> = if wants_cache {
             match kv_router_config
                 .as_ref()
                 .map(|c| c.shared_cache_type)
                 .unwrap_or_default()
             {
-                dynamo_kv_router::SharedCacheType::None => None,
-                dynamo_kv_router::SharedCacheType::Hicache => {
+                dynamo_router_types::config::SharedCacheType::None => None,
+                dynamo_router_types::config::SharedCacheType::Hicache => {
                     let worker_component_name = &endpoint.id().component;
                     tracing::info!(
                         worker_component = worker_component_name,

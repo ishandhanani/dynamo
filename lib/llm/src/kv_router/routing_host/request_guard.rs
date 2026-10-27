@@ -18,13 +18,12 @@ use crate::{
         timing::{RequestPhase, RequestTracker},
     },
 };
-use dynamo_kv_router::{
-    indexer::{ApproximateAcquireMode, ApproximateLruBlock, RoutingDecisionHashes},
-    protocols::{
-        BlockExtraInfo, BlockHashOptions, WorkerWithDpRank, compute_block_hash_for_seq,
-        compute_next_seq_hash,
-    },
-    scheduling::{AbortCause, RequestLifecycle, queue::BookingHandle},
+use dynamo_admission::classifier::AbortCause;
+use dynamo_admission::runtime::RequestLifecycle;
+use dynamo_kv_indexer::{ApproximateAcquireMode, ApproximateLruBlock, RoutingDecisionHashes};
+use dynamo_router_types::protocols::{
+    BlockExtraInfo, BlockHashOptions, WorkerWithDpRank, compute_block_hash_for_seq,
+    compute_next_seq_hash,
 };
 use dynamo_runtime::{
     error::DynamoError,
@@ -32,6 +31,7 @@ use dynamo_runtime::{
     pipeline::OccupancyReservation,
     protocols::annotated::Annotated,
 };
+use dynamo_scheduler::queue::BookingHandle;
 
 pub(super) struct LoraLoadGuard {
     estimator: Arc<LoadEstimator>,

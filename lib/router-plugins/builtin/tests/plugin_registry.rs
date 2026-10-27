@@ -4,7 +4,9 @@
 use std::sync::Arc;
 
 use dynamo_admission::classifier::{ClassifyFuture, ClassifyRequest, RequestClassifier};
-use dynamo_kv_router::{KvRouterConfig, RoutingPartitionRef, WorkerType};
+use dynamo_router_types::WorkerType;
+use dynamo_router_types::config::KvRouterConfig;
+use dynamo_router_types::identity::RoutingPartitionRef;
 use dynamo_scheduler::plugins::RouterPlugins;
 use dynamo_worker_selection::plugin::WorkerCandidates;
 

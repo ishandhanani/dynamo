@@ -5,7 +5,7 @@ use super::*;
 #[allow(unused_imports)]
 use bytes::Bytes;
 #[allow(unused_imports)]
-use dynamo_kv_router::RouterEventSink;
+use dynamo_router_types::protocols::RouterEventSink;
 #[allow(unused_imports)]
 use rmp_serde as rmps;
 #[allow(unused_imports)]

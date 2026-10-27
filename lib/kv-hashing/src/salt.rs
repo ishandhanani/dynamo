@@ -37,7 +37,7 @@ use crate::error::KvHashingError;
 ///
 /// Empty strings (`Some("")`) are normalized to `None` for both `salt` and `lora_name`
 /// before hashing. This matches the router's existing behavior at
-/// `lib/kv-router/src/protocols.rs:79` (`options.lora_name.filter(|n| !n.is_empty())`)
+/// `lib/router/types/src/protocols.rs` (`options.lora_name.filter(|n| !n.is_empty())`)
 /// so a client that sends `lora_name = ""` shares the cache with a client that sends
 /// `lora_name = None`.
 ///

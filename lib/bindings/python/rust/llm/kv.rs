@@ -36,7 +36,8 @@ use dynamo_scheduler::selection::{OverlapScoresRequest, PotentialLoadsRequest, P
 #[cfg(feature = "slot-tracker")]
 use dynamo_slot_tracker::http::{self as slot_tracker, SlotTrackerConfig};
 #[cfg(feature = "select-service")]
-use dynamo_kv_router::{TrackingHashAlgorithm, WorkerType};
+use dynamo_router_types::WorkerType;
+use dynamo_router_types::tracking_hash::TrackingHashAlgorithm;
 use rs::pipeline::{AsyncEngine, SingleIn};
 use rs::protocols::annotated::Annotated as RsAnnotated;
 use tracing::Instrument;
@@ -1975,7 +1976,7 @@ async fn create_kv_router_from_endpoint(
     block_size: usize,
     kv_router_config: Option<KvRouterConfig>,
     load_threshold_config: RsLoadThresholdConfig,
-    prefill_load_estimator: Option<Arc<dyn dynamo_kv_router::PrefillLoadEstimator>>,
+    prefill_load_estimator: Option<Arc<dyn dynamo_router_types::prefill_load::PrefillLoadEstimator>>,
     plugins: RouterPlugins,
 ) -> anyhow::Result<RsManagedKvRouter> {
     // Create ModelManager and use it to create KvRouter (ensures registration)
@@ -2110,9 +2111,9 @@ async fn create_kv_router_from_endpoint(
             factory(
                 config,
                 policy_worker_role,
-                dynamo_kv_router::RoutingPartitionRef::new(
+                dynamo_router_types::identity::RoutingPartitionRef::new(
                     &policy_model_name,
-                    dynamo_kv_router::DEFAULT_ROUTING_GROUP,
+                    dynamo_router_types::identity::DEFAULT_ROUTING_GROUP,
                 ),
             )
         }))

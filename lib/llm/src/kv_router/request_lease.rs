@@ -10,12 +10,10 @@ use std::{
     time::Duration,
 };
 
-use dynamo_kv_router::{
-    multi_worker_sequence::{ReplicaRequestLeaseObserver, active_request_expiry_duration},
-    scheduling::{
-        AttemptId,
-        queue::{SchedulerBookingCleanup, SchedulerBookingDescriptor},
-    },
+use dynamo_router_types::protocols::AttemptId;
+use dynamo_scheduler::queue::{SchedulerBookingCleanup, SchedulerBookingDescriptor};
+use dynamo_slot_tracker::multi_worker::{
+    ReplicaRequestLeaseObserver, active_request_expiry_duration,
 };
 use parking_lot::Mutex;
 use tokio_util::sync::CancellationToken;

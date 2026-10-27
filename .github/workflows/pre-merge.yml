@@ -492,18 +492,18 @@ jobs:
           docs/frontends/checksums.sha256
         if-no-files-found: error
         retention-days: 14
-    - name: Check isolated kv-router feature builds
+    - name: Check isolated router service feature builds
       if: matrix.dir == '.'
       working-directory: ${{ matrix.dir }}
       # Workspace feature unification hides these; check each on its own.
       run: |
-        cargo check --locked -p dynamo-kv-router --no-default-features --features standalone-slot-tracker
-        cargo check --locked -p dynamo-kv-router --no-default-features --features standalone-indexer
+        cargo check --locked -p dynamo-slot-tracker --no-default-features --features http
+        cargo check --locked -p dynamo-kv-indexer --no-default-features --features http
     - name: Run standalone slot-tracker feature tests
       if: matrix.dir == '.'
       working-directory: ${{ matrix.dir }}
-      # No workspace member requests standalone-slot-tracker, so it needs an explicit run here.
-      run: cargo test --locked -p dynamo-kv-router --features standalone-slot-tracker --lib 'services::'
+      # No workspace member requests the slot tracker's http feature, so it needs an explicit run here.
+      run: cargo test --locked -p dynamo-slot-tracker --features http,testing --lib
     - name: Run canonical replay feature tests
       if: matrix.dir == '.'
       working-directory: ${{ matrix.dir }}

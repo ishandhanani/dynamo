@@ -14,7 +14,6 @@ description = "Router plugins shipped with Dynamo"
 [dependencies]
 fastrand = "2"
 parking_lot.workspace = true
-dynamo-kv-router = { workspace = true, features = ["standalone-selection"] }
 dynamo-scheduler = { workspace = true }
 dynamo-admission = { workspace = true }
 dynamo-router-types = { workspace = true }
@@ -28,7 +27,6 @@ tracing.workspace = true
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt", "time"] }
-dynamo-kv-router = { workspace = true, features = ["bench"] }
 rustc-hash = "2.1.1"
 criterion = "0.5"
 tempfile = { workspace = true }

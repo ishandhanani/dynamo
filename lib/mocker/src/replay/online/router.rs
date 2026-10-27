@@ -8,19 +8,19 @@ use std::sync::atomic::AtomicBool;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use anyhow::{Context, Result, anyhow};
+use dynamo_kv_indexer::ConcurrentRadixTreeCompressed;
 use dynamo_kv_indexer::{
     KvIndexer, KvIndexerInterface, KvIndexerMetrics, LowerTierIndexers, LowerTierQueryOptions,
     MatchDetails, ThreadPoolIndexer, TieredMatchDetails, query_lower_tiers_with_options,
 };
-use dynamo_kv_router::{
-    ConcurrentRadixTreeCompressed, RoutingPartitionRef, TrackingHashContext, TrackingHashScope,
-};
 use dynamo_router_types::config::KvRouterConfig;
+use dynamo_router_types::identity::RoutingPartitionRef;
 use dynamo_router_types::protocols::{
     BlockHashOptions, RouterEvent, RoutingConstraints, StorageTier, WorkerId,
     compute_block_hash_for_seq,
 };
 use dynamo_router_types::sched::{ScheduleMode, ScheduleRequest, SessionContext};
+use dynamo_router_types::tracking_hash::{TrackingHashContext, TrackingHashScope};
 use dynamo_scheduler::overlap::OverlapAnalysis;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
@@ -272,7 +272,7 @@ impl KvReplayRouter {
             .configured_policy_profile()
             .map_err(anyhow::Error::from)?;
         let scheduler_cancel = CancellationToken::new();
-        let scheduler = Arc::new(dynamo_kv_router::LocalScheduler::new(
+        let scheduler = Arc::new(dynamo_scheduler::local::LocalScheduler::new(
             slots,
             worker_config_rx,
             profile,
@@ -429,7 +429,7 @@ impl KvReplayRouter {
         &self,
         isl_tokens: usize,
         track_prefill_tokens: bool,
-    ) -> Vec<dynamo_kv_router::PotentialLoad> {
+    ) -> Vec<dynamo_router_types::protocols::PotentialLoad> {
         self.scheduler.get_potential_loads(
             None,
             isl_tokens,
@@ -543,7 +543,7 @@ impl ReplayRouter {
         &self,
         isl_tokens: usize,
         track_prefill_tokens: bool,
-    ) -> Vec<dynamo_kv_router::PotentialLoad> {
+    ) -> Vec<dynamo_router_types::protocols::PotentialLoad> {
         match self {
             Self::RoundRobin(_) => Vec::new(),
             Self::Kv(router) => router.debug_potential_loads(isl_tokens, track_prefill_tokens),

@@ -43,7 +43,8 @@ use dynamo_runtime::{
 
 #[cfg(feature = "select-service")]
 use dynamo_scheduler::plugins::RouterPluginRegistry;
-use dynamo_kv_router::{KvRouterConfig, plugins::RouterPlugins};
+use dynamo_router_types::config::KvRouterConfig;
+use dynamo_scheduler::plugins::RouterPlugins;
 use dynamo_llm::entrypoint::RouterConfig;
 use dynamo_llm::{self as llm_rs};
 

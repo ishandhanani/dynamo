@@ -15,16 +15,13 @@ use std::{
 
 use anyhow::{Context, Result};
 use dashmap::DashMap;
-use dynamo_kv_router::{
-    identity::CacheOwnerId,
-    indexer::{
-        KvStateAgentIdentity, KvStateAgentStatus, KvStateProtocolVersion, WorkerKvQueryResponse,
-    },
-    protocols::{
-        KvCacheEvent, KvCacheEventData, ResetScope, ResidencyDomain, ResidencyProjection,
-        ResidencyRoutingSnapshot, RouterEvent, RouterHintSourceMetadata, StorageTier,
-        WorkerWithDpRank,
-    },
+use dynamo_kv_indexer::{
+    KvStateAgentIdentity, KvStateAgentStatus, KvStateProtocolVersion, WorkerKvQueryResponse,
+};
+use dynamo_router_types::identity::CacheOwnerId;
+use dynamo_router_types::protocols::{
+    KvCacheEvent, KvCacheEventData, ResetScope, ResidencyDomain, ResidencyProjection,
+    ResidencyRoutingSnapshot, RouterEvent, RouterHintSourceMetadata, StorageTier, WorkerWithDpRank,
 };
 use dynamo_runtime::{
     component::Component,

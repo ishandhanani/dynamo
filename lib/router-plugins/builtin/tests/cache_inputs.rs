@@ -3,11 +3,14 @@
 
 mod support;
 
-use dynamo_kv_router::{
-    KvRouterConfig, SharedCacheHits, WorkerCacheInput, WorkerCandidate, WorkerCandidates,
-    WorkerFilter, WorkerInputView, WorkerInputs, WorkerPicker, WorkerScorer,
-    WorkerSelectionContext, WorkerSelectionPolicy, WorkerSelectionPolicyError, WorkerSelector,
+use dynamo_router_types::config::KvRouterConfig;
+use dynamo_router_types::protocols::SharedCacheHits;
+use dynamo_router_types::sched::WorkerSelectionPolicyError;
+use dynamo_worker_selection::plugin::{
+    WorkerCacheInput, WorkerCandidate, WorkerCandidates, WorkerFilter, WorkerInputView,
+    WorkerInputs, WorkerPicker, WorkerScorer, WorkerSelectionContext, WorkerSelectionPolicy,
 };
+use dynamo_worker_selection::selector::WorkerSelector;
 use std::sync::{
     Arc,
     atomic::{AtomicUsize, Ordering},

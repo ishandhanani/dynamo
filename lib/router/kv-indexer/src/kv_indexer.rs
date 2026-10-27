@@ -639,7 +639,7 @@ impl KvIndexer {
             if let Err(panic_payload) = panic_result {
                 let panic_msg = panic_payload_message(&*panic_payload);
                 tracing::error!(
-                    target: "dynamo_kv_router::indexer_panic",
+                    target: "dynamo_kv_indexer::indexer_panic",
                     panic_message = %panic_msg,
                     "KV indexer thread panicked; indexer is now dead and will not process events"
                 );

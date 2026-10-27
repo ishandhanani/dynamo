@@ -266,7 +266,7 @@ mod tests {
         use axum::response::IntoResponse;
         use axum::routing::get;
         use axum::{Json, Router};
-        use dynamo_kv_router::WorkerType;
+        use dynamo_router_types::WorkerType;
         use dynamo_scheduler::config::kv_router_config_from_dynamo_env;
         use dynamo_scheduler::selection::SelectionServiceBuilder;
         use kube::Config;

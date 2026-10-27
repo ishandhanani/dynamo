@@ -330,7 +330,7 @@ impl<T: SyncIndexer> ThreadPoolIndexer<T> {
                 if let Err(panic_payload) = panic_result {
                     let panic_msg = panic_payload_message(&*panic_payload);
                     tracing::error!(
-                        target: "dynamo_kv_router::thread_pool_worker_panic",
+                        target: "dynamo_kv_indexer::thread_pool_worker_panic",
                         worker_thread_index = worker_idx,
                         panic_message = %panic_msg,
                         "Thread pool worker panicked; worker thread is now dead"

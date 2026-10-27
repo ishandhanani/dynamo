@@ -13,7 +13,6 @@ repository.workspace = true
 kvbm-logical = { workspace = true }
 dynamo-tokens = { workspace = true }
 dynamo-kv-hashing = { workspace = true }
-dynamo-kv-router = { workspace = true }
 dynamo-kv-indexer = { workspace = true }
 dynamo-router-types = { workspace = true }
 

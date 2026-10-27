@@ -2079,7 +2079,6 @@ version = "1.7.0"
 dependencies = [
  "async-trait",
  "dynamo-admission",
- "dynamo-kv-router",
  "dynamo-router-types",
  "dynamo-scheduler",
  "dynamo-worker-selection",
@@ -2156,18 +2155,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "dynamo-kv-router"
-version = "1.7.0"
-dependencies = [
- "dynamo-admission",
- "dynamo-kv-indexer",
- "dynamo-router-types",
- "dynamo-scheduler",
- "dynamo-slot-tracker",
- "dynamo-worker-selection",
-]
-
-[[package]]
 name = "dynamo-llm"
 version = "1.7.0"
 dependencies = [
@@ -2198,7 +2185,6 @@ dependencies = [
  "dynamo-custom-policy-builtin",
  "dynamo-http-server",
  "dynamo-kv-indexer",
- "dynamo-kv-router",
  "dynamo-memory",
  "dynamo-mocker",
  "dynamo-parsers",
@@ -2305,7 +2291,6 @@ dependencies = [
  "dynamo-admission",
  "dynamo-custom-policy-builtin",
  "dynamo-kv-indexer",
- "dynamo-kv-router",
  "dynamo-router-types",
  "dynamo-scheduler",
  "dynamo-slot-tracker",
@@ -2573,7 +2558,6 @@ name = "dynamo-slot-tracker"
 version = "1.7.0"
 dependencies = [
  "anyhow",
- "axum",
  "crossbeam-utils",
  "dashmap",
  "dynamo-kv-indexer",

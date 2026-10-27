@@ -505,8 +505,8 @@ async fn serve<P: crate::EndpointPicker>(
 mod tests {
     use std::sync::Arc;
 
-    use dynamo_kv_router::WorkerSelectionPolicyFactory;
     use dynamo_scheduler::plugins::WorkerSelectionPolicyProviderError;
+    use dynamo_worker_selection::plugin::WorkerSelectionPolicyFactory;
     use tokio::sync::Mutex;
 
     use super::*;
