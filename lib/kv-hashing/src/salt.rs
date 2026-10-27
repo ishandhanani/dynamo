@@ -10,7 +10,7 @@
 //! # Router parity
 //!
 //! This function is the shared seed derivation used by
-//! `dynamo_kv_router::protocols::compute_block_hash_for_seq` and canonical
+//! `dynamo_router_types::protocols::compute_block_hash_for_seq` and canonical
 //! pre-hashed producers:
 //!
 //! ```text

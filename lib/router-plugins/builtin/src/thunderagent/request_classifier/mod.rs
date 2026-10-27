@@ -100,7 +100,7 @@ impl Inner {
         input_tokens: usize,
         progress: RequestProgress,
         session_final: bool,
-        pinned_worker: Option<dynamo_kv_router::protocols::WorkerWithDpRank>,
+        pinned_worker: Option<dynamo_router_types::protocols::WorkerWithDpRank>,
     ) -> Result<Arc<Notify>, ThunderAgentError> {
         let capacities = self.capacity_provider.snapshot();
         self.state.lock().register(
@@ -231,7 +231,7 @@ impl Drop for PendingClassification {
 async fn await_release<T>(
     mut pending: PendingClassification,
     value: T,
-) -> Result<(T, Option<dynamo_kv_router::protocols::WorkerWithDpRank>), ThunderAgentError> {
+) -> Result<(T, Option<dynamo_router_types::protocols::WorkerWithDpRank>), ThunderAgentError> {
     pending.inner.start_scheduler();
     let inner = Arc::clone(&pending.inner);
     let request_id = pending.request_id.clone();
@@ -341,7 +341,7 @@ mod tests {
     use std::time::Duration;
 
     use dynamo_kv_router::plugins::worker_selection::{WorkerCapacity, WorkerInfo};
-    use dynamo_kv_router::protocols::WorkerWithDpRank;
+    use dynamo_router_types::protocols::WorkerWithDpRank;
 
     use super::scheduler::ProgramLifecycle;
     use super::*;

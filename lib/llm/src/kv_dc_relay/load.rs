@@ -6,7 +6,7 @@ use std::collections::{HashMap, HashSet};
 use std::time::{Duration, Instant};
 
 use dynamo_kv_router::indexer::cuckoo::ProducerIdentity;
-use dynamo_kv_router::protocols::{
+use dynamo_router_types::protocols::{
     ActiveLoad, SchedulerGroup, SchedulerLoad, WorkerId, WorkerWithDpRank,
 };
 use dynamo_runtime::transports::event_plane::EventEnvelope;
@@ -457,10 +457,10 @@ impl PoolDeployment {
 
 #[cfg(test)]
 mod tests {
-    use dynamo_kv_router::identity::{
+    use dynamo_kv_router::indexer::cuckoo::{CkfConfig, DcCkfState};
+    use dynamo_router_types::identity::{
         CacheSemanticsId, DcId, IdentitySource, IndexerDomainId, PoolId, RoutingScopeId,
     };
-    use dynamo_kv_router::indexer::cuckoo::{CkfConfig, DcCkfState};
 
     use super::*;
 

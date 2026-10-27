@@ -10,18 +10,14 @@ mod active_set;
 pub(crate) mod cleanup;
 pub mod conditional_disagg;
 
-pub mod identity;
 pub mod indexer;
-pub mod kv_hints;
+pub use dynamo_router_types::{identity, kv_hints, protocols, tracking_hash, worker_type};
 pub mod plugins;
-pub mod protocols;
 pub mod recovery;
 pub mod scheduling;
 pub mod sequences;
 pub mod services;
 pub mod session_prefix_index;
-pub mod tracking_hash;
-pub mod worker_type;
 pub mod zmq_wire;
 
 // Backward-compat re-exports: old top-level module paths still work

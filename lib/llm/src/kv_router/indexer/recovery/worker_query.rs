@@ -32,7 +32,7 @@ const RECOVERY_MAX_RETRIES: u32 = 8;
 const RECOVERY_INITIAL_BACKOFF_MS: u64 = 200;
 pub(crate) const DEFAULT_RECOVERY_ATTEMPT_TIMEOUT: Duration = Duration::from_secs(30);
 #[cfg(test)]
-const KV_EVENT_TOPIC: &str = dynamo_kv_router::protocols::KV_EVENT_SUBJECT;
+const KV_EVENT_TOPIC: &str = dynamo_router_types::protocols::KV_EVENT_SUBJECT;
 
 #[derive(Debug, thiserror::Error)]
 #[error("{message}")]
@@ -1969,7 +1969,9 @@ mod tests {
         assert_eq!(retained.len(), 1);
         assert_eq!(
             retained[0].residency_domain,
-            dynamo_kv_router::protocols::WireResidencyDomain::explicit(ResidencyDomain::CacheOwner)
+            dynamo_router_types::protocols::WireResidencyDomain::explicit(
+                ResidencyDomain::CacheOwner
+            )
         );
         assert_eq!(retained[0].state_source, Some(cache_owner_id()));
     }

@@ -10,25 +10,7 @@ use super::{
     TieredMatchDetails, WorkerTask,
 };
 use crate::protocols::*;
-
-/// Trait for querying an external shared KV cache pool.
-///
-/// Implementations check which blocks/pages from a request's token sequence
-/// exist in the shared cache. The returned `SharedCacheHits` describes which
-/// block positions are available externally (and thus cheaper to prefill).
-#[async_trait]
-pub trait SharedKvCache: Send + Sync {
-    /// Query which blocks exist in the shared cache for the given token sequence.
-    ///
-    /// `cache_namespace` must be honored by implementations to avoid scoring
-    /// shared-cache hits across isolated cache namespaces.
-    async fn check_blocks(
-        &self,
-        tokens: &[u32],
-        block_size: u32,
-        cache_namespace: Option<&str>,
-    ) -> Result<SharedCacheHits, KvRouterError>;
-}
+pub use dynamo_router_types::cache::{ShardSizeSnapshot, SharedKvCache};
 
 #[async_trait]
 pub trait TieredMatchProvider: Send + Sync {
@@ -45,22 +27,6 @@ pub trait TieredMatchProvider: Send + Sync {
         let _ = options;
         self.find_tiered_matches(sequence).await
     }
-}
-
-/// Per-shard size snapshot returned by [`KvIndexerInterface::shard_sizes`].
-///
-/// `worker_count` and `block_count` are always populated. `node_count` is
-/// reserved for backends that can expose a structural node count.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-pub struct ShardSizeSnapshot {
-    /// Zero-based shard index.
-    pub shard_idx: usize,
-    /// Distinct `(worker_id, dp_rank)` pairs stored in this shard.
-    pub worker_count: usize,
-    /// Total cached blocks across all workers in this shard.
-    pub block_count: usize,
-    /// Radix-tree node count, or zero when the backend does not expose one.
-    pub node_count: usize,
 }
 
 #[async_trait]

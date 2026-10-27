@@ -6,8 +6,8 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, hash_map::Entry};
 use std::sync::Arc;
 
-use dynamo_kv_router::identity::PoolId;
-use dynamo_kv_router::protocols::WorkerId;
+use dynamo_router_types::identity::PoolId;
+use dynamo_router_types::protocols::WorkerId;
 use dynamo_runtime::protocols::EndpointId;
 use parking_lot::Mutex;
 use tokio::sync::watch;
@@ -495,8 +495,8 @@ fn sorted_worker_roles(roles: HashSet<WorkerType>) -> Vec<WorkerRole> {
 mod tests {
     use std::sync::Arc;
 
-    use dynamo_kv_router::identity::DcId;
     use dynamo_kv_router::indexer::cuckoo::{CkfConfig, DcCkfState, ProducerIdentity};
+    use dynamo_router_types::identity::DcId;
 
     use super::super::discovery::{
         AdapterMembership, AdapterWorkerMembership, DomainWorkerTopology, EndpointMembership,

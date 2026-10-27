@@ -6,13 +6,13 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::common::protocols::MockerConfig;
-use dynamo_kv_router::config::KvRouterConfig;
-use dynamo_kv_router::protocols::{
-    ActiveSequenceEvent, WorkerConfigLike, WorkerId, WorkerWithDpRank,
-};
 use dynamo_kv_router::scheduling::queue::DEFAULT_MAX_BATCHED_TOKENS;
 use dynamo_kv_router::sequences::{LocalWorkerLoad, SchedulerLoadSnapshot};
 use dynamo_kv_router::{ActiveSequencesMultiWorker, LocalScheduler, SequencePublisher};
+use dynamo_router_types::config::KvRouterConfig;
+use dynamo_router_types::protocols::{
+    ActiveSequenceEvent, WorkerConfigLike, WorkerId, WorkerWithDpRank,
+};
 
 #[derive(Clone, Copy, Debug, Default)]
 pub(super) struct ReplayNoopPublisher;

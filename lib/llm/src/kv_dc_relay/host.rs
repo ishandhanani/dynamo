@@ -23,9 +23,9 @@ use std::time::{Duration, Instant};
 #[cfg(feature = "ckf-diagnostics")]
 use std::sync::atomic::Ordering;
 
-use dynamo_kv_router::identity::PoolId;
 use dynamo_kv_router::indexer::cuckoo::{CkfConfig, CkfFailureAction};
-use dynamo_kv_router::protocols::{DpRank, KvCacheEventError, SchedulerLoad, WorkerId};
+use dynamo_router_types::identity::PoolId;
+use dynamo_router_types::protocols::{DpRank, KvCacheEventError, SchedulerLoad, WorkerId};
 use dynamo_runtime::component::Component;
 use dynamo_runtime::component::{Client, Instance};
 use dynamo_runtime::protocols::EndpointId;

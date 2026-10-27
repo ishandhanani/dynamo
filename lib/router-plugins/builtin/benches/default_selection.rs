@@ -4,8 +4,8 @@
 mod support;
 use criterion::{BenchmarkId, Criterion, black_box, criterion_group, criterion_main};
 use dynamo_custom_policy_builtin::default_policy;
-use dynamo_kv_router::protocols::SelectionTraceSpec;
 use dynamo_kv_router::{KvRouterConfig, WorkerSelector};
+use dynamo_router_types::protocols::SelectionTraceSpec;
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::Duration;
@@ -284,9 +284,9 @@ fn shared_cache(c: &mut Criterion) {
 /// Like the selection service's config, it caches its hashed keys.
 struct HintWorker {
     topology: std::collections::HashMap<String, String>,
-    keys: dynamo_kv_router::kv_hints::WorkerKvTransferKeysCache,
+    keys: dynamo_router_types::kv_hints::WorkerKvTransferKeysCache,
 }
-impl dynamo_kv_router::protocols::WorkerConfigLike for HintWorker {
+impl dynamo_router_types::protocols::WorkerConfigLike for HintWorker {
     fn data_parallel_start_rank(&self) -> u32 {
         0
     }
@@ -302,11 +302,13 @@ impl dynamo_kv_router::protocols::WorkerConfigLike for HintWorker {
     fn kv_hint_transfer_metadata_for_dp_rank(
         &self,
         _dp_rank: u32,
-    ) -> Option<dynamo_kv_router::protocols::KvHintTransferWorkerMetadata<'_>> {
-        Some(dynamo_kv_router::protocols::KvHintTransferWorkerMetadata {
-            worker_type: "prefill",
-            source_control_endpoint: Some("tcp://worker:23280"),
-        })
+    ) -> Option<dynamo_router_types::protocols::KvHintTransferWorkerMetadata<'_>> {
+        Some(
+            dynamo_router_types::protocols::KvHintTransferWorkerMetadata {
+                worker_type: "prefill",
+                source_control_endpoint: Some("tcp://worker:23280"),
+            },
+        )
     }
     fn topology_domains(&self) -> Option<&std::collections::HashMap<String, String>> {
         Some(&self.topology)
@@ -316,7 +318,7 @@ impl dynamo_kv_router::protocols::WorkerConfigLike for HintWorker {
     }
     fn kv_transfer_keys(
         &self,
-    ) -> std::borrow::Cow<'_, dynamo_kv_router::kv_hints::WorkerKvTransferKeys> {
+    ) -> std::borrow::Cow<'_, dynamo_router_types::kv_hints::WorkerKvTransferKeys> {
         std::borrow::Cow::Borrowed(self.keys.get_or_init(self))
     }
 }
@@ -368,9 +370,9 @@ fn kv_transfer(c: &mut Criterion) {
                     .collect();
                 sources.sort_unstable();
                 request.kv_transfer_candidates =
-                    Some(dynamo_kv_router::kv_hints::KvTransferCandidates {
+                    Some(dynamo_router_types::kv_hints::KvTransferCandidates {
                         block_hashes: (0..128)
-                            .map(dynamo_kv_router::protocols::ExternalSequenceBlockHash)
+                            .map(dynamo_router_types::protocols::ExternalSequenceBlockHash)
                             .collect(),
                         owner_prefix_blocks: sources,
                         routing_snapshot: None,

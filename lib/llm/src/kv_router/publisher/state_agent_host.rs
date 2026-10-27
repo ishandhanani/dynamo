@@ -8,7 +8,7 @@ use std::{collections::HashMap, sync::Arc};
 use anyhow::{Context, Result};
 use arc_swap::ArcSwap;
 use async_trait::async_trait;
-use dynamo_kv_router::identity::CacheOwnerId;
+use dynamo_router_types::identity::CacheOwnerId;
 use dynamo_runtime::{
     component::{Component, Endpoint, StartedEndpoint},
     discovery::{
@@ -136,7 +136,7 @@ struct HostedSlot {
     agent: Option<Arc<KvStateAgent>>,
     global_dp_rank: u32,
     kv_state_endpoint: dynamo_runtime::protocols::EndpointId,
-    indexer_domain_id: dynamo_kv_router::identity::IndexerDomainId,
+    indexer_domain_id: dynamo_router_types::identity::IndexerDomainId,
     kv_block_size: u32,
     ingress_protocol: KvStateIngressProtocol,
 }
@@ -794,11 +794,11 @@ fn host_discovery_id(instance_id: u64) -> u64 {
 
 #[cfg(test)]
 mod tests {
-    use dynamo_kv_router::identity::{
+    use dynamo_router_types::identity::{
         CacheOwnerId, CacheSemanticsId, DcId, IdentitySource, IndexerDomainId, PoolId,
         RoutingScopeId, StableDpSlotId,
     };
-    use dynamo_kv_router::protocols::{RouterHintSourceMetadata, WorkerWithDpRank};
+    use dynamo_router_types::protocols::{RouterHintSourceMetadata, WorkerWithDpRank};
     use dynamo_runtime::component::{Instance, TransportType};
     use dynamo_runtime::discovery::DiscoveryInstanceId;
     use dynamo_runtime::protocols::EndpointId;

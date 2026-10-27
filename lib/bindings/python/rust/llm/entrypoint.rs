@@ -15,7 +15,7 @@ use pyo3::{
 use pyo3_async_runtimes::TaskLocals;
 
 use dynamo_kv_router::TrackingHashAlgorithm as RsTrackingHashAlgorithm;
-use dynamo_kv_router::config::{
+use dynamo_router_types::config::{
     ApproximateCachePolicyKind as RsApproximateCachePolicyKind,
     ConditionalDisaggPolicyKind as RsConditionalDisaggPolicyKind,
     KvRouterConfig as RsKvRouterConfig, RouterPrefillLoadModel as RsRouterPrefillLoadModel,

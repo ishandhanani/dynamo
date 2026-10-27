@@ -7,8 +7,8 @@ use dynamo_kv_router::plugins::worker_selection::{
     RuntimePolicyConfig, RuntimePolicyError, RuntimePolicyUpdate, WorkerInputs,
     WorkerSelectionPolicy,
 };
-use dynamo_kv_router::protocols::{WorkerConfigLike, WorkerSelectionResult};
 use dynamo_kv_router::{KvRouterConfig, KvSchedulerError, WorkerSelectionInput, WorkerSelector};
+use dynamo_router_types::protocols::{WorkerConfigLike, WorkerSelectionResult};
 use parking_lot::Mutex;
 use std::sync::Arc;
 

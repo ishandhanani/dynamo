@@ -308,10 +308,10 @@ impl RelayPublicationSource for RegistryPublicationSource {
 mod tests {
     use std::time::Duration;
 
-    use dynamo_kv_router::identity::{
+    use dynamo_kv_router::indexer::cuckoo::{CkfConfig, DcCkfState};
+    use dynamo_router_types::identity::{
         CacheSemanticsId, DcId, IdentitySource, IndexerDomainId, PoolId, RoutingScopeId,
     };
-    use dynamo_kv_router::indexer::cuckoo::{CkfConfig, DcCkfState};
 
     use super::*;
     use crate::kv_dc_relay::discovery::DcMembershipView;

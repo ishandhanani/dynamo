@@ -6,7 +6,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use async_stream::{stream, try_stream};
-use dynamo_kv_router::identity::PoolId;
+use dynamo_router_types::identity::PoolId;
 use futures::{Stream, StreamExt};
 use tokio::sync::{OwnedSemaphorePermit, Semaphore, broadcast};
 use tokio_util::sync::CancellationToken;

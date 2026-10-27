@@ -15,8 +15,8 @@ readme = "README.md"
 [features]
 default = []
 metrics = ["dep:prometheus"]
-runtime-protocols = ["dep:dynamo-runtime"]
-bench = []
+runtime-protocols = ["dep:dynamo-runtime", "dynamo-router-types/runtime-protocols"]
+bench = ["dynamo-router-types/bench"]
 profile = []
 standalone-indexer = ["dep:axum", "dep:reqwest", "dep:zmq", "dep:chrono", "dep:tracing-appender"]
 standalone-slot-tracker = ["dep:axum", "dep:zmq"]
@@ -25,6 +25,7 @@ standalone-selection = ["standalone-indexer", "dep:once_cell"]
 testing = []
 
 [dependencies]
+dynamo-router-types = { workspace = true }
 # repo
 dynamo-runtime = { workspace = true, optional = true }
 dynamo-kv-hashing = { workspace = true }
@@ -81,6 +82,7 @@ reqwest = { version = "0.12.24", default-features = false, features = ["json", "
 tracing-appender = { version = "0.2", optional = true }
 
 [dev-dependencies]
+dynamo-router-types = { workspace = true, features = ["testing"] }
 criterion = "0.5"
 rstest = "0.18.2"
 rstest_reuse = "0.7.0"

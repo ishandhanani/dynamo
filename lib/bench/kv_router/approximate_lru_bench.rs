@@ -18,9 +18,9 @@ use dynamo_kv_router::indexer::{
     ApproximateAcquireMode, ApproximateLruBlock, ApproximateLruLease, ApproximateLruStats,
     ApproximateRetentionConfig, KvIndexerInterface, KvIndexerMetrics,
 };
-use dynamo_kv_router::protocols::{LocalBlockHash, WorkerWithDpRank};
 use dynamo_kv_router::scheduling::AttemptId;
 use dynamo_kv_router::{ConcurrentRadixTreeCompressed, ThreadPoolIndexer, approx::PruneConfig};
+use dynamo_router_types::protocols::{LocalBlockHash, WorkerWithDpRank};
 use dynamo_tokens::SequenceHash;
 use serde::Serialize;
 use tokio::sync::{Notify, oneshot};

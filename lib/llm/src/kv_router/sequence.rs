@@ -13,12 +13,12 @@ pub use dynamo_kv_router::multi_worker_sequence::{
     ActiveSequencesMultiWorker, ReplicaRequestLeaseObserver, SchedulerLoadSnapshot, SequenceError,
     SequencePublishQueueError, SequencePublisher, SequenceRequest, SequenceSubscriber,
 };
-use dynamo_kv_router::protocols::{
+pub use dynamo_kv_router::sequence::{ActiveSequences, RequestId};
+use dynamo_kv_router::services::selection::{ModelLoadResponse, SelectionService};
+use dynamo_router_types::protocols::{
     ActiveSequenceEvent, ActiveSequenceEventBatch, MAX_REPLICA_BATCH_DURATION,
     MAX_REPLICA_BATCH_EVENTS, SchedulerGroup, SchedulerLoad, WorkerWithDpRank,
 };
-pub use dynamo_kv_router::sequence::{ActiveSequences, RequestId};
-use dynamo_kv_router::services::selection::{ModelLoadResponse, SelectionService};
 
 use anyhow::Result;
 use dynamo_runtime::component::Endpoint;
@@ -147,7 +147,7 @@ impl ActiveSequenceEventPublisher {
         self.enqueue(ActiveSequenceEvent {
             request_id,
             worker,
-            data: dynamo_kv_router::protocols::ActiveSequenceEventData::MarkPrefillCompleted,
+            data: dynamo_router_types::protocols::ActiveSequenceEventData::MarkPrefillCompleted,
             router_id: worker.worker_id,
             lora_name: None,
         })
@@ -605,7 +605,7 @@ async fn run_scheduler_load_publisher(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use dynamo_kv_router::protocols::ActiveSequenceEventData;
+    use dynamo_router_types::protocols::ActiveSequenceEventData;
     use tokio::time::Instant;
 
     fn free_event(request_id: impl Into<String>) -> ActiveSequenceEvent {
@@ -1074,7 +1074,7 @@ mod tests {
         let model = |name: &str, worker_id, blocks, tokens| ModelLoadResponse {
             model_name: name.into(),
             routing_group: "default".into(),
-            loads: vec![dynamo_kv_router::protocols::PotentialLoad {
+            loads: vec![dynamo_router_types::protocols::PotentialLoad {
                 worker_id,
                 dp_rank: 0,
                 potential_decode_blocks: blocks,
@@ -1122,7 +1122,7 @@ mod tests {
             .endpoint("generate");
         let service = Arc::new(
             SelectionServiceBuilder::new(
-                dynamo_kv_router::config::KvRouterConfig {
+                dynamo_router_types::config::KvRouterConfig {
                     use_kv_events: false,
                     router_queue_threshold: None,
                     ..Default::default()

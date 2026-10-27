@@ -23,11 +23,11 @@ use crate::Endpoint;
 ))]
 use clap::Parser;
 #[cfg(feature = "select-service")]
-use dynamo_kv_router::config::try_kv_router_config_from_dynamo_env;
-use dynamo_kv_router::config::{KvRouterConfig, RouterConfigOverride};
+use dynamo_router_types::config::try_kv_router_config_from_dynamo_env;
+use dynamo_router_types::config::{KvRouterConfig, RouterConfigOverride};
 use dynamo_kv_router::plugins::RouterPlugins;
-use dynamo_kv_router::protocols::compute_block_hash_for_seq;
-use dynamo_kv_router::protocols::*;
+use dynamo_router_types::protocols::compute_block_hash_for_seq;
+use dynamo_router_types::protocols::*;
 #[cfg(feature = "kv-indexer")]
 use dynamo_kv_router::services::indexer::{self, IndexerConfig};
 #[cfg(feature = "select-service")]
@@ -1503,7 +1503,7 @@ impl KvEventPublisher {
 #[pyclass]
 #[derive(Clone)]
 pub(crate) struct OverlapScores {
-    inner: dynamo_kv_router::protocols::OverlapScores,
+    inner: dynamo_router_types::protocols::OverlapScores,
 }
 
 #[pymethods]
@@ -1529,7 +1529,7 @@ enum RadixTreeRequest {
     FindMatches {
         local_block_hashes: Vec<LocalBlockHash>,
         early_exit: bool,
-        response_tx: mpsc::SyncSender<dynamo_kv_router::protocols::OverlapScores>,
+        response_tx: mpsc::SyncSender<dynamo_router_types::protocols::OverlapScores>,
     },
     ApplyEvent {
         worker_id: WorkerId,

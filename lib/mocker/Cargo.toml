@@ -26,6 +26,7 @@ dynamo-custom-policy-builtin = { workspace = true }
 # repo
 aisimulate-core = { workspace = true }
 dynamo-kv-router = { workspace = true }
+dynamo-router-types = { workspace = true }
 dynamo-tokens = { workspace = true }
 
 # workspace

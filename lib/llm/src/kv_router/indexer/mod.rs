@@ -269,7 +269,7 @@ fn predict_on_route_side_indexer(
 
 #[cfg(test)]
 pub(super) mod test_util {
-    use dynamo_kv_router::protocols::{
+    use dynamo_router_types::protocols::{
         ExternalSequenceBlockHash, KvCacheEvent, KvCacheEventData, KvCacheStoreData,
         KvCacheStoredBlockData, LocalBlockHash, RouterEvent, StorageTier,
         compute_seq_hash_for_block,

@@ -2349,7 +2349,9 @@ async fn track_request(
 }
 
 /// Scheduler-reported loads with no prompt, the way the reservation tests read them.
-async fn potential_loads(router: &RoutingHost) -> Vec<dynamo_kv_router::protocols::PotentialLoad> {
+async fn potential_loads(
+    router: &RoutingHost,
+) -> Vec<dynamo_router_types::protocols::PotentialLoad> {
     router
         .kv_router()
         .get_potential_loads(&[], None, None, None, None)
@@ -2358,7 +2360,7 @@ async fn potential_loads(router: &RoutingHost) -> Vec<dynamo_kv_router::protocol
 }
 
 fn active_requests_for(
-    loads: &[dynamo_kv_router::protocols::PotentialLoad],
+    loads: &[dynamo_router_types::protocols::PotentialLoad],
     worker_id: u64,
     dp_rank: u32,
 ) -> usize {

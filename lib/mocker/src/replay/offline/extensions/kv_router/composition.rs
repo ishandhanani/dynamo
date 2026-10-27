@@ -9,7 +9,7 @@ use aisimulate_core::replay::{
 };
 use anyhow::{Context, Result, bail};
 use dynamo_kv_router::WorkerType;
-use dynamo_kv_router::config::{KvRouterConfig, RouterPrefillLoadModel};
+use dynamo_router_types::config::{KvRouterConfig, RouterPrefillLoadModel};
 use std::collections::HashSet;
 
 use super::{KvReplayMetadata, KvRouterPlacement};

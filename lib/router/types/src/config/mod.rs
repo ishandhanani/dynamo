@@ -8,10 +8,13 @@ use std::str::FromStr;
 use std::sync::OnceLock;
 use std::time::Duration;
 
+pub mod policy;
+pub mod request_classifier;
+pub mod worker_selection;
+
 use derive_builder::Builder;
 use serde::{Deserialize, Serialize};
 
-use crate::WorkerType;
 use crate::protocols::{
     BlockHashOptions, LocalBlockHash, complete_block_count, compute_block_hash_for_seq,
     compute_seq_hash_for_block,
@@ -19,6 +22,15 @@ use crate::protocols::{
 use crate::tracking_hash::{
     TrackingHashAlgorithm, TrackingHashContext, TrackingHashScope, validate_tracking_hash_options,
 };
+use crate::worker_type::WorkerType;
+
+/// Default effective-ISL absolute threshold (tokens). A request bypasses to
+/// AGG only if its net-new prefill stays under this cap.
+pub const DEFAULT_CONDITIONAL_DISAGG_EFF_ISL_THRESHOLD: usize = 2048;
+
+/// Default effective-ISL ratio threshold. A request bypasses to AGG only if
+/// `eff_isl / prompt_tokens` stays under this fraction.
+pub const DEFAULT_CONDITIONAL_DISAGG_EFF_ISL_RATIO_THRESHOLD: f64 = 0.7;
 
 const fn default_track_prefill_tokens() -> bool {
     true
@@ -43,10 +55,14 @@ pub const DYN_ROUTER_APPROXIMATE_CACHE_POLICY: &str = "DYN_ROUTER_APPROXIMATE_CA
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[doc(hidden)]
 pub struct WorkerSelectionPolicySelections {
-    pub(crate) aggregated: Option<String>,
-    pub(crate) prefill: Option<String>,
-    pub(crate) decode: Option<String>,
-    pub(crate) encode: Option<String>,
+    #[doc(hidden)]
+    pub aggregated: Option<String>,
+    #[doc(hidden)]
+    pub prefill: Option<String>,
+    #[doc(hidden)]
+    pub decode: Option<String>,
+    #[doc(hidden)]
+    pub encode: Option<String>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -59,7 +75,7 @@ pub enum WorkerSelectionPolicyConfigError {
     #[error("could not load worker_selection from router_policy_config: {source}")]
     Config {
         #[source]
-        source: super::policy_config::RouterPolicyConfigError,
+        source: crate::config::policy::RouterPolicyConfigError,
     },
 }
 
@@ -902,7 +918,7 @@ pub struct KvRouterConfig {
     /// Parsed startup policy document. This prevents per-model file reloads.
     #[serde(skip)]
     #[doc(hidden)]
-    pub policy_config_cache: OnceLock<super::policy_config::RouterPolicyConfig>,
+    pub policy_config_cache: OnceLock<crate::config::policy::RouterPolicyConfig>,
 
     /// Number of KV indexer worker threads.
     /// When > 1, uses ConcurrentRadixTreeCompressed with a thread pool for event-driven
@@ -982,11 +998,11 @@ pub struct KvRouterConfig {
 }
 
 fn default_conditional_disagg_eff_isl_threshold() -> usize {
-    crate::conditional_disagg::DEFAULT_CONDITIONAL_DISAGG_EFF_ISL_THRESHOLD
+    DEFAULT_CONDITIONAL_DISAGG_EFF_ISL_THRESHOLD
 }
 
 fn default_conditional_disagg_eff_isl_ratio_threshold() -> f64 {
-    crate::conditional_disagg::DEFAULT_CONDITIONAL_DISAGG_EFF_ISL_RATIO_THRESHOLD
+    DEFAULT_CONDITIONAL_DISAGG_EFF_ISL_RATIO_THRESHOLD
 }
 
 fn is_default_conditional_disagg_eff_isl_threshold(value: &usize) -> bool {
@@ -1213,14 +1229,14 @@ impl KvRouterConfig {
     fn loaded_policy_config(
         &self,
     ) -> Result<
-        Option<&super::policy_config::RouterPolicyConfig>,
-        super::policy_config::RouterPolicyConfigError,
+        Option<&crate::config::policy::RouterPolicyConfig>,
+        crate::config::policy::RouterPolicyConfigError,
     > {
         let Some(path) = self.router_policy_config.as_deref() else {
             return Ok(None);
         };
         if self.policy_config_cache.get().is_none() {
-            let parsed = super::policy_config::RouterPolicyConfig::from_path(path)?;
+            let parsed = crate::config::policy::RouterPolicyConfig::from_path(path)?;
             let _ = self.policy_config_cache.set(parsed);
         }
         Ok(self.policy_config_cache.get())
@@ -1229,10 +1245,10 @@ impl KvRouterConfig {
     pub fn policy_profile(
         &self,
         model_name: Option<&str>,
-    ) -> Result<super::policy_config::PolicyProfile, super::policy_config::RouterPolicyConfigError>
+    ) -> Result<crate::config::policy::PolicyProfile, crate::config::policy::RouterPolicyConfigError>
     {
         let Some(policy_config) = self.loaded_policy_config()? else {
-            return Ok(super::policy_config::PolicyProfile::synthetic(
+            return Ok(crate::config::policy::PolicyProfile::synthetic(
                 self.router_queue_threshold,
                 self.router_queue_policy,
             ));
@@ -1248,24 +1264,24 @@ impl KvRouterConfig {
     pub fn worker_selection_config(
         &self,
     ) -> Result<
-        Option<&super::policy_config::WorkerSelectionConfig>,
-        super::policy_config::RouterPolicyConfigError,
+        Option<&crate::config::policy::WorkerSelectionConfig>,
+        crate::config::policy::RouterPolicyConfigError,
     > {
         Ok(self
             .loaded_policy_config()?
-            .and_then(super::policy_config::RouterPolicyConfig::worker_selection))
+            .and_then(crate::config::policy::RouterPolicyConfig::worker_selection))
     }
 
     /// Return the custom request-classifier configuration from `router_policy_config`, if any.
     pub fn request_classifier_config(
         &self,
     ) -> Result<
-        Option<&super::policy_config::RequestClassifierConfig>,
-        super::policy_config::RouterPolicyConfigError,
+        Option<&crate::config::policy::RequestClassifierConfig>,
+        crate::config::policy::RouterPolicyConfigError,
     > {
         Ok(self
             .loaded_policy_config()?
-            .and_then(super::policy_config::RouterPolicyConfig::request_classifier))
+            .and_then(crate::config::policy::RouterPolicyConfig::request_classifier))
     }
 
     /// Return one configured custom worker-selection instance, if any.
@@ -1358,8 +1374,8 @@ impl KvRouterConfig {
             .or(selected.encode))
     }
 
-    #[cfg_attr(not(feature = "standalone-selection"), allow(dead_code))]
-    pub(crate) fn selected_worker_selection_policy_instances(
+    #[doc(hidden)]
+    pub fn selected_worker_selection_policy_instances(
         &self,
     ) -> Result<WorkerSelectionPolicySelections, WorkerSelectionPolicyConfigError> {
         let selected = match env::var(DYN_ROUTER_WORKER_SELECTION_POLICY) {
@@ -1430,7 +1446,7 @@ impl KvRouterConfig {
 
     pub fn configured_policy_profile(
         &self,
-    ) -> Result<super::policy_config::PolicyProfile, super::policy_config::RouterPolicyConfigError>
+    ) -> Result<crate::config::policy::PolicyProfile, crate::config::policy::RouterPolicyConfigError>
     {
         self.policy_profile(self.policy_model_name.as_deref())
     }
@@ -1500,7 +1516,7 @@ impl KvRouterConfig {
         // not treat a worker-selection-only document as a queue policy profile.
         let has_routing_profiles = self.policy_config_cache.get().map_or(
             self.router_policy_config.is_some(),
-            super::policy_config::RouterPolicyConfig::has_routing_profiles,
+            crate::config::policy::RouterPolicyConfig::has_routing_profiles,
         );
         if self.router_prefill_load_model.is_enabled()
             && (has_routing_profiles || self.router_queue_threshold.is_some())
@@ -1518,12 +1534,12 @@ impl KvRouterConfig {
     pub fn queueing_enabled(
         &self,
         model_name: Option<&str>,
-    ) -> Result<bool, super::policy_config::RouterPolicyConfigError> {
+    ) -> Result<bool, crate::config::policy::RouterPolicyConfigError> {
         Ok(self
             .policy_profile(model_name)?
             .classes()
             .iter()
-            .any(super::policy_config::PolicyClassConfig::queueing_enabled))
+            .any(crate::config::policy::PolicyClassConfig::queueing_enabled))
     }
 
     pub fn assume_kv_reuse(&self, config_override: Option<&RouterConfigOverride>) -> bool {
@@ -1702,7 +1718,7 @@ mod tests {
         ] {
             let yaml = format!("router:\n  {setting}\n");
             assert!(
-                super::super::policy_config::RouterPolicyConfig::from_yaml(&yaml).is_err(),
+                crate::config::policy::RouterPolicyConfig::from_yaml(&yaml).is_err(),
                 "{setting}"
             );
         }

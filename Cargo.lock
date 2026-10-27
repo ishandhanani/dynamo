@@ -2296,6 +2296,7 @@ dependencies = [
  "dynamo-data-gen",
  "dynamo-kv-router",
  "dynamo-mocker",
+ "dynamo-router-types",
  "dynamo-tokens",
  "flate2",
  "futures-util",
@@ -2333,6 +2334,7 @@ dependencies = [
  "async-trait",
  "criterion",
  "dynamo-kv-router",
+ "dynamo-router-types",
  "fastrand",
  "parking_lot",
  "rustc-hash 2.1.2",
@@ -2360,6 +2362,7 @@ name = "dynamo-custom-policy-example-disagg-filter-score-pick"
 version = "1.7.0"
 dependencies = [
  "dynamo-kv-router",
+ "dynamo-router-types",
  "serde",
 ]
 
@@ -2396,6 +2399,7 @@ name = "dynamo-custom-policy-example-soft-pin-repin"
 version = "1.7.0"
 dependencies = [
  "dynamo-kv-router",
+ "dynamo-router-types",
  "serde",
 ]
 
@@ -2446,6 +2450,7 @@ dependencies = [
  "dynamo-kv-router",
  "dynamo-llm",
  "dynamo-protocols",
+ "dynamo-router-types",
  "dynamo-runtime",
  "futures",
  "hyper-util",
@@ -2527,6 +2532,7 @@ dependencies = [
  "dashmap",
  "derive_builder",
  "dynamo-kv-hashing",
+ "dynamo-router-types",
  "dynamo-runtime",
  "dynamo-tokens",
  "dynamo-truthy",
@@ -2603,6 +2609,7 @@ dependencies = [
  "dynamo-protocols",
  "dynamo-renderer",
  "dynamo-rl",
+ "dynamo-router-types",
  "dynamo-runtime",
  "dynamo-tokenizers",
  "dynamo-tokens",
@@ -2717,6 +2724,7 @@ dependencies = [
  "dashmap",
  "dynamo-custom-policy-builtin",
  "dynamo-kv-router",
+ "dynamo-router-types",
  "dynamo-tokens",
  "futures",
  "ndarray 0.16.1",
@@ -2866,6 +2874,33 @@ dependencies = [
 ]
 
 [[package]]
+name = "dynamo-router-types"
+version = "1.7.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "blake3",
+ "derive_builder",
+ "dynamo-kv-hashing",
+ "dynamo-runtime",
+ "dynamo-tokens",
+ "dynamo-truthy",
+ "fastrand",
+ "rmp-serde",
+ "rstest 0.18.2",
+ "rustc-hash 2.1.2",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tracing",
+ "uuid",
+ "xxhash-rust",
+ "zeroize",
+]
+
+[[package]]
 name = "dynamo-runtime"
 version = "1.7.0"
 dependencies = [
@@ -2989,6 +3024,7 @@ dependencies = [
  "dynamo-backend-common",
  "dynamo-kv-router",
  "dynamo-llm",
+ "dynamo-router-types",
  "dynamo-runtime",
  "dynamo-sidecar-common",
  "futures",
@@ -5310,6 +5346,7 @@ dependencies = [
  "cbindgen",
  "dynamo-kv-router",
  "dynamo-llm",
+ "dynamo-router-types",
  "dynamo-runtime",
  "libc",
  "once_cell",

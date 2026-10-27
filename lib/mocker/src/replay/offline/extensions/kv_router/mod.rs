@@ -10,15 +10,9 @@ use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow};
 use dynamo_kv_router::LocalBlockHash;
-pub(in crate::replay) use dynamo_kv_router::config::KvRouterConfig as ReplayKvRouterConfig;
-use dynamo_kv_router::config::KvRouterConfig;
 use dynamo_kv_router::indexer::{
     KvIndexerInterface, LowerTierIndexers, LowerTierQueryOptions, TieredMatchDetails,
     query_lower_tiers_with_options,
-};
-use dynamo_kv_router::protocols::{
-    BlockHashOptions, KvCacheEventData, PrefillLoadHint, RouterEvent, RoutingConstraints, WorkerId,
-    WorkerWithDpRank, compute_block_hash_for_seq,
 };
 use dynamo_kv_router::scheduling::{
     OverlapAnalysis, OverlapSignals, PolicyClassConfig, PolicyProfile, PolicyQueue, QueueSnapshot,
@@ -29,6 +23,12 @@ use dynamo_kv_router::{
     ActiveSequencesMultiWorker, RadixTree, RoutingPartitionRef, SchedulingRequest, SequenceRequest,
     SessionContext, SessionPrefixIndexer, TrackingHashAlgorithm, TrackingHashContext,
     TrackingHashScope, WorkerLoadProjection, WorkerSelectionInput, WorkerSelector,
+};
+pub(in crate::replay) use dynamo_router_types::config::KvRouterConfig as ReplayKvRouterConfig;
+use dynamo_router_types::config::KvRouterConfig;
+use dynamo_router_types::protocols::{
+    BlockHashOptions, KvCacheEventData, PrefillLoadHint, RouterEvent, RoutingConstraints, WorkerId,
+    WorkerWithDpRank, compute_block_hash_for_seq,
 };
 use dynamo_tokens::SequenceHash;
 use futures::executor::block_on;
@@ -57,36 +57,36 @@ pub(in crate::replay) use composition::{KvReplayComposition, RoundRobinReplayCom
 #[derive(Clone, Copy)]
 enum KvEventSummary {
     Stored {
-        parent_hash: Option<dynamo_kv_router::protocols::ExternalSequenceBlockHash>,
+        parent_hash: Option<dynamo_router_types::protocols::ExternalSequenceBlockHash>,
         start_position: Option<u32>,
         count: usize,
-        first: Option<dynamo_kv_router::protocols::ExternalSequenceBlockHash>,
-        last: Option<dynamo_kv_router::protocols::ExternalSequenceBlockHash>,
+        first: Option<dynamo_router_types::protocols::ExternalSequenceBlockHash>,
+        last: Option<dynamo_router_types::protocols::ExternalSequenceBlockHash>,
     },
     Removed {
         count: usize,
-        first: Option<dynamo_kv_router::protocols::ExternalSequenceBlockHash>,
-        last: Option<dynamo_kv_router::protocols::ExternalSequenceBlockHash>,
+        first: Option<dynamo_router_types::protocols::ExternalSequenceBlockHash>,
+        last: Option<dynamo_router_types::protocols::ExternalSequenceBlockHash>,
     },
     Cleared,
 }
 
 impl KvEventSummary {
-    fn from_data(data: &dynamo_kv_router::protocols::KvCacheEventData) -> Self {
+    fn from_data(data: &dynamo_router_types::protocols::KvCacheEventData) -> Self {
         match data {
-            dynamo_kv_router::protocols::KvCacheEventData::Stored(stored) => Self::Stored {
+            dynamo_router_types::protocols::KvCacheEventData::Stored(stored) => Self::Stored {
                 parent_hash: stored.parent_hash,
                 start_position: stored.start_position,
                 count: stored.blocks.len(),
                 first: stored.blocks.first().map(|block| block.block_hash),
                 last: stored.blocks.last().map(|block| block.block_hash),
             },
-            dynamo_kv_router::protocols::KvCacheEventData::Removed(removed) => Self::Removed {
+            dynamo_router_types::protocols::KvCacheEventData::Removed(removed) => Self::Removed {
                 count: removed.block_hashes.len(),
                 first: removed.block_hashes.first().copied(),
                 last: removed.block_hashes.last().copied(),
             },
-            dynamo_kv_router::protocols::KvCacheEventData::Cleared => Self::Cleared,
+            dynamo_router_types::protocols::KvCacheEventData::Cleared => Self::Cleared,
         }
     }
 }
@@ -1325,13 +1325,13 @@ mod tests {
     use std::sync::Arc;
     use std::time::Duration;
 
-    use dynamo_kv_router::config::{KvRouterConfig, RouterPrefillLoadModel, RouterQueuePolicy};
-    use dynamo_kv_router::protocols::{
+    use dynamo_kv_router::{PrefillLoadEstimator, TrackingHashAlgorithm};
+    use dynamo_router_types::config::{KvRouterConfig, RouterPrefillLoadModel, RouterQueuePolicy};
+    use dynamo_router_types::protocols::{
         BlockHashOptions, ExternalSequenceBlockHash, KvCacheEvent, KvCacheEventData,
         KvCacheStoreData, KvCacheStoredBlockData, LocalBlockHash, RouterEvent, StorageTier,
         WorkerId, WorkerWithDpRank, compute_block_hash_for_seq,
     };
-    use dynamo_kv_router::{PrefillLoadEstimator, TrackingHashAlgorithm};
     use rustc_hash::FxHashMap;
     use serde_json::Value;
     use tempfile::NamedTempFile;
@@ -2598,9 +2598,11 @@ policy_classes:
             KvCacheEvent {
                 event_id: 100,
                 dp_rank: rank,
-                data: KvCacheEventData::Removed(dynamo_kv_router::protocols::KvCacheRemoveData {
-                    block_hashes: hashes.into_iter().map(ExternalSequenceBlockHash).collect(),
-                }),
+                data: KvCacheEventData::Removed(
+                    dynamo_router_types::protocols::KvCacheRemoveData {
+                        block_hashes: hashes.into_iter().map(ExternalSequenceBlockHash).collect(),
+                    },
+                ),
             },
         )
     }

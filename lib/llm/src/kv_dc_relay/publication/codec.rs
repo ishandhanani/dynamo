@@ -208,13 +208,13 @@ fn filter_format(format: DcCkfFormatIdentity) -> Result<images::FilterFormat, Cb
 #[cfg(test)]
 mod tests {
     use dynamo_kv_router::LocalBlockHash;
-    use dynamo_kv_router::identity::{
-        CacheSemanticsId, DcId, IdentitySource, IndexerDomainId, PoolId, RoutingScopeId,
-    };
     use dynamo_kv_router::indexer::cuckoo::{
         CkfConfig, ConsumerInstanceId, DcCkfState, LaneLease, ProducerIdentity,
     };
-    use dynamo_kv_router::protocols::{
+    use dynamo_router_types::identity::{
+        CacheSemanticsId, DcId, IdentitySource, IndexerDomainId, PoolId, RoutingScopeId,
+    };
+    use dynamo_router_types::protocols::{
         BlockHashOptions, ExternalSequenceBlockHash, KvCacheEvent, KvCacheEventData,
         KvCacheStoreData, KvCacheStoredBlockData, RouterEvent, compute_block_hash_for_seq,
         compute_seq_hash_for_block,

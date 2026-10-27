@@ -3,12 +3,12 @@
 
 use std::collections::VecDeque;
 
-#[cfg(test)]
-use dynamo_kv_router::protocols::KvCacheEventData;
 use dynamo_kv_router::{
     protocols::{DpRank, ResetScope, RouterEvent, WorkerId},
     recovery::{CursorObservation, CursorState},
 };
+#[cfg(test)]
+use dynamo_router_types::protocols::KvCacheEventData;
 
 pub(super) type RecoveryKey = (WorkerId, DpRank);
 
@@ -215,7 +215,7 @@ impl RankState {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use dynamo_kv_router::protocols::{
+    use dynamo_router_types::protocols::{
         ExternalSequenceBlockHash, KvCacheEvent, KvCacheStoreData, KvCacheStoredBlockData,
         LocalBlockHash,
     };

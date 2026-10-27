@@ -16,7 +16,6 @@ use std::time::Instant;
 
 use anyhow::{Context, Result, ensure};
 use clap::{Parser, ValueEnum};
-use dynamo_kv_router::config::KvRouterConfig;
 use dynamo_mocker::common::perf_model::PerfModel;
 use dynamo_mocker::common::protocols::{
     EngineType, KvTransferTimingMode, MockerConfig, WorkerType,
@@ -28,6 +27,7 @@ use dynamo_mocker::replay::{
     TraceSimulationReport, simulate_loaded_trace_disagg_with_router_mode_and_capture_options,
     simulate_loaded_trace_with_router_mode_and_capture_options,
 };
+use dynamo_router_types::config::KvRouterConfig;
 use serde_json::{Value, json};
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq, ValueEnum)]

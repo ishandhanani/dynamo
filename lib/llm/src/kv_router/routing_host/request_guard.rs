@@ -1018,7 +1018,7 @@ mod output_block_tests {
 #[cfg(test)]
 mod output_hash_tests {
     use super::*;
-    use dynamo_kv_router::protocols::{BlockMmObjectInfo, compute_seq_hash_for_block};
+    use dynamo_router_types::protocols::{BlockMmObjectInfo, compute_seq_hash_for_block};
 
     fn direct_blocks(
         tokens: &[u32],

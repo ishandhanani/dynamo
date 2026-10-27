@@ -12,8 +12,8 @@ use serde::Deserialize;
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
-use dynamo_kv_router::protocols::StorageTier as RouterStorageTier;
 use dynamo_kv_router::zmq_wire::{KvEventOwnership, Locality, RawKvEvent};
+use dynamo_router_types::protocols::StorageTier as RouterStorageTier;
 
 use super::SharedCacheStatusTracker;
 use super::tracker::{

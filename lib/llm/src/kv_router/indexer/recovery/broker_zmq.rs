@@ -8,7 +8,7 @@ use std::{
     time::Duration,
 };
 
-use dynamo_kv_router::protocols::{KV_EVENT_SUBJECT, RouterEvent};
+use dynamo_router_types::protocols::{KV_EVENT_SUBJECT, RouterEvent};
 use dynamo_runtime::{
     component::Component,
     discovery::EventTransportKind,

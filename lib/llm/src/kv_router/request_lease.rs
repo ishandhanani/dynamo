@@ -498,7 +498,7 @@ mod tests {
 
     #[tokio::test]
     async fn replica_observer_forwards_live_callbacks_without_retaining_manager() {
-        use dynamo_kv_router::protocols::WorkerWithDpRank;
+        use dynamo_router_types::protocols::WorkerWithDpRank;
 
         use crate::kv_router::{sequence::SequenceRequest, tests::tracked_router};
 

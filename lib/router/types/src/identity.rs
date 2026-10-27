@@ -27,11 +27,6 @@ const ROUTING_SCOPE_DEFAULT_V1: &[u8] = b"dynamo/indexer-routing-scope/default/v
 const ROUTING_SCOPE_EXPLICIT_V1: &[u8] = b"dynamo/indexer-routing-scope/explicit/v1";
 const STABLE_DP_SLOT_EXPLICIT_V1: &[u8] = b"dynamo/stable-dp-slot/explicit/v1";
 
-#[cfg(any(
-    feature = "standalone-indexer",
-    feature = "standalone-selection",
-    feature = "standalone-slot-tracker"
-))]
 #[doc(hidden)]
 pub fn default_routing_group() -> String {
     DEFAULT_ROUTING_GROUP.to_string()

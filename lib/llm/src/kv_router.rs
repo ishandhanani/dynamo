@@ -54,8 +54,8 @@ use dynamo_runtime::{
 use futures::stream;
 
 // Re-export from dynamo-kv-router crate
-pub use dynamo_kv_router::protocols;
 pub use dynamo_kv_router::scheduling;
+pub use dynamo_router_types::protocols;
 
 pub(crate) mod embedded;
 pub mod encoder_router;
@@ -1322,7 +1322,7 @@ impl KvRouter {
         policy_class: Option<String>,
         session_context: Option<dynamo_kv_router::SessionContext>,
         expected_output_tokens: Option<u32>,
-        affinity_target: Option<dynamo_kv_router::protocols::WorkerAffinityTarget>,
+        affinity_target: Option<dynamo_router_types::protocols::WorkerAffinityTarget>,
         pinned_worker: Option<WorkerWithDpRank>,
         allowed_worker_ids: Option<HashSet<WorkerId>>,
         routing_constraints: RoutingConstraints,
@@ -2161,7 +2161,7 @@ mod tests {
     }
 
     struct FakeSharedCache {
-        hits: Option<dynamo_kv_router::protocols::SharedCacheHits>,
+        hits: Option<dynamo_router_types::protocols::SharedCacheHits>,
         should_error: bool,
     }
 
@@ -2172,7 +2172,7 @@ mod tests {
             _tokens: &[u32],
             _block_size: u32,
             _cache_namespace: Option<&str>,
-        ) -> Result<dynamo_kv_router::protocols::SharedCacheHits, KvRouterError> {
+        ) -> Result<dynamo_router_types::protocols::SharedCacheHits, KvRouterError> {
             if self.should_error {
                 Err(KvRouterError::IndexerOffline)
             } else {
@@ -2654,7 +2654,7 @@ mod tests {
     #[case::concurrent(2)]
     #[tokio::test]
     async fn session_prefix_tracking_survives_shared_core_selection(#[case] threads: u32) {
-        use dynamo_kv_router::protocols::{ExternalSequenceBlockHash, StorageTier};
+        use dynamo_router_types::protocols::{ExternalSequenceBlockHash, StorageTier};
 
         let component = make_test_component("session-prefix-core").await;
         let endpoint = component.endpoint("backend");
@@ -3442,9 +3442,9 @@ mod tests {
             fixed_policy(Some(2), WorkerWithDpRank::from_worker_id(1)),
             Some(Arc::new(FakeSharedCache {
                 #[allow(clippy::single_range_in_vec_init)]
-                hits: Some(dynamo_kv_router::protocols::SharedCacheHits::from_ranges(
-                    vec![0..2],
-                )),
+                hits: Some(
+                    dynamo_router_types::protocols::SharedCacheHits::from_ranges(vec![0..2]),
+                ),
                 should_error: false,
             })),
         )
@@ -3578,9 +3578,9 @@ mod tests {
             fixed_policy(None, WorkerWithDpRank::from_worker_id(0)),
             Some(Arc::new(FakeSharedCache {
                 #[allow(clippy::single_range_in_vec_init)]
-                hits: Some(dynamo_kv_router::protocols::SharedCacheHits::from_ranges(
-                    vec![0..2],
-                )),
+                hits: Some(
+                    dynamo_router_types::protocols::SharedCacheHits::from_ranges(vec![0..2]),
+                ),
                 should_error: false,
             })),
         )

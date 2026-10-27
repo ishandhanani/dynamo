@@ -30,15 +30,15 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tokenizers::Tokenizer;
 use tokio::sync::{Mutex, Semaphore};
 
-use dynamo_kv_router::protocols::{
-    ExternalSequenceBlockHash, KvCacheEvent, KvCacheEventData, KvCacheStoreData,
-    KvCacheStoredBlockData, LocalBlockHash, RouterEvent, WorkerId, compute_block_hash,
-    compute_seq_hash_for_block,
-};
 use dynamo_llm::model_card::ModelDeploymentCard;
 use dynamo_llm::preprocessor::prompt::prompt_formatter_from_mdc;
 use dynamo_mocker::loadgen::RouterSequence;
 use dynamo_renderer::{ChatTemplate, ContextMixins, OAIChatLikeRequest, PromptFormatter};
+use dynamo_router_types::protocols::{
+    ExternalSequenceBlockHash, KvCacheEvent, KvCacheEventData, KvCacheStoreData,
+    KvCacheStoredBlockData, LocalBlockHash, RouterEvent, WorkerId, compute_block_hash,
+    compute_seq_hash_for_block,
+};
 
 /// KV Router event subject suffix (appended to Component.subject())
 /// Full subject format: namespace.{namespace}.component.{component}.kv-events

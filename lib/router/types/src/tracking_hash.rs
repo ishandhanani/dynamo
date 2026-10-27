@@ -56,7 +56,8 @@ impl FromStr for TrackingHashAlgorithm {
     }
 }
 
-pub(crate) fn validate_tracking_hash_options(
+#[doc(hidden)]
+pub fn validate_tracking_hash_options(
     algorithm: TrackingHashAlgorithm,
     has_key_file: bool,
     key_id: Option<&str>,
@@ -168,7 +169,8 @@ impl TrackingHashContext {
     /// Compute sequence identities for active tracking. Public mode may reuse
     /// already-computed public block hashes; keyed mode must hash canonical
     /// block bytes under its derived block seed.
-    pub(crate) fn compute_sequence_hashes(
+    #[doc(hidden)]
+    pub fn compute_sequence_hashes(
         &self,
         scope: TrackingHashScope<'_>,
         tokens: &[u32],

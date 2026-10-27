@@ -8,20 +8,20 @@ use std::sync::atomic::AtomicBool;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use anyhow::{Context, Result, anyhow};
-use dynamo_kv_router::config::KvRouterConfig;
 use dynamo_kv_router::indexer::{
     KvIndexer, KvIndexerInterface, KvIndexerMetrics, LowerTierIndexers, LowerTierQueryOptions,
     MatchDetails, ThreadPoolIndexer, TieredMatchDetails, query_lower_tiers_with_options,
-};
-use dynamo_kv_router::protocols::{
-    BlockHashOptions, RouterEvent, RoutingConstraints, StorageTier, WorkerId,
-    compute_block_hash_for_seq,
 };
 use dynamo_kv_router::scheduling::{
     OverlapAnalysis, ScheduleMode, ScheduleRequest, SessionContext,
 };
 use dynamo_kv_router::{
     ConcurrentRadixTreeCompressed, RoutingPartitionRef, TrackingHashContext, TrackingHashScope,
+};
+use dynamo_router_types::config::KvRouterConfig;
+use dynamo_router_types::protocols::{
+    BlockHashOptions, RouterEvent, RoutingConstraints, StorageTier, WorkerId,
+    compute_block_hash_for_seq,
 };
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
@@ -167,7 +167,7 @@ impl KvCacheEventSink for ReplayKvEventSink {
         Ok(())
     }
 
-    fn publish(&self, event: dynamo_kv_router::protocols::KvCacheEvent) -> anyhow::Result<()> {
+    fn publish(&self, event: dynamo_router_types::protocols::KvCacheEvent) -> anyhow::Result<()> {
         self.event_tx
             .send(RouterEvent::new(self.worker_id, event))
             .map_err(|_| anyhow!("replay router event channel closed"))
@@ -175,7 +175,7 @@ impl KvCacheEventSink for ReplayKvEventSink {
 
     fn publish_with_storage_tier(
         &self,
-        event: dynamo_kv_router::protocols::KvCacheEvent,
+        event: dynamo_router_types::protocols::KvCacheEvent,
         storage_tier: StorageTier,
     ) -> anyhow::Result<()> {
         self.event_tx
@@ -571,8 +571,8 @@ mod tests {
     use std::sync::Arc;
     use std::time::Duration;
 
-    use dynamo_kv_router::config::RouterQueuePolicy;
-    use dynamo_kv_router::protocols::{
+    use dynamo_router_types::config::RouterQueuePolicy;
+    use dynamo_router_types::protocols::{
         ExternalSequenceBlockHash, KvCacheEvent, KvCacheEventData, KvCacheStoreData,
         KvCacheStoredBlockData, LocalBlockHash, StorageTier, WorkerWithDpRank,
         compute_block_hash_for_seq,

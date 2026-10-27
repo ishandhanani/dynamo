@@ -3,7 +3,6 @@
 
 use super::*;
 use async_trait::async_trait;
-use dynamo_kv_router::protocols::{ExternalSequenceBlockHash, KvCacheEvent, KvCacheEventData};
 use dynamo_mocker::common::handoff::{
     HandoffTransferTiming, NormalizedHandoffConformance, NormalizedHandoffEvent,
     NormalizedStoredTiming,
@@ -17,6 +16,7 @@ use dynamo_mocker::services::bootstrap::{
     BootstrapParticipantRole, BootstrapServer, BootstrapServerConfig, ParticipantRegistration,
     connect_to_prefill,
 };
+use dynamo_router_types::protocols::{ExternalSequenceBlockHash, KvCacheEvent, KvCacheEventData};
 use tokio::sync::{OwnedSemaphorePermit, mpsc, oneshot};
 use uuid::Uuid;
 

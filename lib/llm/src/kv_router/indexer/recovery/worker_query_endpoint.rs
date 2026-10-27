@@ -461,16 +461,16 @@ fn recovery_response_cursor(response: &WorkerKvQueryResponse) -> Option<u64> {
 
 fn filter_state_agent_events(
     response: WorkerKvQueryResponse,
-    state_source: dynamo_kv_router::identity::CacheOwnerId,
+    state_source: dynamo_router_types::identity::CacheOwnerId,
     include_worker: bool,
     worker_only: bool,
 ) -> WorkerKvQueryResponse {
-    let retain = |event: &dynamo_kv_router::protocols::RouterEvent| {
+    let retain = |event: &dynamo_router_types::protocols::RouterEvent| {
         event
             .resolved_residency_domain()
             .is_ok_and(|domain| match domain {
-                dynamo_kv_router::protocols::ResidencyDomain::Worker => include_worker,
-                dynamo_kv_router::protocols::ResidencyDomain::CacheOwner => {
+                dynamo_router_types::protocols::ResidencyDomain::Worker => include_worker,
+                dynamo_router_types::protocols::ResidencyDomain::CacheOwner => {
                     !worker_only && event.state_source == Some(state_source)
                 }
             })
@@ -503,13 +503,13 @@ fn filter_state_agent_events(
                 // upgrades. Such consumers have no CacheOwner state and accept
                 // only an all-rank replacement.
                 // TODO(v1.5): Remove when v1.2 leaves the N-2 compatibility window.
-                dynamo_kv_router::protocols::ResetScope::All
+                dynamo_router_types::protocols::ResetScope::All
             } else if !include_worker {
-                dynamo_kv_router::protocols::ResetScope::Domain(
-                    dynamo_kv_router::protocols::ResidencyDomain::CacheOwner,
+                dynamo_router_types::protocols::ResetScope::Domain(
+                    dynamo_router_types::protocols::ResidencyDomain::CacheOwner,
                 )
             } else {
-                dynamo_kv_router::protocols::ResetScope::All
+                dynamo_router_types::protocols::ResetScope::All
             };
             WorkerKvQueryResponse::TreeDump {
                 events,
@@ -570,11 +570,11 @@ impl Drop for SlowQueryGuard {
 
 #[cfg(test)]
 mod tests {
-    use dynamo_kv_router::identity::{
+    use dynamo_router_types::identity::{
         CacheOwnerId, CacheSemanticsId, DcId, IdentitySource, IndexerDomainId, PoolId,
         RoutingScopeId, StableDpSlotId,
     };
-    use dynamo_kv_router::protocols::{
+    use dynamo_router_types::protocols::{
         KvCacheEvent, KvCacheEventData, ResidencyDomain, RouterEvent, StorageTier,
     };
 
@@ -671,7 +671,7 @@ mod tests {
                 event(1, ResidencyDomain::CacheOwner).with_state_source(test_owner()),
             ],
             last_event_id: 3,
-            reset_scope: dynamo_kv_router::protocols::ResetScope::All,
+            reset_scope: dynamo_router_types::protocols::ResetScope::All,
         };
 
         let WorkerKvQueryResponse::TreeDump {
@@ -684,7 +684,7 @@ mod tests {
         };
         assert_eq!(last_event_id, 3);
         assert_eq!(events.len(), 2);
-        assert_eq!(reset_scope, dynamo_kv_router::protocols::ResetScope::All);
+        assert_eq!(reset_scope, dynamo_router_types::protocols::ResetScope::All);
 
         let detached = filter_state_agent_events(
             WorkerKvQueryResponse::TreeDump {
@@ -700,7 +700,7 @@ mod tests {
             detached,
             WorkerKvQueryResponse::TreeDump {
                 events,
-                reset_scope: dynamo_kv_router::protocols::ResetScope::Domain(
+                reset_scope: dynamo_router_types::protocols::ResetScope::Domain(
                     ResidencyDomain::CacheOwner
                 ),
                 ..

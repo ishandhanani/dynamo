@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-use dynamo_kv_router::protocols::{DpRank, RouterEvent, WorkerId};
+use dynamo_router_types::protocols::{DpRank, RouterEvent, WorkerId};
 use std::future::Future;
 
 use crate::discovery::PublisherId;

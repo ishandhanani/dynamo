@@ -11,7 +11,7 @@ use dynamo_kv_router::indexer::{
     IndexerRecordRoutingDecisionResponse, KV_INDEXER_QUERY_ENDPOINT,
     KV_INDEXER_RECORD_ROUTING_DECISION_ENDPOINT,
 };
-use dynamo_kv_router::protocols::{LocalBlockHash, WorkerWithDpRank};
+use dynamo_router_types::protocols::{LocalBlockHash, WorkerWithDpRank};
 use dynamo_runtime::component::{Client, Component};
 use dynamo_runtime::discovery::{DiscoveryInstance, DiscoveryQuery};
 use dynamo_runtime::pipeline::{
@@ -547,7 +547,9 @@ mod tests {
     use dynamo_kv_router::indexer::{
         KvIndexer, KvIndexerInterface, KvIndexerMetrics, pruning::PruneConfig,
     };
-    use dynamo_kv_router::protocols::{StorageTier, WorkerWithDpRank, compute_seq_hash_for_block};
+    use dynamo_router_types::protocols::{
+        StorageTier, WorkerWithDpRank, compute_seq_hash_for_block,
+    };
     use tokio_util::sync::CancellationToken;
 
     #[tokio::test]

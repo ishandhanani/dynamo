@@ -12,16 +12,16 @@ use std::collections::VecDeque;
 use std::convert::Infallible;
 
 use anyhow::{Context, Result, anyhow, bail};
-use dynamo_kv_router::identity::{
-    CacheSemanticsId, DcId, IdentitySource, IndexerDomainId, PoolId, RoutingScopeId,
-};
 use dynamo_kv_router::indexer::cuckoo::{CkfConfig, PrefixSearchConfig};
 use dynamo_kv_router::indexer::cuckoo::{
     ConsumerInstanceId, DcCkfDelta, DcCkfDeltaSink, DcCkfPublicationBatch, DcCkfPublishError,
     DcCkfPublisher, DcCkfState, GlobalCkfIndexer, GlobalCkfIngestOutcome, GlobalCkfLaneIngestor,
     GlobalCkfManifest, LaneLease, ProducerIdentity,
 };
-use dynamo_kv_router::protocols::{OverlapScores, RouterEvent, WorkerWithDpRank};
+use dynamo_router_types::identity::{
+    CacheSemanticsId, DcId, IdentitySource, IndexerDomainId, PoolId, RoutingScopeId,
+};
+use dynamo_router_types::protocols::{OverlapScores, RouterEvent, WorkerWithDpRank};
 use rustc_hash::FxHashMap;
 
 const MAX_LANES: usize = 16;
@@ -308,7 +308,7 @@ fn map_publish_result(
 #[cfg(test)]
 mod tests {
     use dynamo_kv_router::LocalBlockHash;
-    use dynamo_kv_router::protocols::{
+    use dynamo_router_types::protocols::{
         ExternalSequenceBlockHash, KvCacheEvent, KvCacheEventData, KvCacheRemoveData,
         KvCacheStoreData, KvCacheStoredBlockData,
     };

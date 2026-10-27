@@ -10,10 +10,10 @@ use dynamo_backend_common::{
     GenerateContext, KvEventSource, LLMEngine, PreprocessedRequest, SamplingOptions, StopConditions,
 };
 use dynamo_kv_router::indexer::{KvIndexerInterface, KvIndexerMetrics, LocalKvIndexer};
-use dynamo_kv_router::protocols::{
+use dynamo_llm::kv_router::publisher::{KvEventPublisher, KvEventSourceConfig};
+use dynamo_router_types::protocols::{
     KV_EVENT_SUBJECT, KvCacheEventData, RouterEvent, compute_block_hash_for_seq,
 };
-use dynamo_llm::kv_router::publisher::{KvEventPublisher, KvEventSourceConfig};
 use dynamo_runtime::distributed::DistributedConfig;
 use dynamo_runtime::transports::event_plane::EventSubscriber;
 use dynamo_runtime::{DistributedRuntime, Runtime};

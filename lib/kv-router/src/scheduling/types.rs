@@ -6,7 +6,6 @@ use std::sync::Arc;
 
 use dynamo_tokens::SequenceHash;
 use rustc_hash::FxHashMap;
-use serde::{Deserialize, Serialize};
 
 use super::config::RouterConfigOverride;
 use super::filter::RoutingEligibility;
@@ -20,6 +19,7 @@ use crate::protocols::{
     LocalBlockHash, RoutingConstraints, SelectionTrace, SharedCacheHits, WorkerAffinityTarget,
     WorkerConfigLike, WorkerId, WorkerWithDpRank,
 };
+pub use dynamo_router_types::overlap::TierOverlapBlocks;
 
 pub use crate::protocols::AttemptId;
 
@@ -52,16 +52,6 @@ impl WorkerSelectionPolicyError {
     pub fn failed(message: impl Into<String>) -> Self {
         Self::Failed(message.into())
     }
-}
-
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct TierOverlapBlocks {
-    #[serde(default)]
-    pub device: FxHashMap<WorkerWithDpRank, usize>,
-    #[serde(default)]
-    pub host_pinned: FxHashMap<WorkerWithDpRank, usize>,
-    #[serde(default)]
-    pub disk: FxHashMap<WorkerWithDpRank, usize>,
 }
 
 /// Downstream matches must include a wildcard arm because this enum is non-exhaustive.

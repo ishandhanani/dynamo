@@ -8,7 +8,7 @@ use anyhow::Result;
 
 use dynamo_kv_router::RouterEventSink;
 use dynamo_kv_router::indexer::{KvRouterError, LocalKvIndexer};
-use dynamo_kv_router::protocols::{
+use dynamo_router_types::protocols::{
     KvCacheEvent, KvCacheEventData, ResidencyDomain, RouterEvent, StorageTier,
 };
 use dynamo_runtime::transports::event_plane::EventPublisher;

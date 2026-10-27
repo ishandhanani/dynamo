@@ -13,7 +13,7 @@ use dynamo_kv_router::LocalBlockHash;
 use dynamo_kv_router::indexer::{
     KvIndexerInterface, ObservationError, SyncIndexer, ThreadPoolIndexer, ThreadPoolObservationPlan,
 };
-use dynamo_kv_router::protocols::{KvCacheEventData, RouterEvent};
+use dynamo_router_types::protocols::{KvCacheEventData, RouterEvent};
 use serde::Serialize;
 use tokio::sync::{Notify, oneshot};
 
@@ -1719,7 +1719,7 @@ mod tests {
             worker_id: u64::from(id),
             payload: DispatchPayload::Event(RouterEvent::new(
                 u64::from(id),
-                dynamo_kv_router::protocols::KvCacheEvent {
+                dynamo_router_types::protocols::KvCacheEvent {
                     event_id: u64::from(id),
                     data: KvCacheEventData::Cleared,
                     dp_rank: 0,

@@ -2060,6 +2060,7 @@ version = "1.7.0"
 dependencies = [
  "async-trait",
  "dynamo-kv-router",
+ "dynamo-router-types",
  "fastrand",
  "parking_lot",
  "serde",
@@ -2115,6 +2116,7 @@ dependencies = [
  "dashmap",
  "derive_builder",
  "dynamo-kv-hashing",
+ "dynamo-router-types",
  "dynamo-runtime",
  "dynamo-tokens",
  "dynamo-truthy",
@@ -2182,6 +2184,7 @@ dependencies = [
  "dynamo-protocols",
  "dynamo-renderer",
  "dynamo-rl",
+ "dynamo-router-types",
  "dynamo-runtime",
  "dynamo-tokenizers",
  "dynamo-tokens",
@@ -2276,6 +2279,7 @@ dependencies = [
  "dashmap",
  "dynamo-custom-policy-builtin",
  "dynamo-kv-router",
+ "dynamo-router-types",
  "dynamo-tokens",
  "futures",
  "ndarray",
@@ -2397,6 +2401,31 @@ dependencies = [
  "tokio",
  "tracing",
  "url",
+]
+
+[[package]]
+name = "dynamo-router-types"
+version = "1.7.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "blake3",
+ "derive_builder",
+ "dynamo-kv-hashing",
+ "dynamo-runtime",
+ "dynamo-tokens",
+ "dynamo-truthy",
+ "fastrand",
+ "rmp-serde",
+ "rustc-hash 2.1.2",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "thiserror 2.0.18",
+ "tracing",
+ "uuid",
+ "xxhash-rust",
+ "zeroize",
 ]
 
 [[package]]

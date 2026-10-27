@@ -4,7 +4,7 @@
 use std::collections::HashMap;
 use std::collections::hash_map::Entry;
 
-use dynamo_kv_router::protocols::{
+use dynamo_router_types::protocols::{
     ExternalSequenceBlockHash, KvCacheRemoveData, KvCacheStoreData, ResidencyDomain, StorageTier,
 };
 

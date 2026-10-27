@@ -754,8 +754,8 @@ impl<P: RouterEventBatchSink + 'static> Coordinator<P> {
         worker: WorkerWithDpRank,
         domain: ResidencyDomain,
     ) -> Result<u64> {
-        let placement = dynamo_kv_router::protocols::Placement {
-            owner: dynamo_kv_router::protocols::PlacementOwner::LocalWorker(worker),
+        let placement = dynamo_router_types::protocols::Placement {
+            owner: dynamo_router_types::protocols::PlacementOwner::LocalWorker(worker),
             tier: StorageTier::Device,
             residency_domain: domain,
         };

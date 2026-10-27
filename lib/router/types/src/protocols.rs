@@ -129,7 +129,8 @@ pub fn complete_block_count(token_count: usize, kv_block_size: u32, is_eagle: bo
 
 /// Compute local block hashes with an explicit XXH3 seed while preserving the
 /// canonical token, multimodal, and Eagle encodings used by the public hash path.
-pub(crate) fn compute_block_hash_for_seq_with_seed(
+#[doc(hidden)]
+pub fn compute_block_hash_for_seq_with_seed(
     tokens: &[u32],
     kv_block_size: u32,
     options: BlockHashOptions<'_>,
@@ -1515,9 +1516,8 @@ impl<'de> Deserialize<'de> for ExternalSequenceBlockHash {
 
 /// Errors that can occur during KV Cache Event processing.
 ///
-/// Indexer backends may introduce additional failure modes.
-/// Downstream matches must include a wildcard arm because this enum is non-exhaustive.
-#[non_exhaustive]
+/// Indexer backends may introduce additional failure modes; the stage crates match this
+/// enum exhaustively so a new variant is handled everywhere it is observed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 pub enum KvCacheEventError {
     #[error("Failed to find parent block")]
@@ -1985,7 +1985,8 @@ pub struct QueueRejection {
 pub struct AttemptId(u64);
 
 impl AttemptId {
-    pub(crate) fn new(value: u64) -> Self {
+    #[doc(hidden)]
+    pub fn new(value: u64) -> Self {
         Self(value)
     }
 
@@ -2034,7 +2035,6 @@ impl WorkerLoadProjection {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[non_exhaustive]
 pub enum WorkerPlacement {
     /// Preserve the request's existing routing constraints.
     Any,

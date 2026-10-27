@@ -117,12 +117,12 @@ pub fn register(
 mod tests {
     use std::collections::HashMap;
 
-    use dynamo_kv_router::protocols::{RoutingConstraints, WorkerConfigLike};
     use dynamo_kv_router::scheduling::{OverlapSignals, ScheduleMode};
     use dynamo_kv_router::{
         KvSchedulerError, SchedulingRequest, WorkerSelectionInput, WorkerSelectionPolicyError,
         WorkerSelector,
     };
+    use dynamo_router_types::protocols::{RoutingConstraints, WorkerConfigLike};
 
     use super::*;
 

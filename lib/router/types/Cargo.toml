@@ -1,0 +1,44 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+[package]
+name = "dynamo-router-types"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+homepage.workspace = true
+repository.workspace = true
+description = "Shared vocabulary of the Dynamo router: wire protocols, identities, config, and the types that cross stage boundaries"
+
+[features]
+default = []
+bench = []
+# Test helpers for dependents' tests; never enable in release.
+testing = []
+runtime-protocols = ["dep:dynamo-runtime"]
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+rmp-serde = { workspace = true }
+thiserror = { workspace = true }
+anyhow = { workspace = true }
+blake3 = { workspace = true }
+tracing = { workspace = true }
+dynamo-kv-hashing = { workspace = true }
+zeroize = { workspace = true }
+dynamo-tokens = { workspace = true }
+rustc-hash = "2.1.1"
+fastrand = "2"
+xxhash-rust = { workspace = true }
+uuid = { workspace = true }
+derive_builder = { workspace = true }
+async-trait = { workspace = true }
+dynamo-runtime = { workspace = true, optional = true }
+dynamo-truthy = { workspace = true }
+serde_yaml = "0.9.34"
+
+[dev-dependencies]
+rstest = "0.18.2"
+tempfile = { workspace = true }

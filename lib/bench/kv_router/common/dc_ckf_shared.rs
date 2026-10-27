@@ -7,11 +7,11 @@ use std::path::Path;
 
 use anyhow::{Context, bail};
 use dynamo_kv_router::indexer::cuckoo::CanonicalSequenceBlockHash;
-use dynamo_kv_router::protocols::{
-    ExternalSequenceBlockHash, KvCacheEvent, KvCacheEventData, KvCacheStoreData, WorkerWithDpRank,
-};
 use dynamo_mocker::loadgen::{SessionTrace, Trace};
 use dynamo_mocker::replay::ReplayWorkerArtifacts;
+use dynamo_router_types::protocols::{
+    ExternalSequenceBlockHash, KvCacheEvent, KvCacheEventData, KvCacheStoreData, WorkerWithDpRank,
+};
 use rustc_hash::{FxHashMap, FxHashSet};
 use sha2::{Digest, Sha256};
 
@@ -503,11 +503,11 @@ mod tests {
     use std::io::Write;
     use std::path::PathBuf;
 
-    use dynamo_kv_router::protocols::{
+    use dynamo_mocker::replay::ReplayTimedKvEvent;
+    use dynamo_router_types::protocols::{
         ExternalSequenceBlockHash, KvCacheRemoveData, KvCacheStoreData, KvCacheStoredBlockData,
         LocalBlockHash,
     };
-    use dynamo_mocker::replay::ReplayTimedKvEvent;
     use tempfile::NamedTempFile;
 
     use super::*;

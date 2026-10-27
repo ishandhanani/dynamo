@@ -9,9 +9,9 @@ use tokio_util::sync::CancellationToken;
 
 use arc_swap::ArcSwap;
 use dashmap::DashMap;
-use dynamo_kv_router::protocols::ActiveLoad;
 use dynamo_kv_router::scheduling::BusyThresholds;
 use dynamo_kv_router::sequences::SchedulerLoadSnapshot;
+use dynamo_router_types::protocols::ActiveLoad;
 use serde::{Deserialize, Serialize};
 
 use crate::kv_router::RouterLoadSource;
@@ -211,7 +211,7 @@ impl Default for DecodeOverloadLatchState {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct RemoteActiveLoadSnapshot {
-    worker: dynamo_kv_router::protocols::WorkerWithDpRank,
+    worker: dynamo_router_types::protocols::WorkerWithDpRank,
     active_decode_blocks: Option<u64>,
     active_prefill_tokens: Option<u64>,
     kv_used_blocks: Option<u64>,
@@ -220,7 +220,7 @@ struct RemoteActiveLoadSnapshot {
 impl From<ActiveLoad> for RemoteActiveLoadSnapshot {
     fn from(load: ActiveLoad) -> Self {
         Self {
-            worker: dynamo_kv_router::protocols::WorkerWithDpRank::new(
+            worker: dynamo_router_types::protocols::WorkerWithDpRank::new(
                 load.worker_id,
                 load.dp_rank,
             ),
@@ -241,7 +241,7 @@ impl LoadObservation {
     fn parts(
         self,
     ) -> (
-        dynamo_kv_router::protocols::WorkerWithDpRank,
+        dynamo_router_types::protocols::WorkerWithDpRank,
         Option<u64>,
         Option<u64>,
         Option<u64>,
@@ -1267,8 +1267,8 @@ mod tests {
         WorkerLoadState, cleanup_worker_metrics, collect_overloaded_workers,
         overload_reconciliation_needed, publish_overloaded_instances_if_needed,
     };
-    use dynamo_kv_router::protocols::{ActiveLoad, WorkerWithDpRank};
     use dynamo_kv_router::sequences::SchedulerLoadSnapshot;
+    use dynamo_router_types::protocols::{ActiveLoad, WorkerWithDpRank};
     use std::collections::HashSet;
 
     #[test]

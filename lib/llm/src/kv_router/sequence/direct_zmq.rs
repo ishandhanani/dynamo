@@ -4,7 +4,7 @@
 use std::ffi::OsString;
 
 use anyhow::Result;
-use dynamo_kv_router::protocols::{
+use dynamo_router_types::protocols::{
     ActiveSequenceEvent, ActiveSequenceEventBatch, MAX_REPLICA_BATCH_EVENTS,
 };
 use dynamo_runtime::{
@@ -154,7 +154,7 @@ pub(super) async fn start(
 mod tests {
     use std::time::Duration;
 
-    use dynamo_kv_router::protocols::{ActiveSequenceEventData, WorkerWithDpRank};
+    use dynamo_router_types::protocols::{ActiveSequenceEventData, WorkerWithDpRank};
     use dynamo_runtime::{
         DistributedRuntime, Runtime, distributed::DistributedConfig,
         transports::event_plane::EventPublisher,

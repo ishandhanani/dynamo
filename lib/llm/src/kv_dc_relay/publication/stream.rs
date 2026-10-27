@@ -324,10 +324,10 @@ impl Drop for SnapshotBootstrap {
 mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
-    use dynamo_kv_router::identity::{
+    use dynamo_kv_router::indexer::cuckoo::{CkfConfig, DcCkfState};
+    use dynamo_router_types::identity::{
         CacheSemanticsId, DcId, IdentitySource, IndexerDomainId, PoolId, RoutingScopeId,
     };
-    use dynamo_kv_router::indexer::cuckoo::{CkfConfig, DcCkfState};
     use tokio::sync::Semaphore;
 
     use super::*;

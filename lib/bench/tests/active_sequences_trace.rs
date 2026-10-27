@@ -16,8 +16,8 @@ use active_sequences_open_loop::{
 };
 use active_sequences_shared::{SequenceTrace, SequenceTraceEntry, generate_sequence_events};
 use dynamo_bench::kv_router_common::replay::{NoopSequencePublisher, process_mooncake_trace};
-use dynamo_kv_router::protocols::{PrefillLoadHint, WorkerWithDpRank};
 use dynamo_kv_router::{ActiveSequencesMultiWorker, SequenceRequest};
+use dynamo_router_types::protocols::{PrefillLoadHint, WorkerWithDpRank};
 
 const BLOCK_SIZE: u32 = 128;
 // mooncake_trace_1000.jsonl records one hash per 512-token trace block.

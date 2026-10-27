@@ -26,17 +26,17 @@ use dynamo_bench::kv_router_common::issuer::{
     contiguous_worker_issuer, pin_current_thread, pin_current_thread_to_cpus,
 };
 use dynamo_bench::kv_router_common::replay::generate_replay_artifacts;
-use dynamo_kv_router::identity::{
-    CacheSemanticsId, DcId, IdentitySource, IndexerDomainId, PoolId, RoutingScopeId,
-};
 use dynamo_kv_router::indexer::cuckoo::{
     CanonicalSequenceBlockHash, CkfConfig, ConsumerInstanceId, DcCkfDelta, DcCkfDeltaSink,
     DcCkfPublicationBatch, DcCkfPublisher, DcCkfState, LaneLease, ProducerIdentity,
 };
-use dynamo_kv_router::protocols::{
+use dynamo_mocker::replay::ReplayWorkerArtifacts;
+use dynamo_router_types::identity::{
+    CacheSemanticsId, DcId, IdentitySource, IndexerDomainId, PoolId, RoutingScopeId,
+};
+use dynamo_router_types::protocols::{
     ExternalSequenceBlockHash, KvCacheEvent, KvCacheEventData, KvCacheEventError, RouterEvent,
 };
-use dynamo_mocker::replay::ReplayWorkerArtifacts;
 use serde::Serialize;
 
 const SCHEMA_VERSION: u32 = 1;

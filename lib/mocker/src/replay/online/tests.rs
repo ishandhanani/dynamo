@@ -7,7 +7,7 @@ use std::sync::Mutex;
 use std::time::Duration;
 
 use dynamo_kv_router::PrefillLoadEstimator;
-use dynamo_kv_router::config::{KvRouterConfig, RouterPrefillLoadModel};
+use dynamo_router_types::config::{KvRouterConfig, RouterPrefillLoadModel};
 use tokio::sync::{Notify, mpsc, watch};
 use tokio::time::Instant;
 use tokio_util::sync::CancellationToken;

@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright (c) 2024-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-pub mod config;
+pub use dynamo_router_types::config;
 mod filter;
 mod local;
 mod lora_filter;
@@ -10,7 +10,7 @@ pub mod overlap_refresh;
 pub mod policy;
 pub mod policy_config;
 pub mod policy_queue;
-pub mod prefill_load;
+pub use dynamo_router_types::prefill_load;
 pub mod queue;
 mod queue_admission;
 pub mod request_classifier;

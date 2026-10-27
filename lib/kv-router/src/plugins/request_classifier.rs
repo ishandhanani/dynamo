@@ -10,7 +10,6 @@ mod registry;
 pub use inputs::RequestClassifierContext;
 pub use progress::{RequestProgress, RequestProgressUpdater};
 
-pub(crate) use config::RawRequestClassifierConfig;
 pub use config::RequestClassifierConfig;
 pub(crate) use registry::RequestClassifierRegistry;
 pub use registry::{

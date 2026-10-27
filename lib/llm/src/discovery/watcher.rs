@@ -2695,7 +2695,7 @@ request_classifier:
             .unwrap();
         let router_config = RouterConfig {
             router_mode: RouterMode::KV,
-            kv_router_config: dynamo_kv_router::config::KvRouterConfig {
+            kv_router_config: dynamo_router_types::config::KvRouterConfig {
                 skip_initial_worker_wait: true,
                 use_kv_events: false,
                 ..Default::default()

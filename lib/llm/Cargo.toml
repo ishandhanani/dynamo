@@ -75,6 +75,7 @@ dynamo-custom-policy-builtin = { workspace = true }
 # repo
 dynamo-http-server = { workspace = true }
 dynamo-kv-router = { workspace = true, features = ["metrics", "runtime-protocols", "standalone-selection"] }
+dynamo-router-types = { workspace = true }
 dynamo-memory = { workspace = true }
 dynamo-mocker = { workspace = true, features = ["zmq-events"] }
 dynamo-rl = { workspace = true }

@@ -6,10 +6,10 @@ use std::sync::Arc;
 use dynamo_kv_router::LocalBlockHash;
 use dynamo_kv_router::indexer::pruning::PruneConfig;
 use dynamo_kv_router::indexer::{KvIndexer, KvIndexerInterface, KvIndexerMetrics};
-use dynamo_kv_router::protocols::{KvCacheEvent, KvCacheEventData, StorageTier};
 use dynamo_kv_router::{
     BranchShardedIndexer, ConcurrentRadixTreeCompressed, PositionalIndexer, ThreadPoolIndexer,
 };
+use dynamo_router_types::protocols::{KvCacheEvent, KvCacheEventData, StorageTier};
 use tokio_util::sync::CancellationToken;
 
 use dynamo_bench::kv_router_common::replay::WorkerReplayArtifacts;

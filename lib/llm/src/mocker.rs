@@ -24,7 +24,6 @@ use crate::protocols::TokenIdType;
 use crate::protocols::common::FinishReason;
 use crate::protocols::common::llm_backend::{LLMEngineOutput, PreprocessedRequest};
 use anyhow::{Context, Result, bail};
-use dynamo_kv_router::protocols::{KvCacheEvent, StorageTier};
 use dynamo_mocker::common::handoff::HandoffId;
 use dynamo_mocker::common::protocols::{
     DirectRequest, EngineType, KvCacheEventSink, KvEventPublishers, MockerConfig, RawKvEvent,
@@ -38,6 +37,7 @@ use dynamo_mocker::services::bootstrap::{
 };
 use dynamo_mocker::services::zmq_events::ZmqKvEventSink;
 use dynamo_protocols::types::{CompletionUsage, PromptTokensDetails};
+use dynamo_router_types::protocols::{KvCacheEvent, StorageTier};
 use dynamo_runtime::DistributedRuntime;
 use dynamo_runtime::error::{DynamoError, ErrorType};
 use dynamo_runtime::metrics::MetricsHierarchy;

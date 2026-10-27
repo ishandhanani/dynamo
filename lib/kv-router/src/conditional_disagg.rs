@@ -10,14 +10,10 @@
 use async_trait::async_trait;
 
 use crate::config::{ConditionalDisaggPolicyKind, KvRouterConfig};
-
-/// Default effective-ISL absolute threshold (tokens). A request bypasses to
-/// AGG only if its net-new prefill stays under this cap.
-pub const DEFAULT_CONDITIONAL_DISAGG_EFF_ISL_THRESHOLD: usize = 2048;
-
-/// Default effective-ISL ratio threshold. A request bypasses to AGG only if
-/// `eff_isl / prompt_tokens` stays under this fraction.
-pub const DEFAULT_CONDITIONAL_DISAGG_EFF_ISL_RATIO_THRESHOLD: f64 = 0.7;
+pub use crate::config::{
+    DEFAULT_CONDITIONAL_DISAGG_EFF_ISL_RATIO_THRESHOLD,
+    DEFAULT_CONDITIONAL_DISAGG_EFF_ISL_THRESHOLD,
+};
 
 /// Inputs passed to a `ConditionalDisaggPolicy` when deciding whether to
 /// bypass remote prefill.

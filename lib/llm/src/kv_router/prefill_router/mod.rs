@@ -853,7 +853,7 @@ fn merge_decode_topology_constraints(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use dynamo_kv_router::config::{KvRouterConfig, RouterConfigOverride};
+    use dynamo_router_types::config::{KvRouterConfig, RouterConfigOverride};
     use dynamo_runtime::{engine::AsyncEngine, pipeline::Error};
     use futures::StreamExt;
     use std::{

@@ -12,14 +12,14 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result, anyhow};
 
-use dynamo_kv_router::config::{KvRouterConfig, try_kv_router_config_from_dynamo_env};
-use dynamo_kv_router::protocols::RoutingConstraints;
 use dynamo_kv_router::services::selection::{
     PromptRequest, SelectAndReserveRequest as CoreSelectAndReserveRequest, SelectionError,
     SelectionService, SelectionServiceBuilder, WorkerSelectionPolicyRegistry,
     warn_for_unserved_worker_selection_policies,
 };
 use dynamo_kv_router::{DEFAULT_ROUTING_GROUP, WorkerType};
+use dynamo_router_types::config::{KvRouterConfig, try_kv_router_config_from_dynamo_env};
+use dynamo_router_types::protocols::RoutingConstraints;
 use kube::Client;
 use tokio_util::sync::CancellationToken;
 

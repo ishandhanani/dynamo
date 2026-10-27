@@ -2398,17 +2398,17 @@ async fn clear_cache_owner(indexer: &Indexer, owner: CacheOwnerId, event_id: u64
 mod tests {
     use std::{collections::HashMap, sync::Arc};
 
-    use dynamo_kv_router::identity::{
-        CacheSemanticsId, DcId, IdentitySource, IndexerDomainId, PoolId, RoutingScopeId,
-        StableDpSlotId,
-    };
     use dynamo_kv_router::indexer::{
         KvIndexer, KvIndexerInterface, KvIndexerMetrics, KvStateAttachmentStatus,
         KvStateRecoveryReceipt, LowerTierIndexers, LowerTierQueryOptions, MatchDetails,
         query_lower_tiers_with_options,
     };
-    use dynamo_kv_router::kv_hints::KvTransferCandidateSource;
-    use dynamo_kv_router::protocols::{
+    use dynamo_router_types::identity::{
+        CacheSemanticsId, DcId, IdentitySource, IndexerDomainId, PoolId, RoutingScopeId,
+        StableDpSlotId,
+    };
+    use dynamo_router_types::kv_hints::KvTransferCandidateSource;
+    use dynamo_router_types::protocols::{
         ExternalSequenceBlockHash, KvCacheRemoveData, KvCacheStoreData, KvCacheStoredBlockData,
         LocalBlockHash, ResidencyOwner, RouterHintSourceMetadata, WorkerWithDpRank,
     };

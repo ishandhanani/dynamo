@@ -3,11 +3,11 @@
 
 #[allow(unused_imports)]
 pub use dynamo_kv_router::NoopSequencePublisher;
-use dynamo_kv_router::protocols::KvCacheEventData;
 use dynamo_mocker::common::protocols::MockerConfig;
 use dynamo_mocker::loadgen::{SessionPartitionSpec, Trace};
 use dynamo_mocker::replay::ReplayKvEventVisibility;
 pub use dynamo_mocker::replay::ReplayWorkerArtifacts as WorkerReplayArtifacts;
+use dynamo_router_types::protocols::KvCacheEventData;
 use indicatif::ProgressBar;
 
 use super::progress::make_progress_bar;

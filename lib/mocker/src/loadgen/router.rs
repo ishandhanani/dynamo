@@ -6,7 +6,7 @@
 use aisimulate_core::replay::loadgen::Trace;
 use anyhow::{Context, Result};
 use dynamo_kv_router::LocalBlockHash;
-use dynamo_kv_router::protocols::{
+use dynamo_router_types::protocols::{
     BlockHashOptions, ExternalSequenceBlockHash, WorkerId, compute_block_hash_for_seq,
     compute_seq_hash_for_block,
 };

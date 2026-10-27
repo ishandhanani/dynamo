@@ -4,10 +4,10 @@
 //! Startup parameters and provider registration for the default policy.
 
 use dynamo_kv_router::KvRouterConfig;
-use dynamo_kv_router::config::SharedCacheType;
 use dynamo_kv_router::plugins::{
     RouterPluginRegistry, WorkerSelectionPolicyProviderError, WorkerSelectionPolicyRegistryError,
 };
+use dynamo_router_types::config::SharedCacheType;
 use std::sync::Arc;
 
 use super::policy_for_role;

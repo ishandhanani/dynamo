@@ -29,7 +29,6 @@ pub use crate::scheduling::selector::WorkerSelectionPolicy;
 pub use crate::scheduling::{
     SessionContext, WorkerSelectionInputTrigger, WorkerSelectionPolicyError,
 };
-pub(crate) use config::RawWorkerSelectionConfig;
 pub use config::{WorkerSelectionConfig, WorkerSelectionInstance};
 
 use crate::{KvRouterConfig, RoutingPartitionRef, WorkerType};

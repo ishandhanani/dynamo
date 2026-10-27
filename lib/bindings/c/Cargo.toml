@@ -31,6 +31,7 @@ cbindgen = "0.27"
 
 [dependencies]
 dynamo-kv-router = { path = "../../kv-router" }
+dynamo-router-types = { path = "../../router/types" }
 dynamo-runtime = { path = "../../runtime" }
 
 anyhow = { workspace = true }
