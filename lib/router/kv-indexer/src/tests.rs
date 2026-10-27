@@ -329,40 +329,17 @@ async fn assert_request_score(
     assert_eq!(scores.scores.get(&worker), Some(&expected_score));
 }
 
-#[cfg(feature = "metrics")]
-fn event_metric_value(
-    metrics: &KvIndexerMetrics,
-    event_type: &'static str,
-    status: &'static str,
-) -> u64 {
-    metrics
-        .kv_cache_events_applied
-        .get_metric_with_label_values(&[event_type, status])
-        .unwrap()
-        .get()
-}
-
-#[cfg(feature = "metrics")]
-fn warning_metric_value(metrics: &KvIndexerMetrics, warning_kind: &'static str) -> u64 {
-    metrics
-        .kv_cache_event_warnings
-        .get_metric_with_label_values(&[warning_kind])
-        .unwrap()
-        .get()
-}
-
-#[cfg(feature = "metrics")]
 fn assert_no_event_errors(metrics: &KvIndexerMetrics) {
     let invalid_count = [
-        (METRIC_EVENT_STORED, METRIC_STATUS_PARENT_NOT_FOUND),
-        (METRIC_EVENT_STORED, METRIC_STATUS_BLOCK_NOT_FOUND),
-        (METRIC_EVENT_STORED, METRIC_STATUS_INVALID_BLOCK),
-        (METRIC_EVENT_REMOVED, METRIC_STATUS_PARENT_NOT_FOUND),
-        (METRIC_EVENT_REMOVED, METRIC_STATUS_BLOCK_NOT_FOUND),
-        (METRIC_EVENT_REMOVED, METRIC_STATUS_INVALID_BLOCK),
+        (EventKind::Stored, EventStatus::ParentNotFound),
+        (EventKind::Stored, EventStatus::BlockNotFound),
+        (EventKind::Stored, EventStatus::InvalidBlock),
+        (EventKind::Removed, EventStatus::ParentNotFound),
+        (EventKind::Removed, EventStatus::BlockNotFound),
+        (EventKind::Removed, EventStatus::InvalidBlock),
     ]
     .into_iter()
-    .map(|(event_type, status)| event_metric_value(metrics, event_type, status))
+    .map(|(kind, status)| metrics.events_applied(kind, status))
     .sum::<u64>();
     assert_eq!(
         invalid_count, 0,
@@ -370,10 +347,9 @@ fn assert_no_event_errors(metrics: &KvIndexerMetrics) {
     );
 }
 
-#[cfg(feature = "metrics")]
 fn assert_no_event_warnings(metrics: &KvIndexerMetrics) {
     assert_eq!(
-        warning_metric_value(metrics, METRIC_WARNING_DUPLICATE_STORE),
+        metrics.event_warnings(EventWarningKind::DuplicateStore),
         0,
         "router indexer reported suspicious KV events",
     );
@@ -383,7 +359,6 @@ mod interface_tests {
     use super::*;
     use rstest_reuse::apply;
 
-    #[cfg(feature = "metrics")]
     #[tokio::test]
     #[apply(indexer_template)]
     async fn test_duplicate_store_replay_warns_without_error(variant: &str) {
@@ -406,13 +381,9 @@ mod interface_tests {
         );
         assert_score(index.as_ref(), &[1, 2, 3], worker, 3).await;
         assert_no_event_errors(metrics.as_ref());
-        assert_eq!(
-            warning_metric_value(metrics.as_ref(), METRIC_WARNING_DUPLICATE_STORE),
-            1
-        );
+        assert_eq!(metrics.event_warnings(EventWarningKind::DuplicateStore), 1);
     }
 
-    #[cfg(feature = "metrics")]
     #[tokio::test]
     #[apply(matching_indexer_template)]
     async fn test_continuation_store_does_not_warn(variant: &str) {
@@ -2347,61 +2318,45 @@ async fn test_routing_decision_assigns_first_seen_worker() {
 // ============================================================================
 
 mod metrics_tests {
-    #[cfg(feature = "metrics")]
     use super::*;
 
-    #[cfg(feature = "metrics")]
     #[test]
     fn test_increment_event_applied() {
         let metrics = KvIndexerMetrics::new_unregistered();
 
-        metrics.increment_event_applied(METRIC_EVENT_STORED, Ok(()));
+        metrics.increment_event_applied(EventKind::Stored, Ok(()));
         assert_eq!(
-            metrics
-                .kv_cache_events_applied
-                .get_metric_with_label_values(&[METRIC_EVENT_STORED, METRIC_STATUS_OK])
-                .unwrap()
-                .get(),
+            metrics.events_applied(EventKind::Stored, EventStatus::Ok),
             1
         );
 
         metrics.increment_event_applied(
-            METRIC_EVENT_STORED,
+            EventKind::Stored,
             Err(KvCacheEventError::ParentBlockNotFound),
         );
         assert_eq!(
-            metrics
-                .kv_cache_events_applied
-                .get_metric_with_label_values(&[
-                    METRIC_EVENT_STORED,
-                    METRIC_STATUS_PARENT_NOT_FOUND
-                ])
-                .unwrap()
-                .get(),
+            metrics.events_applied(EventKind::Stored, EventStatus::ParentNotFound),
             1
         );
 
-        metrics
-            .increment_event_applied(METRIC_EVENT_REMOVED, Err(KvCacheEventError::BlockNotFound));
+        metrics.increment_event_applied(EventKind::Removed, Err(KvCacheEventError::BlockNotFound));
         assert_eq!(
-            metrics
-                .kv_cache_events_applied
-                .get_metric_with_label_values(&[
-                    METRIC_EVENT_REMOVED,
-                    METRIC_STATUS_BLOCK_NOT_FOUND
-                ])
-                .unwrap()
-                .get(),
+            metrics.events_applied(EventKind::Removed, EventStatus::BlockNotFound),
             1
         );
-
-        metrics.increment_event_warning(METRIC_WARNING_DUPLICATE_STORE);
         assert_eq!(
-            metrics
-                .kv_cache_event_warnings
-                .get_metric_with_label_values(&[METRIC_WARNING_DUPLICATE_STORE])
-                .unwrap()
-                .get(),
+            metrics.events_applied(EventKind::Stored, EventStatus::BlockNotFound),
+            0
+        );
+
+        metrics.increment_event_warning(EventWarningKind::DuplicateStore);
+        assert_eq!(metrics.event_warnings(EventWarningKind::DuplicateStore), 1);
+
+        // Clones share the counters; a thread handle increments the same set.
+        let clone = metrics.clone();
+        clone.prebind().inc(EventKind::Cleared, Ok(()));
+        assert_eq!(
+            metrics.events_applied(EventKind::Cleared, EventStatus::Ok),
             1
         );
     }

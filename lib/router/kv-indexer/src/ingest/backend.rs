@@ -999,8 +999,7 @@ mod tests {
     use super::test_util::store_event;
     use super::*;
     use crate::KvIndexerInterface;
-    #[cfg(feature = "metrics")]
-    use crate::{METRIC_EVENT_CLEARED, METRIC_STATUS_OK};
+    use crate::{EventKind, EventStatus};
     use dynamo_router_types::protocols::{
         KvCacheEvent, LocalBlockHash, ResidencyDomain, StorageTier, WorkerWithDpRank,
     };
@@ -1552,7 +1551,6 @@ mod tests {
         assert!(IndexerPolicy::from_router_config(&side_without_events).is_err());
     }
 
-    #[cfg(feature = "metrics")]
     #[tokio::test]
     async fn acknowledged_clear_records_primary_event_for_both_indexers() {
         for num_threads in [1, 2] {
@@ -1573,11 +1571,7 @@ mod tests {
                 .unwrap();
 
             assert_eq!(
-                metrics
-                    .kv_cache_events_applied
-                    .get_metric_with_label_values(&[METRIC_EVENT_CLEARED, METRIC_STATUS_OK])
-                    .unwrap()
-                    .get(),
+                metrics.events_applied(EventKind::Cleared, EventStatus::Ok),
                 1,
                 "clear metric mismatch for {num_threads} indexer thread(s)"
             );

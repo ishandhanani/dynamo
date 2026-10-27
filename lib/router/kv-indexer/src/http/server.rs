@@ -15,6 +15,7 @@ use serde::{Deserialize, Serialize};
 use tokio_util::sync::CancellationToken;
 
 #[cfg(feature = "metrics")]
+use crate::KvIndexerCounterCollector;
 use crate::KvIndexerMetrics;
 use crate::TieredMatchDetails;
 use crate::overlap::{MooncakeOverlapSummary, build_mooncake_overlap_summaries};
@@ -55,29 +56,23 @@ impl AppState {
         indexer_threads: usize,
         root_cancel_token: CancellationToken,
     ) -> anyhow::Result<Self> {
+        let indexer_metrics = Arc::new(KvIndexerMetrics::new_unregistered());
         #[cfg(feature = "metrics")]
-        {
+        let prom_registry = {
             let prom_registry = prometheus::Registry::new();
-            crate::ingest::metrics::register(&prom_registry)?;
-            let indexer_metrics = KvIndexerMetrics::new_registered(&prom_registry)?;
-            Ok(Self {
-                registry: Arc::new(WorkerRegistry::new_with_indexer_metrics_and_cancel_token(
-                    indexer_threads,
-                    indexer_metrics,
-                    root_cancel_token,
-                )),
-                access_log_sink: None,
-                prom_registry,
-            })
-        }
-
-        #[cfg(not(feature = "metrics"))]
+            super::metrics::register(&prom_registry)?;
+            KvIndexerCounterCollector::register_all(&prom_registry, &indexer_metrics)?;
+            prom_registry
+        };
         Ok(Self {
-            registry: Arc::new(WorkerRegistry::new_with_cancel_token(
+            registry: Arc::new(WorkerRegistry::new_with_indexer_metrics_and_cancel_token(
                 indexer_threads,
+                indexer_metrics,
                 root_cancel_token,
             )),
             access_log_sink: None,
+            #[cfg(feature = "metrics")]
+            prom_registry,
         })
     }
 }
@@ -532,7 +527,7 @@ async fn reopen_logs(State(state): State<Arc<AppState>>) -> impl IntoResponse {
 
 #[cfg(feature = "metrics")]
 async fn handle_metrics(State(state): State<Arc<AppState>>) -> impl IntoResponse {
-    state.registry.refresh_metrics();
+    super::metrics::set_worker_state(&state.registry.stats());
     let encoder = prometheus::TextEncoder::new();
     let mut buf = Vec::new();
     encoder
@@ -601,7 +596,7 @@ fn build_router(state: Arc<AppState>, test_endpoints: bool) -> Router {
             .with_state(state);
         router
             .layer(axum::middleware::from_fn(
-                crate::ingest::metrics::metrics_middleware,
+                super::metrics::metrics_middleware,
             ))
             .merge(metrics_route)
     };

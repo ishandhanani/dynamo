@@ -36,11 +36,8 @@ pub use self::embedding_cache::{
     EmbeddingCacheIndexer, preprocessed_multimodal_cache_keys, try_build_cache_indexer,
 };
 
-use dynamo_kv_indexer::{
-    CKF_MUTATION_HELP, CKF_MUTATION_LABELS, KV_CACHE_EVENT_WARNINGS_HELP,
-    KV_CACHE_EVENT_WARNINGS_LABELS, KV_CACHE_EVENTS_APPLIED_HELP, KV_CACHE_EVENTS_APPLIED_LABELS,
-};
-use dynamo_runtime::metrics::MetricsHierarchy;
+use dynamo_kv_indexer::{IndexerCounterFamily, KvIndexerCounterCollector};
+use dynamo_runtime::metrics::PrometheusMetric;
 
 /// Component-registered indexer metrics, memoized per process so repeated indexer construction
 /// never double-registers the counters.
@@ -53,48 +50,82 @@ const KV_CACHE_EVENT_WARNINGS_SUFFIX: &str = "kv_cache_event_warnings";
 const CKF_MUTATION_SUFFIX: &str = "ckf_mutation_total";
 static KV_INDEXER_METRICS: std::sync::OnceLock<Arc<KvIndexerMetrics>> = std::sync::OnceLock::new();
 
+/// One indexer counter family as a component metric: the hierarchy names it
+/// and injects its labels, the collector reads the indexer's atomics at scrape.
+trait IndexerCounterMetric: PrometheusMetric {
+    const FAMILY: IndexerCounterFamily;
+    fn collector(&self) -> &KvIndexerCounterCollector;
+}
+
+macro_rules! indexer_counter_metric {
+    ($name:ident, $family:expr) => {
+        #[derive(Clone)]
+        struct $name(KvIndexerCounterCollector);
+
+        impl prometheus::core::Collector for $name {
+            fn desc(&self) -> Vec<&prometheus::core::Desc> {
+                self.0.desc()
+            }
+
+            fn collect(&self) -> Vec<prometheus::proto::MetricFamily> {
+                self.0.collect()
+            }
+        }
+
+        impl PrometheusMetric for $name {
+            fn with_opts(opts: prometheus::Opts) -> Result<Self, prometheus::Error> {
+                KvIndexerCounterCollector::new($family, opts).map(Self)
+            }
+        }
+
+        impl IndexerCounterMetric for $name {
+            const FAMILY: IndexerCounterFamily = $family;
+
+            fn collector(&self) -> &KvIndexerCounterCollector {
+                &self.0
+            }
+        }
+    };
+}
+
+indexer_counter_metric!(EventsAppliedMetric, IndexerCounterFamily::EventsApplied);
+indexer_counter_metric!(EventWarningsMetric, IndexerCounterFamily::EventWarnings);
+indexer_counter_metric!(CkfMutationsMetric, IndexerCounterFamily::CkfMutations);
+
+/// Register `T` on the component and put `metrics` in its scrape. On failure
+/// the counters still count; they are just not exported.
+fn expose<T: IndexerCounterMetric>(
+    component: &Component,
+    suffix: &str,
+    metrics: &KvIndexerMetrics,
+) {
+    match dynamo_runtime::metrics::create_metric::<T, _>(
+        component,
+        suffix,
+        T::FAMILY.help(),
+        &[],
+        None,
+        None,
+    ) {
+        Ok(metric) => metric.collector().attach(metrics),
+        Err(e) => tracing::warn!(
+            metric = suffix,
+            "Failed to register kv indexer counters on the component; they stay unexposed: {e}"
+        ),
+    }
+}
+
 impl KvIndexerMetricsExt for KvIndexerMetrics {
     fn from_component(component: &Component) -> Arc<KvIndexerMetrics> {
-        {
-            KV_INDEXER_METRICS
-                .get_or_init(|| {
-                    match (
-                        component.metrics().create_intcountervec(
-                            KV_CACHE_EVENTS_APPLIED_SUFFIX,
-                            KV_CACHE_EVENTS_APPLIED_HELP,
-                            KV_CACHE_EVENTS_APPLIED_LABELS,
-                            &[],
-                        ),
-                        component.metrics().create_intcountervec(
-                            KV_CACHE_EVENT_WARNINGS_SUFFIX,
-                            KV_CACHE_EVENT_WARNINGS_HELP,
-                            KV_CACHE_EVENT_WARNINGS_LABELS,
-                            &[],
-                        ),
-                        component.metrics().create_intcountervec(
-                            CKF_MUTATION_SUFFIX,
-                            CKF_MUTATION_HELP,
-                            CKF_MUTATION_LABELS,
-                            &[],
-                        ),
-                    ) {
-                        (
-                            Ok(kv_cache_events_applied),
-                            Ok(kv_cache_event_warnings),
-                            Ok(ckf_mutation),
-                        ) => Arc::new(KvIndexerMetrics::from_counters(
-                            kv_cache_events_applied,
-                            kv_cache_event_warnings,
-                            ckf_mutation,
-                        )),
-                        (Err(e), _, _) | (_, Err(e), _) | (_, _, Err(e)) => {
-                            tracing::warn!("Failed to create kv indexer metrics from component: {}. Using unregistered metrics as fallback.", e);
-                            Arc::new(KvIndexerMetrics::new_unregistered())
-                        }
-                    }
-                })
-                .clone()
-        }
+        KV_INDEXER_METRICS
+            .get_or_init(|| {
+                let metrics = KvIndexerMetrics::new_unregistered();
+                expose::<EventsAppliedMetric>(component, KV_CACHE_EVENTS_APPLIED_SUFFIX, &metrics);
+                expose::<EventWarningsMetric>(component, KV_CACHE_EVENT_WARNINGS_SUFFIX, &metrics);
+                expose::<CkfMutationsMetric>(component, CKF_MUTATION_SUFFIX, &metrics);
+                Arc::new(metrics)
+            })
+            .clone()
     }
 }
 use self::remote::RemoteIndexer;

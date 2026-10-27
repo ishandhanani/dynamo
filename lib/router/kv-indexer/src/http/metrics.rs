@@ -1,37 +1,29 @@
 // SPDX-FileCopyrightText: Copyright (c) 2025-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-#[cfg(feature = "metrics")]
+//! The standalone indexer service's own Prometheus surface: HTTP request
+//! metrics and registry gauges (feature `metrics`). The indexer's counters are
+//! exported by [`crate::KvIndexerCounterCollector`], which the server
+//! registers next to these.
+
 use std::sync::LazyLock;
-#[cfg(feature = "metrics")]
 use std::time::Instant;
 
-#[cfg(feature = "metrics")]
 use axum::{extract::MatchedPath, http::Request, middleware::Next, response::Response};
-#[cfg(feature = "metrics")]
 use prometheus::{
     HistogramVec, IntCounterVec, IntGauge, IntGaugeVec, Opts, exponential_buckets, histogram_opts,
 };
 
-#[cfg(feature = "metrics")]
-use super::registry::ListenerStatus;
+use crate::ingest::registry::{ListenerStatus, WorkerRegistryStats};
 
-#[cfg(feature = "metrics")]
 const METRICS_PREFIX: &str = "dynamo_kvindexer";
-#[cfg(feature = "metrics")]
 const REQUEST_DURATION_SECONDS: &str = "request_duration_seconds";
-#[cfg(feature = "metrics")]
 const REQUESTS_TOTAL: &str = "requests_total";
-#[cfg(feature = "metrics")]
 const ERRORS_TOTAL: &str = "errors_total";
-#[cfg(feature = "metrics")]
 const MODELS: &str = "models";
-#[cfg(feature = "metrics")]
 const WORKERS: &str = "workers";
-#[cfg(feature = "metrics")]
 const LISTENERS: &str = "listeners";
 
-#[cfg(feature = "metrics")]
 pub struct StandaloneIndexerMetrics {
     pub request_duration: HistogramVec,
     pub requests_total: IntCounterVec,
@@ -41,7 +33,6 @@ pub struct StandaloneIndexerMetrics {
     pub listeners: IntGaugeVec,
 }
 
-#[cfg(feature = "metrics")]
 static METRICS: LazyLock<StandaloneIndexerMetrics> = LazyLock::new(|| StandaloneIndexerMetrics {
     request_duration: HistogramVec::new(
         histogram_opts!(
@@ -88,7 +79,6 @@ static METRICS: LazyLock<StandaloneIndexerMetrics> = LazyLock::new(|| Standalone
     .expect("valid gauge"),
 });
 
-#[cfg(feature = "metrics")]
 pub fn register(registry: &prometheus::Registry) -> Result<(), prometheus::Error> {
     let m = &*METRICS;
     registry.register(Box::new(m.request_duration.clone()))?;
@@ -100,7 +90,6 @@ pub fn register(registry: &prometheus::Registry) -> Result<(), prometheus::Error
     Ok(())
 }
 
-#[cfg(feature = "metrics")]
 pub async fn metrics_middleware(req: Request<axum::body::Body>, next: Next) -> Response {
     let path = req
         .extensions()
@@ -128,23 +117,21 @@ pub async fn metrics_middleware(req: Request<axum::body::Body>, next: Next) -> R
     response
 }
 
-#[cfg(feature = "metrics")]
-pub fn set_worker_state(models: usize, workers: usize, listener_counts: [i64; 4]) {
-    METRICS.models.set(models as i64);
-    METRICS.workers.set(workers as i64);
+/// Show the registry's current state on the gauges; the server calls this at
+/// scrape time.
+pub fn set_worker_state(stats: &WorkerRegistryStats) {
+    METRICS.models.set(stats.indexers as i64);
+    METRICS.workers.set(stats.workers as i64);
 
     for status in ListenerStatus::ALL {
         METRICS
             .listeners
             .with_label_values(&[status.as_str()])
-            .set(listener_counts[status.metric_index()]);
+            .set(stats.listeners[status.metric_index()]);
     }
 }
 
-#[cfg(not(feature = "metrics"))]
-pub fn set_worker_state(_models: usize, _workers: usize, _listener_counts: [i64; 4]) {}
-
-#[cfg(all(test, feature = "metrics"))]
+#[cfg(test)]
 mod tests {
     use super::*;
     use prometheus::Encoder;
@@ -154,7 +141,11 @@ mod tests {
         let registry = prometheus::Registry::new();
         register(&registry).expect("registration should succeed");
 
-        set_worker_state(1, 2, [1, 1, 0, 0]);
+        set_worker_state(&WorkerRegistryStats {
+            indexers: 1,
+            workers: 2,
+            listeners: [1, 1, 0, 0],
+        });
         METRICS
             .request_duration
             .with_label_values(&["/health"])

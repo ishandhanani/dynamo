@@ -30,6 +30,8 @@
 //! response struct in [`server`] for the exact semantics.
 
 pub mod logging;
+#[cfg(feature = "metrics")]
+pub mod metrics;
 pub mod recovery;
 pub mod server;
 #[doc(hidden)]

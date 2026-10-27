@@ -772,39 +772,29 @@ fn store_remove_churn_drains_every_physical_slot() {
     );
 }
 
-#[cfg(feature = "metrics")]
 #[test]
 fn new_event_errors_have_finite_metric_labels() {
-    use crate::{
-        KvIndexerMetrics, METRIC_EVENT_STORED, METRIC_STATUS_CAPACITY_EXHAUSTED,
-        METRIC_STATUS_INDEXER_INVARIANT_VIOLATION,
-    };
+    use crate::{EventKind, EventStatus, KvIndexerMetrics};
+    use dynamo_router_types::protocols::KvCacheEventError;
 
     let metrics = KvIndexerMetrics::new_unregistered();
+    metrics.increment_event_applied(EventKind::Stored, Err(KvCacheEventError::CapacityExhausted));
     metrics.increment_event_applied(
-        METRIC_EVENT_STORED,
-        Err(dynamo_router_types::protocols::KvCacheEventError::CapacityExhausted),
-    );
-    metrics.increment_event_applied(
-        METRIC_EVENT_STORED,
-        Err(dynamo_router_types::protocols::KvCacheEventError::IndexerInvariantViolation),
+        EventKind::Stored,
+        Err(KvCacheEventError::IndexerInvariantViolation),
     );
     assert_eq!(
-        metrics
-            .kv_cache_events_applied
-            .with_label_values(&[METRIC_EVENT_STORED, METRIC_STATUS_CAPACITY_EXHAUSTED])
-            .get(),
+        metrics.events_applied(EventKind::Stored, EventStatus::CapacityExhausted),
         1
     );
     assert_eq!(
-        metrics
-            .kv_cache_events_applied
-            .with_label_values(&[
-                METRIC_EVENT_STORED,
-                METRIC_STATUS_INDEXER_INVARIANT_VIOLATION,
-            ])
-            .get(),
+        metrics.events_applied(EventKind::Stored, EventStatus::IndexerInvariantViolation),
         1
+    );
+    assert_eq!(EventStatus::CapacityExhausted.label(), "capacity_exhausted");
+    assert_eq!(
+        EventStatus::IndexerInvariantViolation.label(),
+        "indexer_invariant_violation"
     );
 }
 

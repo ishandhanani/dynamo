@@ -6,10 +6,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, OnceLock};
 
 use anyhow::Context;
-use dynamo_kv_indexer::{
-    KvIndexerMetrics, METRIC_EVENT_STORED, METRIC_STATUS_PARENT_NOT_FOUND,
-    METRIC_WARNING_DUPLICATE_STORE,
-};
+use dynamo_kv_indexer::{EventKind, EventStatus, EventWarningKind, KvIndexerMetrics};
 use tracing::{Event, Level, Subscriber};
 use tracing_subscriber::Registry;
 use tracing_subscriber::layer::{Context as LayerContext, Layer};
@@ -73,18 +70,10 @@ pub fn fixture_path(file_name: &str) -> anyhow::Result<String> {
 
 #[allow(dead_code)]
 pub fn duplicate_store_warning_count(metrics: &KvIndexerMetrics) -> u64 {
-    metrics
-        .kv_cache_event_warnings
-        .get_metric_with_label_values(&[METRIC_WARNING_DUPLICATE_STORE])
-        .expect("duplicate_store warning metric should exist")
-        .get()
+    metrics.event_warnings(EventWarningKind::DuplicateStore)
 }
 
 #[allow(dead_code)]
 pub fn stored_parent_not_found_count(metrics: &KvIndexerMetrics) -> u64 {
-    metrics
-        .kv_cache_events_applied
-        .get_metric_with_label_values(&[METRIC_EVENT_STORED, METRIC_STATUS_PARENT_NOT_FOUND])
-        .expect("stored parent-not-found metric should exist")
-        .get()
+    metrics.events_applied(EventKind::Stored, EventStatus::ParentNotFound)
 }

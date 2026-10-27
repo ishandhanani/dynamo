@@ -12,8 +12,6 @@ pub mod session_updates;
 #[cfg(feature = "ingest-zmq")]
 pub mod listener;
 #[cfg(feature = "ingest-zmq")]
-pub mod metrics;
-#[cfg(feature = "ingest-zmq")]
 pub mod registry;
 #[cfg(feature = "ingest-zmq")]
 pub mod zmq;

@@ -308,6 +308,17 @@ pub struct WorkerEntry {
     listeners: HashMap<u32, Arc<ListenerRecord>>,
 }
 
+/// A snapshot of what a [`WorkerRegistry`] holds, for a host's gauges.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct WorkerRegistryStats {
+    /// Live `(model, routing group)` indexers.
+    pub indexers: usize,
+    /// Registered worker instances.
+    pub workers: usize,
+    /// Listeners by status, indexed by [`ListenerStatus::metric_index`].
+    pub listeners: [i64; 4],
+}
+
 pub struct WorkerRegistry {
     workers: DashMap<WorkerId, WorkerEntry>,
     indexers: DashMap<RoutingPartitionId, IndexerEntry>,
@@ -346,8 +357,6 @@ impl WorkerRegistry {
         Self::new_inner(num_threads, indexer_metrics, CancellationToken::new())
     }
 
-    #[cfg(feature = "metrics")]
-    #[doc(hidden)]
     pub fn new_with_indexer_metrics_and_cancel_token(
         num_threads: usize,
         indexer_metrics: Arc<KvIndexerMetrics>,
@@ -410,19 +419,19 @@ impl WorkerRegistry {
         self.peers.iter().map(|entry| entry.key().clone()).collect()
     }
 
-    #[cfg(feature = "metrics")]
-    pub fn refresh_metrics(&self) {
-        let models = self.indexers.len();
-        let workers = self.workers.len();
-
-        let mut listener_counts = [0_i64; 4];
+    /// What the registry holds right now.
+    pub fn stats(&self) -> WorkerRegistryStats {
+        let mut listeners = [0_i64; 4];
         for entry in self.workers.iter() {
             for record in entry.value().listeners.values() {
-                listener_counts[record.status().metric_index()] += 1;
+                listeners[record.status().metric_index()] += 1;
             }
         }
-
-        super::metrics::set_worker_state(models, workers, listener_counts);
+        WorkerRegistryStats {
+            indexers: self.indexers.len(),
+            workers: self.workers.len(),
+            listeners,
+        }
     }
 
     #[expect(clippy::too_many_arguments)]
