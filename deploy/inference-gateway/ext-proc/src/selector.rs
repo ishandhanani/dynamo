@@ -12,14 +12,15 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result, anyhow};
 
-use dynamo_kv_router::services::selection::{
-    PromptRequest, SelectAndReserveRequest as CoreSelectAndReserveRequest, SelectionError,
-    SelectionService, SelectionServiceBuilder, WorkerSelectionPolicyRegistry,
-    warn_for_unserved_worker_selection_policies,
-};
 use dynamo_kv_router::{DEFAULT_ROUTING_GROUP, WorkerType};
-use dynamo_router_types::config::{KvRouterConfig, try_kv_router_config_from_dynamo_env};
+use dynamo_router_types::config::KvRouterConfig;
 use dynamo_router_types::protocols::RoutingConstraints;
+use dynamo_scheduler::config::try_kv_router_config_from_dynamo_env;
+use dynamo_scheduler::plugins::WorkerSelectionPolicyRegistry;
+use dynamo_scheduler::selection::{
+    PromptRequest, SelectAndReserveRequest as CoreSelectAndReserveRequest, SelectionError,
+    SelectionService, SelectionServiceBuilder, warn_for_unserved_worker_selection_policies,
+};
 use kube::Client;
 use tokio_util::sync::CancellationToken;
 
@@ -263,13 +264,12 @@ mod tests {
     use std::sync::Mutex;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
-    use dynamo_kv_router::services::selection::{
-        CatalogReconciler, WorkerRequest, WorkerSelectionPolicyParameters,
-    };
     use dynamo_kv_router::{
         WorkerInputView, WorkerPicker, WorkerSelectionContext, WorkerSelectionPolicy,
         WorkerSelectionPolicyError, WorkerSelectionPolicyFactory,
     };
+    use dynamo_scheduler::plugins::WorkerSelectionPolicyParameters;
+    use dynamo_scheduler::selection::{CatalogReconciler, WorkerRequest};
 
     use super::*;
 

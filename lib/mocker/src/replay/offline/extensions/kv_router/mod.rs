@@ -15,7 +15,6 @@ use dynamo_kv_indexer::{
     query_lower_tiers_with_options,
 };
 use dynamo_kv_router::LocalBlockHash;
-use dynamo_kv_router::scheduling::OverlapAnalysis;
 use dynamo_kv_router::{
     ActiveSequencesMultiWorker, RadixTree, RoutingPartitionRef, SchedulingRequest, SequenceRequest,
     SessionContext, SessionPrefixIndexer, TrackingHashAlgorithm, TrackingHashContext,
@@ -31,6 +30,7 @@ use dynamo_router_types::protocols::{
     WorkerWithDpRank, compute_block_hash_for_seq,
 };
 use dynamo_router_types::sched::ScheduleMode;
+use dynamo_scheduler::overlap::OverlapAnalysis;
 use dynamo_slot_tracker::topology::WorkerDpRange;
 use dynamo_tokens::SequenceHash;
 use futures::executor::block_on;

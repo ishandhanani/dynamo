@@ -16,4 +16,5 @@ anyhow.workspace = true
 dynamo-custom-policy-example-catalog = { path = "../catalog" }
 dynamo-ext-proc = { path = "../../../../deploy/inference-gateway/ext-proc" }
 dynamo-kv-router = { workspace = true, features = ["standalone-selection"] }
+dynamo-scheduler = { workspace = true }
 tokio.workspace = true

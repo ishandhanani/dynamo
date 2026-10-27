@@ -9,16 +9,16 @@
 
 use std::sync::Arc;
 
-use dynamo_kv_router::services::selection::{
-    WorkerSelectionPolicyFactory, WorkerSelectionPolicyParameters,
-    WorkerSelectionPolicyProviderError, WorkerSelectionPolicyRegistry,
-    WorkerSelectionPolicyRegistryError,
-};
 use dynamo_kv_router::{
     KvRouterConfig, ScoredWorkerCandidate, WorkerInputView, WorkerInputs, WorkerPicker,
     WorkerSelectionContext, WorkerSelectionPolicy, WorkerSelectionPolicyError,
 };
 use dynamo_router_types::protocols::WorkerAffinityTarget;
+use dynamo_scheduler::plugins::{
+    WorkerSelectionPolicyParameters, WorkerSelectionPolicyProviderError,
+    WorkerSelectionPolicyRegistry, WorkerSelectionPolicyRegistryError,
+};
+use dynamo_worker_selection::plugin::WorkerSelectionPolicyFactory;
 
 struct SoftPinRepinPicker {
     max_active_requests: usize,

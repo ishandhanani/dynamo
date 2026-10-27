@@ -13,8 +13,8 @@ mod scorer;
 use std::sync::Arc;
 
 use dynamo_kv_router::KvRouterConfig;
-use dynamo_kv_router::plugins::RouterPluginRegistry;
-use dynamo_kv_router::plugins::worker_selection::{
+use dynamo_scheduler::plugins::RouterPluginRegistry;
+use dynamo_scheduler::plugins::{
     WorkerSelectionPolicyParameters, WorkerSelectionPolicyProviderError,
     WorkerSelectionPolicyRegistryError,
 };

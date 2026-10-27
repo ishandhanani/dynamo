@@ -23,6 +23,7 @@ dynamo-kv-router = { workspace = true, features = [
     "metrics",
     "standalone-selection",
 ] }
+dynamo-scheduler = { workspace = true, features = ["metrics"] }
 dynamo-kv-indexer = { workspace = true }
 dynamo-worker-selection = { workspace = true }
 dynamo-router-types = { workspace = true }

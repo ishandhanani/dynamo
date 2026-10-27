@@ -11,9 +11,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use dynamo_kv_router::DEFAULT_ROUTING_GROUP;
-use dynamo_kv_router::services::selection::{
-    CatalogReconciler, WorkerCatalogSource, WorkerRequest,
-};
+use dynamo_scheduler::selection::{CatalogReconciler, WorkerCatalogSource, WorkerRequest};
 use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
 
@@ -199,7 +197,7 @@ mod tests {
         let selector = Arc::new(
             Selector::new(
                 &config(),
-                dynamo_kv_router::services::selection::WorkerSelectionPolicyRegistry::default(),
+                dynamo_scheduler::plugins::WorkerSelectionPolicyRegistry::default(),
             )
             .await
             .expect("selector should build"),

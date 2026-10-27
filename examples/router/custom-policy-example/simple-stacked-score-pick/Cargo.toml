@@ -13,4 +13,6 @@ description = "Stacked scorer and picker custom worker-selection policy example 
 
 [dependencies]
 dynamo-kv-router = { workspace = true, features = ["standalone-selection"] }
+dynamo-scheduler = { workspace = true }
+dynamo-worker-selection = { workspace = true }
 serde.workspace = true

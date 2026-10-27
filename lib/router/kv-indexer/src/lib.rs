@@ -41,6 +41,7 @@ pub use delegate::KvIndexerDelegate;
 mod shard_handle;
 
 mod active_set;
+pub mod config;
 pub mod ingest;
 pub mod overlap;
 pub mod recovery;

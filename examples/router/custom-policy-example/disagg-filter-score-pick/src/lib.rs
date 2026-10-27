@@ -11,12 +11,12 @@ mod scorer;
 
 use std::sync::Arc;
 
-use dynamo_kv_router::services::selection::{
-    WorkerSelectionPolicyFactory, WorkerSelectionPolicyParameters,
-    WorkerSelectionPolicyProviderError, WorkerSelectionPolicyRegistry,
-    WorkerSelectionPolicyRegistryError,
-};
 use dynamo_kv_router::{KvRouterConfig, WorkerFilter, WorkerSelectionPolicy, WorkerType};
+use dynamo_scheduler::plugins::{
+    WorkerSelectionPolicyParameters, WorkerSelectionPolicyProviderError,
+    WorkerSelectionPolicyRegistry, WorkerSelectionPolicyRegistryError,
+};
+use dynamo_worker_selection::plugin::WorkerSelectionPolicyFactory;
 use filter::MinimumDeviceOverlapFilter;
 use picker::{DecodePicker, PrefillPicker, UnsupportedWorkerTypePicker};
 use scorer::{DecodeLoadScorer, PrefillLoadScorer};

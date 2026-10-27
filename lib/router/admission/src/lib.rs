@@ -9,7 +9,4 @@ pub mod classifier;
 pub mod policy_queue;
 pub mod runtime;
 
-pub mod config {
-    //! The admission slice of the router configuration: policy classes and classifier settings.
-    pub use dynamo_router_types::config::{policy, request_classifier};
-}
+pub mod config;

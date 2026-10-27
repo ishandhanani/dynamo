@@ -494,9 +494,7 @@ impl ActiveSequenceIngressMetrics {
     }
 }
 
-impl dynamo_kv_router::services::selection::ReplicaIngressObserver
-    for ActiveSequenceIngressMetricHandles
-{
+impl dynamo_scheduler::selection::ReplicaIngressObserver for ActiveSequenceIngressMetricHandles {
     fn observe_drain(&self, queue_depth: usize, applied: usize) {
         self.queue_depth.set(queue_depth as i64);
         self.events_applied_total.inc_by(applied as u64);

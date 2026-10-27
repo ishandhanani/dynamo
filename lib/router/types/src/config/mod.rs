@@ -176,65 +176,9 @@ pub fn apply_deprecated_overlap_score_weight_override(
     }
 }
 
-/// Build a [`KvRouterConfig`] from defaults and standard Dynamo environment variables.
-///
-/// # Panics
-///
-/// Panics when `DYN_ROUTER_TRACKING_HASH` is not a supported algorithm. Startup
-/// paths should use [`try_kv_router_config_from_dynamo_env`] to report the error.
-pub fn kv_router_config_from_dynamo_env() -> KvRouterConfig {
-    try_kv_router_config_from_dynamo_env()
-        .unwrap_or_else(|error| panic!("invalid Dynamo router environment configuration: {error}"))
-}
-
-/// Build a [`KvRouterConfig`] from standard Dynamo environment variables.
-pub fn try_kv_router_config_from_dynamo_env() -> Result<KvRouterConfig, String> {
-    let config = kv_router_config_from_lookup(|key| env::var(key).ok())?;
-    log_env_config(&config);
-    Ok(config)
-}
-
-fn log_env_config(config: &KvRouterConfig) {
-    tracing::info!(
-        overlap_score_credit = config.overlap_score_credit,
-        overlap_score_credit_decay = config.overlap_score_credit_decay,
-        prefill_load_scale = config.prefill_load_scale,
-        decode_active_request_weight = config.decode_active_request_weight,
-        router_temperature = config.router_temperature,
-        use_kv_events = config.use_kv_events,
-        router_replica_sync = config.router_replica_sync,
-        router_track_active_blocks = config.router_track_active_blocks,
-        router_track_output_blocks = config.router_track_output_blocks,
-        router_assume_kv_reuse = config.router_assume_kv_reuse,
-        router_track_prefill_tokens = config.router_track_prefill_tokens,
-        router_tracking_hash = %config.router_tracking_hash,
-        router_tracking_key_id = ?config.router_tracking_key_id,
-        router_queue_threshold = ?config.router_queue_threshold,
-        router_policy_config = ?config.router_policy_config,
-        router_prefill_policy = ?config.router_prefill_policy,
-        router_decode_policy = ?config.router_decode_policy,
-        conditional_disagg_enabled = config.conditional_disagg_enabled,
-        conditional_disagg_policy = ?config.conditional_disagg_policy,
-        conditional_disagg_eff_isl_threshold = config.conditional_disagg_eff_isl_threshold,
-        conditional_disagg_eff_isl_ratio_threshold = config.conditional_disagg_eff_isl_ratio_threshold,
-        conditional_disagg_prefill_busy_threshold = ?config.conditional_disagg_prefill_busy_threshold,
-        conditional_disagg_decode_busy_threshold = ?config.conditional_disagg_decode_busy_threshold,
-        router_predicted_ttl_secs = ?config.router_predicted_ttl_secs,
-        router_ttl_secs = config.router_ttl_secs,
-        router_event_threads = config.router_event_threads,
-        router_queue_policy = %config.router_queue_policy,
-        use_remote_indexer = config.use_remote_indexer,
-        shared_cache_multiplier = ?config.shared_cache_multiplier,
-        shared_cache_type = %config.shared_cache_type,
-        host_cache_hit_weight = config.host_cache_hit_weight,
-        disk_cache_hit_weight = config.disk_cache_hit_weight,
-        router_prefill_load_model = %config.router_prefill_load_model,
-        router_approximate_cache_policy = %config.router_approximate_cache_policy,
-        "KvRouterConfig initialized (DYN_* env overrides applied)"
-    );
-}
-
-fn kv_router_config_from_lookup(
+/// Build the flat config from a key lookup; `dynamo-scheduler` feeds it the process environment.
+#[doc(hidden)]
+pub fn kv_router_config_from_lookup(
     get_env: impl Fn(&str) -> Option<String>,
 ) -> Result<KvRouterConfig, String> {
     fn parse_f64(get_env: &impl Fn(&str) -> Option<String>, key: &str) -> Option<f64> {
@@ -452,7 +396,7 @@ pub enum SharedCacheType {
 ///
 /// This selector is intentionally process-local. Workers do not advertise it in
 /// model cards because request lifetime and release ownership live in the router.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ApproximateCachePolicyKind {
     /// Expire predicted entries after `router_ttl_secs`.
@@ -2967,5 +2911,23 @@ models:
         };
         // With a threshold set, queueing is enabled
         assert!(with_threshold.queueing_enabled(None).unwrap());
+    }
+}
+
+/// The tracking-hash trio: part of the wire contract shared by hashing, the indexer, and workers.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct TrackingHashConfig {
+    pub algorithm: TrackingHashAlgorithm,
+    pub key_file: Option<PathBuf>,
+    pub key_id: Option<String>,
+}
+
+impl From<&KvRouterConfig> for TrackingHashConfig {
+    fn from(config: &KvRouterConfig) -> Self {
+        Self {
+            algorithm: config.router_tracking_hash,
+            key_file: config.router_tracking_key_file.clone(),
+            key_id: config.router_tracking_key_id.clone(),
+        }
     }
 }

@@ -42,7 +42,7 @@ use dynamo_runtime::{
 };
 
 #[cfg(feature = "select-service")]
-use dynamo_kv_router::plugins::RouterPluginRegistry;
+use dynamo_scheduler::plugins::RouterPluginRegistry;
 use dynamo_kv_router::{KvRouterConfig, plugins::RouterPlugins};
 use dynamo_llm::entrypoint::RouterConfig;
 use dynamo_llm::{self as llm_rs};
@@ -483,7 +483,7 @@ pub(crate) fn linked_worker_selection_policy_registry() -> RouterPluginRegistry 
 
 #[cfg(feature = "custom-policy")]
 fn register_core_with_router_plugins(m: &Bound<'_, PyModule>) -> PyResult<()> {
-    let mut registry = dynamo_kv_router::plugins::RouterPluginRegistry::default();
+    let mut registry = dynamo_scheduler::plugins::RouterPluginRegistry::default();
     // The policies Dynamo ships register first, so a replaced catalog that reuses one of their
     // type names fails here instead of silently overriding it.
     dynamo_custom_policy_builtin::register(&mut registry)

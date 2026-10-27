@@ -31,6 +31,7 @@ dynamo-custom-policy-builtin = { workspace = true }
 # repo
 aisimulate-core = { workspace = true }
 dynamo-kv-router = { workspace = true }
+dynamo-scheduler = { workspace = true }
 dynamo-admission = { workspace = true }
 dynamo-worker-selection = { workspace = true }
 dynamo-kv-indexer = { workspace = true, features = ["metrics"] }

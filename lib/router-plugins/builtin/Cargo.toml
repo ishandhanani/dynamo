@@ -15,6 +15,7 @@ description = "Router plugins shipped with Dynamo"
 fastrand = "2"
 parking_lot.workspace = true
 dynamo-kv-router = { workspace = true, features = ["standalone-selection"] }
+dynamo-scheduler = { workspace = true }
 dynamo-admission = { workspace = true }
 dynamo-router-types = { workspace = true }
 dynamo-worker-selection = { workspace = true }

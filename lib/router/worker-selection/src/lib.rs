@@ -13,7 +13,4 @@ pub mod lora;
 pub mod plugin;
 pub mod selector;
 
-pub mod config {
-    //! The worker-selection slice of the router configuration.
-    pub use dynamo_router_types::config::worker_selection::*;
-}
+pub mod config;

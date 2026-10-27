@@ -3,7 +3,7 @@
 
 //! Catalog for the custom worker-selection policy examples.
 
-use dynamo_kv_router::services::selection::{
+use dynamo_scheduler::plugins::{
     WorkerSelectionPolicyRegistry, WorkerSelectionPolicyRegistryError,
 };
 

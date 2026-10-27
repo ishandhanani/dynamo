@@ -219,7 +219,7 @@ The provider runs once at startup. Parse and validate all parameters there, then
 use std::sync::Arc;
 
 use dynamo_worker_selection::plugin::WorkerSelectionPolicyFactory;
-use dynamo_kv_router::plugins::worker_selection::{WorkerSelectionPolicyParameters, WorkerSelectionPolicyProviderError};
+use dynamo_scheduler::plugins::{WorkerSelectionPolicyParameters, WorkerSelectionPolicyProviderError};
 use dynamo_worker_selection::plugin::{WorkerFilter, WorkerScorer, WorkerSelectionPolicy};
 
 #[derive(serde::Deserialize)]
@@ -264,7 +264,7 @@ Dynamo calls the returned factory once per routing partition. Branch on the type
 Expose a registration function from the policy crate:
 
 ```rust
-use dynamo_kv_router::plugins::{RouterPluginRegistry, WorkerSelectionPolicyRegistryError};
+use dynamo_scheduler::plugins::{RouterPluginRegistry, WorkerSelectionPolicyRegistryError};
 
 pub fn register(
     registry: &mut RouterPluginRegistry,
@@ -561,7 +561,7 @@ Register the catalog before the standard runner starts:
 
 ```rust
 use dynamo_ext_proc::run;
-use dynamo_kv_router::plugins::RouterPluginRegistry;
+use dynamo_scheduler::plugins::RouterPluginRegistry;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {

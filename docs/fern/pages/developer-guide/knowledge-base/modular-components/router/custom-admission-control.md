@@ -143,7 +143,7 @@ Each factory-created classifier owns its state. Separate frontend replicas have 
 Expose a registration function from `classifier/src/lib.rs`:
 
 ```rust
-use dynamo_kv_router::plugins::RouterPluginRegistry;
+use dynamo_scheduler::plugins::RouterPluginRegistry;
 use dynamo_admission::classifier::RequestClassifierRegistryError;
 
 pub fn register(
@@ -156,7 +156,7 @@ pub fn register(
 Call it from `catalog/src/lib.rs`:
 
 ```rust
-use dynamo_kv_router::plugins::RouterPluginRegistry;
+use dynamo_scheduler::plugins::RouterPluginRegistry;
 use dynamo_admission::classifier::RequestClassifierRegistryError;
 
 pub fn register(

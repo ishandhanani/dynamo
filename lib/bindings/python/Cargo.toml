@@ -37,7 +37,12 @@ kv-indexer-metrics = ["kv-indexer", "dynamo-kv-router/metrics", "dynamo-kv-index
 # Exposes the optional Relay stats/snapshot methods to Python diagnostic builds.
 ckf-diagnostics = ["dynamo-llm/ckf-diagnostics"]
 slot-tracker = ["dep:clap", "dep:tracing-subscriber", "dynamo-slot-tracker/http"]
-select-service = ["dep:clap", "dep:tracing-subscriber", "dynamo-kv-router/standalone-selection"]
+select-service = [
+  "dep:clap",
+  "dep:tracing-subscriber",
+  "dynamo-kv-router/standalone-selection",
+  "dynamo-scheduler/http",
+]
 # Replay parity benchmark builds. Deterministic replay itself is the `deterministic`
 # argument of `run_mocker_trace_replay` and needs no feature.
 replay-bench = ["dynamo-mocker/replay-bench"]
@@ -98,6 +103,7 @@ uuid = { version = "1.18.1" }
 
 # kv-indexer / slot-tracker / shared kv-router types
 dynamo-kv-router = { path = "../../kv-router" }
+dynamo-scheduler = { path = "../../router/scheduler" }
 dynamo-kv-indexer = { path = "../../router/kv-indexer" }
 dynamo-slot-tracker = { path = "../../router/slot-tracker" }
 dynamo-router-types = { path = "../../router/types" }

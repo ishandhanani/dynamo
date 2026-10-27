@@ -14,13 +14,6 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 use dynamo_kv_router::WorkerType;
-use dynamo_kv_router::plugins::RouterPluginRegistry;
-use dynamo_kv_router::services::selection::{
-    CatalogReconciler, DEFAULT_MODEL_NAME, HostCache, HostEligibility, HostLoad, HostReplication,
-    HostTelemetry, KvEventIngress, KvIndexSource, SelectionHost, SelectionOperation,
-    SelectionOutcome, SelectionPartition, SelectionRun, SelectionScheduler, SelectionService,
-    SelectionServiceBuilder, WorkerCatalogSource, WorkerRequest,
-};
 use dynamo_kv_router::{DEFAULT_ROUTING_GROUP, PrefillLoadEstimator, WorkerSelectionPolicyFactory};
 use dynamo_router_types::busy::RejectThresholdsProvider;
 use dynamo_router_types::config::KvRouterConfig;
@@ -31,6 +24,13 @@ use dynamo_router_types::sched::{
     NonMaxOverlapSelectionObserver, OverloadedWorkerProvider, WorkerAvailabilityProvider,
 };
 use dynamo_router_types::selection_inputs::DEFAULT_MAX_BATCHED_TOKENS;
+use dynamo_scheduler::plugins::RouterPluginRegistry;
+use dynamo_scheduler::selection::{
+    CatalogReconciler, DEFAULT_MODEL_NAME, HostCache, HostEligibility, HostLoad, HostReplication,
+    HostTelemetry, KvEventIngress, KvIndexSource, SelectionHost, SelectionOperation,
+    SelectionOutcome, SelectionPartition, SelectionRun, SelectionScheduler, SelectionService,
+    SelectionServiceBuilder, WorkerCatalogSource, WorkerRequest,
+};
 use dynamo_slot_tracker::{LocalWorkerLoad, ReplicaWorkerPolicy};
 use tokio_util::sync::CancellationToken;
 
@@ -93,7 +93,7 @@ fn record_queue_rejection(
 
 fn update_queue_metrics(
     per_class: &[RouterQueueMetricHandles],
-    mut stats_for: impl FnMut(usize) -> Option<dynamo_kv_router::queue::ClassQueueStats>,
+    mut stats_for: impl FnMut(usize) -> Option<dynamo_scheduler::queue::ClassQueueStats>,
 ) {
     for (class_index, handles) in per_class.iter().enumerate() {
         let Some(stats) = stats_for(class_index) else {
@@ -195,7 +195,7 @@ struct SenderLoadSink {
     worker_type: &'static str,
 }
 
-impl dynamo_kv_router::services::selection::SchedulerLoadSink for SenderLoadSink {
+impl dynamo_scheduler::selection::SchedulerLoadSink for SenderLoadSink {
     fn publish(&self, snapshot: dynamo_slot_tracker::SchedulerLoadSnapshot) {
         self.sender.publish(snapshot);
     }
@@ -250,7 +250,7 @@ impl EmbeddedSelection {
             ),
         ));
         let slot = std::sync::Mutex::new(Some(channels));
-        let replica_sync: Option<dynamo_kv_router::services::selection::HostReplicaSyncFactory> =
+        let replica_sync: Option<dynamo_scheduler::selection::HostReplicaSyncFactory> =
             Some(Arc::new(move |_partition| {
                 slot.lock().ok().and_then(|mut s| s.take())
             }));
@@ -515,21 +515,21 @@ pub(crate) fn worker_request_from_runtime_config(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use dynamo_kv_router::services::selection::SchedulerLoadSink;
+    use dynamo_scheduler::selection::SchedulerLoadSink;
 
     #[test]
     fn queue_metrics_are_updated_by_class_index() {
         let handles = ["latency", "bulk"]
             .map(|class| ROUTER_QUEUE_METRICS.handles("index-test", "decode", class));
         let stats = [
-            dynamo_kv_router::queue::ClassQueueStats {
+            dynamo_scheduler::queue::ClassQueueStats {
                 received_total: 10,
                 rejected_due_time_passed_total: 1,
                 pending_count: 2,
                 pending_isl_tokens: 128,
                 pending_cached_tokens: 64,
             },
-            dynamo_kv_router::queue::ClassQueueStats {
+            dynamo_scheduler::queue::ClassQueueStats {
                 received_total: 20,
                 rejected_due_time_passed_total: 3,
                 pending_count: 3,

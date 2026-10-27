@@ -30,7 +30,7 @@
 use std::sync::Arc;
 
 use dynamo_kv_router::KvRouterConfig;
-use dynamo_kv_router::plugins::{
+use dynamo_scheduler::plugins::{
     RouterPluginRegistry, WorkerSelectionPolicyParameters, WorkerSelectionPolicyProviderError,
     WorkerSelectionPolicyRegistryError,
 };

@@ -23,7 +23,7 @@ use k8s_openapi::api::discovery::v1::EndpointSlice;
 use kube::{Api, Client};
 use tokio_util::sync::CancellationToken;
 
-use dynamo_kv_router::services::selection::SelectionService;
+use dynamo_scheduler::selection::SelectionService;
 
 /// Label Kubernetes sets on every EndpointSlice pointing back to its Service.
 const SERVICE_NAME_LABEL: &str = "kubernetes.io/service-name";
@@ -267,8 +267,8 @@ mod tests {
         use axum::routing::get;
         use axum::{Json, Router};
         use dynamo_kv_router::WorkerType;
-        use dynamo_kv_router::services::selection::SelectionServiceBuilder;
-        use dynamo_router_types::config::kv_router_config_from_dynamo_env;
+        use dynamo_scheduler::config::kv_router_config_from_dynamo_env;
+        use dynamo_scheduler::selection::SelectionServiceBuilder;
         use kube::Config;
         use tokio::net::TcpListener;
         use tokio::sync::Notify;

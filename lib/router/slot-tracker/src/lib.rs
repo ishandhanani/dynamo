@@ -17,6 +17,8 @@ mod sharded_lock;
 pub mod single;
 pub mod topology;
 
+pub mod config;
+
 pub(crate) mod cleanup;
 
 #[cfg(feature = "replica-sync-zmq")]

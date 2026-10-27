@@ -3,7 +3,7 @@
 
 [package]
 name = "dynamo-kv-router"
-description = "KV Router - Radix tree for LLM KV cache routing"
+description = "Facade over the Dynamo router crates; removed in the next step of the router split"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
@@ -14,19 +14,13 @@ readme = "README.md"
 
 [features]
 default = []
-metrics = ["dep:prometheus", "dynamo-kv-indexer/metrics"]
-bench = [
-  "dynamo-router-types/bench",
-  "dynamo-kv-indexer/bench",
-  "dynamo-slot-tracker/bench",
-  "dynamo-worker-selection/bench",
-]
-profile = ["dynamo-kv-indexer/profile"]
-standalone-indexer = ["dep:axum", "dynamo-kv-indexer/http"]
-standalone-slot-tracker = ["dep:axum", "dynamo-slot-tracker/http"]
-standalone-selection = ["standalone-indexer", "dep:once_cell", "dynamo-slot-tracker/http"]
-# Test-only hooks consumed by dependent crates' tests; never enable in release.
-testing = ["dynamo-worker-selection/testing"]
+metrics = ["dynamo-scheduler/metrics"]
+bench = ["dynamo-scheduler/bench"]
+profile = ["dynamo-scheduler/profile"]
+standalone-indexer = ["dynamo-kv-indexer/http"]
+standalone-slot-tracker = ["dynamo-slot-tracker/http"]
+standalone-selection = ["standalone-indexer", "dynamo-scheduler/http"]
+testing = ["dynamo-scheduler/testing"]
 
 [dependencies]
 dynamo-router-types = { workspace = true }
@@ -34,70 +28,9 @@ dynamo-kv-indexer = { workspace = true }
 dynamo-slot-tracker = { workspace = true }
 dynamo-admission = { workspace = true }
 dynamo-worker-selection = { workspace = true }
-# repo
-dynamo-kv-hashing = { workspace = true }
-dynamo-tokens = { workspace = true }
-dynamo-truthy = { workspace = true }
-
-# workspace
-anyhow = { workspace = true }
-arc-swap = "1.9.1"
-async-trait = { workspace = true }
-blake3 = { workspace = true }
-dashmap = { workspace = true }
-indexmap = { workspace = true }
-ordered-float = { workspace = true }
-once_cell = { version = "1", optional = true }
-derive_builder = { workspace = true }
-fastrand = "2"
-futures-util = { workspace = true }
-prometheus = { workspace = true, optional = true }
-seqlock = { workspace = true }
-serde = { workspace = true }
-serde_json = { workspace = true }
-serde_yaml = "0.9.34"
-thiserror = { workspace = true }
-tokio = { workspace = true }
-tokio-util = { workspace = true }
-tracing = { workspace = true }
-uuid = { workspace = true }
-xxhash-rust = { workspace = true }
-zeroize = { workspace = true }
-
-# dependencies
-crossbeam-queue = "0.3"
-crossbeam-utils = "0.8"
-flume = "0.12.0"
-parking_lot = { workspace = true }
-rmp-serde = { workspace = true }
-
-rustc-hash = "2.1.1"
-slotmap = "1"
-
-# standalone services (optional)
-axum = { version = "=0.8.4", default-features = false, features = [
-  "http1",
-  "json",
-  "matched-path",
-  "query",
-  "tokio",
-  "tracing",
-], optional = true }
+dynamo-scheduler = { workspace = true }
 
 [dev-dependencies]
-dynamo-router-types = { workspace = true, features = ["testing"] }
-dynamo-kv-indexer = { workspace = true, features = ["testing"] }
-dynamo-slot-tracker = { workspace = true, features = ["testing"] }
-dynamo-worker-selection = { workspace = true, features = ["testing"] }
-criterion = "0.5"
-rstest = "0.18.2"
-rstest_reuse = "0.7.0"
+dynamo-scheduler = { workspace = true, features = ["testing", "http"] }
+tokio = { workspace = true, features = ["rt", "macros", "time"] }
 tempfile = { workspace = true }
-tokio = { workspace = true, features = ["rt", "macros", "time", "test-util"] }
-dynamo-tokens = { workspace = true }
-tower = { version = "0.5", features = ["util"] }
-
-[[bench]]
-name = "selection_core"
-harness = false
-required-features = ["standalone-selection", "bench"]

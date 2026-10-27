@@ -56,7 +56,7 @@ areas:
   - lib/router/
   - lib/router/kv-indexer/src/
   - lib/router/kv-indexer/src/recovery/
-  - lib/kv-router/src/scheduling/
+  - lib/router/scheduler/src/
   - lib/router/slot-tracker/src/
   - lib/router/kv-indexer/src/zmq_wire/
   - lib/kv-router/tests/
@@ -1040,10 +1040,6 @@ shared:
   - performance
   - router
   - global-router
-- glob: lib/kv-router/src/services/shared_cache/
-  owners:
-  - router
-  - kv-memory
 - glob: lib/router/kv-indexer/src/zmq_wire/extra_keys.rs
   owners:
   - router

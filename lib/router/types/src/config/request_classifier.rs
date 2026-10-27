@@ -8,7 +8,7 @@ use serde::Deserialize;
 use super::policy::{RouterPolicyConfigError, validate_identifier};
 
 /// Startup selection and plugin-owned parameters for one request-classifier type.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
 pub struct RequestClassifierConfig {
     classifier_type: String,
     parameters: serde_yaml::Value,

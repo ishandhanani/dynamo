@@ -122,7 +122,7 @@ impl SelectionPolicySource {
             Self::Registry => worker_selection_policy_registry()
                 .resolve_for_worker_type(config, worker_type)?
                 .ok_or_else(|| {
-                    dynamo_kv_router::plugins::WorkerSelectionPolicyRegistryError::MissingDefault
+                    dynamo_scheduler::plugins::WorkerSelectionPolicyRegistryError::MissingDefault
                         .into()
                 }),
         }
@@ -888,7 +888,7 @@ impl KvRouter {
                 // The availability provider refreshes LoRA eligibility at admission.
                 lora_worker_filter: None,
                 ingress: Arc::clone(&ingress)
-                    as Arc<dyn dynamo_kv_router::services::selection::KvEventIngress>,
+                    as Arc<dyn dynamo_scheduler::selection::KvEventIngress>,
                 scheduler_load,
                 endpoint: endpoint.clone(),
                 router_id: endpoint.drt().discovery().instance_id(),
@@ -995,9 +995,7 @@ impl KvRouter {
         &self.kv_router_config
     }
 
-    pub fn policy_control(
-        &self,
-    ) -> &Arc<dynamo_kv_router::scheduling::queue::RuntimePolicyControl> {
+    pub fn policy_control(&self) -> &Arc<dynamo_scheduler::queue::RuntimePolicyControl> {
         self.selection.scheduler().policy_control()
     }
 
