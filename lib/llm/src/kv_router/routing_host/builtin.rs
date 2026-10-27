@@ -5,7 +5,7 @@
 //! runtime's stateless route pickers over the host's own worker set and
 //! occupancy, plus the Direct and device-aware paths.
 
-use dynamo_runtime::pipeline::RouterMode;
+use dynamo_runtime::pipeline::{OverloadCheck, RouterMode, TransportFallback};
 
 use super::*;
 
@@ -28,6 +28,56 @@ pub(super) fn builtin_inputs(mode: RouterMode) -> WorkerInputs {
         WorkerInputs::OCCUPANCY
     } else {
         WorkerInputs::NONE
+    }
+}
+
+/// How a hosted send treats a selected worker that has left discovery.
+#[derive(Clone, Copy)]
+enum Departed {
+    /// Direct and the stateless modes: an error only when no permitted
+    /// fallback is free.
+    OrFallback,
+    /// The occupancy modes: the preselected worker must still be discovered;
+    /// fallback covers only a departure after that check.
+    Reject,
+}
+
+impl RoutingHost {
+    /// Resolve the worker the request really goes to, let `prepare` rewrite
+    /// the request for it, then send. A failed `prepare` is recorded as the
+    /// route's outcome.
+    async fn resolve_prepare_send<M>(
+        &self,
+        mut request: SingleIn<PreprocessedRequest>,
+        worker_id: u64,
+        fallback: TransportFallback<'_>,
+        departed: Departed,
+        prepare: impl FnOnce(&mut PreprocessedRequest, u64) -> Result<M, Error>,
+    ) -> Result<(M, ManyOut<Annotated<LLMEngineOutput>>), Error> {
+        match departed {
+            Departed::OrFallback => self.inner.ensure_live_or_fallback(worker_id, fallback)?,
+            Departed::Reject => self.inner.ensure_live_for_dispatch(worker_id)?,
+        }
+        let resolved =
+            self.inner
+                .resolve(&request, worker_id, fallback, OverloadCheck::Required)?;
+        let worker_id = resolved.worker_id();
+        let metadata = match prepare(&mut request, worker_id) {
+            Ok(metadata) => metadata,
+            Err(error) => {
+                resolved.fail(error.as_ref());
+                return Err(error);
+            }
+        };
+        let stream = self.inner.send(request, resolved).await?;
+        if matches!(departed, Departed::OrFallback) {
+            tracing::info!(
+                router_mode = self.inner.router_mode().telemetry_label(),
+                worker_id,
+                "Selected worker"
+            );
+        }
+        Ok((metadata, stream))
     }
 }
 
@@ -306,10 +356,11 @@ impl RoutingHost {
                 staged_kv,
                 "builtin.dispatch_direct",
                 &budget,
-                self.inner.direct_within_prepared(
+                self.resolve_prepare_send(
                     request,
                     target.worker_id,
-                    None,
+                    TransportFallback::Allow,
+                    Departed::OrFallback,
                     |request, worker_id| {
                         let occupancy = guard.retarget_worker(worker_id);
                         let target = AffinityTarget::new(
@@ -351,9 +402,11 @@ impl RoutingHost {
                 staged_kv,
                 "builtin.dispatch_occupancy",
                 &budget,
-                self.inner.dispatch_preselected_prepared(
+                self.resolve_prepare_send(
                     request,
                     initial_worker,
+                    TransportFallback::Allow,
+                    Departed::Reject,
                     |request, worker_id| {
                         let occupancy = guard.retarget_worker(worker_id);
                         let target = target_for_worker(worker_id);
@@ -372,10 +425,13 @@ impl RoutingHost {
                 staged_kv,
                 "builtin.dispatch",
                 &budget,
-                self.inner.direct_within_prepared(
+                self.resolve_prepare_send(
                     request,
                     initial_worker,
-                    lora_fallback.as_ref(),
+                    lora_fallback
+                        .as_ref()
+                        .map_or(TransportFallback::Allow, TransportFallback::Within),
+                    Departed::OrFallback,
                     |request, worker_id| {
                         let occupancy = guard.retarget_worker(worker_id);
                         let target = target_for_worker(worker_id);

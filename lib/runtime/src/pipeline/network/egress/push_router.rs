@@ -125,51 +125,20 @@ fn response_stream_establish_timeout() -> Option<std::time::Duration> {
         .map(std::time::Duration::from_secs)
 }
 
-/// RAII handle for one in-flight unit of work charged against
-/// [`RoutingOccupancyState`]. The counter is incremented at construction; the
-/// matching decrement is emitted on drop (or by [`Self::into_tracked_stream`]).
-struct OccupancyPermit {
-    reservation: Option<OccupancyReservation>,
-}
-
-impl OccupancyPermit {
-    fn acquire(state: Arc<RoutingOccupancyState>, instance_id: u64) -> Self {
-        Self {
-            reservation: Some(state.reserve(instance_id)),
-        }
-    }
-
-    fn from_counter(
-        state: Arc<RoutingOccupancyState>,
-        instance_id: u64,
-        counter: Arc<AtomicU64>,
-    ) -> Self {
-        Self {
-            reservation: Some(OccupancyReservation::from_counter(
-                state,
-                instance_id,
-                counter,
-            )),
-        }
-    }
-
-    fn retarget(&mut self, instance_id: u64) {
-        self.reservation
-            .as_mut()
-            .expect("occupancy permit must be armed before stream tracking")
-            .retarget(instance_id);
-    }
-
-    fn into_tracked_stream<U: Data + MaybeError>(mut self, stream: ManyOut<U>) -> ManyOut<U> {
-        let engine_ctx = stream.context();
-        ResponseStream::new(
-            Box::pin(OccupancyTrackedStream {
-                inner: stream,
-                reservation: self.reservation.take(),
-            }),
-            engine_ctx,
-        )
-    }
+/// Hold `reservation` for as long as `stream` lives: it is released when the
+/// stream ends, yields an error, or is dropped.
+fn track_occupancy<U: Data + MaybeError>(
+    stream: ManyOut<U>,
+    reservation: OccupancyReservation,
+) -> ManyOut<U> {
+    let engine_ctx = stream.context();
+    ResponseStream::new(
+        Box::pin(OccupancyTrackedStream {
+            inner: stream,
+            reservation: Some(reservation),
+        }),
+        engine_ctx,
+    )
 }
 
 /// Trait for monitoring worker load and determining overload state.
@@ -220,7 +189,7 @@ where
     /// A trait object so an alternate transport can swap it out.
     addressed: Arc<dyn StreamingDispatch<T, U>>,
 
-    /// When false, `generate_with_fault_detection` skips fault detection logic:
+    /// When false, `resolve` and `send` skip fault detection logic:
     /// it won't call `report_instance_down` on errors, and it uses the raw discovery
     /// instance list instead of the filtered avail list. Use for recovery/query paths
     /// where transient failures are expected.
@@ -266,17 +235,51 @@ pub enum RouterMode {
     DeviceAwareWeighted,
 }
 
-#[derive(Clone, Copy)]
-enum TransportFallback<'a> {
+/// What to do when the worker a request was routed to has left discovery
+/// between selection and transport resolution.
+#[derive(Clone, Copy, Debug)]
+pub enum TransportFallback<'a> {
+    /// Send to the first free worker instead; `Unavailable` when there is none.
     Allow,
+    /// Fail with `CannotConnect`: the caller booked exactly this worker.
     Deny,
+    /// Like `Allow`, but only to a worker in the given set.
     Within(&'a HashSet<u64>),
 }
 
-#[derive(Clone, Copy)]
-enum OverloadCheck {
+/// Whether [`PushRouter::resolve`] re-checks the worker's overload state.
+#[derive(Clone, Copy, Debug)]
+pub enum OverloadCheck {
+    /// Reject an overloaded worker before sending, when fault detection is on.
     Required,
+    /// The caller's admission already accounted this request's load; the
+    /// shared overload set, which may already include it, is not re-read.
     AlreadyAdmitted,
+}
+
+/// The worker a request will be sent to, resolved from discovery, with the
+/// route span opened for it. [`PushRouter::resolve`] produces it and
+/// [`PushRouter::send`] consumes it; a caller that gives up in between reports
+/// why through [`Self::fail`] so the span still records the outcome.
+pub struct ResolvedTarget {
+    instance_id: u64,
+    address: String,
+    transport_kind: &'static str,
+    instance: Instance,
+    route_span: tracing::Span,
+    route_start: Instant,
+}
+
+impl ResolvedTarget {
+    /// The worker the request goes to: the selected one, or its fallback.
+    pub fn worker_id(&self) -> u64 {
+        self.instance_id
+    }
+
+    /// The caller will not send after all; record `error` as the route's outcome.
+    pub fn fail(self, error: &(dyn std::error::Error + 'static)) {
+        record_route_error(&self.route_span, error);
+    }
 }
 
 struct DeviceAwareCandidates {
@@ -937,7 +940,7 @@ where
             return Err(self.empty_free_pool_error(&routing_instances));
         }
         let selection = self.device_aware_candidates(request, instance_ids);
-        let (decision, counter) = state
+        let (decision, slot) = state
             .select_and_admit(
                 self.picker()?,
                 CandidateView::DeviceAware(&selection.candidates),
@@ -948,8 +951,7 @@ where
         let is_cpu = selection.candidates.iter().any(|candidate| {
             candidate.target.worker_id == worker_id && candidate.device == RouteDevice::Cpu
         });
-        let reservation = counter
-            .map(|counter| OccupancyReservation::from_counter(state.clone(), worker_id, counter));
+        let reservation = slot.map(|slot| state.reservation(worker_id, slot));
 
         Ok(DeviceAwareSelection {
             worker_id,
@@ -978,7 +980,11 @@ where
         )
     }
 
-    fn ensure_discovered_for_dispatch(&self, instance_id: u64) -> anyhow::Result<()> {
+    /// Reject a worker that has left discovery. A caller that wants fallback
+    /// still runs this first when the selection must be honored while the
+    /// worker remains discovered; fallback then covers only a departure after
+    /// this point.
+    pub fn ensure_live_for_dispatch(&self, instance_id: u64) -> anyhow::Result<()> {
         if self.client.is_instance_live(instance_id) {
             return Ok(());
         }
@@ -992,21 +998,41 @@ where
             .into())
     }
 
-    /// Issue a request to the next available instance in a round-robin fashion
-    pub async fn round_robin(&self, request: SingleIn<T>) -> anyhow::Result<ManyOut<U>> {
-        self.round_robin_prepared(request, |_, _| Ok(()))
-            .await
-            .map(|(_, stream)| stream)
+    /// Direct's standalone rule for a departed target: an error only when no
+    /// fallback `fallback` permits is free. Letting `resolve` see a worker that
+    /// is already absent from discovery preserves that historical fallback;
+    /// [`TransportFallback::Deny`] keeps exact-target behavior.
+    pub fn ensure_live_or_fallback(
+        &self,
+        instance_id: u64,
+        fallback: TransportFallback<'_>,
+    ) -> anyhow::Result<()> {
+        if self.client.is_instance_live(instance_id) {
+            return Ok(());
+        }
+        let fallback_is_available = self
+            .client
+            .routing_instances()
+            .free_ids()
+            .iter()
+            .copied()
+            .any(|candidate| {
+                candidate != instance_id
+                    && match fallback {
+                        TransportFallback::Allow => true,
+                        TransportFallback::Deny => false,
+                        TransportFallback::Within(allowed) => allowed.contains(&candidate),
+                    }
+            });
+        if fallback_is_available {
+            Ok(())
+        } else {
+            self.ensure_live_for_dispatch(instance_id)
+        }
     }
 
-    async fn round_robin_prepared<M, F>(
-        &self,
-        request: SingleIn<T>,
-        prepare: F,
-    ) -> anyhow::Result<(M, ManyOut<U>)>
-    where
-        F: FnOnce(&mut T, u64) -> anyhow::Result<M>,
-    {
+    /// Issue a request to the next available instance in a round-robin fashion
+    pub async fn round_robin(&self, request: SingleIn<T>) -> anyhow::Result<ManyOut<U>> {
         let (instance_id, candidate_count) =
             self.select_untracked_worker(self.round_robin_picker.as_ref())?;
         tracing::info!(
@@ -1015,26 +1041,11 @@ where
             candidate_count,
             "Selected worker"
         );
-
-        self.dispatch_selected(instance_id, request, None, prepare)
-            .await
+        self.send_selected(request, instance_id, None).await
     }
 
     /// Issue a request to a random endpoint
     pub async fn random(&self, request: SingleIn<T>) -> anyhow::Result<ManyOut<U>> {
-        self.random_prepared(request, |_, _| Ok(()))
-            .await
-            .map(|(_, stream)| stream)
-    }
-
-    async fn random_prepared<M, F>(
-        &self,
-        request: SingleIn<T>,
-        prepare: F,
-    ) -> anyhow::Result<(M, ManyOut<U>)>
-    where
-        F: FnOnce(&mut T, u64) -> anyhow::Result<M>,
-    {
         let (instance_id, candidate_count) =
             self.select_untracked_worker(self.random_picker.as_ref())?;
         tracing::info!(
@@ -1043,41 +1054,30 @@ where
             candidate_count,
             "Selected worker"
         );
-
-        self.dispatch_selected(instance_id, request, None, prepare)
-            .await
+        self.send_selected(request, instance_id, None).await
     }
 
     /// Issue a request using power-of-two-choices: pick 2 random healthy workers,
     /// route to the one with fewer in-flight requests.
     pub async fn power_of_two_choices(&self, request: SingleIn<T>) -> anyhow::Result<ManyOut<U>> {
-        self.power_of_two_choices_prepared(request, |_, _| Ok(()))
-            .await
-            .map(|(_, stream)| stream)
-    }
-
-    async fn power_of_two_choices_prepared<M, F>(
-        &self,
-        request: SingleIn<T>,
-        prepare: F,
-    ) -> anyhow::Result<(M, ManyOut<U>)>
-    where
-        F: FnOnce(&mut T, u64) -> anyhow::Result<M>,
-    {
         let state = self.occupancy_state()?;
-        let (instance_id, counter, candidate_count) = {
+        let (instance_id, reservation, candidate_count) = {
             let routing_instances = self.client.routing_instances();
             let candidates = routing_instances.free_ids();
-            let (decision, counter) = state
+            let (decision, slot) = state
                 .select_and_admit(
                     self.picker()?,
                     CandidateView::Workers(candidates),
                     RouteContext::default(),
                 )
                 .ok_or_else(|| self.empty_free_pool_error(&routing_instances))?;
+            let instance_id = decision.target.worker_id;
             (
-                decision.target.worker_id,
-                counter.expect("P2C selection always requests occupancy admission"),
+                instance_id,
+                state.reservation(
+                    instance_id,
+                    slot.expect("P2C selection always requests occupancy admission"),
+                ),
                 candidates.len(),
             )
         };
@@ -1088,8 +1088,7 @@ where
             load = state.load(instance_id),
             "Selected worker"
         );
-        let permit = OccupancyPermit::from_counter(state, instance_id, counter);
-        self.dispatch_selected(instance_id, request, Some(permit), prepare)
+        self.send_selected(request, instance_id, Some(reservation))
             .await
     }
 
@@ -1104,8 +1103,7 @@ where
             worker_id = instance_id,
             "Selected worker"
         );
-        self.generate_with_fault_detection(instance_id, request, TransportFallback::Deny)
-            .await
+        self.dispatch_exact(request, instance_id).await
     }
 
     /// Dispatch to a selected endpoint with transport fallback.
@@ -1120,122 +1118,19 @@ where
         instance_id: u64,
         allowed_fallback: Option<&HashSet<u64>>,
     ) -> anyhow::Result<ManyOut<U>> {
-        self.direct_within_prepared(request, instance_id, allowed_fallback, |_, _| Ok(()))
-            .await
-            .map(|(_, stream)| stream)
-    }
-
-    /// Like [`Self::direct_within`], but prepares the request after transport resolution and
-    /// returns the preparation metadata alongside the response stream.
-    pub async fn direct_within_prepared<M, F>(
-        &self,
-        request: SingleIn<T>,
-        instance_id: u64,
-        allowed_fallback: Option<&HashSet<u64>>,
-        prepare: F,
-    ) -> anyhow::Result<(M, ManyOut<U>)>
-    where
-        F: FnOnce(&mut T, u64) -> anyhow::Result<M>,
-    {
         let fallback = allowed_fallback
             .map(TransportFallback::Within)
             .unwrap_or(TransportFallback::Allow);
-        self.direct_prepared_with_fallback(instance_id, request, fallback, prepare)
-            .await
-    }
-
-    /// Dispatch a worker already selected by a routing host.
-    ///
-    /// `PushRouter` may still resolve transport fallback if the selected worker
-    /// disappears before dispatch. The callback receives that final worker so
-    /// the caller can retarget its own reservation and telemetry.
-    pub async fn dispatch_preselected_prepared<M, F>(
-        &self,
-        request: SingleIn<T>,
-        instance_id: u64,
-        prepare: F,
-    ) -> anyhow::Result<(M, ManyOut<U>)>
-    where
-        F: FnOnce(&mut T, u64) -> anyhow::Result<M>,
-    {
-        self.dispatch_preselected_with_fallback(
-            instance_id,
-            request,
-            TransportFallback::Allow,
-            prepare,
-        )
-        .await
-    }
-
-    async fn direct_prepared_with_fallback<M, F>(
-        &self,
-        instance_id: u64,
-        request: SingleIn<T>,
-        fallback: TransportFallback<'_>,
-        prepare: F,
-    ) -> anyhow::Result<(M, ManyOut<U>)>
-    where
-        F: FnOnce(&mut T, u64) -> anyhow::Result<M>,
-    {
-        // Fallback resolution owns the unavailable-target decision. Allowing it
-        // to see a worker already absent from discovery preserves Direct's
-        // historical standalone fallback; `Deny` remains exact-target behavior.
-        let selected_is_discovered = self.client.is_instance_live(instance_id);
-        if !selected_is_discovered {
-            let fallback_is_available = self
-                .client
-                .routing_instances()
-                .free_ids()
-                .iter()
-                .copied()
-                .any(|candidate| {
-                    candidate != instance_id
-                        && match fallback {
-                            TransportFallback::Allow => true,
-                            TransportFallback::Deny => false,
-                            TransportFallback::Within(allowed) => allowed.contains(&candidate),
-                        }
-                });
-            if !fallback_is_available {
-                self.ensure_discovered_for_dispatch(instance_id)?;
-            }
-        }
-        let ((metadata, resolved_instance_id), response_stream) = self
-            .generate_with_fault_detection_prepared(
-                instance_id,
-                request,
-                fallback,
-                |request, resolved_instance_id| {
-                    prepare(request, resolved_instance_id)
-                        .map(|metadata| (metadata, resolved_instance_id))
-                },
-            )
-            .await?;
+        self.ensure_live_or_fallback(instance_id, fallback)?;
+        let target = self.resolve(&request, instance_id, fallback, OverloadCheck::Required)?;
+        let worker_id = target.worker_id();
+        let stream = self.send(request, target).await?;
         tracing::info!(
             router_mode = self.router_mode.telemetry_label(),
-            worker_id = resolved_instance_id,
+            worker_id,
             "Selected worker"
         );
-        Ok((metadata, response_stream))
-    }
-
-    async fn dispatch_preselected_with_fallback<M, F>(
-        &self,
-        instance_id: u64,
-        request: SingleIn<T>,
-        fallback: TransportFallback<'_>,
-        prepare: F,
-    ) -> anyhow::Result<(M, ManyOut<U>)>
-    where
-        F: FnOnce(&mut T, u64) -> anyhow::Result<M>,
-    {
-        // Fallback-enabled dispatch still honors a selected worker while it remains in
-        // discovery. Local inhibition only filters worker selection owned by this router;
-        // fallback is considered only if the selected worker disappears after this check.
-        self.ensure_discovered_for_dispatch(instance_id)?;
-
-        self.generate_with_fault_detection_prepared(instance_id, request, fallback, prepare)
-            .await
+        Ok(stream)
     }
 
     /// Dispatch to exactly one worker without transport fallback.
@@ -1247,8 +1142,13 @@ where
         request: SingleIn<T>,
         instance_id: u64,
     ) -> anyhow::Result<ManyOut<U>> {
-        self.generate_with_fault_detection(instance_id, request, TransportFallback::Deny)
-            .await
+        let target = self.resolve(
+            &request,
+            instance_id,
+            TransportFallback::Deny,
+            OverloadCheck::Required,
+        )?;
+        self.send(request, target).await
     }
 
     /// Dispatch exactly to a worker whose KV selection step already performed
@@ -1265,93 +1165,38 @@ where
         if !self.router_mode.is_kv_routing() {
             anyhow::bail!("admitted dispatch is only valid in KV routing mode");
         }
-        self.generate_with_fault_detection_inner(
+        let target = self.resolve(
+            &request,
             instance_id,
-            request,
             TransportFallback::Deny,
             OverloadCheck::AlreadyAdmitted,
-        )
-        .await
+        )?;
+        self.send(request, target).await
     }
 
-    /// Select and book one worker, prepare the request for that exact worker,
-    /// then dispatch without reselection or transport fallback.
-    pub async fn select_and_dispatch_exact<M, F>(
-        &self,
-        mut request: SingleIn<T>,
-        pinned_worker: Option<u64>,
-        prepare: F,
-    ) -> anyhow::Result<(M, ManyOut<U>)>
-    where
-        F: FnOnce(&mut T, u64) -> anyhow::Result<M>,
-    {
-        let (instance_id, permit) = self
-            .select_exact_target(request.content(), pinned_worker)
-            .await?;
-        let metadata = prepare(&mut request, instance_id)?;
-        let stream = self.dispatch_exact(request, instance_id).await?;
-        let stream = match permit {
-            Some(permit) => permit.into_tracked_stream(stream),
-            None => stream,
-        };
-        Ok((metadata, stream))
-    }
-
-    /// Select a worker using the configured routing mode, prepare the request with the worker
-    /// that survives transport resolution, then dispatch with normal fallback behavior.
-    pub async fn select_and_dispatch<M, F>(
+    /// Send a request the configured mode selected: resolve the worker with
+    /// fallback, move the occupancy reservation if the fallback changed it, and
+    /// hold the reservation for the life of the response stream.
+    async fn send_selected(
         &self,
         request: SingleIn<T>,
-        prepare: F,
-    ) -> anyhow::Result<(M, ManyOut<U>)>
-    where
-        F: FnOnce(&mut T, u64) -> anyhow::Result<M>,
-    {
-        match self.router_mode {
-            RouterMode::Random => self.random_prepared(request, prepare).await,
-            RouterMode::RoundRobin => self.round_robin_prepared(request, prepare).await,
-            RouterMode::PowerOfTwoChoices => {
-                self.power_of_two_choices_prepared(request, prepare).await
-            }
-            RouterMode::LeastLoaded => self.least_loaded_prepared(request, prepare).await,
-            RouterMode::DeviceAwareWeighted => {
-                self.device_aware_weighted_prepared(request, prepare).await
-            }
-            RouterMode::KV => anyhow::bail!("KV routing should not call select_and_dispatch"),
-            RouterMode::Direct => anyhow::bail!(
-                "Direct routing should use direct_within_prepared instead of select_and_dispatch"
-            ),
-        }
-    }
-
-    async fn dispatch_selected<M, F>(
-        &self,
         instance_id: u64,
-        request: SingleIn<T>,
-        mut permit: Option<OccupancyPermit>,
-        prepare: F,
-    ) -> anyhow::Result<(M, ManyOut<U>)>
-    where
-        F: FnOnce(&mut T, u64) -> anyhow::Result<M>,
-    {
-        let (metadata, stream) = self
-            .generate_with_fault_detection_prepared(
-                instance_id,
-                request,
-                TransportFallback::Allow,
-                |request, resolved_instance_id| {
-                    if let Some(permit) = permit.as_mut() {
-                        permit.retarget(resolved_instance_id);
-                    }
-                    prepare(request, resolved_instance_id)
-                },
-            )
-            .await?;
-        let stream = match permit {
-            Some(permit) => permit.into_tracked_stream(stream),
+        mut reservation: Option<OccupancyReservation>,
+    ) -> anyhow::Result<ManyOut<U>> {
+        let target = self.resolve(
+            &request,
+            instance_id,
+            TransportFallback::Allow,
+            OverloadCheck::Required,
+        )?;
+        if let Some(reservation) = reservation.as_mut() {
+            reservation.retarget(target.worker_id());
+        }
+        let stream = self.send(request, target).await?;
+        Ok(match reservation {
+            Some(reservation) => track_occupancy(stream, reservation),
             None => stream,
-        };
-        Ok((metadata, stream))
+        })
     }
 
     /// Issue a request using device-aware weighted routing.
@@ -1363,19 +1208,6 @@ where
     /// If only one device class exists (all CPU or all non-CPU), this naturally
     /// degenerates to least-loaded routing over the available instances.
     pub async fn device_aware_weighted(&self, request: SingleIn<T>) -> anyhow::Result<ManyOut<U>> {
-        self.device_aware_weighted_prepared(request, |_, _| Ok(()))
-            .await
-            .map(|(_, stream)| stream)
-    }
-
-    async fn device_aware_weighted_prepared<M, F>(
-        &self,
-        request: SingleIn<T>,
-        prepare: F,
-    ) -> anyhow::Result<(M, ManyOut<U>)>
-    where
-        F: FnOnce(&mut T, u64) -> anyhow::Result<M>,
-    {
         let state = self.occupancy_state()?;
         let routing_instances = self.client.routing_instances();
         let instance_ids = routing_instances.free_ids();
@@ -1391,7 +1223,7 @@ where
 
         // Only full cache hits bypass weighted accounting; partial hits still follow the
         // device-aware ratio because some image encoding remains for this request.
-        let (decision, counter) = state
+        let (decision, slot) = state
             .select_and_admit(
                 self.picker()?,
                 CandidateView::DeviceAware(&selection.candidates),
@@ -1399,8 +1231,7 @@ where
             )
             .ok_or_else(|| self.empty_free_pool_error(&routing_instances))?;
         let instance_id = decision.target.worker_id;
-        let permit = counter
-            .map(|counter| OccupancyPermit::from_counter(state.clone(), instance_id, counter));
+        let reservation = slot.map(|slot| state.reservation(instance_id, slot));
         let is_cpu = selection.candidates.iter().any(|candidate| {
             candidate.target.worker_id == instance_id && candidate.device == RouteDevice::Cpu
         });
@@ -1416,8 +1247,7 @@ where
             "Selected worker"
         );
 
-        self.dispatch_selected(instance_id, request, permit, prepare)
-            .await
+        self.send_selected(request, instance_id, reservation).await
     }
 
     fn device_aware_candidates(&self, request: &T, instance_ids: &[u64]) -> DeviceAwareCandidates {
@@ -1488,23 +1318,10 @@ where
 
     /// Issue a request to the instance with the fewest active connections.
     pub async fn least_loaded(&self, request: SingleIn<T>) -> anyhow::Result<ManyOut<U>> {
-        self.least_loaded_prepared(request, |_, _| Ok(()))
-            .await
-            .map(|(_, stream)| stream)
-    }
-
-    async fn least_loaded_prepared<M, F>(
-        &self,
-        request: SingleIn<T>,
-        prepare: F,
-    ) -> anyhow::Result<(M, ManyOut<U>)>
-    where
-        F: FnOnce(&mut T, u64) -> anyhow::Result<M>,
-    {
         let state = self.occupancy_state()?;
         let routing_instances = self.client.routing_instances();
         let instance_ids = routing_instances.free_ids();
-        let (decision, counter) = state
+        let (decision, slot) = state
             .select_and_admit(
                 self.picker()?,
                 CandidateView::Workers(instance_ids),
@@ -1512,10 +1329,9 @@ where
             )
             .ok_or_else(|| self.empty_free_pool_error(&routing_instances))?;
         let instance_id = decision.target.worker_id;
-        let permit = OccupancyPermit::from_counter(
-            state.clone(),
+        let reservation = state.reservation(
             instance_id,
-            counter.expect("least-loaded selection always requests occupancy admission"),
+            slot.expect("least-loaded selection always requests occupancy admission"),
         );
         tracing::info!(
             router_mode = "least-loaded",
@@ -1525,7 +1341,7 @@ where
             "Selected worker"
         );
 
-        self.dispatch_selected(instance_id, request, Some(permit), prepare)
+        self.send_selected(request, instance_id, Some(reservation))
             .await
     }
 
@@ -1648,85 +1464,6 @@ where
             .unwrap_or(0)
     }
 
-    async fn select_exact_target(
-        &self,
-        request: &T,
-        pinned_worker: Option<u64>,
-    ) -> anyhow::Result<(u64, Option<OccupancyPermit>)> {
-        if let Some(instance_id) = pinned_worker {
-            let routing_instances = self.client.routing_instances();
-            if !routing_instances.routable_ids().contains(&instance_id) {
-                return Err(anyhow::anyhow!(
-                    "instance_id={instance_id} not found for endpoint {}",
-                    self.client.endpoint.id()
-                ));
-            }
-            let permit = match self.router_mode {
-                RouterMode::LeastLoaded
-                | RouterMode::PowerOfTwoChoices
-                | RouterMode::DeviceAwareWeighted => {
-                    let state = self.occupancy_state()?;
-                    Some(OccupancyPermit::acquire(state, instance_id))
-                }
-                RouterMode::RoundRobin
-                | RouterMode::Random
-                | RouterMode::Direct
-                | RouterMode::KV => None,
-            };
-            return Ok((instance_id, permit));
-        }
-
-        match self.router_mode {
-            RouterMode::LeastLoaded
-            | RouterMode::PowerOfTwoChoices
-            | RouterMode::DeviceAwareWeighted => {
-                let state = self.occupancy_state()?;
-                let routing_instances = self.client.routing_instances();
-                let instance_ids = routing_instances.free_ids();
-                if instance_ids.is_empty() {
-                    return Err(self.empty_free_pool_error(&routing_instances));
-                }
-
-                let (decision, counter) = match self.router_mode {
-                    RouterMode::LeastLoaded | RouterMode::PowerOfTwoChoices => state
-                        .select_and_admit(
-                            self.picker()?,
-                            CandidateView::Workers(instance_ids),
-                            RouteContext::default(),
-                        )
-                        .ok_or_else(|| self.empty_free_pool_error(&routing_instances))?,
-                    RouterMode::DeviceAwareWeighted => {
-                        let selection = self.device_aware_candidates(request, instance_ids);
-                        state
-                            .select_and_admit(
-                                self.picker()?,
-                                CandidateView::DeviceAware(&selection.candidates),
-                                selection.context,
-                            )
-                            .ok_or_else(|| self.empty_free_pool_error(&routing_instances))?
-                    }
-                    _ => unreachable!(),
-                };
-                let instance_id = decision.target.worker_id;
-                let permit = counter
-                    .map(|counter| OccupancyPermit::from_counter(state, instance_id, counter));
-                Ok((instance_id, permit))
-            }
-            RouterMode::RoundRobin => self
-                .select_untracked_worker(self.round_robin_picker.as_ref())
-                .map(|(instance_id, _)| (instance_id, None)),
-            RouterMode::Random => self
-                .select_untracked_worker(self.random_picker.as_ref())
-                .map(|(instance_id, _)| (instance_id, None)),
-            RouterMode::Direct => Err(anyhow::anyhow!(
-                "Worker ID required for exact dispatch in Direct routing mode"
-            )),
-            RouterMode::KV => Err(anyhow::anyhow!(
-                "select_and_dispatch_exact cannot select workers in KV routing mode"
-            )),
-        }
-    }
-
     fn occupancy_state(&self) -> anyhow::Result<Arc<RoutingOccupancyState>> {
         self.occupancy_state.clone().ok_or_else(|| {
             anyhow::anyhow!(
@@ -1746,73 +1483,22 @@ where
     }
     */
 
-    async fn generate_with_fault_detection(
+    /// Resolve the worker `request` will be sent to.
+    ///
+    /// Opens the route span, looks the worker up in discovery (applying
+    /// `fallback` if it has gone), and runs the overload check `overload_check`
+    /// asks for. The caller may still rewrite the request for the resolved
+    /// worker before [`Self::send`].
+    pub fn resolve(
         &self,
+        request: &SingleIn<T>,
         instance_id: u64,
-        request: SingleIn<T>,
-        fallback: TransportFallback<'_>,
-    ) -> anyhow::Result<ManyOut<U>> {
-        self.generate_with_fault_detection_inner(
-            instance_id,
-            request,
-            fallback,
-            OverloadCheck::Required,
-        )
-        .await
-    }
-
-    async fn generate_with_fault_detection_inner(
-        &self,
-        instance_id: u64,
-        request: SingleIn<T>,
         fallback: TransportFallback<'_>,
         overload_check: OverloadCheck,
-    ) -> anyhow::Result<ManyOut<U>> {
-        self.generate_with_fault_detection_prepared_inner(
-            instance_id,
-            request,
-            fallback,
-            overload_check,
-            |_, _| Ok(()),
-        )
-        .await
-        .map(|(_, stream)| stream)
-    }
-
-    async fn generate_with_fault_detection_prepared<M, F>(
-        &self,
-        instance_id: u64,
-        request: SingleIn<T>,
-        fallback: TransportFallback<'_>,
-        prepare: F,
-    ) -> anyhow::Result<(M, ManyOut<U>)>
-    where
-        F: FnOnce(&mut T, u64) -> anyhow::Result<M>,
-    {
-        self.generate_with_fault_detection_prepared_inner(
-            instance_id,
-            request,
-            fallback,
-            OverloadCheck::Required,
-            prepare,
-        )
-        .await
-    }
-
-    async fn generate_with_fault_detection_prepared_inner<M, F>(
-        &self,
-        instance_id: u64,
-        mut request: SingleIn<T>,
-        fallback: TransportFallback<'_>,
-        overload_check: OverloadCheck,
-        prepare: F,
-    ) -> anyhow::Result<(M, ManyOut<U>)>
-    where
-        F: FnOnce(&mut T, u64) -> anyhow::Result<M>,
-    {
+    ) -> anyhow::Result<ResolvedTarget> {
         let route_start = Instant::now();
         let request_id = request.id().to_string();
-        let route_trace_context = get_route_trace_context(&request);
+        let route_trace_context = get_route_trace_context(request);
         let route_span = if matches!(self.router_mode, RouterMode::KV) {
             tracing::Span::none()
         } else {
@@ -1852,14 +1538,31 @@ where
             record_route_error(&route_span, error.as_ref());
             return Err(error);
         }
+        Ok(ResolvedTarget {
+            instance_id,
+            address,
+            transport_kind,
+            instance,
+            route_span,
+            route_start,
+        })
+    }
 
-        let metadata = match prepare(&mut request, instance_id) {
-            Ok(metadata) => metadata,
-            Err(error) => {
-                record_route_error(&route_span, error.as_ref());
-                return Err(error);
-            }
-        };
+    /// Send `request` to a resolved worker and wrap the response in fault
+    /// detection and the inactivity timeout.
+    pub async fn send(
+        &self,
+        request: SingleIn<T>,
+        target: ResolvedTarget,
+    ) -> anyhow::Result<ManyOut<U>> {
+        let ResolvedTarget {
+            instance_id,
+            address,
+            transport_kind,
+            instance,
+            route_span,
+            route_start,
+        } = target;
         let establish_timeout = self
             .establish_timeout
             .filter(|_| self.fault_detection_enabled);
@@ -1878,8 +1581,7 @@ where
             .generate(request)
             .instrument(route_span.clone())
             .await;
-        let stream = self.wrap_with_fault_detection(stream, instance_id, route_span)?;
-        Ok((metadata, stream))
+        self.wrap_with_fault_detection(stream, instance_id, route_span)
     }
 
     /// Reject early if the selected worker is overloaded and fault detection
@@ -2154,7 +1856,7 @@ where
     T: Data + Serialize,
     U: Data + for<'de> Deserialize<'de> + MaybeError,
 {
-    /// Bidirectional sibling of [`Self::generate_with_fault_detection`].
+    /// Bidirectional sibling of [`Self::resolve`] + [`Self::send`].
     async fn bidirectional_dispatch(
         &self,
         instance_id: u64,
@@ -2486,25 +2188,26 @@ mod tests {
     }
 
     #[test]
-    fn occupancy_permit_decrements_before_stream_creation() {
+    fn occupancy_reservation_releases_before_stream_creation() {
         let state = Arc::new(RoutingOccupancyState::default());
-        let counter = state.increment(42);
-        let permit = OccupancyPermit::from_counter(state.clone(), 42, counter);
+        let reservation = state.reserve(42);
         assert_eq!(state.load(42), 1);
-        drop(permit);
+        drop(reservation);
         assert_eq!(state.load(42), 0);
     }
 
     #[test]
     fn occupancy_tracked_stream_decrements_on_drop() {
         let state = Arc::new(RoutingOccupancyState::default());
-        let counter = state.increment(7);
-        let permit = OccupancyPermit::from_counter(state.clone(), 7, counter);
+        let reservation = state.reserve(7);
         let ctx: Arc<dyn AsyncEngineContext> = Arc::new(Controller::default());
-        let stream = permit.into_tracked_stream(ResponseStream::new(
-            Box::pin(tokio_stream::iter(vec![TestResponse { error: None }])),
-            ctx,
-        ));
+        let stream = track_occupancy(
+            ResponseStream::new(
+                Box::pin(tokio_stream::iter(vec![TestResponse { error: None }])),
+                ctx,
+            ),
+            reservation,
+        );
         assert_eq!(state.load(7), 1);
         drop(stream);
         assert_eq!(state.load(7), 0);
@@ -2513,13 +2216,15 @@ mod tests {
     #[tokio::test]
     async fn occupancy_tracked_stream_decrements_on_completion() {
         let state = Arc::new(RoutingOccupancyState::default());
-        let counter = state.increment(7);
-        let permit = OccupancyPermit::from_counter(state.clone(), 7, counter);
+        let reservation = state.reserve(7);
         let ctx: Arc<dyn AsyncEngineContext> = Arc::new(Controller::default());
-        let mut stream = permit.into_tracked_stream(ResponseStream::new(
-            Box::pin(tokio_stream::iter(vec![TestResponse { error: None }])),
-            ctx,
-        ));
+        let mut stream = track_occupancy(
+            ResponseStream::new(
+                Box::pin(tokio_stream::iter(vec![TestResponse { error: None }])),
+                ctx,
+            ),
+            reservation,
+        );
 
         assert!(stream.next().await.unwrap().err().is_none());
         assert_eq!(state.load(7), 1);
@@ -2532,19 +2237,21 @@ mod tests {
     #[tokio::test]
     async fn occupancy_tracked_stream_releases_before_yielding_error() {
         let state = Arc::new(RoutingOccupancyState::default());
-        let counter = state.increment(7);
-        let permit = OccupancyPermit::from_counter(state.clone(), 7, counter);
+        let reservation = state.reserve(7);
         let ctx: Arc<dyn AsyncEngineContext> = Arc::new(Controller::default());
         let error = DynamoError::builder()
             .error_type(ErrorType::WorkerOverloaded)
             .message("worker queue full")
             .build();
-        let mut stream = permit.into_tracked_stream(ResponseStream::new(
-            Box::pin(tokio_stream::iter(vec![TestResponse {
-                error: Some(error),
-            }])),
-            ctx,
-        ));
+        let mut stream = track_occupancy(
+            ResponseStream::new(
+                Box::pin(tokio_stream::iter(vec![TestResponse {
+                    error: Some(error),
+                }])),
+                ctx,
+            ),
+            reservation,
+        );
 
         let response = stream.next().await.expect("error response");
         assert!(response.err().is_some());
@@ -2556,25 +2263,24 @@ mod tests {
     }
 
     #[test]
-    fn same_id_readd_keeps_existing_permit_accounting() {
+    fn same_id_readd_keeps_existing_reservation_accounting() {
         let state = Arc::new(RoutingOccupancyState::default());
         state.retain(&[7]);
-        let old_counter = state.increment(7);
-        let old_permit = OccupancyPermit::from_counter(state.clone(), 7, old_counter);
+        let old_reservation = state.reserve(7);
 
         state.retain(&[]);
         assert_eq!(state.load(7), 1);
         state.retain(&[7]);
-        let new_permit = OccupancyPermit::acquire(state.clone(), 7);
+        let new_reservation = state.reserve(7);
         assert_eq!(state.load(7), 2);
 
-        drop(old_permit);
+        drop(old_reservation);
         assert_eq!(
             state.load(7),
             1,
             "re-added worker must retain the still-live request"
         );
-        drop(new_permit);
+        drop(new_reservation);
         assert_eq!(state.load(7), 0);
     }
 
@@ -2815,7 +2521,7 @@ mod tests {
         let mut permits = Vec::new();
         for _ in 0..5 {
             let selected = p2c_select_from(&state, &[1, 2]);
-            permits.push(OccupancyPermit::acquire(state.clone(), selected));
+            permits.push(state.reserve(selected));
         }
 
         let total = state.load(1) + state.load(2);
@@ -2858,7 +2564,7 @@ mod tests {
         state.increment(2);
 
         let picker = RoutePicker::new(RoutePolicy::LeastLoaded);
-        let (decision, counter) = state
+        let (decision, slot) = state
             .select_and_admit(
                 &picker,
                 CandidateView::Workers(&[1, 2, 3]),
@@ -2868,13 +2574,12 @@ mod tests {
         let selected = decision.target.worker_id;
         assert_eq!(selected, 3);
 
-        let permit = OccupancyPermit::from_counter(
-            state.clone(),
+        let reservation = state.reservation(
             selected,
-            counter.expect("least-loaded selection must acquire a counter"),
+            slot.expect("least-loaded selection must acquire a slot"),
         );
         assert_eq!(state.load(selected), 1);
-        drop(permit);
+        drop(reservation);
         assert_eq!(state.load(selected), 0);
     }
 
@@ -3033,76 +2738,6 @@ mod tests {
             "LeastLoaded peek must return the available worker for disagg bootstrap"
         );
 
-        rt.shutdown();
-    }
-
-    #[tokio::test]
-    async fn exact_selection_releases_occupancy_when_preparation_fails() {
-        let rt = Runtime::from_current().unwrap();
-        let drt = DistributedRuntime::new(rt.clone(), DistributedConfig::process_local())
-            .await
-            .unwrap();
-        let ns = drt
-            .namespace("test_exact_prepare_failure".to_string())
-            .unwrap();
-        let component = ns.component("test_component".to_string()).unwrap();
-        let endpoint = component.endpoint("test_endpoint".to_string());
-        let client = endpoint.client().await.unwrap();
-        endpoint.register_endpoint_instance().await.unwrap();
-        let worker_id = client.wait_for_instances().await.unwrap()[0].id();
-
-        let router = PushRouter::<u64, TestResponse>::from_client(client, RouterMode::LeastLoaded)
-            .await
-            .unwrap();
-        let state = router.occupancy_state.clone().unwrap();
-        let result = router
-            .select_and_dispatch_exact(SingleIn::new(42), None, |_, _| {
-                Err::<(), _>(anyhow::anyhow!("metadata preparation failed"))
-            })
-            .await;
-
-        assert!(result.is_err());
-        assert_eq!(
-            state.load(worker_id),
-            0,
-            "preparation failure must release the selected worker"
-        );
-        rt.shutdown();
-    }
-
-    #[tokio::test]
-    async fn exact_dispatch_revalidates_overload_after_preparation() {
-        let rt = Runtime::from_current().unwrap();
-        let drt = DistributedRuntime::new(rt.clone(), DistributedConfig::process_local())
-            .await
-            .unwrap();
-        let ns = drt
-            .namespace("test_exact_overload_revalidation".to_string())
-            .unwrap();
-        let component = ns.component("test_component".to_string()).unwrap();
-        let endpoint = component.endpoint("test_endpoint".to_string());
-        let client = endpoint.client().await.unwrap();
-        endpoint.register_endpoint_instance().await.unwrap();
-        let worker_id = client.wait_for_instances().await.unwrap()[0].id();
-
-        let router =
-            PushRouter::<u64, TestResponse>::from_client(client.clone(), RouterMode::LeastLoaded)
-                .await
-                .unwrap();
-        let state = router.occupancy_state.clone().unwrap();
-        let result = router
-            .select_and_dispatch_exact(SingleIn::new(42), Some(worker_id), |_, worker_id| {
-                client.set_overloaded_instances(&[worker_id]);
-                Ok(())
-            })
-            .await;
-
-        assert!(result.is_err());
-        assert_eq!(
-            state.load(worker_id),
-            0,
-            "validation failure must release the selected worker"
-        );
         rt.shutdown();
     }
 
@@ -3432,33 +3067,25 @@ mod tests {
             "precondition: worker should be locally inhibited"
         );
 
-        let result = router
-            .direct_within_prepared(
-                SingleIn::new(42),
+        router
+            .ensure_live_or_fallback(instance_id, TransportFallback::Allow)
+            .expect("an inhibited worker is still discovered");
+        let request = SingleIn::new(42);
+        let target = router
+            .resolve(
+                &request,
                 instance_id,
-                None,
-                |_, selected_instance_id| {
-                    assert_eq!(selected_instance_id, instance_id);
-                    Err::<(), _>(anyhow::anyhow!("direct prepare sentinel"))
-                },
+                TransportFallback::Allow,
+                OverloadCheck::Required,
             )
-            .await;
-        let error = match result {
-            Ok(_) => panic!("direct dispatch should reach request preparation"),
-            Err(error) => error,
-        };
-        assert_eq!(error.to_string(), "direct prepare sentinel");
+            .expect("direct dispatch should resolve the inhibited worker");
+        assert_eq!(target.worker_id(), instance_id);
+        target.fail(&*anyhow::anyhow!("direct prepare sentinel"));
 
         let missing_instance_id = instance_id.wrapping_add(1);
-        let result = router
-            .direct_within_prepared(SingleIn::new(42), missing_instance_id, None, |_, _| {
-                Ok::<(), anyhow::Error>(())
-            })
-            .await;
-        let error = match result {
-            Ok(_) => panic!("direct dispatch should reject a worker absent from discovery"),
-            Err(error) => error,
-        };
+        let error = router
+            .ensure_live_or_fallback(missing_instance_id, TransportFallback::Allow)
+            .expect_err("direct dispatch should reject a worker absent from discovery");
         assert!(
             error
                 .to_string()
@@ -3514,7 +3141,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn prepared_dispatch_observes_worker_after_transport_fallback() {
+    async fn transport_fallback_resolves_a_live_worker_and_moves_the_reservation() {
         let rt = Runtime::from_current().unwrap();
         let drt = DistributedRuntime::new(rt.clone(), DistributedConfig::process_local())
             .await
@@ -3534,25 +3161,27 @@ mod tests {
             .await
             .unwrap();
         let state = router.occupancy_state.clone().unwrap();
-        state.increment(real_id);
-        let state_for_prepare = state.clone();
-        let observed = Arc::new(AtomicU64::new(0));
-        let observed_for_prepare = observed.clone();
+        let in_flight = state.reserve(real_id);
+        let mut reservation = state.reserve(stale_id);
+        assert_eq!([state.load(stale_id), state.load(real_id)], [1, 1]);
 
-        let _ = tokio::time::timeout(
-            std::time::Duration::from_millis(100),
-            router.select_and_dispatch(SingleIn::new(42), move |_, worker_id| {
-                assert_eq!(state_for_prepare.load(stale_id), 0);
-                assert_eq!(state_for_prepare.load(worker_id), 2);
-                observed_for_prepare.store(worker_id, Ordering::Relaxed);
-                Ok(())
-            }),
-        )
-        .await;
+        let request = SingleIn::new(42);
+        let target = router
+            .resolve(
+                &request,
+                stale_id,
+                TransportFallback::Allow,
+                OverloadCheck::Required,
+            )
+            .expect("a departed selection falls back to the live worker");
+        assert_eq!(target.worker_id(), real_id);
+        reservation.retarget(target.worker_id());
+        assert_eq!([state.load(stale_id), state.load(real_id)], [0, 2]);
 
-        assert_eq!(observed.load(Ordering::Relaxed), real_id);
+        drop(reservation);
         assert_eq!(state.load(real_id), 1);
-        state.decrement(real_id);
+        drop(in_flight);
+        assert_eq!(state.load(real_id), 0);
         rt.shutdown();
     }
 
