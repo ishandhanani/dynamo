@@ -20,9 +20,12 @@ use dynamo_runtime::{
     },
     protocols::annotated::Annotated,
 };
-use dynamo_worker_selection::selector::{WorkerInputs, WorkerSelector};
+use dynamo_worker_selection::selector::WorkerInputs;
 
-use super::{BuiltinWorkerSelector, HostedOccupancy, LoraRouting, RoutingHost, RoutingPolicy};
+use super::{
+    HostedOccupancy, LoraRouting, RoutingHost, RoutingPolicy,
+    builtin::{builtin_inputs, builtin_picker},
+};
 use crate::{
     kv_router::{KvRouter, RoutingLoadContext, metrics::RouterRequestMetrics},
     lora::{LoadEstimator, LoraFilter},
@@ -333,12 +336,12 @@ fn assemble(
         RouterMode::Direct => RoutingPolicy::Direct,
         RouterMode::DeviceAwareWeighted => RoutingPolicy::DeviceAwareWeighted,
         mode => RoutingPolicy::Builtin(
-            BuiltinWorkerSelector::new(mode)
+            builtin_picker(mode)
                 .ok_or_else(|| anyhow::anyhow!("{mode:?} routing is not a first-party policy"))?,
         ),
     };
     let required_worker_inputs = match &policy {
-        RoutingPolicy::Builtin(selector) => selector.required_worker_inputs(),
+        RoutingPolicy::Builtin(_) => builtin_inputs(mode),
         RoutingPolicy::DeviceAwareWeighted => WorkerInputs::OCCUPANCY,
         RoutingPolicy::Direct => WorkerInputs::NONE,
         RoutingPolicy::Kv(_) => unreachable!("KV hosts are assembled above"),
@@ -353,7 +356,7 @@ fn assemble(
     let lora = lora.map(|(filter, load_estimator)| LoraRouting {
         filter,
         load_estimator,
-        selector: BuiltinWorkerSelector::new(mode).expect("LoRA routing mode was validated above"),
+        selector: builtin_picker(mode).expect("LoRA routing mode was validated above"),
     });
     let request_metrics = RouterRequestMetrics::from_component(inner.client.endpoint.component());
     Ok(RoutingHost {

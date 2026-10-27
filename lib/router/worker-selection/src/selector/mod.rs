@@ -116,10 +116,6 @@ pub enum WorkerSelectionInput<'a, C: WorkerConfigLike> {
         eligibility: RoutingEligibility<'a>,
         block_size: u32,
     },
-    Hosted {
-        worker_ids: &'a [WorkerId],
-        occupancy: Option<&'a dyn Fn(WorkerId) -> u64>,
-    },
 }
 
 pub type ConfiguredSelectionInputs<'a, C> = (
@@ -128,8 +124,6 @@ pub type ConfiguredSelectionInputs<'a, C> = (
     RoutingEligibility<'a>,
     u32,
 );
-
-pub type HostedSelectionInputs<'a> = (&'a [WorkerId], Option<&'a dyn Fn(WorkerId) -> u64>);
 
 impl<'a, C: WorkerConfigLike> WorkerSelectionInput<'a, C> {
     pub fn configured(
@@ -146,42 +140,14 @@ impl<'a, C: WorkerConfigLike> WorkerSelectionInput<'a, C> {
         }
     }
 
-    pub fn hosted(
-        worker_ids: &'a [WorkerId],
-        occupancy: Option<&'a dyn Fn(WorkerId) -> u64>,
-    ) -> Self {
-        Self::Hosted {
-            worker_ids,
-            occupancy,
-        }
-    }
-
-    pub fn into_configured(self) -> Result<ConfiguredSelectionInputs<'a, C>, KvSchedulerError> {
-        match self {
-            Self::Configured {
-                workers,
-                request,
-                eligibility,
-                block_size,
-            } => Ok((workers, request, eligibility, block_size)),
-            Self::Hosted { .. } => Err(WorkerSelectionPolicyError::failed(
-                "selector requires configured worker inputs",
-            )
-            .into()),
-        }
-    }
-
-    pub fn into_hosted(self) -> Result<HostedSelectionInputs<'a>, KvSchedulerError> {
-        match self {
-            Self::Hosted {
-                worker_ids,
-                occupancy,
-            } => Ok((worker_ids, occupancy)),
-            Self::Configured { .. } => Err(WorkerSelectionPolicyError::failed(
-                "selector requires hosted worker inputs",
-            )
-            .into()),
-        }
+    pub fn into_configured(self) -> ConfiguredSelectionInputs<'a, C> {
+        let Self::Configured {
+            workers,
+            request,
+            eligibility,
+            block_size,
+        } = self;
+        (workers, request, eligibility, block_size)
     }
 }
 

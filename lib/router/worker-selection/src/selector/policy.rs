@@ -494,7 +494,7 @@ impl<C: WorkerConfigLike> WorkerSelector<C> for WorkerSelectionPolicy {
         input: WorkerSelectionInput<'_, C>,
         trace: Option<SelectionTraceSpec>,
     ) -> Result<(WorkerSelectionResult, Option<SelectionTrace>), KvSchedulerError> {
-        let (workers, request, eligibility, block_size) = input.into_configured()?;
+        let (workers, request, eligibility, block_size) = input.into_configured();
         let state = match &self.state {
             #[cfg(any(test, feature = "testing", feature = "bench"))]
             WorkerSelectionPolicyState::Reference(config, picker) => {

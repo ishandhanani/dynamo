@@ -15,8 +15,8 @@ use dynamo_runtime::{
     error::{DynamoError, ErrorType, match_error_chain},
     metrics::frontend_perf::{STAGE_ROUTE, StageGuard},
     pipeline::{
-        AsyncEngine, AsyncEngineContext, AsyncEngineContextProvider, Error, ManyOut, PushRouter,
-        ResponseStream, SingleIn, async_trait,
+        AsyncEngine, AsyncEngineContext, AsyncEngineContextProvider, BuiltinRoutePicker, Error,
+        ManyOut, PushRouter, ResponseStream, SingleIn, async_trait,
         network::egress::route_span::{
             get_route_trace_context, record_route_error, record_route_span_start, wrap_route_span,
         },
@@ -24,7 +24,7 @@ use dynamo_runtime::{
     protocols::annotated::Annotated,
 };
 use dynamo_worker_selection::affinity::AffinityLease;
-use dynamo_worker_selection::selector::{WorkerInputs, WorkerSelector};
+use dynamo_worker_selection::selector::WorkerInputs;
 use futures::stream::{self, StreamExt};
 use tracing::Instrument;
 
@@ -54,7 +54,6 @@ mod occupancy;
 mod request_guard;
 
 pub use builder::{LlmDispatch, LlmPushRouter, RoutingHostBuilder};
-use builtin::BuiltinWorkerSelector;
 use cancellation::{CleanupBudget, DispatchCancellation, StagedKv, await_with_cleanup_policy};
 use kv_selection::{RoutingRequestParts, SelectionOptions, WorkerSelection};
 use occupancy::HostedOccupancy;
@@ -261,7 +260,7 @@ fn into_monitored_response(
 
 enum RoutingPolicy {
     Kv(Arc<KvRouter>),
-    Builtin(BuiltinWorkerSelector),
+    Builtin(BuiltinRoutePicker),
     Direct,
     DeviceAwareWeighted,
 }
@@ -269,7 +268,7 @@ enum RoutingPolicy {
 struct LoraRouting {
     filter: Arc<LoraFilter>,
     load_estimator: Arc<LoadEstimator>,
-    selector: BuiltinWorkerSelector,
+    selector: BuiltinRoutePicker,
 }
 
 struct LoraSelection {
@@ -434,7 +433,7 @@ impl RoutingHost {
     pub fn required_worker_inputs(&self) -> WorkerInputs {
         match &self.policy {
             RoutingPolicy::Kv(chooser) => chooser.required_worker_inputs(),
-            RoutingPolicy::Builtin(selector) => selector.required_worker_inputs(),
+            RoutingPolicy::Builtin(_) => builtin::builtin_inputs(self.inner.router_mode()),
             RoutingPolicy::Direct => WorkerInputs::NONE,
             RoutingPolicy::DeviceAwareWeighted => WorkerInputs::OCCUPANCY,
         }
@@ -470,19 +469,13 @@ impl RoutingHost {
 
     pub(crate) fn peek_next_worker(&self) -> Option<u64> {
         match &self.policy {
-            RoutingPolicy::Builtin(selector) => match &self.hosted_occupancy {
-                Some(occupancy) => occupancy.peek(&self.inner, selector),
+            RoutingPolicy::Builtin(picker) => match &self.hosted_occupancy {
+                Some(occupancy) => occupancy.peek(&self.inner, picker),
                 None => self
                     .inner
-                    .with_selectable_worker_ids(|ids| {
-                        selector.peek_worker(
-                            dynamo_worker_selection::selector::WorkerSelectionInput::hosted(
-                                ids, None,
-                            ),
-                        )
-                    })
+                    .with_selectable_worker_ids(|ids| picker.peek_worker(ids, |_| 0))
                     .ok()
-                    .and_then(Result::ok),
+                    .flatten(),
             },
             RoutingPolicy::DeviceAwareWeighted => self.inner.peek_next_worker(),
             RoutingPolicy::Direct => None,

@@ -33,6 +33,7 @@ use dynamo_runtime::{
 use dynamo_worker_selection::plugin::WorkerCandidates;
 use tokio::sync::{Notify, mpsc, watch};
 
+use super::builtin::{builtin_inputs, builtin_picker};
 use super::*;
 use crate::{
     kv_router::{RoutingLoadContext, routing_host::request_guard::RouteObservation},
@@ -105,12 +106,19 @@ fn selector_state_remains_owned_by_the_scheduler_actor() {
 #[test]
 fn builtin_policies_declare_capabilities() {
     for mode in [RouterMode::RoundRobin, RouterMode::Random] {
-        let selector = BuiltinWorkerSelector::new(mode).unwrap();
-        assert_eq!(selector.required_worker_inputs(), WorkerInputs::NONE);
+        assert!(builtin_picker(mode).is_some());
+        assert_eq!(builtin_inputs(mode), WorkerInputs::NONE);
     }
     for mode in [RouterMode::PowerOfTwoChoices, RouterMode::LeastLoaded] {
-        let selector = BuiltinWorkerSelector::new(mode).unwrap();
-        assert_eq!(selector.required_worker_inputs(), WorkerInputs::OCCUPANCY);
+        assert!(builtin_picker(mode).is_some());
+        assert_eq!(builtin_inputs(mode), WorkerInputs::OCCUPANCY);
+    }
+    for mode in [
+        RouterMode::KV,
+        RouterMode::Direct,
+        RouterMode::DeviceAwareWeighted,
+    ] {
+        assert!(builtin_picker(mode).is_none());
     }
 }
 
@@ -146,7 +154,7 @@ async fn builtin_host_constructs_only_declared_capabilities() {
         .build()
         .await
         .unwrap();
-    let RoutingPolicy::Builtin(selector) = &host.policy else {
+    let RoutingPolicy::Builtin(picker) = &host.policy else {
         unreachable!()
     };
     assert_eq!(host.required_worker_inputs(), WorkerInputs::OCCUPANCY);
@@ -155,7 +163,7 @@ async fn builtin_host_constructs_only_declared_capabilities() {
         .hosted_occupancy
         .as_ref()
         .unwrap()
-        .select_and_reserve(&host.inner, selector, Some(1))
+        .select_and_reserve(&host.inner, picker, Some(1))
         .unwrap();
     assert_eq!(selection.worker_id, 1);
     assert_eq!(selection.occupancy, 1);
@@ -196,15 +204,15 @@ async fn builtin_occupancy_selection_uses_all_selectable_workers() {
         .build()
         .await
         .unwrap();
-    let RoutingPolicy::Builtin(selector) = &host.policy else {
+    let RoutingPolicy::Builtin(picker) = &host.policy else {
         unreachable!()
     };
     let occupancy = host.hosted_occupancy.as_ref().unwrap();
     let first = occupancy
-        .select_and_reserve(&host.inner, selector, Some(1))
+        .select_and_reserve(&host.inner, picker, Some(1))
         .unwrap();
     let second = occupancy
-        .select_and_reserve(&host.inner, selector, None)
+        .select_and_reserve(&host.inner, picker, None)
         .unwrap();
 
     assert_eq!(first.worker_id, 1);
