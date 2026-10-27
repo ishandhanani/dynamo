@@ -58,7 +58,8 @@ struct ClassifyBusyThresholds {
 }
 
 #[derive(Clone, Debug, Default)]
-pub(crate) struct ClassificationOverrides {
+#[doc(hidden)]
+pub struct ClassificationOverrides {
     pub(crate) policy_class: Option<String>,
     pub(crate) due_at: Option<Instant>,
     pub(crate) scheduling_cost_tokens: Option<usize>,

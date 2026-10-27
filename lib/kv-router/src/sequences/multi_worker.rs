@@ -37,8 +37,8 @@ use crate::plugins::worker_selection::WorkerCapacity;
 use crate::protocols::{
     ActiveSequenceEvent, ActiveSequenceEventData, PrefillLoadHint, WorkerId, WorkerWithDpRank,
 };
+use crate::protocols::{AttemptId, SchedulerBookingDescriptor};
 use crate::scheduling::policy_config::FullRankCounts;
-use crate::scheduling::{AttemptId, queue::SchedulerBookingDescriptor};
 
 // How often we force expire stale requests across all workers. See the comment
 // in ActiveSequencesMultiWorker::force_expire_requests_across_all_workers for
@@ -196,7 +196,8 @@ impl SequencePublishQueueError {
 
 /// Throttles repeated failure logs to one per interval, counting what it suppressed.
 #[derive(Default)]
-pub(crate) struct RateLimitedFailureLog {
+#[doc(hidden)]
+pub struct RateLimitedFailureLog {
     last_logged_at: Option<Instant>,
     suppressed_since_last_log: u64,
 }
@@ -299,7 +300,8 @@ pub enum ReplicaWorkerPolicy {
 }
 
 #[derive(Debug, Clone, Copy)]
-pub(crate) struct SequenceTrackerOptions {
+#[doc(hidden)]
+pub struct SequenceTrackerOptions {
     pub(crate) replica_worker_policy: ReplicaWorkerPolicy,
     pub(crate) expiry_duration: Option<Duration>,
 }
@@ -461,7 +463,8 @@ impl<P: SequencePublisher + 'static> ActiveSequencesMultiWorker<P> {
     }
 
     /// Builds a tracker from resolved replica-admission and expiry policies.
-    pub(crate) fn new_with_options(
+    #[doc(hidden)]
+    pub fn new_with_options(
         publisher: P,
         block_size: usize,
         dp_range: HashMap<u64, (u32, u32)>,
@@ -797,7 +800,8 @@ impl<P: SequencePublisher + 'static> ActiveSequencesMultiWorker<P> {
         self.add_request_admitted(req, decay_now).map(|_| ())
     }
 
-    pub(crate) fn add_request_admitted(
+    #[doc(hidden)]
+    pub fn add_request_admitted(
         &self,
         req: SequenceRequest,
         decay_now: Instant,
@@ -851,14 +855,16 @@ impl<P: SequencePublisher + 'static> ActiveSequencesMultiWorker<P> {
         Ok(attempt_id)
     }
 
-    pub(crate) fn request_worker(&self, request_id: &str) -> Option<WorkerWithDpRank> {
+    #[doc(hidden)]
+    pub fn request_worker(&self, request_id: &str) -> Option<WorkerWithDpRank> {
         self.request_index.worker_for(request_id)
     }
 
     /// Return the live booking for `request_id`, so callers can fence later
     /// lifecycle steps to this attempt.
     #[cfg(feature = "standalone-slot-tracker")]
-    pub(crate) fn request_booking(&self, request_id: &str) -> Option<SchedulerBookingDescriptor> {
+    #[doc(hidden)]
+    pub fn request_booking(&self, request_id: &str) -> Option<SchedulerBookingDescriptor> {
         let booking = self.request_index.booking_for(request_id)?;
         Some(SchedulerBookingDescriptor {
             request_id: request_id.to_string(),
@@ -867,7 +873,8 @@ impl<P: SequencePublisher + 'static> ActiveSequencesMultiWorker<P> {
         })
     }
 
-    pub(crate) fn has_booking(&self, booking: &SchedulerBookingDescriptor) -> bool {
+    #[doc(hidden)]
+    pub fn has_booking(&self, booking: &SchedulerBookingDescriptor) -> bool {
         self.request_index.booking_for(&booking.request_id)
             == Some(RequestBooking {
                 worker: booking.worker,
@@ -878,7 +885,8 @@ impl<P: SequencePublisher + 'static> ActiveSequencesMultiWorker<P> {
     /// Republish the ordered completion event for `booking` while it is still
     /// the live booking; serialized with free/rebook through the worker's
     /// sequence lock.
-    pub(crate) fn publish_prefill_completed_if_booking(
+    #[doc(hidden)]
+    pub fn publish_prefill_completed_if_booking(
         &self,
         booking: &SchedulerBookingDescriptor,
     ) -> bool {
@@ -957,7 +965,8 @@ impl<P: SequencePublisher + 'static> ActiveSequencesMultiWorker<P> {
     ///
     /// This is safe for delayed cleanup that captured a worker when it acquired
     /// the booking. An ownership mismatch or already-freed request is a no-op.
-    pub(crate) fn free_if_worker(
+    #[doc(hidden)]
+    pub fn free_if_worker(
         &self,
         request_id: &RequestId,
         worker: WorkerWithDpRank,
@@ -970,7 +979,8 @@ impl<P: SequencePublisher + 'static> ActiveSequencesMultiWorker<P> {
     }
 
     /// Release only the scheduler booking owned by one request attempt.
-    pub(crate) fn free_if_booking(
+    #[doc(hidden)]
+    pub fn free_if_booking(
         &self,
         request_id: &RequestId,
         worker: WorkerWithDpRank,
@@ -987,7 +997,8 @@ impl<P: SequencePublisher + 'static> ActiveSequencesMultiWorker<P> {
     }
 
     /// Expire one request attempt locally without publishing a replica `Free` event.
-    pub(crate) fn expire_if_booking(
+    #[doc(hidden)]
+    pub fn expire_if_booking(
         &self,
         request_id: &RequestId,
         worker: WorkerWithDpRank,
@@ -1126,7 +1137,8 @@ impl<P: SequencePublisher + 'static> ActiveSequencesMultiWorker<P> {
     /// Mark prefill complete if `attempt_id` still owns the booking, and publish the
     /// ordered completion event for every phase change, so peer routers move the
     /// request to decode even when it held no prompt load.
-    pub(crate) fn mark_prefill_completed_if_booking(
+    #[doc(hidden)]
+    pub fn mark_prefill_completed_if_booking(
         &self,
         request_id: &RequestId,
         worker: WorkerWithDpRank,
@@ -1172,7 +1184,8 @@ impl<P: SequencePublisher + 'static> ActiveSequencesMultiWorker<P> {
 
     /// Publish the router's ordered completion fallback independently of the local mutation.
     /// This is a no-op when the request no longer has a live worker booking.
-    pub(crate) fn publish_prefill_completed(&self, request_id: &RequestId) {
+    #[doc(hidden)]
+    pub fn publish_prefill_completed(&self, request_id: &RequestId) {
         if !self.replica_sync {
             return;
         }
@@ -1229,7 +1242,8 @@ impl<P: SequencePublisher + 'static> ActiveSequencesMultiWorker<P> {
         Ok(())
     }
 
-    pub(crate) fn add_output_blocks_if_booking(
+    #[doc(hidden)]
+    pub fn add_output_blocks_if_booking(
         &self,
         request_id: &RequestId,
         worker: WorkerWithDpRank,
@@ -1267,7 +1281,8 @@ impl<P: SequencePublisher + 'static> ActiveSequencesMultiWorker<P> {
 
     /// Get the number of workers.
     #[cfg(test)]
-    pub(crate) fn num_workers(&self) -> usize {
+    #[doc(hidden)]
+    pub fn num_workers(&self) -> usize {
         self.workers.read().slots.len()
     }
 
@@ -1315,7 +1330,8 @@ impl<P: SequencePublisher + 'static> ActiveSequencesMultiWorker<P> {
 
     /// Project every registered rank's load for one request into `projections`. With
     /// `full_ranks`, the pass also counts the ranks past its busy thresholds per worker.
-    pub(crate) fn project_worker_loads_into(
+    #[doc(hidden)]
+    pub fn project_worker_loads_into(
         &self,
         token_sequence: Option<&[SequenceHash]>,
         decay_now: Instant,

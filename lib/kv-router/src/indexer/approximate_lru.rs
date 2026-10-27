@@ -30,11 +30,11 @@ use super::{
     KvRouterError,
     pruning::{BlockEntry, PruneConfig, WorkerPruneManager},
 };
+use crate::protocols::AttemptId;
 use crate::protocols::{
     ExternalSequenceBlockHash, KvCacheEvent, KvCacheEventData, KvCacheRemoveData, KvCacheStoreData,
     KvCacheStoredBlockData, LocalBlockHash, RouterEvent, WorkerWithDpRank,
 };
-use crate::scheduling::AttemptId;
 use dynamo_tokens::SequenceHash;
 
 pub type ApproximateLruIncarnation = u64;

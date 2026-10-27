@@ -6,8 +6,8 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use super::single::RequestId;
+use crate::protocols::AttemptId;
 use crate::protocols::WorkerWithDpRank;
-use crate::scheduling::AttemptId;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) struct RequestBooking {

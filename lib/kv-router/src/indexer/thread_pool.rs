@@ -28,8 +28,8 @@ use super::{
     ObservedEnqueueReceipt, ThreadPoolObservationPlan, ThreadPoolObservationSnapshot,
 };
 use crate::indexer::pruning::{BlockEntry, PruneConfig, WorkerPruneManager};
+use crate::protocols::AttemptId;
 use crate::protocols::*;
-use crate::scheduling::AttemptId;
 use dynamo_tokens::SequenceHash;
 #[cfg(feature = "bench")]
 use std::sync::atomic::{AtomicBool, Ordering as AtomicOrdering};

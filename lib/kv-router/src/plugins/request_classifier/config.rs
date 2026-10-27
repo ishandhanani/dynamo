@@ -28,7 +28,8 @@ impl RequestClassifierConfig {
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(crate) struct RawRequestClassifierConfig {
+#[doc(hidden)]
+pub struct RawRequestClassifierConfig {
     #[serde(rename = "type")]
     classifier_type: String,
     #[serde(default = "empty_parameters")]

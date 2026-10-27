@@ -32,7 +32,8 @@ const STABLE_DP_SLOT_EXPLICIT_V1: &[u8] = b"dynamo/stable-dp-slot/explicit/v1";
     feature = "standalone-selection",
     feature = "standalone-slot-tracker"
 ))]
-pub(crate) fn default_routing_group() -> String {
+#[doc(hidden)]
+pub fn default_routing_group() -> String {
     DEFAULT_ROUTING_GROUP.to_string()
 }
 

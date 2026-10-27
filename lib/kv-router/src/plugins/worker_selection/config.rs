@@ -71,7 +71,8 @@ impl WorkerSelectionInstance {
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(crate) struct RawWorkerSelectionConfig {
+#[doc(hidden)]
+pub struct RawWorkerSelectionConfig {
     aggregated: Option<String>,
     prefill: Option<String>,
     decode: Option<String>,

@@ -138,7 +138,8 @@ impl BusyThresholds {
 /// projected. Only a worker with at least one full rank has an entry, so the map stays empty
 /// while no worker is near its limits and selection pays nothing to consult it.
 #[derive(Debug, Default)]
-pub(crate) struct FullRankCounts {
+#[doc(hidden)]
+pub struct FullRankCounts {
     limits: BusyThresholds,
     full_ranks: FxHashMap<WorkerId, u32>,
 }
@@ -814,7 +815,8 @@ fn resolve_uncached_isl_buckets(
     })
 }
 
-pub(crate) fn validate_identifier(
+#[doc(hidden)]
+pub fn validate_identifier(
     name: &str,
     kind: &str,
     location: &str,

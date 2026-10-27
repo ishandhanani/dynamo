@@ -383,7 +383,8 @@ impl WorkerRegistry {
     }
 
     #[cfg(feature = "standalone-selection")]
-    pub(crate) fn with_retained_indexers(mut self) -> Self {
+    #[doc(hidden)]
+    pub fn with_retained_indexers(mut self) -> Self {
         // Selection entries and their schedulers retain these indexers across worker updates.
         self.retain_empty_indexers = true;
         self

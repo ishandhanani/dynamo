@@ -47,7 +47,8 @@ impl MooncakeOverlapSummary {
     }
 }
 
-pub(crate) fn build_mooncake_overlap_summaries(
+#[doc(hidden)]
+pub fn build_mooncake_overlap_summaries(
     tiered: &TieredMatchDetails,
     block_size: u32,
     expected_workers: impl IntoIterator<Item = WorkerWithDpRank>,

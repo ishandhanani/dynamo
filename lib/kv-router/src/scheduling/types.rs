@@ -14,35 +14,14 @@ use super::overlap::{OverlapSignals, SelectedWorkerTierSnapshot};
 use super::prefill_load::effective_prefill_tokens;
 use crate::kv_hints::{KvTransferCandidates, KvTransferSourceChoice};
 pub use crate::protocols::PotentialLoad;
+use crate::protocols::QueueRejection;
+use crate::protocols::WorkerLoadProjection;
 use crate::protocols::{
     LocalBlockHash, RoutingConstraints, SelectionTrace, SharedCacheHits, WorkerAffinityTarget,
     WorkerConfigLike, WorkerId, WorkerWithDpRank,
 };
-use crate::scheduling::policy_queue::QueueRejection;
-use crate::sequences::WorkerLoadProjection;
 
-/// Router-internal identity for one admitted request attempt.
-#[doc(hidden)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct AttemptId(u64);
-
-impl AttemptId {
-    pub(crate) fn new(value: u64) -> Self {
-        Self(value)
-    }
-
-    #[cfg(feature = "bench")]
-    #[doc(hidden)]
-    pub fn for_benchmark(value: u64) -> Self {
-        Self::new(value)
-    }
-}
-
-impl std::fmt::Display for AttemptId {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        self.0.fmt(formatter)
-    }
-}
+pub use crate::protocols::AttemptId;
 
 pub type OverloadedWorkerProvider =
     Arc<dyn Fn() -> Option<HashSet<WorkerId>> + Send + Sync + 'static>;

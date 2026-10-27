@@ -473,7 +473,8 @@ async fn dump_events(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     (StatusCode::OK, Json(dump_registry(&state.registry).await))
 }
 
-pub(crate) async fn dump_registry(registry: &WorkerRegistry) -> serde_json::Value {
+#[doc(hidden)]
+pub async fn dump_registry(registry: &WorkerRegistry) -> serde_json::Value {
     let all = registry.all_indexers_with_block_size();
     let mut handles = Vec::with_capacity(all.len());
 

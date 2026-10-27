@@ -41,7 +41,8 @@ pub const DYN_ROUTER_DECODE_POLICY: &str = "DYN_ROUTER_DECODE_POLICY";
 pub const DYN_ROUTER_APPROXIMATE_CACHE_POLICY: &str = "DYN_ROUTER_APPROXIMATE_CACHE_POLICY";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct WorkerSelectionPolicySelections {
+#[doc(hidden)]
+pub struct WorkerSelectionPolicySelections {
     pub(crate) aggregated: Option<String>,
     pub(crate) prefill: Option<String>,
     pub(crate) decode: Option<String>,

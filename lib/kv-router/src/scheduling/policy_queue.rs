@@ -8,7 +8,6 @@ use tokio::time::Instant;
 
 use ordered_float::OrderedFloat;
 use rustc_hash::{FxHashMap, FxHashSet};
-use serde::{Deserialize, Serialize};
 
 use super::config::RouterQueuePolicy;
 use super::policy_config::{PolicyClassConfig, PolicyProfile};
@@ -45,35 +44,7 @@ pub(crate) struct QueueMetadata {
     pub(crate) arrival_offset_secs: f64,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum QueueLimitKind {
-    Requests,
-    RawIslTokens,
-    CachedTokens,
-}
-
-impl std::fmt::Display for QueueLimitKind {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Requests => formatter.write_str("requests"),
-            Self::RawIslTokens => formatter.write_str("raw_isl_tokens"),
-            Self::CachedTokens => formatter.write_str("cached_tokens"),
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, thiserror::Error)]
-#[error(
-    "router policy class {policy_class:?} queue {limit_kind} limit reached \
-     (current={current}, limit={limit})"
-)]
-pub struct QueueRejection {
-    pub policy_class: String,
-    pub limit_kind: QueueLimitKind,
-    pub current: usize,
-    pub limit: usize,
-}
+pub use crate::protocols::{QueueLimitKind, QueueRejection};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct PolicyQueueStats {

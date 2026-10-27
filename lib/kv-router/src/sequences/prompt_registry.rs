@@ -22,28 +22,7 @@ use crate::plugins::worker_selection::WorkerCapacity;
 use crate::protocols::WorkerWithDpRank;
 use crate::scheduling::policy_config::FullRankCounts;
 
-/// Ephemeral, request-specific view of worker load.
-///
-/// Values are materialized for one incoming request at a specific instant and
-/// should be passed to worker selection immediately. Do not persist, reuse, or
-/// publish this projection as durable worker state.
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
-pub struct WorkerLoadProjection {
-    pub active_prefill_tokens: usize,
-    pub active_decode_blocks: usize,
-    pub active_requests: usize,
-    /// Request blocks not already shared with active sequences on this worker.
-    ///
-    /// These blocks may still exist in an inactive cache; this field describes
-    /// additional active block footprint, not cache misses.
-    pub additional_active_blocks: usize,
-}
-
-impl WorkerLoadProjection {
-    pub fn potential_decode_blocks(self) -> usize {
-        self.active_decode_blocks + self.additional_active_blocks
-    }
-}
+pub use crate::protocols::WorkerLoadProjection;
 
 pub type PotentialLoadMaps = (
     FxHashMap<WorkerWithDpRank, usize>,

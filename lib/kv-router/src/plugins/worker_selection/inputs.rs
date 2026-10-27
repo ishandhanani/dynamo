@@ -9,7 +9,8 @@ use rustc_hash::FxHashMap;
 use std::ops::BitOr;
 
 /// Host-owned row materialized once for the union of component input requirements.
-pub(crate) struct CandidateData {
+#[doc(hidden)]
+pub struct CandidateData {
     pub(crate) worker: WorkerWithDpRank,
     pub(crate) inputs: WorkerInputs,
     pub(crate) cache: WorkerCacheData,
@@ -211,7 +212,8 @@ impl BitOr for WorkerInputs {
 }
 
 /// Request-wide facts borrowed once for all cache views in a selection.
-pub(crate) struct CacheSnapshot<'a> {
+#[doc(hidden)]
+pub struct CacheSnapshot<'a> {
     pub(crate) shared_hits: Option<&'a SharedCacheHits>,
     pub(crate) has_tier_matches: bool,
 }
@@ -287,7 +289,8 @@ impl std::fmt::Debug for WorkerInputRows {
 
 /// Numeric cache row retained in host buffers between selections.
 #[derive(Clone, Copy, Default)]
-pub(crate) struct WorkerCacheData {
+#[doc(hidden)]
+pub struct WorkerCacheData {
     pub(crate) effective_overlap_blocks: f64,
     pub(crate) estimated_cached_tokens: usize,
     pub(crate) device_overlap_blocks: f64,

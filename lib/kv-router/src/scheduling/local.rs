@@ -314,7 +314,8 @@ where
     }
 
     /// Apply published topology before a subsequent catalog mutation can replace it.
-    pub(crate) fn apply_published_worker_configs(&self) {
+    #[doc(hidden)]
+    pub fn apply_published_worker_configs(&self) {
         if !self.monitor_worker_configs {
             return;
         }
@@ -366,7 +367,8 @@ where
     /// the handle frees the booking, `commit` hands it to a longer-lived owner.
     /// The handle is `None` unless the mode is `TrackedWithLifecycle`.
     #[cfg(any(test, feature = "standalone-selection"))]
-    pub(crate) async fn schedule_request_with_booking(
+    #[doc(hidden)]
+    pub async fn schedule_request_with_booking(
         &self,
         request: ScheduleRequest,
     ) -> Result<(AdmittedSchedulingResponse, Option<BookingHandle>), KvSchedulerError> {

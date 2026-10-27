@@ -114,11 +114,8 @@ pub fn compute_block_hash_for_seq(
 }
 
 /// Count complete canonical blocks for normal and Eagle token windows.
-pub(crate) fn complete_block_count(
-    token_count: usize,
-    kv_block_size: u32,
-    is_eagle: bool,
-) -> usize {
+#[doc(hidden)]
+pub fn complete_block_count(token_count: usize, kv_block_size: u32, is_eagle: bool) -> usize {
     let stride = kv_block_size as usize;
     if stride == 0 {
         return 0;
@@ -219,7 +216,8 @@ pub fn compute_seq_hash_for_block(block_hashes: &[LocalBlockHash]) -> Vec<Sequen
 
 /// Compute rolling sequence hashes directly from canonical token blocks with
 /// separate XXH3 block and chain seeds, without materializing block hashes.
-pub(crate) fn compute_seq_hash_for_tokens_with_seeds(
+#[doc(hidden)]
+pub fn compute_seq_hash_for_tokens_with_seeds(
     tokens: &[u32],
     kv_block_size: u32,
     options: BlockHashOptions<'_>,
@@ -1070,7 +1068,7 @@ pub enum RouterResponse {
         overlap_blocks: u32,
     },
     QueueRejected {
-        rejection: crate::scheduling::QueueRejection,
+        rejection: QueueRejection,
     },
     PrefillMarked {
         success: bool,
@@ -1944,6 +1942,107 @@ impl TokensWithHashes {
 // ------
 // Tests
 // ------
+
+// ---------------------------------------------------------------------------
+// Scheduler seam types. These are shared by the indexer, the slot tracker, the
+// admission queue, and the selection kernel, so they live with the other wire
+// and identity types instead of inside any one stage module.
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum QueueLimitKind {
+    Requests,
+    RawIslTokens,
+    CachedTokens,
+}
+
+impl std::fmt::Display for QueueLimitKind {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Requests => formatter.write_str("requests"),
+            Self::RawIslTokens => formatter.write_str("raw_isl_tokens"),
+            Self::CachedTokens => formatter.write_str("cached_tokens"),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, thiserror::Error)]
+#[error(
+    "router policy class {policy_class:?} queue {limit_kind} limit reached \
+     (current={current}, limit={limit})"
+)]
+pub struct QueueRejection {
+    pub policy_class: String,
+    pub limit_kind: QueueLimitKind,
+    pub current: usize,
+    pub limit: usize,
+}
+
+/// Router-internal identity for one admitted request attempt.
+#[doc(hidden)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct AttemptId(u64);
+
+impl AttemptId {
+    pub(crate) fn new(value: u64) -> Self {
+        Self(value)
+    }
+
+    #[cfg(feature = "bench")]
+    #[doc(hidden)]
+    pub fn for_benchmark(value: u64) -> Self {
+        Self::new(value)
+    }
+}
+
+impl std::fmt::Display for AttemptId {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.0.fmt(formatter)
+    }
+}
+
+#[doc(hidden)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SchedulerBookingDescriptor {
+    pub request_id: String,
+    pub worker: WorkerWithDpRank,
+    pub attempt_id: AttemptId,
+}
+
+/// Ephemeral, request-specific view of worker load.
+///
+/// Values are materialized for one incoming request at a specific instant and
+/// should be passed to worker selection immediately. Do not persist, reuse, or
+/// publish this projection as durable worker state.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct WorkerLoadProjection {
+    pub active_prefill_tokens: usize,
+    pub active_decode_blocks: usize,
+    pub active_requests: usize,
+    /// Request blocks not already shared with active sequences on this worker.
+    ///
+    /// These blocks may still exist in an inactive cache; this field describes
+    /// additional active block footprint, not cache misses.
+    pub additional_active_blocks: usize,
+}
+
+impl WorkerLoadProjection {
+    pub fn potential_decode_blocks(self) -> usize {
+        self.active_decode_blocks + self.additional_active_blocks
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum WorkerPlacement {
+    /// Preserve the request's existing routing constraints.
+    Any,
+    /// Add an exact-worker constraint. The router validates it against the
+    /// request's existing constraints before dispatch.
+    Exact(WorkerWithDpRank),
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
