@@ -559,7 +559,7 @@ impl RouterWorkerStatusMetrics {
 
     pub fn watch_workers(
         &self,
-        workers: crate::discovery::RuntimeConfigWatch,
+        workers: crate::discovery::TopologyWatch,
         worker_type: &'static str,
         cancellation: tokio_util::sync::CancellationToken,
         available_workers: Option<RegistrationAvailabilityProvider>,
@@ -1678,7 +1678,7 @@ dynamo_frontend_worker_active_requests{dp_rank=\"0\",request_phase=\"prefill\",w
             .unwrap();
 
         let (workers_tx, workers_rx) =
-            tokio::sync::watch::channel(std::collections::HashMap::from([(
+            crate::discovery::topology::topology_channel(std::collections::HashMap::from([(
                 123,
                 crate::local_model::runtime_config::ModelRuntimeConfig::default(),
             )]));

@@ -17,7 +17,7 @@ use prometheus::{
 use tokio_util::sync::CancellationToken;
 
 use super::{ROUTER_WORKER_ID_LABEL, labels};
-use crate::discovery::RuntimeConfigWatch;
+use crate::discovery::TopologyWatch;
 
 const LABELS: &[&str] = &[ROUTER_WORKER_ID_LABEL, labels::DP_RANK, labels::WORKER_TYPE];
 
@@ -26,7 +26,7 @@ pub(crate) type RegistrationAvailabilityProvider =
 
 /// Owned by an embedded router, independently of its request/replica slot state.
 pub(crate) struct RouterWorkerRegistration {
-    workers: RuntimeConfigWatch,
+    workers: TopologyWatch,
     worker_type: &'static str,
     cancellation: CancellationToken,
     available_workers: Option<RegistrationAvailabilityProvider>,
@@ -53,7 +53,7 @@ impl PrometheusMetric for RouterWorkerRegistered {
 impl RouterWorkerRegistered {
     pub(super) fn watch(
         &self,
-        workers: RuntimeConfigWatch,
+        workers: TopologyWatch,
         worker_type: &'static str,
         cancellation: CancellationToken,
         available_workers: Option<RegistrationAvailabilityProvider>,
@@ -96,7 +96,7 @@ impl Collector for RouterWorkerRegistered {
                 if let Some(available) = &available
                     && available
                         .as_ref()
-                        .is_none_or(|ids| !ids.contains(worker_id))
+                        .is_none_or(|ids| !ids.contains(&worker_id))
                 {
                     continue;
                 }
@@ -119,6 +119,7 @@ impl Collector for RouterWorkerRegistered {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::discovery::topology::topology_channel;
     use crate::local_model::runtime_config::ModelRuntimeConfig;
     use prometheus::{Registry, TextEncoder};
     use std::collections::HashMap;
@@ -147,7 +148,7 @@ mod tests {
     #[test]
     fn removed_worker_stays_absent_after_discovery_removal() {
         let (metric, registry) = setup();
-        let (tx, rx) = watch::channel(HashMap::from([
+        let (tx, rx) = topology_channel(HashMap::from([
             (1, ModelRuntimeConfig::default()),
             (2, ModelRuntimeConfig::default()),
         ]));
@@ -170,7 +171,7 @@ mod tests {
         use std::collections::HashSet;
 
         let (metric, registry) = setup();
-        let (_discovery_tx, discovery_rx) = watch::channel(HashMap::from([
+        let (_discovery_tx, discovery_rx) = topology_channel(HashMap::from([
             (1, ModelRuntimeConfig::default()),
             (2, ModelRuntimeConfig::default()),
         ]));
@@ -210,7 +211,7 @@ mod tests {
     #[test]
     fn shared_owners_deduplicate_and_cleanup_independently() {
         let (metric, registry) = setup();
-        let (_tx, rx) = watch::channel(HashMap::from([(
+        let (_tx, rx) = topology_channel(HashMap::from([(
             7,
             ModelRuntimeConfig {
                 data_parallel_start_rank: 2,
@@ -242,7 +243,7 @@ mod tests {
     #[test]
     fn rank_updates_invalid_configs_and_closed_watch_do_not_retain_series() {
         let (metric, registry) = setup();
-        let (tx, rx) = watch::channel(HashMap::from([(
+        let (tx, rx) = topology_channel(HashMap::from([(
             3,
             ModelRuntimeConfig {
                 data_parallel_size: 2,

@@ -31,10 +31,11 @@ use dynamo_runtime::{
     traits::DistributedRuntimeProvider,
 };
 use dynamo_worker_selection::plugin::WorkerCandidates;
-use tokio::sync::{Notify, mpsc, watch};
+use tokio::sync::{Notify, mpsc};
 
 use super::builtin::{builtin_inputs, builtin_picker};
 use super::*;
+use crate::discovery::topology::topology_channel;
 use crate::{
     kv_router::{RoutingLoadContext, routing_host::request_guard::RouteObservation},
     local_model::runtime_config::ModelRuntimeConfig,
@@ -1566,7 +1567,7 @@ async fn router_with_config_and_classifier(
     let endpoint = component.endpoint("generate");
     let client = endpoint.client().await.unwrap();
     let worker_ids = workers.keys().copied().collect::<Vec<_>>();
-    let (_tx, workers) = watch::channel(workers);
+    let (_tx, workers) = topology_channel(workers);
     let mut chooser = KvRouter::new(
         endpoint,
         client.clone(),
@@ -1669,7 +1670,7 @@ async fn router_with_recorded_dispatch_and_affinity(
     endpoint.register_endpoint_instance().await.unwrap();
     let worker_id = client.wait_for_instances().await.unwrap()[0].id();
     let workers = HashMap::from([(worker_id, ModelRuntimeConfig::default())]);
-    let (_workers_tx, workers) = watch::channel(workers);
+    let (_workers_tx, workers) = topology_channel(workers);
     let config = KvRouterConfig {
         skip_initial_worker_wait: true,
         use_kv_events: false,
@@ -3295,7 +3296,7 @@ async fn two_worker_migration_harness(
         .copied()
         .map(|worker_id| (worker_id, ModelRuntimeConfig::default()))
         .collect::<HashMap<_, _>>();
-    let (_workers_tx, workers) = watch::channel(workers);
+    let (_workers_tx, workers) = topology_channel(workers);
     let config = KvRouterConfig {
         skip_initial_worker_wait: true,
         use_kv_events: false,

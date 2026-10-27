@@ -1259,7 +1259,8 @@ mod tests {
             .unwrap()
             .endpoint("generate");
         let client = endpoint.client().await.unwrap();
-        let (_workers_tx, workers) = watch::channel(HashMap::<u64, ModelRuntimeConfig>::new());
+        let (_workers_tx, workers) =
+            crate::discovery::topology::topology_channel(HashMap::<u64, ModelRuntimeConfig>::new());
         let config = KvRouterConfig {
             skip_initial_worker_wait: true,
             use_kv_events: false,

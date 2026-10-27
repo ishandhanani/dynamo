@@ -36,7 +36,7 @@ use dynamo_slot_tracker::{LocalWorkerLoad, ReplicaWorkerPolicy};
 use dynamo_worker_selection::plugin::WorkerSelectionPolicyFactory;
 use tokio_util::sync::CancellationToken;
 
-use crate::discovery::RuntimeConfigWatch;
+use crate::discovery::TopologyWatch;
 use crate::kv_router::metrics::{
     ActiveSequenceIngressMetrics, ROUTER_QUEUE_METRICS, RegistrationAvailabilityProvider,
     RouterQueueMetricHandles, RouterRequestMetrics, WORKER_LOAD_METRICS,
@@ -218,14 +218,14 @@ impl EmbeddedSelection {
     /// the manager before it can release the booking.
     pub(crate) async fn start(
         args: EmbeddedSelectionArgs,
-        workers_with_configs: RuntimeConfigWatch,
+        topology: TopologyWatch,
         request_leases: Option<Arc<dyn dynamo_slot_tracker::ReplicaRequestLeaseObserver>>,
         cancellation_token: CancellationToken,
     ) -> Result<(Self, crate::kv_router::sequence::ReplicaIngress)> {
         let worker_registration =
             super::metrics::RouterWorkerStatusMetrics::from_component(args.endpoint.component())
                 .watch_workers(
-                    workers_with_configs.clone(),
+                    topology.clone(),
                     args.metric_worker_type,
                     cancellation_token.clone(),
                     Some(args.registration_availability_provider),
@@ -341,7 +341,7 @@ impl EmbeddedSelection {
         }
 
         let mut source = RuntimeDiscoverySource {
-            watch: workers_with_configs,
+            watch: topology,
             key,
             block_size: args.block_size,
             is_eagle: args.is_eagle,
@@ -430,7 +430,7 @@ impl EmbeddedSelection {
 
 /// The runtime-config watch as worker membership for the partition.
 struct RuntimeDiscoverySource {
-    watch: RuntimeConfigWatch,
+    watch: TopologyWatch,
     key: RoutingPartitionId,
     block_size: u32,
     is_eagle: bool,
@@ -450,7 +450,7 @@ impl WorkerCatalogSource for RuntimeDiscoverySource {
             .iter()
             .map(|(worker_id, config)| {
                 worker_request_from_runtime_config(
-                    *worker_id,
+                    worker_id,
                     config,
                     &self.key,
                     self.block_size,

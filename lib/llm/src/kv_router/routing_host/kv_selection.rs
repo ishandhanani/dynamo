@@ -271,14 +271,14 @@ impl RoutingHost {
             return Ok(selection);
         };
         {
-            let configs = self.kv_router().workers_with_configs.borrow();
+            let topology = self.kv_router().topology.borrow();
             let eligibility = RoutingEligibility::new(
                 allowed_worker_ids.as_ref(),
                 None,
                 Some(pinned_worker),
                 &routing_constraints,
             );
-            if let Err(error) = eligibility.validate_worker_rank(&configs, pinned_worker) {
+            if let Err(error) = eligibility.validate_worker_rank(topology.as_ref(), pinned_worker) {
                 return Err(anyhow::anyhow!(
                     "Pinned worker {} dp_rank {} is not eligible: {error}",
                     pinned_worker.worker_id,
@@ -327,10 +327,10 @@ impl RoutingHost {
         if constraints.pin.is_some() || constraints.exclude.is_empty() {
             return Ok(());
         }
-        let workers = self.kv_router().workers_with_configs.borrow();
-        let any_left = constraints.exclude_from(workers.keys().copied(), |worker_id, taints| {
-            workers
-                .get(&worker_id)
+        let topology = self.kv_router().topology.borrow();
+        let any_left = constraints.exclude_from(topology.worker_ids(), |worker_id, taints| {
+            topology
+                .get(worker_id)
                 .is_some_and(|config| taints.is_compatible_with_worker_taints(&config.taints))
         });
         if !any_left

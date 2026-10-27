@@ -90,7 +90,7 @@ pub use routing_load::{
 };
 
 use crate::{
-    discovery::{KvSourceMembershipWatch, RuntimeConfigWatch},
+    discovery::{EndpointTopology, KvSourceMembershipWatch, TopologyWatch},
     kv_router::sequence::{SequenceError, SequenceRequest},
     local_model::runtime_config::ModelRuntimeConfig,
     worker_type::WorkerType,
@@ -246,11 +246,11 @@ type ApproximateLruRanks = Arc<parking_lot::Mutex<ApproximateLruRankRegistry>>;
 
 async fn reconcile_approximate_lru_snapshot(
     indexer: &Indexer,
-    snapshot: &HashMap<WorkerId, ModelRuntimeConfig>,
+    snapshot: &EndpointTopology,
     registry: &ApproximateLruRanks,
 ) -> Result<(), KvRouterError> {
     let mut advertised = HashMap::new();
-    for (&worker_id, config) in snapshot {
+    for (worker_id, config) in snapshot.iter() {
         let capacity = config
             .total_kv_blocks
             .and_then(|blocks| usize::try_from(blocks).ok())
@@ -328,7 +328,7 @@ async fn reconcile_approximate_lru_snapshot(
 
 fn start_approximate_lru_reconciler(
     indexer: Indexer,
-    mut workers: RuntimeConfigWatch,
+    mut workers: TopologyWatch,
     registry: ApproximateLruRanks,
     cancellation: CancellationToken,
 ) {
@@ -593,7 +593,7 @@ pub struct KvRouter {
     indexer: Indexer,
     selection: embedded::EmbeddedSelection,
     required_worker_inputs: dynamo_worker_selection::plugin::WorkerInputs,
-    workers_with_configs: RuntimeConfigWatch,
+    topology: TopologyWatch,
     block_size: u32,
     kv_router_config: KvRouterConfig,
     prefill_load_estimator: Option<Arc<dyn PrefillLoadEstimator>>,
@@ -633,7 +633,7 @@ impl KvRouter {
     pub async fn new(
         endpoint: Endpoint,
         client: Client,
-        workers_with_configs: RuntimeConfigWatch,
+        topology: TopologyWatch,
         kv_source_membership: Option<KvSourceMembershipWatch>,
         block_size: u32,
         policy: SelectionPolicySource,
@@ -648,7 +648,7 @@ impl KvRouter {
         Self::new_with_worker_role(
             endpoint,
             client,
-            workers_with_configs,
+            topology,
             kv_source_membership,
             block_size,
             policy,
@@ -668,7 +668,7 @@ impl KvRouter {
     pub async fn new_with_worker_role(
         endpoint: Endpoint,
         client: Client,
-        workers_with_configs: RuntimeConfigWatch,
+        topology: TopologyWatch,
         kv_source_membership: Option<KvSourceMembershipWatch>,
         block_size: u32,
         policy: SelectionPolicySource,
@@ -687,7 +687,7 @@ impl KvRouter {
         Self::new_with_worker_role_and_scheduler_load(
             endpoint,
             client,
-            workers_with_configs,
+            topology,
             kv_source_membership,
             block_size,
             policy,
@@ -709,7 +709,7 @@ impl KvRouter {
     pub(crate) async fn new_with_worker_role_and_scheduler_load(
         endpoint: Endpoint,
         client: Client,
-        workers_with_configs: RuntimeConfigWatch,
+        topology: TopologyWatch,
         kv_source_membership: Option<KvSourceMembershipWatch>,
         block_size: u32,
         policy: SelectionPolicySource,
@@ -789,13 +789,13 @@ impl KvRouter {
         approximate_lru_metrics.set_policies(&configured_policy, effective_policy);
 
         if min_initial_workers > 0 && !kv_router_config.skip_initial_worker_wait {
-            let mut startup_watch = workers_with_configs.clone();
+            let mut startup_watch = topology.clone();
             let _ = startup_watch
-                .wait_for(|m| m.len() >= min_initial_workers)
+                .wait_for(|topology| topology.len() >= min_initial_workers)
                 .await
                 .map_err(|_| {
                     anyhow::anyhow!(
-                        "runtime config watch closed before {} workers appeared",
+                        "topology watch closed before {} workers appeared",
                         min_initial_workers
                     )
                 })?;
@@ -805,11 +805,11 @@ impl KvRouter {
             ApproximateLruRankRegistry::default(),
         ));
         if indexer.uses_approximate_lru() {
-            let snapshot = workers_with_configs.borrow().clone();
+            let snapshot = Arc::clone(&topology.borrow());
             reconcile_approximate_lru_snapshot(&indexer, &snapshot, &approximate_lru_ranks).await?;
             start_approximate_lru_reconciler(
                 indexer.clone(),
-                workers_with_configs.clone(),
+                topology.clone(),
                 Arc::clone(&approximate_lru_ranks),
                 cancellation_token.child_token(),
             );
@@ -836,7 +836,7 @@ impl KvRouter {
             Arc::new(move || client_for_registration.available_instance_ids());
 
         let client_for_availability = client.clone();
-        let workers_for_availability = workers_with_configs.clone();
+        let topology_for_availability = topology.clone();
         let available_worker_provider: WorkerAvailabilityProvider = Arc::new(move |request| {
             let available = client_for_availability.available_instance_ids();
             let (Some(filter), Some(lora_name)) =
@@ -855,7 +855,7 @@ impl KvRouter {
                     .copied()
                     .collect(),
                 (None, Some(available)) => available.iter().copied().collect(),
-                (None, None) => workers_for_availability.borrow().keys().copied().collect(),
+                (None, None) => topology_for_availability.borrow().worker_ids().collect(),
             };
             Some(Arc::new(
                 filter
@@ -894,7 +894,7 @@ impl KvRouter {
                 router_id: endpoint.drt().discovery().instance_id(),
                 policy_factory,
             },
-            workers_with_configs.clone(),
+            topology.clone(),
             Some(request_leases.replica_observer()),
             cancellation_token.child_token(),
         )
@@ -909,7 +909,7 @@ impl KvRouter {
             indexer,
             selection,
             required_worker_inputs,
-            workers_with_configs,
+            topology,
             block_size,
             kv_router_config,
             prefill_load_estimator,
@@ -949,16 +949,16 @@ impl KvRouter {
 
     /// Cached per-rank capacity and registration state for this router's classifier.
     pub fn request_classifier_context(&self) -> RequestClassifierContext {
-        let workers = self.workers_with_configs.clone();
+        let topology = self.topology.clone();
         RequestClassifierContext::new(self.block_size, move || {
-            workers
+            topology
                 .borrow()
                 .iter()
-                .flat_map(|(&worker_id, config)| {
+                .flat_map(|(worker_id, config)| {
                     let start = config.data_parallel_start_rank();
                     let end = start.saturating_add(config.data_parallel_size());
                     (start..end).map(move |rank| {
-                        WorkerInfo::of(WorkerWithDpRank::new(worker_id, rank), config)
+                        WorkerInfo::of(WorkerWithDpRank::new(worker_id, rank), config.as_ref())
                     })
                 })
                 .collect()
@@ -1025,8 +1025,8 @@ impl KvRouter {
         {
             return None;
         }
-        let configs = self.workers_with_configs.borrow();
-        let config = configs.get(&worker.worker_id)?;
+        let topology = self.topology.borrow();
+        let config = topology.get(worker.worker_id)?;
         let end_rank = config
             .data_parallel_start_rank
             .saturating_add(config.data_parallel_size);
@@ -1037,7 +1037,7 @@ impl KvRouter {
             .total_kv_blocks
             .and_then(|blocks| usize::try_from(blocks).ok())
             .filter(|blocks| *blocks > 0);
-        drop(configs);
+        drop(topology);
 
         let mut registration = match registry.ranks.get(&worker).copied() {
             Some(registration) => registration,
@@ -1702,8 +1702,8 @@ impl KvRouter {
 
     /// Return the worker's unique global DP rank when it owns exactly one rank.
     pub fn unique_dp_rank_for_worker(&self, worker_id: WorkerId) -> Option<u32> {
-        let configs = self.workers_with_configs.borrow();
-        let config = configs.get(&worker_id)?;
+        let topology = self.topology.borrow();
+        let config = topology.get(worker_id)?;
         (config.data_parallel_size == 1).then_some(config.data_parallel_start_rank)
     }
 
@@ -1849,10 +1849,10 @@ impl KvRouter {
 
         let shared_enabled = include_shared && self.shared_cache.is_some();
         let expected_workers = {
-            let configs = self.workers_with_configs.borrow();
-            configs
+            let topology = self.topology.borrow();
+            topology
                 .iter()
-                .flat_map(|(&worker_id, config)| {
+                .flat_map(|(worker_id, config)| {
                     let start = config.data_parallel_start_rank();
                     let end = start.saturating_add(config.data_parallel_size());
                     (start..end).map(move |dp_rank| WorkerWithDpRank::new(worker_id, dp_rank))
@@ -2006,6 +2006,7 @@ impl Drop for KvRouter {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::discovery::topology::{TopologySender, topology_channel};
     use dynamo_worker_selection::plugin::WorkerCapacity;
     use std::collections::{HashMap, HashSet};
 
@@ -2299,7 +2300,7 @@ mod tests {
         let mut router = make_router_without_membership(Some(WorkerType::Decode))
             .await
             .unwrap();
-        let (tx, workers) = watch::channel(HashMap::from([
+        let (tx, topology) = topology_channel(HashMap::from([
             (
                 7,
                 ModelRuntimeConfig {
@@ -2312,7 +2313,7 @@ mod tests {
             ),
             (8, ModelRuntimeConfig::default()),
         ]));
-        router.workers_with_configs = workers;
+        router.topology = topology;
         let context = router.request_classifier_context();
         assert_eq!(context.block_size(), 16);
         let mut snapshot = context.workers();
@@ -2544,14 +2545,11 @@ mod tests {
         worker_role: Option<WorkerType>,
         metric_label: &'static str,
         config: KvRouterConfig,
-    ) -> Result<(
-        KvRouter,
-        watch::Sender<HashMap<WorkerId, ModelRuntimeConfig>>,
-    )> {
+    ) -> Result<(KvRouter, TopologySender)> {
         let component = make_test_component(name).await;
         let endpoint = component.endpoint("backend");
         let client = endpoint.client().await?;
-        let (tx, rx) = watch::channel(workers);
+        let (tx, rx) = topology_channel(workers);
         let router = KvRouter::new_with_worker_role(
             endpoint,
             client,
@@ -2658,10 +2656,12 @@ mod tests {
         let component = make_test_component("session-prefix-core").await;
         let endpoint = component.endpoint("backend");
         let client = endpoint.client().await.unwrap();
-        let (_tx, workers) = watch::channel(HashMap::from([(7, ModelRuntimeConfig::default())]));
+        let configs = HashMap::from([(7, ModelRuntimeConfig::default())]);
+        let (_configs_tx, configs_rx) = watch::channel(configs.clone());
+        let (_tx, workers) = topology_channel(configs);
         let membership = crate::discovery::KvSourceMembershipCoordinator::start(
             endpoint.id(),
-            workers.clone(),
+            configs_rx,
             component.drt().discovery(),
         )
         .subscribe();
@@ -3200,7 +3200,7 @@ mod tests {
         let component = make_test_component("queued-lora-router").await;
         let endpoint = component.endpoint("backend");
         let client = endpoint.client().await.unwrap();
-        let (_tx, workers) = watch::channel(
+        let (_tx, workers) = topology_channel(
             [1, 2]
                 .into_iter()
                 .map(|id| (id, ModelRuntimeConfig::default()))

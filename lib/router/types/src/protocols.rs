@@ -366,6 +366,65 @@ pub trait WorkerConfigLike {
     }
 }
 
+/// A shared configuration reads like the configuration itself, so a topology
+/// row holding an `Arc` satisfies every worker-table consumer.
+impl<T: WorkerConfigLike + ?Sized> WorkerConfigLike for std::sync::Arc<T> {
+    fn data_parallel_start_rank(&self) -> u32 {
+        (**self).data_parallel_start_rank()
+    }
+
+    fn data_parallel_size(&self) -> u32 {
+        (**self).data_parallel_size()
+    }
+
+    fn max_num_batched_tokens(&self) -> Option<u64> {
+        (**self).max_num_batched_tokens()
+    }
+
+    fn total_kv_blocks(&self) -> Option<u64> {
+        (**self).total_kv_blocks()
+    }
+
+    fn kv_hint_transfer_metadata_for_dp_rank(
+        &self,
+        dp_rank: DpRank,
+    ) -> Option<KvHintTransferWorkerMetadata<'_>> {
+        (**self).kv_hint_transfer_metadata_for_dp_rank(dp_rank)
+    }
+
+    fn native_offloading_capacity_tokens(&self) -> Option<u64> {
+        (**self).native_offloading_capacity_tokens()
+    }
+
+    fn taints(&self) -> &HashSet<String> {
+        (**self).taints()
+    }
+
+    fn stable_routing_id(&self) -> Option<&str> {
+        (**self).stable_routing_id()
+    }
+
+    fn topology_domains(&self) -> Option<&HashMap<String, String>> {
+        (**self).topology_domains()
+    }
+
+    fn kv_transfer_domain(&self) -> Option<&str> {
+        (**self).kv_transfer_domain()
+    }
+
+    fn kv_transfer_enforcement(&self) -> Option<KvTransferEnforcement> {
+        (**self).kv_transfer_enforcement()
+    }
+
+    fn kv_transfer_preferred_weight(&self) -> Option<f32> {
+        (**self).kv_transfer_preferred_weight()
+    }
+
+    fn kv_transfer_keys(&self) -> Cow<'_, WorkerKvTransferKeys> {
+        (**self).kv_transfer_keys()
+    }
+}
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum KvTransferEnforcement {

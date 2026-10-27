@@ -8,6 +8,52 @@ use crate::protocols::{
     DpRank, RoutingConstraints, WorkerAffinityTarget, WorkerConfigLike, WorkerId, WorkerWithDpRank,
 };
 use crate::sched::KvSchedulerError;
+use crate::topology::Topology;
+
+/// A worker table the eligibility checks read: the per-worker map the
+/// scheduler keeps, or a [`Topology`] snapshot.
+pub trait WorkerLookup<C> {
+    fn config(&self, worker_id: WorkerId) -> Option<&C>;
+    fn workers<'a>(&'a self) -> impl Iterator<Item = (WorkerId, &'a C)>
+    where
+        C: 'a;
+    /// An upper bound on the table's size, for the scan-vs-lookup heuristic.
+    fn capacity_hint(&self) -> usize;
+}
+
+impl<C> WorkerLookup<C> for HashMap<WorkerId, C> {
+    fn config(&self, worker_id: WorkerId) -> Option<&C> {
+        self.get(&worker_id)
+    }
+
+    fn workers<'a>(&'a self) -> impl Iterator<Item = (WorkerId, &'a C)>
+    where
+        C: 'a,
+    {
+        self.iter().map(|(worker_id, config)| (*worker_id, config))
+    }
+
+    fn capacity_hint(&self) -> usize {
+        self.capacity()
+    }
+}
+
+impl<C> WorkerLookup<C> for Topology<C> {
+    fn config(&self, worker_id: WorkerId) -> Option<&C> {
+        Topology::get(self, worker_id)
+    }
+
+    fn workers<'a>(&'a self) -> impl Iterator<Item = (WorkerId, &'a C)>
+    where
+        C: 'a,
+    {
+        self.iter()
+    }
+
+    fn capacity_hint(&self) -> usize {
+        self.len()
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum WorkerEligibilityError {
@@ -211,9 +257,9 @@ impl<'a> RoutingEligibility<'a> {
     }
 
     #[inline]
-    pub fn validate_worker_rank<'w, C: WorkerConfigLike>(
+    pub fn validate_worker_rank<'w, C: WorkerConfigLike, W: WorkerLookup<C> + ?Sized>(
         &self,
-        workers: &'w HashMap<WorkerId, C>,
+        workers: &'w W,
         worker: WorkerWithDpRank,
     ) -> Result<&'w C, WorkerEligibilityError> {
         if !self.caller_allows_worker_id(worker.worker_id) {
@@ -259,13 +305,10 @@ impl<'a> RoutingEligibility<'a> {
         Ok(config)
     }
 
-    pub fn any_eligible_worker_rank<C, F>(
-        &self,
-        workers: &HashMap<WorkerId, C>,
-        mut predicate: F,
-    ) -> bool
+    pub fn any_eligible_worker_rank<C, W, F>(&self, workers: &W, mut predicate: F) -> bool
     where
         C: WorkerConfigLike,
+        W: WorkerLookup<C> + ?Sized,
         F: FnMut(WorkerWithDpRank, &C) -> bool,
     {
         if let Some(worker) = self.pinned_worker {
@@ -276,7 +319,7 @@ impl<'a> RoutingEligibility<'a> {
         }
 
         if let Some(target) = self.affinity_target {
-            let Some(config) = workers.get(&target.worker_id) else {
+            let Some(config) = workers.config(target.worker_id) else {
                 return false;
             };
             if !self.allows_worker(target.worker_id, config) {
@@ -304,9 +347,11 @@ impl<'a> RoutingEligibility<'a> {
         };
         // Hash iteration scans capacity, not length. The half-capacity cutoff
         // is a conservative heuristic for the extra worker lookups.
-        if let Some(inclusion) = inclusion.filter(|ids| ids.capacity() < workers.capacity() / 2) {
+        if let Some(inclusion) =
+            inclusion.filter(|ids| ids.capacity() < workers.capacity_hint() / 2)
+        {
             for &worker_id in inclusion {
-                let Some(config) = workers.get(&worker_id) else {
+                let Some(config) = workers.config(worker_id) else {
                     continue;
                 };
                 if !self.allows_worker(worker_id, config) {
@@ -319,7 +364,7 @@ impl<'a> RoutingEligibility<'a> {
             return false;
         }
 
-        for (&worker_id, config) in workers {
+        for (worker_id, config) in workers.workers() {
             if !self.allows_worker(worker_id, config) {
                 continue;
             }
@@ -333,12 +378,12 @@ impl<'a> RoutingEligibility<'a> {
     }
 
     #[doc(hidden)]
-    pub fn affinity_target_is_eligible<C: WorkerConfigLike>(
+    pub fn affinity_target_is_eligible<C: WorkerConfigLike, W: WorkerLookup<C> + ?Sized>(
         &self,
-        workers: &HashMap<WorkerId, C>,
+        workers: &W,
         target: WorkerAffinityTarget,
     ) -> bool {
-        let Some(config) = workers.get(&target.worker_id) else {
+        let Some(config) = workers.config(target.worker_id) else {
             return false;
         };
         if !self.allows_worker(target.worker_id, config) {
@@ -351,9 +396,10 @@ impl<'a> RoutingEligibility<'a> {
             .map_or(!ranks.is_empty(), |rank| ranks.contains(&rank))
     }
 
-    pub fn for_each_eligible_worker_rank<C, F>(&self, workers: &HashMap<WorkerId, C>, mut visit: F)
+    pub fn for_each_eligible_worker_rank<C, W, F>(&self, workers: &W, mut visit: F)
     where
         C: WorkerConfigLike,
+        W: WorkerLookup<C> + ?Sized,
         F: FnMut(WorkerWithDpRank, &C),
     {
         self.any_eligible_worker_rank(workers, |worker, config| {
@@ -391,11 +437,11 @@ where
 }
 
 #[doc(hidden)]
-pub fn worker_config_for_rank<C: WorkerConfigLike>(
-    workers: &HashMap<WorkerId, C>,
+pub fn worker_config_for_rank<C: WorkerConfigLike, W: WorkerLookup<C> + ?Sized>(
+    workers: &W,
     worker: WorkerWithDpRank,
 ) -> Result<&C, WorkerEligibilityError> {
-    let Some(config) = workers.get(&worker.worker_id) else {
+    let Some(config) = workers.config(worker.worker_id) else {
         return Err(WorkerEligibilityError::WorkerUnavailable {
             worker_id: worker.worker_id,
         });
@@ -802,7 +848,8 @@ mod tests {
             dp_size: 3,
             ..Default::default()
         };
-        let workers = (0..64).map(|id| (id, config.clone())).collect();
+        let workers: HashMap<WorkerId, TestWorkerConfig> =
+            (0..64).map(|id| (id, config.clone())).collect();
         let available = HashSet::from([7, 1000]);
         let constraints = RoutingConstraints::default();
         let eligibility = RoutingEligibility::new(None, None, None, &constraints)

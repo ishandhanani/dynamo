@@ -156,7 +156,6 @@ mod tests {
         traits::DistributedRuntimeProvider,
     };
     use futures::StreamExt;
-    use tokio::sync::watch;
 
     use super::*;
     use crate::{
@@ -389,10 +388,11 @@ mod tests {
         let endpoint = component.endpoint("generate");
         let endpoint_id = endpoint.id();
         let client = endpoint.client().await.unwrap();
-        let (_workers_tx, workers_rx) = watch::channel(HashMap::from([
-            (7, ModelRuntimeConfig::default()),
-            (8, ModelRuntimeConfig::default()),
-        ]));
+        let (_workers_tx, workers_rx) =
+            crate::discovery::topology::topology_channel(HashMap::from([
+                (7, ModelRuntimeConfig::default()),
+                (8, ModelRuntimeConfig::default()),
+            ]));
         let config = KvRouterConfig {
             overlap_score_credit: 0.0,
             router_temperature: 0.0,

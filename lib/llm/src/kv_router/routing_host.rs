@@ -607,8 +607,8 @@ impl RoutingHost {
         let Some(kv_router) = self.kv_router_if_enabled() else {
             return true;
         };
-        let workers = kv_router.workers_with_configs.borrow();
-        let Some(config) = workers.get(&target.worker_id) else {
+        let topology = kv_router.topology.borrow();
+        let Some(config) = topology.get(target.worker_id) else {
             return true;
         };
         let Some(dp_rank) = target.dp_rank else {

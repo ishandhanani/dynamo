@@ -2376,8 +2376,8 @@ impl ModelManager {
         let endpoint = client.endpoint.clone();
         let lora_domain = self.lora_domain(&endpoint.id());
 
-        // Get of create runtime config watcher for this endpoint
-        let workers_with_configs = self.get_or_create_runtime_config_watcher(&endpoint).await?;
+        // One topology per endpoint; the shared cache below still reads it as a map.
+        let topology = self.get_or_create_topology_watch(&endpoint).await?;
 
         let effective_kv_router_config = kv_router_config.clone().unwrap_or_default();
         let worker_type = worker_role.unwrap_or(WorkerType::Aggregated);
@@ -2405,9 +2405,10 @@ impl ModelManager {
                         worker_component = worker_component_name,
                         "Using HiCache shared KV cache"
                     );
-                    Some(Arc::new(
-                        self.hicache_cache_for(&endpoint, workers_with_configs.clone()),
-                    ))
+                    Some(Arc::new(self.hicache_cache_for(
+                        &endpoint,
+                        self.get_or_create_runtime_config_watcher(&endpoint).await?,
+                    )))
                 }
             }
         } else {
@@ -2432,7 +2433,7 @@ impl ModelManager {
         let chooser = KvRouter::new_with_worker_role_and_scheduler_load(
             endpoint.clone(),
             client,
-            workers_with_configs,
+            topology,
             kv_source_membership,
             kv_cache_block_size,
             SelectionPolicySource::Prepared(policy),

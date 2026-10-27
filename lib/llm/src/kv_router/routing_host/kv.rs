@@ -182,10 +182,10 @@ impl RoutingHost {
                 .and_then(|blocks| blocks.try_into().ok()),
             None => self
                 .kv_router()
-                .workers_with_configs
+                .topology
                 .borrow()
-                .get(&selection.worker.worker_id)
-                .and_then(WorkerConfigLike::total_kv_blocks),
+                .get(selection.worker.worker_id)
+                .and_then(|config| config.total_kv_blocks()),
         };
         RoutePlanSignals {
             worker: selection.worker,
@@ -645,9 +645,9 @@ impl RoutingHost {
         };
         let consumes_replay = self
             .kv_router()
-            .workers_with_configs
+            .topology
             .borrow()
-            .get(&selection.worker.worker_id)
+            .get(selection.worker.worker_id)
             .and_then(|config| {
                 config
                     .get_engine_specific::<bool>(OUTPUT_REPLAY_CONSUMER_RUNTIME_KEY)

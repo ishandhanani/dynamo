@@ -113,6 +113,62 @@ pub async fn topology_watch(
     Ok(rx)
 }
 
+/// A snapshot built from a per-worker configuration map, for callers (and
+/// tests) that hold membership as a map.
+pub fn topology_from_configs(
+    generation: u64,
+    configs: &HashMap<WorkerId, ModelRuntimeConfig>,
+) -> EndpointTopology {
+    EndpointTopology::new(
+        generation,
+        configs
+            .iter()
+            .map(|(worker_id, config)| WorkerRow {
+                worker_id: *worker_id,
+                config: Arc::new(config.clone()),
+            })
+            .collect(),
+    )
+}
+
+/// Test-side publisher of topology snapshots from configuration maps.
+#[cfg(test)]
+pub(crate) struct TopologySender {
+    sender: watch::Sender<Arc<EndpointTopology>>,
+    generation: std::sync::atomic::AtomicU64,
+}
+
+#[cfg(test)]
+impl TopologySender {
+    /// Publish `configs` as the next snapshot.
+    pub(crate) fn send(
+        &self,
+        configs: HashMap<WorkerId, ModelRuntimeConfig>,
+    ) -> Result<(), watch::error::SendError<Arc<EndpointTopology>>> {
+        let generation = self
+            .generation
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+            + 1;
+        self.sender
+            .send(Arc::new(topology_from_configs(generation, &configs)))
+    }
+}
+
+/// A topology watch over an initial configuration map, for tests.
+#[cfg(test)]
+pub(crate) fn topology_channel(
+    configs: HashMap<WorkerId, ModelRuntimeConfig>,
+) -> (TopologySender, TopologyWatch) {
+    let (sender, receiver) = watch::channel(Arc::new(topology_from_configs(0, &configs)));
+    (
+        TopologySender {
+            sender,
+            generation: std::sync::atomic::AtomicU64::new(0),
+        },
+        receiver,
+    )
+}
+
 /// The per-worker configuration map, derived from a topology for the readers
 /// that still consume it as a map. One projection task per call; the model
 /// manager caches one per endpoint.

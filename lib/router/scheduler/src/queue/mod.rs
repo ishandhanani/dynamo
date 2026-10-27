@@ -1550,7 +1550,7 @@ impl<
             recheck_all = self
                 .capacity_workers
                 .iter()
-                .any(|&worker| worker_config_for_rank(&configs, worker).is_err());
+                .any(|&worker| worker_config_for_rank(&*configs, worker).is_err());
         }
         if recheck_all {
             self.pending.recheck_all_workers();
@@ -1773,7 +1773,7 @@ impl<
             eligibility = eligibility.with_full_worker_ranks(&self.full_ranks);
             if self.selector.uses_exclusive_affinity_target()
                 && let Some(target) = request.affinity_target
-                && eligibility.affinity_target_is_eligible(&workers, target)
+                && eligibility.affinity_target_is_eligible(&*workers, target)
             {
                 eligibility = eligibility.with_affinity_target(target);
             }
