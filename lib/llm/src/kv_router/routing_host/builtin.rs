@@ -31,6 +31,17 @@ pub(super) fn builtin_inputs(mode: RouterMode) -> WorkerInputs {
     }
 }
 
+/// A first-party selection awaiting dispatch.
+pub(super) struct HostedPlan {
+    selection: HostedSelection,
+    /// The LoRA replica set a transport fallback may move within.
+    lora_fallback: Option<HashSet<u64>>,
+    lora_load: Option<LoraLoadGuard>,
+    /// Direct routing for a request without a session: the explicit target is
+    /// sent with Direct's standalone transport fallback.
+    direct_unbound: bool,
+}
+
 /// How a hosted send treats a selected worker that has left discovery.
 #[derive(Clone, Copy)]
 enum Departed {
@@ -249,19 +260,19 @@ impl RoutingHost {
         }
     }
 
-    pub(super) async fn select_and_dispatch_builtin<M, F>(
+    /// Select a first-party worker for `request` in `phase` and hold what the
+    /// send must honor: the exact target, the occupancy reservation, the LoRA
+    /// fallback set, and the session hold.
+    pub(super) async fn plan_hosted_route(
         &self,
-        mut request: SingleIn<PreprocessedRequest>,
+        request: &SingleIn<PreprocessedRequest>,
         phase: RequestPhase,
-        prepare: F,
-    ) -> Result<(M, ManyOut<Annotated<LLMEngineOutput>>), Error>
-    where
-        F: FnOnce(&mut PreprocessedRequest, AffinityTarget) -> Result<M, Error>,
-    {
+        budget: CleanupBudget,
+    ) -> Result<RoutePlan, Error> {
         let phase_label = phase.to_string();
-        let route_guard = StageGuard::new(STAGE_ROUTE, &phase_label);
+        let _route_guard = StageGuard::new(STAGE_ROUTE, &phase_label);
         let explicit = explicit_target(request.content(), phase)?;
-        let has_affinity_session = self.affinity.is_some() && affinity_id(&request)?.is_some();
+        let has_affinity_session = self.affinity.is_some() && affinity_id(request)?.is_some();
         let is_direct = matches!(&self.policy, RoutingPolicy::Direct);
         if is_direct && explicit.is_none() && !has_affinity_session {
             return Err(invalid_argument(format!(
@@ -269,10 +280,6 @@ impl RoutingHost {
             )));
         }
         let is_query_only = request.get_annotation_value("query_instance_id").is_some();
-        // Declared before worker selection because the session-affinity wait is
-        // the first stage that can spend it.
-        let budget = CleanupBudget::default();
-        let staged_kv = StagedKv::for_request(request.content());
         let (lora_target, lora_fallback, lora_load) =
             match self.select_lora_target(request.content())? {
                 Some(selection) => (
@@ -282,7 +289,7 @@ impl RoutingHost {
                 ),
                 None => (None, None, None),
             };
-        let (selection, mut operation) = if let Some(target) = lora_target {
+        let (selection, affinity) = if let Some(target) = lora_target {
             (
                 HostedSelection {
                     initial_worker: target,
@@ -296,7 +303,7 @@ impl RoutingHost {
             )
         } else {
             self.validate_explicit_worker(request.content(), phase)?;
-            self.select_with_session_affinity(&request, phase, is_query_only, &budget, |target| {
+            self.select_with_session_affinity(request, phase, is_query_only, &budget, |target| {
                 let pinned_target = explicit.or(match self.session_affinity_mode {
                     SessionAffinityMode::Hard => target,
                     SessionAffinityMode::Soft if is_direct => target,
@@ -306,20 +313,57 @@ impl RoutingHost {
                     (None, SessionAffinityMode::Soft) => target,
                     _ => None,
                 };
-                ready(self.select_hosted_worker(&request, pinned_target, affinity_target))
+                ready(self.select_hosted_worker(request, pinned_target, affinity_target))
             })
             .await?
         };
-        let HostedSelection {
-            initial_worker,
-            target_constraint,
-            occupancy_reservation,
-            candidate_count,
-            selected_occupancy,
-            device_aware_telemetry,
-        } = selection;
+        Ok(RoutePlan {
+            phase,
+            selection: PlanSelection::Hosted(HostedPlan {
+                selection,
+                lora_fallback,
+                lora_load,
+                direct_unbound: is_direct && !has_affinity_session,
+            }),
+            affinity,
+            budget,
+        })
+    }
+
+    /// Send a first-party plan. An exact target is prepared for and sent
+    /// without fallback; every other selection resolves its transport first,
+    /// moves the occupancy slot if that changed the worker, and prepares for
+    /// the worker the request really goes to.
+    pub(super) async fn dispatch_hosted_plan<M, F>(
+        &self,
+        mut request: SingleIn<PreprocessedRequest>,
+        phase: RequestPhase,
+        plan: HostedPlan,
+        affinity: &mut Option<Hold>,
+        budget: &CleanupBudget,
+        prepare: F,
+    ) -> Result<(M, ManyOut<Annotated<LLMEngineOutput>>), Error>
+    where
+        F: FnOnce(&mut PreprocessedRequest, AffinityTarget) -> Result<M, Error>,
+    {
+        let phase_label = phase.to_string();
+        let staged_kv = StagedKv::for_request(request.content());
+        let HostedPlan {
+            selection:
+                HostedSelection {
+                    initial_worker,
+                    target_constraint,
+                    occupancy_reservation,
+                    candidate_count,
+                    selected_occupancy,
+                    device_aware_telemetry,
+                },
+            lora_fallback,
+            lora_load,
+            direct_unbound,
+        } = plan;
         let soft_affinity_target = if self.session_affinity_mode == SessionAffinityMode::Soft {
-            operation.as_ref().and_then(Hold::target).map(from_table)
+            affinity.as_ref().and_then(Hold::target).map(from_table)
         } else {
             None
         };
@@ -345,37 +389,10 @@ impl RoutingHost {
             .input_sequence_tokens
             .with_label_values(&[request.phase().as_str(), &request.model])
             .observe(request.token_ids.len() as f64);
-        drop(route_guard);
 
         guard.begin_dispatch(&phase_label, request.content());
-        let dispatch_result = if is_direct && !has_affinity_session {
-            let target = target_constraint.expect("Direct routing requires an explicit target");
-            await_with_cleanup_policy(
-                request_context.as_ref(),
-                phase,
-                staged_kv,
-                "builtin.dispatch_direct",
-                &budget,
-                self.resolve_prepare_send(
-                    request,
-                    target.worker_id,
-                    TransportFallback::Allow,
-                    Departed::OrFallback,
-                    |request, worker_id| {
-                        let occupancy = guard.retarget_worker(worker_id);
-                        let target = AffinityTarget::new(
-                            worker_id,
-                            target.dp_rank.filter(|_| worker_id == target.worker_id),
-                        );
-                        request.routing_mut().dp_rank = target.dp_rank;
-                        prepare(request, target).map(|metadata| (metadata, target, occupancy))
-                    },
-                ),
-            )
-            .await
-            .and_then(|result| result)
-            .map(|((metadata, target, occupancy), stream)| (metadata, target, occupancy, stream))
-        } else if let Some(target) = target_constraint {
+        let dispatch_result = if let Some(target) = target_constraint.filter(|_| !direct_unbound) {
+            // An exact target: prepare for it, then send without fallback.
             request.routing_mut().dp_rank = target.dp_rank;
             let metadata = match prepare(&mut request, target) {
                 Ok(metadata) => metadata,
@@ -389,52 +406,60 @@ impl RoutingHost {
                 phase,
                 staged_kv,
                 "builtin.dispatch_exact",
-                &budget,
+                budget,
                 self.inner.dispatch_exact(request, target.worker_id),
             )
             .await
             .and_then(|result| result)
             .map(|stream| (metadata, target, selected_occupancy, stream))
-        } else if uses_occupancy {
-            await_with_cleanup_policy(
-                request_context.as_ref(),
-                phase,
-                staged_kv,
-                "builtin.dispatch_occupancy",
-                &budget,
-                self.resolve_prepare_send(
-                    request,
+        } else {
+            let (worker_id, fallback, departed, stage) = if direct_unbound {
+                let target = target_constraint.expect("Direct routing requires an explicit target");
+                (
+                    target.worker_id,
+                    TransportFallback::Allow,
+                    Departed::OrFallback,
+                    "builtin.dispatch_direct",
+                )
+            } else if uses_occupancy {
+                (
                     initial_worker,
                     TransportFallback::Allow,
                     Departed::Reject,
-                    |request, worker_id| {
-                        let occupancy = guard.retarget_worker(worker_id);
-                        let target = target_for_worker(worker_id);
-                        request.routing_mut().dp_rank = target.dp_rank;
-                        prepare(request, target).map(|metadata| (metadata, target, occupancy))
-                    },
-                ),
-            )
-            .await
-            .and_then(|result| result)
-            .map(|((metadata, target, occupancy), stream)| (metadata, target, occupancy, stream))
-        } else {
-            await_with_cleanup_policy(
-                request_context.as_ref(),
-                phase,
-                staged_kv,
-                "builtin.dispatch",
-                &budget,
-                self.resolve_prepare_send(
-                    request,
+                    "builtin.dispatch_occupancy",
+                )
+            } else {
+                (
                     initial_worker,
                     lora_fallback
                         .as_ref()
                         .map_or(TransportFallback::Allow, TransportFallback::Within),
                     Departed::OrFallback,
+                    "builtin.dispatch",
+                )
+            };
+            let explicit = target_constraint.filter(|_| direct_unbound);
+            await_with_cleanup_policy(
+                request_context.as_ref(),
+                phase,
+                staged_kv,
+                stage,
+                budget,
+                self.resolve_prepare_send(
+                    request,
+                    worker_id,
+                    fallback,
+                    departed,
                     |request, worker_id| {
                         let occupancy = guard.retarget_worker(worker_id);
-                        let target = target_for_worker(worker_id);
+                        let target = match explicit {
+                            // Direct keeps the explicit rank only for the worker it named.
+                            Some(explicit) => AffinityTarget::new(
+                                worker_id,
+                                explicit.dp_rank.filter(|_| worker_id == explicit.worker_id),
+                            ),
+                            None => target_for_worker(worker_id),
+                        };
                         request.routing_mut().dp_rank = target.dp_rank;
                         prepare(request, target).map(|metadata| (metadata, target, occupancy))
                     },
@@ -450,17 +475,8 @@ impl RoutingHost {
             Err(error) => {
                 let expected_target =
                     target_constraint.unwrap_or_else(|| target_for_worker(initial_worker));
-                if self.session_affinity_mode == SessionAffinityMode::Hard
-                    && !self.affinity_target_is_valid(expected_target)
-                    && let Some(operation) = operation.take()
-                {
-                    operation.invalidate();
-                }
-                let typed_error = error
-                    .chain()
-                    .find_map(|cause| cause.downcast_ref::<DynamoError>().cloned());
-                guard.record_migration_failure(typed_error);
-                guard.abort().await;
+                self.fail_dispatch(&mut guard, affinity, expected_target, &error)
+                    .await;
                 return Err(error);
             }
         };
@@ -498,17 +514,9 @@ impl RoutingHost {
             };
             tracker.record_worker(target.worker_id, target.dp_rank, worker_type);
         }
-        guard.on_dispatched();
-        if let Some(hold) = operation.take() {
-            match self.commit_affinity(hold, target) {
-                Ok(Some(lease)) => guard.hold_affinity_lease(lease),
-                Ok(None) => {}
-                Err(error) => {
-                    guard.abort().await;
-                    return Err(error);
-                }
-            }
-        }
-        Ok((metadata, into_monitored_response(response_stream, guard)))
+        let stream = self
+            .complete_dispatch(guard, affinity, target, response_stream)
+            .await?;
+        Ok((metadata, stream))
     }
 }

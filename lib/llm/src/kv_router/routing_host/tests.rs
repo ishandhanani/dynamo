@@ -2097,7 +2097,7 @@ async fn planned_route_admission_classifies_and_carries_lifecycle() {
         .unwrap();
     assert_eq!(calls.load(Ordering::Relaxed), 1);
 
-    let mut lifecycle = plan.selection.request_lifecycle.take().unwrap();
+    let mut lifecycle = plan.take_request_lifecycle().unwrap();
     lifecycle.observe_context_tokens(1);
     lifecycle.complete();
     assert_eq!(
@@ -2394,7 +2394,7 @@ async fn route_plan_from_preview_holds_and_releases_the_decode_reservation() {
     let request = Context::new(request());
 
     let plan = plan_decode_route(&router, &request).await;
-    assert_eq!(plan.signals.worker.worker_id, 7);
+    assert_eq!(plan.kv_signals().unwrap().worker.worker_id, 7);
     assert_eq!(
         router.request_metrics.requests_started_total.get(),
         0,
@@ -2453,7 +2453,7 @@ async fn route_plan_from_preview_admits_the_previewed_worker() {
         .plan_kv_route_from_preview(&request, preview)
         .await
         .unwrap();
-    assert_eq!(plan.signals.worker, previewed_worker);
+    assert_eq!(plan.kv_signals().unwrap().worker, previewed_worker);
     let loads = potential_loads(&router).await;
     assert_eq!(
         active_requests_for(&loads, previewed_worker.worker_id, previewed_worker.dp_rank),
@@ -2503,7 +2503,12 @@ async fn planned_dispatch_transfers_the_reservation_to_request_cleanup() {
     let request = Context::new(request());
     let plan = plan_decode_route(&router, &request).await;
 
-    assert!(router.dispatch_kv_plan(request, plan).await.is_err());
+    assert!(
+        router
+            .dispatch_plan(request, plan, |_, _| Ok(()))
+            .await
+            .is_err()
+    );
     assert_eq!(router.request_metrics.requests_started_total.get(), 1);
     let loads = potential_loads(&router).await;
     assert!(loads.iter().all(|load| load.active_requests == 0));
@@ -3891,7 +3896,7 @@ async fn stopped_request_in_phase(
 
 /// The builtin plane, which is what the failing vLLM cancellation test uses
 /// (`tests/fault_tolerance/cancellation/utils.py` sets `router_mode="round-robin"`).
-/// Covers all four dispatch arms of `select_and_dispatch_builtin`.
+/// Covers every first-party dispatch arm of `dispatch_hosted_plan`.
 #[tokio::test]
 #[serial_test::serial]
 async fn builtin_stopped_decode_request_reaches_the_worker_on_every_dispatch_path() {
@@ -4174,9 +4179,10 @@ async fn unknown_explicit_workers_are_rejected_before_builtin_dispatch() {
         content.routing =
             Some(serde_json::from_value(serde_json::json!({field: worker_id})).unwrap());
         let error = host
-            .select_and_dispatch_builtin(Context::new(content), phase, |_, _| Ok(()))
+            .plan_route(&Context::new(content), phase, CleanupBudget::default())
             .await
-            .unwrap_err();
+            .err()
+            .expect("an unknown explicit worker is rejected at planning");
         assert!(match_error_chain(
             error.as_ref(),
             &[ErrorType::InvalidArgument],
@@ -4324,7 +4330,10 @@ async fn explicit_worker_disappearing_after_preview_is_not_revalidated() {
     host.inner.client.override_discovered_instances(vec![]);
     // A failure after successful selection must keep its service-error classification.
     let error = match host.plan_kv_route_from_preview(&request, preview).await {
-        Ok(plan) => host.dispatch_kv_plan(request, plan).await.unwrap_err(),
+        Ok(plan) => host
+            .dispatch_plan(request, plan, |_, _| Ok(()))
+            .await
+            .expect_err("dispatch to a vanished worker fails"),
         Err(error) => error,
     };
     assert!(!match_error_chain(

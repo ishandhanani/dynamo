@@ -477,11 +477,11 @@ impl KvRequestCleanup {
 
 /// Policy-specific state released by the host's common request lifecycle.
 enum RequestCleanup {
+    /// A KV route: the scheduler booking and the classifier lifecycle.
     Kv(KvRequestCleanup),
-    Stateless {
-        worker_id: u64,
-    },
-    Occupancy {
+    /// A first-party route: the worker and, for the load-aware modes, the
+    /// occupancy slot charged to it.
+    Slot {
         worker_id: u64,
         reservation: Option<OccupancyReservation>,
     },
@@ -491,22 +491,19 @@ impl RequestCleanup {
     fn worker_id(&self) -> u64 {
         match self {
             Self::Kv(cleanup) => cleanup.worker.worker_id,
-            Self::Stateless { worker_id } => *worker_id,
-            Self::Occupancy { worker_id, .. } => *worker_id,
+            Self::Slot { worker_id, .. } => *worker_id,
         }
     }
 
+    /// Transport resolution sent the request elsewhere: move the slot's load
+    /// with it and report the new worker's load.
     fn retarget_worker(&mut self, worker_id: u64) -> Option<u64> {
         match self {
             Self::Kv(_) => {
                 debug_assert!(false, "KV cleanup target cannot be retargeted");
                 None
             }
-            Self::Stateless { worker_id: current } => {
-                *current = worker_id;
-                None
-            }
-            Self::Occupancy {
+            Self::Slot {
                 worker_id: current,
                 reservation,
             } => {
@@ -522,36 +519,35 @@ impl RequestCleanup {
     fn context_id(&self) -> Option<&str> {
         match self {
             Self::Kv(cleanup) => Some(&cleanup.context_id),
-            Self::Stateless { .. } | Self::Occupancy { .. } => None,
+            Self::Slot { .. } => None,
         }
     }
 
     fn lifecycle(&self) -> Option<&RequestAttemptLease> {
         match self {
             Self::Kv(cleanup) => cleanup.lifecycle(),
-            Self::Stateless { .. } | Self::Occupancy { .. } => None,
+            Self::Slot { .. } => None,
         }
     }
 
     fn request_lifecycle_mut(&mut self) -> Option<&mut RequestLifecycle> {
         match self {
             Self::Kv(cleanup) => cleanup.request_lifecycle.as_deref_mut(),
-            Self::Stateless { .. } | Self::Occupancy { .. } => None,
+            Self::Slot { .. } => None,
         }
     }
 
     fn take_request_lifecycle(&mut self) -> Option<Box<RequestLifecycle>> {
         match self {
             Self::Kv(cleanup) => cleanup.request_lifecycle.take(),
-            Self::Stateless { .. } | Self::Occupancy { .. } => None,
+            Self::Slot { .. } => None,
         }
     }
 
     async fn finish(&mut self) {
         match self {
             Self::Kv(cleanup) => cleanup.finish().await,
-            Self::Occupancy { reservation, .. } => drop(reservation.take()),
-            Self::Stateless { .. } => {}
+            Self::Slot { reservation, .. } => drop(reservation.take()),
         }
     }
 }
@@ -697,12 +693,9 @@ impl RequestGuard {
     ) -> Self {
         request_metrics.requests_started_total.inc();
         Self {
-            cleanup: match occupancy_reservation {
-                Some(reservation) => RequestCleanup::Occupancy {
-                    worker_id,
-                    reservation: Some(reservation),
-                },
-                None => RequestCleanup::Stateless { worker_id },
+            cleanup: RequestCleanup::Slot {
+                worker_id,
+                reservation: occupancy_reservation,
             },
             observability: RequestObservability::new(request.tracker.clone(), request_metrics),
             // Builtin policies do not track scheduler blocks. Emit one final ITL sample

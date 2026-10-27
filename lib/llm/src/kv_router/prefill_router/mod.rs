@@ -441,7 +441,10 @@ impl
                 .await
             {
                 Ok(Some(decision)) => {
-                    let signals = decision.plan.signals;
+                    let signals = decision
+                        .plan
+                        .kv_signals()
+                        .expect("conditional disaggregation plans a KV route");
                     tracing::info!(
                         request_id = %request_id,
                         worker_id = signals.worker.worker_id,
@@ -467,8 +470,8 @@ impl
                         .decode_routing_host
                         .get()
                         .expect("conditional plan requires a decode RoutingHost");
-                    let response_stream = decode_host
-                        .dispatch_kv_plan(conditional_request, decision.plan)
+                    let (_, response_stream) = decode_host
+                        .dispatch_plan(conditional_request, decision.plan, |_, _| Ok(()))
                         .await?;
                     let ctx = response_stream.context();
                     let annotation = Annotated::<LLMEngineOutput>::from_annotation(

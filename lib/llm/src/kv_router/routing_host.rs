@@ -54,6 +54,7 @@ mod occupancy;
 mod request_guard;
 
 pub use builder::{LlmDispatch, LlmPushRouter, RoutingHostBuilder};
+use builtin::HostedPlan;
 use cancellation::{CleanupBudget, DispatchCancellation, StagedKv, await_with_cleanup_policy};
 use kv_selection::{RoutingRequestParts, SelectionOptions, WorkerSelection};
 use occupancy::HostedOccupancy;
@@ -312,19 +313,33 @@ pub struct RoutingHost {
     routing_context: Option<Arc<crate::kv_router::RoutingLoadContext>>,
 }
 
-/// An admitted KV route awaiting dispatch: the one form "booked but not sent"
-/// takes. Every KV route, direct or previewed, passes through here.
+/// An admitted route awaiting dispatch: the one form "booked but not sent"
+/// takes. Every route, KV or first-party, direct or previewed, passes through
+/// here on its way to [`RoutingHost::dispatch_plan`].
 pub(crate) struct RoutePlan {
-    pub(crate) signals: RoutePlanSignals,
     /// The phase the worker was selected for; dispatch tracks under it rather
     /// than re-reading the request.
     phase: RequestPhase,
-    selection: WorkerSelection,
-    cleanup: KvRequestCleanup,
+    selection: PlanSelection,
     affinity: Option<Hold>,
     /// Carried forward from the [`RoutePreview`] this plan was admitted from, so
     /// preview, admission and dispatch draw on one budget instead of three.
     budget: CleanupBudget,
+}
+
+/// What a plan booked, by routing plane.
+// One plan per request and the KV variant is the common one; boxing it to
+// shrink the first-party variant would put an allocation on the hot path.
+#[allow(clippy::large_enum_variant)]
+enum PlanSelection {
+    /// A KV selection with its scheduler booking.
+    Kv {
+        signals: RoutePlanSignals,
+        selection: WorkerSelection,
+        cleanup: KvRequestCleanup,
+    },
+    /// A first-party selection with its occupancy reservation, if any.
+    Hosted(HostedPlan),
 }
 
 /// A KV route selected without scheduler admission.
@@ -367,24 +382,51 @@ impl RoutePlan {
         self.budget.remaining()
     }
 
-    /// The worker this plan booked.
-    pub(crate) fn worker(&self) -> WorkerWithDpRank {
-        self.signals.worker
-    }
-
-    /// Give the route up before dispatch: abort the classifier lifecycle with
-    /// `error` as its cause, release the booking, and drop the affinity hold.
-    pub(crate) async fn abort_with_error(mut self, error: Option<&Error>) {
-        if let Some(mut lifecycle) = self.selection.request_lifecycle.take() {
-            lifecycle.abort(error.map(|error| owned_abort_error(error.as_ref())));
+    /// The KV signals this plan was admitted with; `None` for a first-party route.
+    pub(crate) fn kv_signals(&self) -> Option<RoutePlanSignals> {
+        match &self.selection {
+            PlanSelection::Kv { signals, .. } => Some(*signals),
+            PlanSelection::Hosted(_) => None,
         }
-        self.cleanup.finish().await;
     }
 
+    /// The classifier lifecycle a KV plan carries, for tests that drive it by hand.
+    #[cfg(test)]
+    pub(crate) fn take_request_lifecycle(
+        &mut self,
+    ) -> Option<Box<dynamo_admission::runtime::RequestLifecycle>> {
+        match &mut self.selection {
+            PlanSelection::Kv { selection, .. } => selection.request_lifecycle.take(),
+            PlanSelection::Hosted(_) => None,
+        }
+    }
+
+    /// Give the route up before dispatch: abort the classifier lifecycle,
+    /// release the booking, and drop the affinity hold. Production routes give
+    /// a KV plan up through [`RoutingHost::dispatch_plan`]'s prepare step.
     #[cfg(test)]
     pub(crate) async fn abort(self) {
-        self.abort_with_error(None).await;
+        match self.selection {
+            PlanSelection::Kv {
+                selection, cleanup, ..
+            } => abort_kv_booking(selection, cleanup, None).await,
+            // The reservation and the LoRA load guard release on drop.
+            PlanSelection::Hosted(_) => {}
+        }
     }
+}
+
+/// Abort a KV booking that was never dispatched: the classifier lifecycle
+/// learns `error` as its cause and the scheduler booking is released.
+async fn abort_kv_booking(
+    mut selection: WorkerSelection,
+    cleanup: KvRequestCleanup,
+    error: Option<&Error>,
+) {
+    if let Some(mut lifecycle) = selection.request_lifecycle.take() {
+        lifecycle.abort(error.map(|error| owned_abort_error(error.as_ref())));
+    }
+    cleanup.finish().await;
 }
 
 /// Compatibility name for the KV-only host used by existing callers.
@@ -684,6 +726,8 @@ impl RoutingHost {
         }
     }
 
+    /// The prefill leg: book a prefill worker, let `prepare` rewrite the request
+    /// for it, then send. A failed `prepare` gives the booking back.
     pub(crate) async fn select_and_dispatch_prefill<M, F>(
         &self,
         request: SingleIn<PreprocessedRequest>,
@@ -692,14 +736,120 @@ impl RoutingHost {
     where
         F: FnOnce(&mut PreprocessedRequest, AffinityTarget) -> Result<M, Error>,
     {
+        let plan = self
+            .plan_route(&request, RequestPhase::Prefill, CleanupBudget::default())
+            .await?;
+        self.dispatch_plan(request, plan, prepare).await
+    }
+
+    /// Select, admit and book a worker for `request` in `phase` on whichever
+    /// plane this host routes: the one booking step every route takes.
+    pub(crate) async fn plan_route(
+        &self,
+        request: &SingleIn<PreprocessedRequest>,
+        phase: RequestPhase,
+        budget: CleanupBudget,
+    ) -> Result<RoutePlan, Error> {
         match &self.policy {
-            RoutingPolicy::Kv(_) => self.select_and_dispatch_kv_prefill(request, prepare).await,
+            RoutingPolicy::Kv(_) => self.plan_kv_route(request, phase, None, budget).await,
             RoutingPolicy::Builtin(_)
             | RoutingPolicy::Direct
             | RoutingPolicy::DeviceAwareWeighted => {
-                self.select_and_dispatch_builtin(request, RequestPhase::Prefill, prepare)
+                self.plan_hosted_route(request, phase, budget).await
+            }
+        }
+    }
+
+    /// Send a planned route and hand the response stream to its guard.
+    ///
+    /// `prepare` rewrites the request for the worker it goes to. A KV route
+    /// never falls back, so it is prepared for its booked worker before the
+    /// booking is recorded; a first-party route may be retargeted while its
+    /// transport resolves, so it is prepared for the resolved worker. Either
+    /// way the send ends in [`Self::complete_dispatch`] or
+    /// [`Self::fail_dispatch`].
+    pub(crate) async fn dispatch_plan<M, F>(
+        &self,
+        request: SingleIn<PreprocessedRequest>,
+        plan: RoutePlan,
+        prepare: F,
+    ) -> Result<(M, ManyOut<Annotated<LLMEngineOutput>>), Error>
+    where
+        F: FnOnce(&mut PreprocessedRequest, AffinityTarget) -> Result<M, Error>,
+    {
+        let RoutePlan {
+            phase,
+            selection,
+            mut affinity,
+            budget,
+        } = plan;
+        match selection {
+            PlanSelection::Kv {
+                selection, cleanup, ..
+            } => {
+                self.dispatch_kv_plan(
+                    request,
+                    phase,
+                    selection,
+                    cleanup,
+                    &mut affinity,
+                    &budget,
+                    prepare,
+                )
+                .await
+            }
+            PlanSelection::Hosted(hosted) => {
+                self.dispatch_hosted_plan(request, phase, hosted, &mut affinity, &budget, prepare)
                     .await
             }
+        }
+    }
+
+    /// The send succeeded: tell the guard, bind the session to `target`, and
+    /// hand the response stream to the guard for the rest of the request.
+    async fn complete_dispatch(
+        &self,
+        mut guard: RequestGuard,
+        affinity: &mut Option<Hold>,
+        target: AffinityTarget,
+        stream: ManyOut<Annotated<LLMEngineOutput>>,
+    ) -> Result<ManyOut<Annotated<LLMEngineOutput>>, Error> {
+        guard.on_dispatched();
+        if let Some(hold) = affinity.take() {
+            match self.commit_affinity(hold, target) {
+                Ok(Some(lease)) => guard.hold_affinity_lease(lease),
+                Ok(None) => {}
+                Err(error) => {
+                    guard.abort().await;
+                    return Err(error);
+                }
+            }
+        }
+        Ok(into_monitored_response(stream, guard))
+    }
+
+    /// The send failed: invalidate a hard binding to a worker that is gone,
+    /// record the attempt's failure for migration, and park the booking for
+    /// the retry when the failure is migratable, else release it.
+    async fn fail_dispatch(
+        &self,
+        guard: &mut RequestGuard,
+        affinity: &mut Option<Hold>,
+        target: AffinityTarget,
+        error: &Error,
+    ) {
+        if self.session_affinity_mode == SessionAffinityMode::Hard
+            && !self.affinity_target_is_valid(target)
+            && let Some(hold) = affinity.take()
+        {
+            hold.invalidate();
+        }
+        let typed_error = error
+            .chain()
+            .find_map(|cause| cause.downcast_ref::<DynamoError>().cloned());
+        guard.record_migration_failure(typed_error);
+        if !crate::migration::is_migratable(error.as_ref()) || !guard.release_for_retry().await {
+            guard.abort_with_error(Some(error.as_ref())).await;
         }
     }
 }
@@ -737,17 +887,9 @@ impl AsyncEngine<SingleIn<PreprocessedRequest>, ManyOut<Annotated<LLMEngineOutpu
     ) -> Result<ManyOut<Annotated<LLMEngineOutput>>, Error> {
         // One cleanup budget for this request's whole route through the host.
         let budget = CleanupBudget::default();
-        if !matches!(&self.policy, RoutingPolicy::Kv(_)) {
-            let phase = request.phase();
-            return self
-                .select_and_dispatch_builtin(request, phase, |_, _| Ok(()))
-                .await
-                .map(|(_, stream)| stream);
-        }
-
-        let is_query_only = request.get_annotation_value("query_instance_id").is_some();
         let phase = request.phase();
-        if is_query_only {
+        let is_query_only = request.get_annotation_value("query_instance_id").is_some();
+        if is_query_only && self.kv_router_if_enabled().is_some() {
             let phase_label = phase.to_string();
             let _route_guard = StageGuard::new(STAGE_ROUTE, &phase_label);
             let (selection, _) = self
@@ -794,8 +936,10 @@ impl AsyncEngine<SingleIn<PreprocessedRequest>, ManyOut<Annotated<LLMEngineOutpu
             return Ok(ResponseStream::new(Box::pin(stream), stream_context));
         }
 
-        let plan = self.plan_kv_route(&request, phase, None, budget).await?;
-        self.dispatch_kv_plan(request, plan).await
+        let plan = self.plan_route(&request, phase, budget).await?;
+        self.dispatch_plan(request, plan, |_, _| Ok(()))
+            .await
+            .map(|(_, stream)| stream)
     }
 }
 

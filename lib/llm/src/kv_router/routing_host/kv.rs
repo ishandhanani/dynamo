@@ -283,16 +283,19 @@ impl RoutingHost {
             .await?;
         let signals = self.route_signals(&selection);
         drop(route_guard);
+        let cleanup = KvRequestCleanup::new(
+            Arc::clone(self.kv_router()),
+            request.context().id().to_string(),
+            selection.worker,
+            selection.booking.take(),
+        );
         Ok(RoutePlan {
-            signals,
             phase,
-            cleanup: KvRequestCleanup::new(
-                Arc::clone(self.kv_router()),
-                request.context().id().to_string(),
-                selection.worker,
-                selection.booking.take(),
-            ),
-            selection,
+            selection: PlanSelection::Kv {
+                signals,
+                selection,
+                cleanup,
+            },
             affinity,
             budget,
         })
@@ -321,39 +324,60 @@ impl RoutingHost {
         .await
     }
 
-    pub(crate) async fn dispatch_kv_plan(
+    /// Send a KV plan: prepare the request for its booked worker, record the
+    /// routing decision into the guard, and dispatch without fallback.
+    #[allow(clippy::too_many_arguments)]
+    pub(super) async fn dispatch_kv_plan<M, F>(
+        &self,
+        mut request: SingleIn<PreprocessedRequest>,
+        phase: RequestPhase,
+        mut selection: WorkerSelection,
+        cleanup: KvRequestCleanup,
+        affinity: &mut Option<Hold>,
+        budget: &CleanupBudget,
+        prepare: F,
+    ) -> Result<(M, ManyOut<Annotated<LLMEngineOutput>>), Error>
+    where
+        F: FnOnce(&mut PreprocessedRequest, AffinityTarget) -> Result<M, Error>,
+    {
+        let target = route_target(selection.worker);
+        let metadata = match prepare(&mut request, target) {
+            Ok(metadata) => metadata,
+            Err(error) => {
+                abort_kv_booking(selection, cleanup, Some(&error)).await;
+                return Err(error);
+            }
+        };
+        let guard = self
+            .track_planned_selection(&request, &mut selection, phase, cleanup, budget)
+            .await?;
+        let stream = self
+            .dispatch_selection(request, selection, guard, budget, affinity)
+            .await?;
+        Ok((metadata, stream))
+    }
+
+    /// Send a tracked selection and hand the response stream to its guard,
+    /// through the host's common success and failure tails.
+    pub(super) async fn dispatch_selection(
         &self,
         request: SingleIn<PreprocessedRequest>,
-        plan: RoutePlan,
+        selection: WorkerSelection,
+        mut guard: RequestGuard,
+        budget: &CleanupBudget,
+        affinity: &mut Option<Hold>,
     ) -> Result<ManyOut<Annotated<LLMEngineOutput>>, Error> {
-        let RoutePlan {
-            phase,
-            mut selection,
-            cleanup,
-            mut affinity,
-            budget,
-            ..
-        } = plan;
-        let selected_target = route_target(selection.worker);
-        let guard = match self
-            .track_planned_selection(&request, &mut selection, phase, cleanup, &budget)
-            .await
-        {
-            Ok(guard) => guard,
-            Err(error) => return Err(error),
-        };
-        match self
-            .dispatch_selection(request, selection, guard, &budget, &mut affinity)
-            .await
-        {
-            Ok(stream) => Ok(stream),
+        let target = route_target(selection.worker);
+        match self.send_kv(request, selection, &mut guard, budget).await {
+            Ok((stream, route_span)) => {
+                let stream = self
+                    .complete_dispatch(guard, affinity, target, stream)
+                    .await?;
+                Ok(wrap_route_span(stream, route_span))
+            }
             Err(error) => {
-                if self.session_affinity_mode == SessionAffinityMode::Hard
-                    && !self.affinity_target_is_valid(selected_target)
-                    && let Some(operation) = affinity.take()
-                {
-                    operation.invalidate();
-                }
+                self.fail_dispatch(&mut guard, affinity, target, &error)
+                    .await;
                 Err(error)
             }
         }
@@ -540,25 +564,22 @@ impl RoutingHost {
         Ok(guard)
     }
 
-    /// Send a tracked selection and hand the response stream to its guard. On
-    /// success the session-affinity hold, if any, is committed to the worker
-    /// and its lease moves into the guard; on failure the hold is left with the
-    /// caller, which decides whether to invalidate it.
-    pub(super) async fn dispatch_selection(
+    /// Send a tracked selection to its booked worker under the KV route span.
+    /// Returns the raw response stream and the span for the caller to wrap once
+    /// the guard owns the stream; a failed send is recorded on the span here.
+    async fn send_kv(
         &self,
         request: SingleIn<PreprocessedRequest>,
         selection: WorkerSelection,
-        mut guard: RequestGuard,
+        guard: &mut RequestGuard,
         budget: &CleanupBudget,
-        affinity: &mut Option<Hold>,
-    ) -> Result<ManyOut<Annotated<LLMEngineOutput>>, Error> {
+    ) -> Result<(ManyOut<Annotated<LLMEngineOutput>>, tracing::Span), Error> {
         let context_id = request.context().id().to_string();
         let request_context = request.context().clone();
         let route_trace_context = get_route_trace_context(&request);
         let phase = request.phase();
         let staged_kv = StagedKv::for_request(request.content());
         let phase_label = phase.to_string();
-        let worker = selection.worker;
         self.warn_if_output_replay_annotation_ignored(&request, &selection);
 
         let (mut backend_input, context) = request.into_parts();
@@ -605,38 +626,13 @@ impl RoutingHost {
         )
         .await
         .and_then(|result| result);
-        let response_stream = match dispatch_result {
-            Ok(stream) => stream,
+        match dispatch_result {
+            Ok(stream) => Ok((stream, route_span)),
             Err(error) => {
                 record_route_error(&route_span, error.as_ref());
-                let typed_error = error
-                    .chain()
-                    .find_map(|cause| cause.downcast_ref::<DynamoError>().cloned());
-                guard.record_migration_failure(typed_error);
-                if !crate::migration::is_migratable(error.as_ref())
-                    || !guard.release_for_retry().await
-                {
-                    guard.abort_with_error(Some(error.as_ref())).await;
-                }
-                return Err(error);
-            }
-        };
-
-        guard.on_dispatched();
-        if let Some(hold) = affinity.take() {
-            match self.commit_affinity(hold, route_target(worker)) {
-                Ok(Some(lease)) => guard.hold_affinity_lease(lease),
-                Ok(None) => {}
-                Err(error) => {
-                    guard.abort().await;
-                    return Err(error);
-                }
+                Err(error)
             }
         }
-        Ok(wrap_route_span(
-            into_monitored_response(response_stream, guard),
-            route_span,
-        ))
     }
 
     fn warn_if_output_replay_annotation_ignored(
@@ -669,34 +665,5 @@ impl RoutingHost {
             dp_rank = selection.worker.dp_rank,
             "request has output token replay annotation but selected worker has not declared replay-token consumption"
         );
-    }
-
-    /// The prefill leg: book a prefill worker, let `prepare` rewrite the request
-    /// for it, then send. A failed `prepare` gives the booking back.
-    pub(super) async fn select_and_dispatch_kv_prefill<M, F>(
-        &self,
-        mut request: SingleIn<PreprocessedRequest>,
-        prepare: F,
-    ) -> Result<(M, ManyOut<Annotated<LLMEngineOutput>>), Error>
-    where
-        F: FnOnce(&mut PreprocessedRequest, AffinityTarget) -> Result<M, Error>,
-    {
-        let plan = self
-            .plan_kv_route(
-                &request,
-                RequestPhase::Prefill,
-                None,
-                CleanupBudget::default(),
-            )
-            .await?;
-        let metadata = match prepare(&mut request, route_target(plan.worker())) {
-            Ok(metadata) => metadata,
-            Err(error) => {
-                plan.abort_with_error(Some(&error)).await;
-                return Err(error);
-            }
-        };
-        let stream = self.dispatch_kv_plan(request, plan).await?;
-        Ok((metadata, stream))
     }
 }
