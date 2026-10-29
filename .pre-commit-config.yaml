@@ -230,6 +230,12 @@ repos:
       pass_filenames: false
       additional_dependencies:
         - pyyaml
+    - id: router-layering
+      name: Router crates depend only on the protocol crate and their upstream stages
+      entry: bash scripts/router_layering_check.sh
+      language: system
+      files: ^(lib/router/.*/Cargo\.toml|Cargo\.(toml|lock)|scripts/router_layering_check\.sh)$
+      pass_filenames: false
     - id: check-action-pins
       name: GitHub Actions pinned to a commit SHA with a version comment
       entry: python3 scripts/check_action_pins.py
