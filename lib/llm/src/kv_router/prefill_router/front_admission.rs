@@ -295,14 +295,15 @@ impl Serializer {
             let popped = {
                 let prefill_router = &self.prefill_router;
                 let decode_router = &self.decode_router;
-                self.queue.pop_next(|class_index, class, pending: &Pending| {
-                    if pending.response.is_closed() {
-                        return true;
-                    }
-                    *class_room[class_index].get_or_insert_with(|| {
-                        class_has_room(prefill_router, decode_router, class)
+                self.queue
+                    .pop_next(|class_index, class, pending: &Pending| {
+                        if pending.response.is_closed() {
+                            return true;
+                        }
+                        *class_room[class_index].get_or_insert_with(|| {
+                            class_has_room(prefill_router, decode_router, class)
+                        })
                     })
-                })
             };
             self.stats
                 .depth
@@ -343,19 +344,17 @@ impl Serializer {
         self.stats.max_wait_ns.fetch_max(wait, Ordering::Relaxed);
 
         let started = Instant::now();
-        let prefill_context = planning_context(
-            prefill,
-            &request_id,
-            &metadata,
-            session_affinity.as_ref(),
-        );
+        let prefill_context =
+            planning_context(prefill, &request_id, &metadata, session_affinity.as_ref());
         let prefill_plan = self
             .prefill_host
             .plan_admitted_upstream(&prefill_context, RequestPhase::Prefill)
             .await;
         let prefill_done = Instant::now();
         let prefill_ns = (prefill_done - started).as_nanos() as u64;
-        self.stats.prefill_ns.fetch_add(prefill_ns, Ordering::Relaxed);
+        self.stats
+            .prefill_ns
+            .fetch_add(prefill_ns, Ordering::Relaxed);
         self.stats
             .max_prefill_ns
             .fetch_max(prefill_ns, Ordering::Relaxed);
@@ -371,12 +370,8 @@ impl Serializer {
                     if let Some(constraints) = constraints {
                         super::merge_decode_topology_constraints(&mut decode, constraints);
                     }
-                    let decode_context = planning_context(
-                        decode,
-                        &request_id,
-                        &metadata,
-                        session_affinity.as_ref(),
-                    );
+                    let decode_context =
+                        planning_context(decode, &request_id, &metadata, session_affinity.as_ref());
                     match self
                         .decode_host
                         .plan_admitted_upstream(&decode_context, RequestPhase::Decode)

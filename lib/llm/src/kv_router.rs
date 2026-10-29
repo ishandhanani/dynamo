@@ -29,9 +29,8 @@ use dynamo_kv_router::{
     },
     scheduling::{
         BusyThresholds, CacheHitEstimates, OverlapAnalysis, OverloadedWorkerProvider,
-        PotentialLoad, RejectThresholdsProvider, RequestClassifier,
-        RequestClassifierContext, WorkerAvailabilityProvider,
-        effective_prefill_tokens,
+        PotentialLoad, RejectThresholdsProvider, RequestClassifier, RequestClassifierContext,
+        WorkerAvailabilityProvider, effective_prefill_tokens,
         overlap::cache_hit_estimates_from_tiered_matches,
         queue::{BookingHandle, SchedulerBookingDescriptor},
     },

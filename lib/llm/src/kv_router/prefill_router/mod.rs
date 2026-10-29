@@ -603,10 +603,8 @@ impl
                     }),
                 })
                 .await?;
-            prefill_context.insert_unique(
-                PREFILL_ROUTE_PLAN_KEY,
-                AttachedRoutePlan::new(prefill_plan),
-            );
+            prefill_context
+                .insert_unique(PREFILL_ROUTE_PLAN_KEY, AttachedRoutePlan::new(prefill_plan));
             context.insert_unique(DECODE_ROUTE_PLAN_KEY, AttachedRoutePlan::new(decode_plan));
         }
 
