@@ -34,11 +34,11 @@ use super::single::{
 use super::topology::{WorkerDpRange, WorkerTable, WorkerTopologyChange, WorkerTopologyError};
 use super::{PotentialLoadMaps, PrefillTokenDeltas, WorkerLoadProjection};
 use dynamo_router_types::busy::FullRankCounts;
+use dynamo_router_types::load::WorkerCapacity;
 use dynamo_router_types::protocols::{
     ActiveSequenceEvent, ActiveSequenceEventData, PrefillLoadHint, WorkerId, WorkerWithDpRank,
 };
 use dynamo_router_types::protocols::{AttemptId, SchedulerBookingDescriptor};
-use dynamo_router_types::selection_inputs::WorkerCapacity;
 
 // How often we force expire stale requests across all workers. See the comment
 // in ActiveSequencesMultiWorker::force_expire_requests_across_all_workers for

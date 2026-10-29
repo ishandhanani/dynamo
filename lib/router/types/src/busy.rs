@@ -7,8 +7,8 @@ use std::sync::Arc;
 
 use rustc_hash::FxHashMap;
 
+use crate::load::{WorkerCapacity, WorkerLoadInput};
 use crate::protocols::{WorkerConfigLike, WorkerId, WorkerLoadProjection, WorkerWithDpRank};
-use crate::selection_inputs::{WorkerCapacity, WorkerLoadInput};
 
 /// Supplies the host's live reject thresholds. Selection skips a worker whose every rank is
 /// past them, and rejects the request when no eligible worker remains.

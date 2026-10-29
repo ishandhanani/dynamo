@@ -2263,6 +2263,7 @@ dependencies = [
  "criterion",
  "dynamo-router-types",
  "dynamo-tokens",
+ "dynamo-worker-selection",
  "futures-util",
  "ordered-float 4.6.0",
  "parking_lot",

@@ -530,8 +530,8 @@ mod tests {
     #[test]
     fn full_rank_counts_skip_a_worker_only_when_every_rank_is_full() {
         use crate::busy::BusyThresholds;
+        use crate::load::WorkerCapacity;
         use crate::protocols::WorkerLoadProjection;
-        use crate::selection_inputs::WorkerCapacity;
 
         let constraints = RoutingConstraints::default();
         let config = TestWorkerConfig {

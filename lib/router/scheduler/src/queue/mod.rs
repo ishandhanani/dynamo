@@ -52,7 +52,7 @@ use dynamo_worker_selection::selector::{
 };
 
 // The fallback lives beside `WorkerCapacity`; this path stays for existing importers.
-pub use dynamo_router_types::selection_inputs::DEFAULT_MAX_BATCHED_TOKENS;
+pub use dynamo_router_types::load::DEFAULT_MAX_BATCHED_TOKENS;
 
 mod capacity;
 

@@ -6,7 +6,7 @@
 mod context;
 mod runtime;
 
-pub use dynamo_router_types::selection_inputs as inputs;
+pub mod inputs;
 
 #[doc(hidden)]
 pub use runtime::RuntimePolicyState;

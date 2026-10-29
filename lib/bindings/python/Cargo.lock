@@ -2085,6 +2085,7 @@ dependencies = [
  "async-trait",
  "dynamo-router-types",
  "dynamo-tokens",
+ "dynamo-worker-selection",
  "futures-util",
  "ordered-float 4.6.0",
  "parking_lot",
@@ -2664,6 +2665,7 @@ name = "dynamo-scheduler"
 version = "1.7.0"
 dependencies = [
  "anyhow",
+ "arc-swap",
  "async-trait",
  "crossbeam-queue",
  "dynamo-admission",

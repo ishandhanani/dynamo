@@ -19,8 +19,8 @@ use super::sharded_lock::ShardedRwLock;
 use super::single::PromptMembershipDelta;
 use super::topology::WorkerTopologyChange;
 use dynamo_router_types::busy::FullRankCounts;
+use dynamo_router_types::load::WorkerCapacity;
 use dynamo_router_types::protocols::WorkerWithDpRank;
-use dynamo_router_types::selection_inputs::WorkerCapacity;
 
 pub use dynamo_router_types::protocols::WorkerLoadProjection;
 

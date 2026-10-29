@@ -31,7 +31,7 @@ use dynamo_router_types::busy::BusyThresholds;
 use dynamo_router_types::config::policy::PolicyProfile;
 use dynamo_router_types::protocols::{WorkerAffinityTarget, WorkerWithDpRank};
 use dynamo_router_types::sched::SessionContext;
-use dynamo_router_types::selection_inputs::{WorkerCandidates, WorkerInputs};
+use dynamo_worker_selection::plugin::inputs::{WorkerCandidates, WorkerInputs};
 
 #[derive(Debug)]
 pub struct ClassifyRequest {

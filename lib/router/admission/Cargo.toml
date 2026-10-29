@@ -17,6 +17,7 @@ bench = ["dynamo-router-types/bench"]
 
 [dependencies]
 dynamo-router-types = { workspace = true }
+dynamo-worker-selection = { workspace = true }
 async-trait = { workspace = true }
 ordered-float = { workspace = true }
 futures-util = { workspace = true }

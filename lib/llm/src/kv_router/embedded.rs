@@ -25,13 +25,13 @@ use dynamo_router_types::busy::RejectThresholdsProvider;
 use dynamo_router_types::config::KvRouterConfig;
 use dynamo_router_types::identity::DEFAULT_ROUTING_GROUP;
 use dynamo_router_types::identity::RoutingPartitionId;
+use dynamo_router_types::load::DEFAULT_MAX_BATCHED_TOKENS;
 use dynamo_router_types::prefill_load::PrefillLoadEstimator;
 use dynamo_router_types::protocols::{QueueLimitKind, QueueRejection};
 use dynamo_router_types::protocols::{WorkerConfigLike, WorkerId, WorkerWithDpRank};
 use dynamo_router_types::sched::{
     NonMaxOverlapSelectionObserver, OverloadedWorkerProvider, WorkerAvailabilityProvider,
 };
-use dynamo_router_types::selection_inputs::DEFAULT_MAX_BATCHED_TOKENS;
 use dynamo_slot_tracker::{LocalWorkerLoad, ReplicaWorkerPolicy};
 use dynamo_worker_selection::plugin::WorkerSelectionPolicyFactory;
 use tokio_util::sync::CancellationToken;
