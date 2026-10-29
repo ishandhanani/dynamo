@@ -10,8 +10,8 @@
 //! When modifying constants in this file, regenerate the Python module:
 //!     cargo run -p dynamo-codegen --bin gen-python-prometheus-names
 //!
-//! This crate is a dependency-free leaf so both `dynamo-runtime` (which re-exports it as
-//! `dynamo_runtime::metrics::prometheus_names`) and `dynamo-http-server` can share one source of names.
+//! One source of names for every crate: `dynamo-runtime` re-exports this module as
+//! `dynamo_runtime::metrics::prometheus_names`; `dynamo-http-server` and the router hosts use it directly.
 //!
 //! This generates `lib/bindings/python/src/dynamo/prometheus_names.py`
 //! with pure Python constants (no Rust bindings needed).
@@ -1038,7 +1038,7 @@ pub fn build_metric_name(prefix: &str, metric_name: &str) -> String {
 ///
 /// # Examples
 /// ```
-/// use dynamo_prometheus_names::clamp_u64_to_i64;
+/// use dynamo_metrics::names::clamp_u64_to_i64;
 ///
 /// assert_eq!(clamp_u64_to_i64(100), 100);
 /// assert_eq!(clamp_u64_to_i64(u64::MAX), i64::MAX);

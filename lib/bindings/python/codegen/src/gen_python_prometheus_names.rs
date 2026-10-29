@@ -183,9 +183,9 @@ fn main() -> Result<()> {
 
     let source = source_path.unwrap_or_else(|| {
         // From: lib/bindings/python/codegen
-        // To:   lib/prometheus-names/src/lib.rs
+        // To:   lib/metrics/src/names.rs
         codegen_dir
-            .join("../../../prometheus-names/src/lib.rs")
+            .join("../../../metrics/src/names.rs")
             .canonicalize()
             .expect("Failed to resolve source path")
     });
@@ -271,7 +271,7 @@ gen-python-prometheus-names - Generate Python prometheus_names from Rust source
 
 Usage: gen-python-prometheus-names [OPTIONS]
 
-Parses lib/prometheus-names/src/lib.rs and generates a pure Python
+Parses lib/metrics/src/names.rs and generates a pure Python
 module with 1:1 constant mappings at lib/bindings/python/src/dynamo/prometheus_names.py
 
 This allows Python code to import Prometheus metric constants without Rust bindings:
@@ -279,7 +279,7 @@ This allows Python code to import Prometheus metric constants without Rust bindi
 
 OPTIONS:
     --source PATH    Path to Rust source file
-                     (default: lib/prometheus-names/src/lib.rs)
+                     (default: lib/metrics/src/names.rs)
 
     --output PATH    Path to Python output file
                      (default: lib/bindings/python/src/dynamo/prometheus_names.py)
@@ -383,7 +383,7 @@ pub mod empty_module {}
     #[test]
     fn committed_python_matches_generated() {
         let codegen_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-        let rust_source = codegen_dir.join("../../../prometheus-names/src/lib.rs");
+        let rust_source = codegen_dir.join("../../../metrics/src/names.rs");
         let python_module = codegen_dir.join("../src/dynamo/prometheus_names.py");
 
         let rust_src = std::fs::read_to_string(&rust_source)

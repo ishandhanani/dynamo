@@ -4,7 +4,7 @@
 [workspace]
 members = [
     "lib/http-server",
-    "lib/prometheus-names",
+    "lib/metrics",
     "lib/router/types",
     "lib/router/kv-indexer",
     "lib/router/slot-tracker",
@@ -64,7 +64,7 @@ aisimulate-core = { version = "=0.13.0-dev.202610240000000082" }
 
 # Local crates
 dynamo-http-server = { path = "lib/http-server", version = "1.7.0" }
-dynamo-prometheus-names = { path = "lib/prometheus-names", version = "1.7.0" }
+dynamo-metrics = { path = "lib/metrics", version = "1.7.0" }
 dynamo-router-types = { path = "lib/router/types", version = "1.7.0" }
 dynamo-kv-indexer = { path = "lib/router/kv-indexer", version = "1.7.0" }
 dynamo-slot-tracker = { path = "lib/router/slot-tracker", version = "1.7.0" }

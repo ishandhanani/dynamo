@@ -2522,7 +2522,7 @@ version = "1.7.0"
 dependencies = [
  "anyhow",
  "axum 0.8.4",
- "dynamo-prometheus-names",
+ "dynamo-metrics",
  "futures",
  "hyper-util",
  "parking_lot",
@@ -2765,6 +2765,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "dynamo-metrics"
+version = "1.7.0"
+dependencies = [
+ "anyhow",
+ "criterion",
+ "once_cell",
+ "parking_lot",
+ "prometheus",
+ "regex",
+ "serde",
+ "serde_json",
+ "tracing",
+]
+
+[[package]]
 name = "dynamo-mocker"
 version = "1.7.0"
 dependencies = [
@@ -2863,15 +2878,6 @@ dependencies = [
  "serde_yaml",
  "tracing",
  "uuid",
-]
-
-[[package]]
-name = "dynamo-prometheus-names"
-version = "1.7.0"
-dependencies = [
- "anyhow",
- "once_cell",
- "regex",
 ]
 
 [[package]]
@@ -2977,7 +2983,7 @@ dependencies = [
  "derive-getters",
  "derive_builder",
  "dynamo-http-server",
- "dynamo-prometheus-names",
+ "dynamo-metrics",
  "dynamo-router-types",
  "dynamo-truthy",
  "dynamo-worker-selection",

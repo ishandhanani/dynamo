@@ -324,7 +324,7 @@ areas:
   - lib/llm/src/telemetry/
   - lib/runtime/src/metrics.rs
   - lib/runtime/src/metrics/
-  - lib/prometheus-names/
+  - lib/metrics/
 - label: fault-tolerance
   github_team: '@ai-dynamo/dynamo-fault-tolerance-codeowners'
   path_globs:
