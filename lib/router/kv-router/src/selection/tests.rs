@@ -32,8 +32,8 @@ use dynamo_worker_selection::selector::{
 };
 use tempfile::NamedTempFile;
 
-fn test_config() -> dynamo_router_types::config::KvRouterConfig {
-    dynamo_router_types::config::KvRouterConfig {
+fn test_config() -> crate::config::KvRouterConfig {
+    crate::config::KvRouterConfig {
         use_kv_events: false,
         router_queue_threshold: None,
         ..Default::default()
@@ -270,7 +270,7 @@ impl FactoryRendezvous {
 async fn native_policy_app<F>(worker_type: dynamo_router_types::WorkerType, factory: F) -> Router
 where
     F: for<'a> Fn(
-            &dynamo_router_types::config::KvRouterConfig,
+            &dynamo_worker_selection::config::SelectionConfig,
             dynamo_router_types::WorkerType,
             RoutingPartitionRef<'a>,
         ) -> WorkerSelectionPolicy
@@ -285,7 +285,7 @@ where
         worker_type.as_str(),
     )
     .expect("write worker-selection policy config");
-    let config = dynamo_router_types::config::KvRouterConfig {
+    let config = crate::config::KvRouterConfig {
         router_policy_config: Some(policy_file.path().display().to_string()),
         ..test_config()
     };
@@ -342,7 +342,7 @@ async fn custom_worker_selection_policy_is_per_partition_composes_filter_scorer_
     let rendezvous = Arc::clone(&factory_rendezvous);
     let app = native_policy_app(
         dynamo_router_types::WorkerType::Prefill,
-        move |config, worker_type, partition| {
+        move |_config, worker_type, partition| {
             calls.fetch_add(1, Ordering::Relaxed);
             partitions.lock().unwrap().push(partition.into_owned());
             worker_types.lock().unwrap().push(worker_type);
@@ -419,7 +419,7 @@ async fn custom_worker_selection_policy_is_per_partition_composes_filter_scorer_
 async fn native_worker_selection_policy_rejects_non_finite_costs_before_booking() {
     let app = native_policy_app(
         dynamo_router_types::WorkerType::Aggregated,
-        |config, worker_type, _partition| {
+        |_config, worker_type, _partition| {
             WorkerSelectionPolicy::new(
                 worker_type.as_str(),
                 vec![Box::new(NonFiniteScorer)],
@@ -453,7 +453,7 @@ async fn native_worker_selection_policy_rejects_non_finite_costs_before_booking(
 async fn native_worker_selection_policy_rejects_invalid_rows_before_booking() {
     let app = native_policy_app(
         dynamo_router_types::WorkerType::Aggregated,
-        |config, worker_type, _partition| {
+        |_config, worker_type, _partition| {
             WorkerSelectionPolicy::new(worker_type.as_str(), Vec::new(), Box::new(InvalidRowPicker))
         },
     )
@@ -483,7 +483,7 @@ async fn native_worker_selection_policy_rejects_invalid_rows_before_booking() {
 async fn worker_selection_filter_returns_unavailable_without_booking() {
     let app = native_policy_app(
         dynamo_router_types::WorkerType::Aggregated,
-        |config, worker_type, _partition| {
+        |_config, worker_type, _partition| {
             WorkerSelectionPolicy::new_with_filters(
                 worker_type.as_str(),
                 vec![Box::new(RejectAllFilter)],
@@ -625,7 +625,7 @@ async fn prompt_routes_keep_json_rejection_statuses() {
 fn keyed_prompt_tracking_leaves_indexer_hashes_public() {
     let mut key_file = NamedTempFile::new().unwrap();
     key_file.write_all(&[0x35; 32]).unwrap();
-    let config = dynamo_router_types::config::KvRouterConfig {
+    let config = crate::config::KvRouterConfig {
         router_tracking_hash:
             dynamo_router_types::tracking_hash::TrackingHashAlgorithm::KeyedXxh3V1,
         router_tracking_key_file: Some(key_file.path().to_path_buf()),
@@ -680,7 +680,7 @@ fn disabled_kv_reuse_keeps_public_indexer_hashes_and_randomizes_tracking() {
 fn keyed_reservation_hashes_directly_from_tokens() {
     let mut key_file = NamedTempFile::new().unwrap();
     key_file.write_all(&[0x47; 32]).unwrap();
-    let config = dynamo_router_types::config::KvRouterConfig {
+    let config = crate::config::KvRouterConfig {
         router_tracking_hash:
             dynamo_router_types::tracking_hash::TrackingHashAlgorithm::KeyedXxh3V1,
         router_tracking_key_file: Some(key_file.path().to_path_buf()),
@@ -728,7 +728,7 @@ fn keyed_reservation_hashes_directly_from_tokens() {
 fn keyed_hash_only_inputs_remain_trusted_for_selection_and_reservation() {
     let mut key_file = NamedTempFile::new().unwrap();
     key_file.write_all(&[0x59; 32]).unwrap();
-    let config = dynamo_router_types::config::KvRouterConfig {
+    let config = crate::config::KvRouterConfig {
         router_tracking_hash:
             dynamo_router_types::tracking_hash::TrackingHashAlgorithm::KeyedXxh3V1,
         router_tracking_key_file: Some(key_file.path().to_path_buf()),
@@ -1744,7 +1744,7 @@ async fn explicit_reservation_discards_cached_selection() {
 
 #[tokio::test]
 async fn cached_booking_honors_prefill_tracking() {
-    let config = dynamo_router_types::config::KvRouterConfig {
+    let config = crate::config::KvRouterConfig {
         router_track_prefill_tokens: false,
         ..test_config()
     };

@@ -26,11 +26,10 @@ pub mod scheduling_compat {
     pub use crate::overlap::*;
     pub use crate::overlap_refresh::*;
     pub use dynamo_admission::classifier::*;
+    pub use dynamo_admission::policy_config::*;
     pub use dynamo_admission::policy_queue::*;
     pub use dynamo_admission::runtime::{RequestClassifierRuntime, RequestLifecycle};
-    pub use dynamo_router_types::busy::*;
     pub use dynamo_router_types::config;
-    pub use dynamo_router_types::config::policy::*;
     pub use dynamo_router_types::eligibility::*;
     pub use dynamo_router_types::prefill_load::*;
     pub use dynamo_router_types::protocols::{PotentialLoad, WorkerPlacement};

@@ -14,7 +14,7 @@ use dynamo_kv_indexer::{
     KvIndexer, KvIndexerInterface, KvIndexerMetrics, LowerTierIndexers, LowerTierQueryOptions,
     MatchDetails, ThreadPoolIndexer, TieredMatchDetails, query_lower_tiers_with_options,
 };
-use dynamo_router_types::config::KvRouterConfig;
+use dynamo_kv_router::config::KvRouterConfig;
 use dynamo_router_types::identity::RoutingPartitionRef;
 use dynamo_router_types::protocols::{
     BlockHashOptions, RouterEvent, RoutingConstraints, StorageTier, WorkerId,
@@ -577,7 +577,7 @@ mod tests {
     use std::sync::Arc;
     use std::time::Duration;
 
-    use dynamo_router_types::config::RouterQueuePolicy;
+    use dynamo_admission::config::RouterQueuePolicy;
     use dynamo_router_types::protocols::{
         ExternalSequenceBlockHash, KvCacheEvent, KvCacheEventData, KvCacheStoreData,
         KvCacheStoredBlockData, LocalBlockHash, StorageTier, WorkerWithDpRank,

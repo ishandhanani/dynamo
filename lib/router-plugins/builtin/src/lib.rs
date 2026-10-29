@@ -38,9 +38,9 @@ pub fn register(registry: &mut RouterPluginRegistry) -> Result<(), RouterPluginR
 
 #[cfg(test)]
 mod tests {
+    use dynamo_kv_router::config::KvRouterConfig;
     use dynamo_kv_router::plugins::WorkerSelectionPolicyRegistryError;
     use dynamo_router_types::WorkerType;
-    use dynamo_router_types::config::KvRouterConfig;
     use dynamo_router_types::identity::RoutingPartitionRef;
     use dynamo_worker_selection::plugin::WorkerSelectionPolicyFactory;
 

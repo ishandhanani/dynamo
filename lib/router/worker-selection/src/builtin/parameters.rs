@@ -4,7 +4,7 @@
 //! Startup parameters and provider registration for the default policy.
 
 use crate::config::SelectionConfig;
-use dynamo_router_types::config::SharedCacheType;
+use crate::config::SharedCacheType;
 
 /// YAML parameters of the `dynamo-default-cost-fn` provider; every field falls back to the router config.
 #[derive(Default, serde::Deserialize)]

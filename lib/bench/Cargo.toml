@@ -136,6 +136,7 @@ dynamo-mocker = { workspace = true, optional = true }
 dynamo-kv-indexer = { workspace = true }
 dynamo-slot-tracker = { workspace = true }
 dynamo-router-types = { workspace = true }
+dynamo-kv-router = { workspace = true }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 libc = { workspace = true, optional = true }

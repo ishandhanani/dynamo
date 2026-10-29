@@ -9,9 +9,9 @@
 
 use async_trait::async_trait;
 
+use crate::config::ConditionalDisaggPolicyKind;
 use crate::config::SelectionConfig;
-use dynamo_router_types::config::ConditionalDisaggPolicyKind;
-pub use dynamo_router_types::config::{
+pub use crate::config::{
     DEFAULT_CONDITIONAL_DISAGG_EFF_ISL_RATIO_THRESHOLD,
     DEFAULT_CONDITIONAL_DISAGG_EFF_ISL_THRESHOLD,
 };

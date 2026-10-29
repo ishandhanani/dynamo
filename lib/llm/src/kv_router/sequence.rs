@@ -1122,7 +1122,7 @@ mod tests {
             .endpoint("generate");
         let service = Arc::new(
             SelectionServiceBuilder::new(
-                dynamo_router_types::config::KvRouterConfig {
+                dynamo_kv_router::config::KvRouterConfig {
                     use_kv_events: false,
                     router_queue_threshold: None,
                     ..Default::default()

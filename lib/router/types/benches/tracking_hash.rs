@@ -4,7 +4,7 @@
 use std::io::Write;
 
 use criterion::{BenchmarkId, Criterion, Throughput, black_box, criterion_group, criterion_main};
-use dynamo_router_types::config::{KvRouterConfig, TrackingHashConfig};
+use dynamo_router_types::config::TrackingHashConfig;
 use dynamo_router_types::identity::RoutingPartitionRef;
 use dynamo_router_types::protocols::{BlockHashOptions, compute_block_hash_for_seq};
 use dynamo_router_types::tracking_hash::{
@@ -79,14 +79,12 @@ fn tracking_hash(c: &mut Criterion) {
     let mut key_file = NamedTempFile::new().unwrap();
     key_file.write_all(&BENCHMARK_KEY).unwrap();
     let public_context = TrackingHashContext::from_config(&TrackingHashConfig::default()).unwrap();
-    let keyed_context =
-        TrackingHashContext::from_config(&TrackingHashConfig::from(&KvRouterConfig {
-            router_tracking_hash: TrackingHashAlgorithm::KeyedXxh3V1,
-            router_tracking_key_file: Some(key_file.path().to_path_buf()),
-            router_tracking_key_id: Some("benchmark".to_string()),
-            ..Default::default()
-        }))
-        .unwrap();
+    let keyed_context = TrackingHashContext::from_config(&TrackingHashConfig {
+        algorithm: TrackingHashAlgorithm::KeyedXxh3V1,
+        key_file: Some(key_file.path().to_path_buf()),
+        key_id: Some("benchmark".to_string()),
+    })
+    .unwrap();
     let block_size = 16;
     let scope = TrackingHashScope {
         partition: RoutingPartitionRef::new("benchmark-model", "default"),

@@ -24,6 +24,7 @@ blake3 = { workspace = true }
 dashmap = { workspace = true }
 fastrand = "2"
 serde = { workspace = true }
+serde_yaml = "0.9.34"
 serde_json = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }

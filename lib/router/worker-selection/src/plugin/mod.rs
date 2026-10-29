@@ -24,10 +24,8 @@ pub use inputs::{
 };
 
 pub use crate::config::SelectionConfig;
+pub use crate::config::{WorkerSelectionConfig, WorkerSelectionInstance};
 pub use crate::selector::WorkerSelectionPolicy;
-pub use dynamo_router_types::config::worker_selection::{
-    WorkerSelectionConfig, WorkerSelectionInstance,
-};
 pub use dynamo_router_types::sched::{
     SessionContext, WorkerSelectionInputTrigger, WorkerSelectionPolicyError,
 };

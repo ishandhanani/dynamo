@@ -6,8 +6,8 @@ use std::time::Duration;
 
 use tokio_util::sync::CancellationToken;
 
+use crate::config::KvRouterConfig;
 use dynamo_kv_indexer::ingest::backend::IndexerPolicy;
-use dynamo_router_types::config::KvRouterConfig;
 use dynamo_router_types::protocols::WorkerId;
 use dynamo_router_types::tracking_hash::TrackingHashContext;
 use dynamo_scheduler::scheduling_compat::PotentialLoad;
@@ -767,7 +767,7 @@ worker_selection:
             ),
         ] {
             let result = super::SelectionServiceBuilder::new(
-                dynamo_router_types::config::KvRouterConfig {
+                crate::config::KvRouterConfig {
                     use_kv_events: false,
                     router_queue_threshold: None,
                     ..Default::default()

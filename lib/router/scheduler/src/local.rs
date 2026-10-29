@@ -20,8 +20,8 @@ use crate::queue::{
 use crate::scheduling_compat::{RequestClassifierRuntime, RequestLifecycle};
 use dynamo_admission::classifier::{ClassifyRequest, RequestClassifier};
 #[cfg(test)]
-use dynamo_router_types::config::RouterQueuePolicy;
-use dynamo_router_types::config::policy::{PolicyProfile, RejectThresholdsProvider};
+use dynamo_admission::config::RouterQueuePolicy;
+use dynamo_admission::policy_config::{PolicyProfile, RejectThresholdsProvider};
 use dynamo_router_types::prefill_load::PrefillLoadEstimator;
 use dynamo_router_types::protocols::RoutingConstraints;
 use dynamo_router_types::protocols::{

@@ -3,8 +3,10 @@
 
 //! The slot-tracker slice of the router configuration.
 
-use dynamo_router_types::config::{KvRouterConfig, RouterPrefillLoadModel};
-use serde::Serialize;
+use std::fmt;
+use std::str::FromStr;
+
+use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct SlotsConfig {
@@ -17,22 +19,57 @@ pub struct SlotsConfig {
 }
 
 impl Default for SlotsConfig {
-    /// The router's defaults; the aggregate's `Default` is the single source until it leaves
-    /// the shared crate.
+    /// The router's defaults; `dynamo-kv-router` asserts the flat defaults map onto these.
     fn default() -> Self {
-        Self::from(&KvRouterConfig::default())
+        Self {
+            track_active_blocks: true,
+            track_output_blocks: false,
+            track_prefill_tokens: true,
+            prefill_load_model: RouterPrefillLoadModel::default(),
+            ttl_secs: 120.0,
+            predicted_ttl_secs: None,
+        }
     }
 }
 
-impl From<&KvRouterConfig> for SlotsConfig {
-    fn from(config: &KvRouterConfig) -> Self {
-        Self {
-            track_active_blocks: config.router_track_active_blocks,
-            track_output_blocks: config.router_track_output_blocks,
-            track_prefill_tokens: config.router_track_prefill_tokens,
-            prefill_load_model: config.router_prefill_load_model,
-            ttl_secs: config.router_ttl_secs,
-            predicted_ttl_secs: config.router_predicted_ttl_secs,
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum RouterPrefillLoadModel {
+    #[default]
+    None,
+    // v1.5 frontends only recognize "aic" in worker cards.
+    // TODO(v1.8): write "ais" with alias="aic" when v1.5 leaves N-2.
+    // TODO(v1.10): remove the wire "aic" alias when v1.7 writers leave N-2,
+    // provided v1.8 and later consistently emit "ais".
+    #[serde(rename = "aic", alias = "ais")]
+    Ais,
+}
+
+impl fmt::Display for RouterPrefillLoadModel {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::None => f.write_str("none"),
+            Self::Ais => f.write_str("ais"),
         }
+    }
+}
+
+impl FromStr for RouterPrefillLoadModel {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "none" => Ok(Self::None),
+            "ais" | "aic" => Ok(Self::Ais),
+            _ => Err(format!(
+                "unknown prefill load model: {s:?}, expected 'none' or 'ais'"
+            )),
+        }
+    }
+}
+
+impl RouterPrefillLoadModel {
+    pub fn is_enabled(self) -> bool {
+        !matches!(self, Self::None)
     }
 }

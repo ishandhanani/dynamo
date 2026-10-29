@@ -30,7 +30,7 @@ use crate::{
 };
 use dynamo_http_server::metrics::Metrics;
 
-use dynamo_router_types::config::min_initial_workers_from_env;
+use dynamo_kv_indexer::config::min_initial_workers_from_env;
 use dynamo_runtime::{
     DistributedRuntime,
     component::Client,

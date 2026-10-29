@@ -13,6 +13,7 @@ use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
 use anyhow::{Context, Result};
+use dynamo_kv_router::config::KvRouterConfig;
 use dynamo_kv_router::plugins::RouterPluginRegistry;
 use dynamo_kv_router::selection::{
     CatalogReconciler, DEFAULT_MODEL_NAME, HostCache, HostEligibility, HostLoad, HostReplication,
@@ -22,7 +23,6 @@ use dynamo_kv_router::selection::{
 };
 use dynamo_router_types::WorkerType;
 use dynamo_router_types::busy::RejectThresholdsProvider;
-use dynamo_router_types::config::KvRouterConfig;
 use dynamo_router_types::identity::DEFAULT_ROUTING_GROUP;
 use dynamo_router_types::identity::RoutingPartitionId;
 use dynamo_router_types::load::DEFAULT_MAX_BATCHED_TOKENS;

@@ -165,7 +165,7 @@ pub fn parse_router_worker_type(name: &str) -> Result<WorkerType> {
 mod tests {
     use super::*;
     use dynamo_custom_policy_builtin::DefaultWorkerSelector;
-    use dynamo_router_types::config::KvRouterConfig;
+    use dynamo_kv_router::config::KvRouterConfig;
     use dynamo_worker_selection::config::SelectionConfig;
     use dynamo_worker_selection::plugin::RuntimePolicyError;
 

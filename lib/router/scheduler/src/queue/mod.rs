@@ -20,12 +20,12 @@ use crate::overlap_refresh::{
     NoopOverlapScoresRefresh, OverlapScoresRefresh, read_overlap_refresh_after, refresh_overlap,
 };
 use crate::scheduling_compat::{ClassificationOverrides, ClassifyRequest};
-use dynamo_admission::policy_queue::{PolicyQueue, QueueMetadata, QueueSnapshot};
 #[cfg(test)]
-use dynamo_router_types::config::RouterQueuePolicy;
-use dynamo_router_types::config::policy::{
+use dynamo_admission::config::RouterQueuePolicy;
+use dynamo_admission::policy_config::{
     BusyThresholds, FullRankCounts, PolicyClassConfig, PolicyProfile, RejectThresholdsProvider,
 };
+use dynamo_admission::policy_queue::{PolicyQueue, QueueMetadata, QueueSnapshot};
 use dynamo_router_types::eligibility::{RoutingEligibility, worker_config_for_rank};
 use dynamo_router_types::prefill_load::{PrefillLoadEstimator, effective_prefill_tokens};
 use dynamo_router_types::protocols::WorkerPlacement;

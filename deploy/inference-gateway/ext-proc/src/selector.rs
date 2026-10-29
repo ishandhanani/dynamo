@@ -12,6 +12,7 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result, anyhow};
 
+use dynamo_kv_router::config::KvRouterConfig;
 use dynamo_kv_router::config::try_kv_router_config_from_dynamo_env;
 use dynamo_kv_router::plugins::WorkerSelectionPolicyRegistry;
 use dynamo_kv_router::selection::{
@@ -19,7 +20,6 @@ use dynamo_kv_router::selection::{
     SelectionService, SelectionServiceBuilder, warn_for_unserved_worker_selection_policies,
 };
 use dynamo_router_types::WorkerType;
-use dynamo_router_types::config::KvRouterConfig;
 use dynamo_router_types::identity::DEFAULT_ROUTING_GROUP;
 use dynamo_router_types::protocols::RoutingConstraints;
 use kube::Client;

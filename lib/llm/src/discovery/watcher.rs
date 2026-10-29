@@ -2217,7 +2217,7 @@ request_classifier:
         .unwrap();
         let router_config = RouterConfig::new(
             RouterMode::KV,
-            dynamo_router_types::config::KvRouterConfig {
+            dynamo_kv_router::config::KvRouterConfig {
                 use_kv_events: false,
                 router_policy_config: Some(policy_file.path().display().to_string()),
                 ..Default::default()
@@ -2660,7 +2660,7 @@ request_classifier:
             .unwrap();
         let router_config = RouterConfig {
             router_mode: RouterMode::KV,
-            kv_router_config: dynamo_router_types::config::KvRouterConfig {
+            kv_router_config: dynamo_kv_router::config::KvRouterConfig {
                 skip_initial_worker_wait: true,
                 use_kv_events: false,
                 ..Default::default()
@@ -3197,7 +3197,7 @@ request_classifier:
     fn only_explicit_policies_require_typed_model_cards() {
         let unresolved = RouterPluginBuilder::default();
         let resolved = dynamo_custom_policy_builtin::default_registry()
-            .resolve_plugins(&dynamo_router_types::config::KvRouterConfig::default())
+            .resolve_plugins(&dynamo_kv_router::config::KvRouterConfig::default())
             .unwrap();
         assert!(resolved.worker_selection().is_some());
         let builtin = RouterPluginBuilder::new(resolved);

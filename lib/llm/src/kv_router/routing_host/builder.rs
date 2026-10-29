@@ -12,7 +12,8 @@
 
 use std::{sync::Arc, time::Duration};
 
-use dynamo_router_types::{config::KvRouterConfig, prefill_load::PrefillLoadEstimator};
+use dynamo_kv_router::config::KvRouterConfig;
+use dynamo_router_types::prefill_load::PrefillLoadEstimator;
 use dynamo_runtime::{
     component::Client,
     engine::EngineContextGuard,

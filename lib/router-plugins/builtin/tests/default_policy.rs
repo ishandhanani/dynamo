@@ -2,8 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0
 mod support;
 use dynamo_custom_policy_builtin::{DefaultWorkerSelector, default_policy, default_registry};
+use dynamo_kv_router::config::KvRouterConfig;
 use dynamo_router_types::WorkerType;
-use dynamo_router_types::config::KvRouterConfig;
 use dynamo_router_types::identity::RoutingPartitionRef;
 use dynamo_router_types::protocols::WorkerWithDpRank;
 use dynamo_router_types::sched::WorkerSelectionPolicyError;

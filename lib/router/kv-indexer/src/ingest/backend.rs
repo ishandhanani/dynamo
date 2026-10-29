@@ -10,6 +10,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::ConcurrentRadixTreeCompressed;
 use crate::ThreadPoolIndexer;
+use crate::config::ApproximateCachePolicyKind;
 use crate::config::IndexerConfig;
 use crate::pruning::PruneConfig;
 use crate::{
@@ -18,7 +19,6 @@ use crate::{
     MatchDetails, RoutingDecisionHashes, SyncIndexer, TieredMatchDetails, TieredMatchProvider,
     record_unsupported_residency_event,
 };
-use dynamo_router_types::config::ApproximateCachePolicyKind;
 use dynamo_router_types::protocols::{
     DpRank, ExternalSequenceBlockHash, KvCacheEventData, LocalBlockHash, OverlapScores,
     ResidencyProjection, ResidencyRoutingSnapshot, RouterEvent, WorkerId, WorkerWithDpRank,
@@ -40,7 +40,7 @@ pub enum PrimaryRetention {
 
 /// Indexer shape derived from router configuration, mirroring the frontend
 /// `KvRouter` indexer resolution so a selection service built from the same
-/// `KvRouterConfig` indexes the same way.
+/// the router configuration indexes the same way.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct IndexerPolicy {
     pub primary: PrimaryRetention,
@@ -992,8 +992,6 @@ pub mod test_util {
 
 #[cfg(test)]
 mod tests {
-    use dynamo_router_types::config::KvRouterConfig;
-
     use super::test_util::flush;
     use super::test_util::store_event;
     use super::*;
@@ -1496,60 +1494,58 @@ mod tests {
 
     #[test]
     fn indexer_policy_mirrors_frontend_resolution() {
-        let event_driven = KvRouterConfig::default();
+        let event_driven = IndexerConfig::default();
         assert_eq!(
-            IndexerPolicy::from_config(&IndexerConfig::from(&event_driven)).unwrap(),
+            IndexerPolicy::from_config(&event_driven).unwrap(),
             IndexerPolicy::event_driven()
         );
 
-        let side = KvRouterConfig {
-            router_predicted_ttl_secs: Some(2.5),
+        let side = IndexerConfig {
+            predicted_ttl_secs: Some(2.5),
             ..Default::default()
         };
         assert_eq!(
-            IndexerPolicy::from_config(&IndexerConfig::from(&side))
-                .unwrap()
-                .side_ttl,
+            IndexerPolicy::from_config(&side).unwrap().side_ttl,
             Some(Duration::from_secs_f64(2.5))
         );
 
-        let approximate = KvRouterConfig {
+        let approximate = IndexerConfig {
             use_kv_events: false,
-            router_ttl_secs: 30.0,
+            ttl_secs: 30.0,
             ..Default::default()
         };
         assert_eq!(
-            IndexerPolicy::from_config(&IndexerConfig::from(&approximate)).unwrap(),
+            IndexerPolicy::from_config(&approximate).unwrap(),
             IndexerPolicy {
                 primary: PrimaryRetention::ApproximateTtl(Duration::from_secs(30)),
                 side_ttl: None,
             }
         );
 
-        let lru_without_events = KvRouterConfig {
+        let lru_without_events = IndexerConfig {
             use_kv_events: false,
-            router_approximate_cache_policy: ApproximateCachePolicyKind::Lru,
+            approximate_cache_policy: ApproximateCachePolicyKind::Lru,
             ..Default::default()
         };
         assert!(matches!(
-            IndexerPolicy::from_config(&IndexerConfig::from(&lru_without_events))
+            IndexerPolicy::from_config(&lru_without_events)
                 .unwrap()
                 .primary,
             PrimaryRetention::ApproximateTtl(_)
         ));
 
-        let lru_with_events = KvRouterConfig {
-            router_approximate_cache_policy: ApproximateCachePolicyKind::Lru,
+        let lru_with_events = IndexerConfig {
+            approximate_cache_policy: ApproximateCachePolicyKind::Lru,
             ..Default::default()
         };
-        assert!(IndexerPolicy::from_config(&IndexerConfig::from(&lru_with_events)).is_err());
+        assert!(IndexerPolicy::from_config(&lru_with_events).is_err());
 
-        let side_without_events = KvRouterConfig {
+        let side_without_events = IndexerConfig {
             use_kv_events: false,
-            router_predicted_ttl_secs: Some(1.0),
+            predicted_ttl_secs: Some(1.0),
             ..Default::default()
         };
-        assert!(IndexerPolicy::from_config(&IndexerConfig::from(&side_without_events)).is_err());
+        assert!(IndexerPolicy::from_config(&side_without_events).is_err());
     }
 
     #[tokio::test]

@@ -45,7 +45,7 @@ worker_selection:
 "#,
         )
         .unwrap();
-        let config = dynamo_router_types::config::KvRouterConfig {
+        let config = dynamo_kv_router::config::KvRouterConfig {
             router_policy_config: Some(policy.path().display().to_string()),
             ..Default::default()
         };

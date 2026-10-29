@@ -9,16 +9,16 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow};
+use dynamo_admission::policy_config::{PolicyClassConfig, PolicyProfile};
 use dynamo_admission::policy_queue::{PolicyQueue, QueueSnapshot};
 use dynamo_kv_indexer::{
     KvIndexerInterface, LowerTierIndexers, LowerTierQueryOptions, TieredMatchDetails,
     query_lower_tiers_with_options,
 };
 use dynamo_kv_indexer::{RadixTree, SessionPrefixIndexer};
-pub(in crate::replay) use dynamo_router_types::config::KvRouterConfig as ReplayKvRouterConfig;
-use dynamo_router_types::config::KvRouterConfig;
+pub(in crate::replay) use dynamo_kv_router::config::KvRouterConfig as ReplayKvRouterConfig;
+use dynamo_kv_router::config::KvRouterConfig;
 use dynamo_router_types::config::TrackingHashConfig;
-use dynamo_router_types::config::policy::{PolicyClassConfig, PolicyProfile};
 use dynamo_router_types::identity::RoutingPartitionRef;
 use dynamo_router_types::overlap::OverlapSignals;
 use dynamo_router_types::protocols::LocalBlockHash;
@@ -1338,7 +1338,11 @@ mod tests {
     use std::sync::Arc;
     use std::time::Duration;
 
-    use dynamo_router_types::config::{KvRouterConfig, RouterPrefillLoadModel, RouterQueuePolicy};
+    use dynamo_kv_router::config::KvRouterConfig;
+
+    use dynamo_slot_tracker::config::RouterPrefillLoadModel;
+
+    use dynamo_admission::config::RouterQueuePolicy;
     use dynamo_router_types::prefill_load::PrefillLoadEstimator;
     use dynamo_router_types::protocols::{
         BlockHashOptions, ExternalSequenceBlockHash, KvCacheEvent, KvCacheEventData,

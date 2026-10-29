@@ -23,10 +23,10 @@ use crate::{
     },
 };
 use dynamo_admission::classifier::RequestClassifierFactory;
+#[cfg(test)]
+use dynamo_kv_router::config::KvRouterConfig;
 use dynamo_kv_router::plugins::RouterPlugins;
 use dynamo_router_types::WorkerType;
-#[cfg(test)]
-use dynamo_router_types::config::KvRouterConfig;
 use dynamo_router_types::identity::RoutingPartitionRef;
 use dynamo_runtime::{DistributedRuntime, metrics::MetricsHierarchy};
 use dynamo_worker_selection::config::SelectionConfig;

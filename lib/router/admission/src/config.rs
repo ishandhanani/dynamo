@@ -4,41 +4,30 @@
 //! The admission slice of the router configuration: queue policy and limits, plus the policy
 //! classes and classifier settings (re-exported from the types crate).
 
-use dynamo_router_types::config::{KvRouterConfig, RouterQueuePolicy};
-pub use dynamo_router_types::config::{policy, request_classifier};
-use serde::Serialize;
+use std::fmt;
+use std::str::FromStr;
 
-#[derive(Debug, Clone, PartialEq, Serialize)]
+use serde::{Deserialize, Serialize};
+
+pub use crate::policy_config as policy;
+use crate::policy_config::PolicyProfiles;
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize)]
 pub struct AdmissionConfig {
     pub queue_threshold: Option<f64>,
     pub queue_policy: RouterQueuePolicy,
-    /// The loaded policy file, when the router was given one.
+    /// The policy file's queue profiles, when the router was given one.
     #[serde(skip)]
-    pub policy_config: Option<policy::RouterPolicyConfig>,
+    pub profiles: Option<PolicyProfiles>,
 }
 
 impl AdmissionConfig {
-    /// Read the admission slice, loading the policy file the aggregate names.
-    pub fn try_from_kv_router_config(
-        config: &KvRouterConfig,
-    ) -> Result<Self, policy::RouterPolicyConfigError> {
-        Ok(Self {
-            queue_threshold: config.router_queue_threshold,
-            queue_policy: config.router_queue_policy,
-            policy_config: config
-                .router_policy_config
-                .as_deref()
-                .map(policy::RouterPolicyConfig::from_path)
-                .transpose()?,
-        })
-    }
-
     /// The queue profile for `model_name`: the policy file's, or one synthesized from the
     /// threshold and queue policy.
     pub fn policy_profile(&self, model_name: Option<&str>) -> policy::PolicyProfile {
-        match &self.policy_config {
-            Some(policy_config) => {
-                policy_config.resolve_profile(model_name, self.queue_threshold, self.queue_policy)
+        match &self.profiles {
+            Some(profiles) => {
+                profiles.resolve_profile(model_name, self.queue_threshold, self.queue_policy)
             }
             None => policy::PolicyProfile::synthetic(self.queue_threshold, self.queue_policy),
         }
@@ -54,35 +43,48 @@ impl AdmissionConfig {
 
     /// Whether the policy file defines queue profiles (not only plugin selections).
     pub fn has_routing_profiles(&self) -> bool {
-        self.policy_config
+        self.profiles
             .as_ref()
-            .is_some_and(policy::RouterPolicyConfig::has_routing_profiles)
-    }
-}
-
-impl Default for AdmissionConfig {
-    /// The router's defaults; the aggregate's `Default` is the single source until it leaves
-    /// the shared crate.
-    fn default() -> Self {
-        Self::try_from_kv_router_config(&KvRouterConfig::default())
-            .expect("the default router configuration names no policy file")
+            .is_some_and(PolicyProfiles::has_routing_profiles)
     }
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize)]
 pub struct ClassifierConfig {
     /// The classifier instance the policy document selects, if any.
-    pub request_classifier: Option<request_classifier::RequestClassifierConfig>,
+    pub request_classifier: Option<crate::classifier::RequestClassifierConfig>,
 }
 
-impl ClassifierConfig {
-    /// Resolve the classifier from the flat config; reading the policy document can fail.
-    pub fn try_from_kv_router_config(config: &KvRouterConfig) -> Result<Self, String> {
-        Ok(Self {
-            request_classifier: config
-                .request_classifier_config()
-                .map_err(|e| e.to_string())?
-                .cloned(),
-        })
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum RouterQueuePolicy {
+    #[default]
+    Fcfs,
+    Lcfs,
+    Wspt,
+}
+
+impl fmt::Display for RouterQueuePolicy {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Fcfs => f.write_str("fcfs"),
+            Self::Lcfs => f.write_str("lcfs"),
+            Self::Wspt => f.write_str("wspt"),
+        }
+    }
+}
+
+impl FromStr for RouterQueuePolicy {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "fcfs" => Ok(Self::Fcfs),
+            "lcfs" => Ok(Self::Lcfs),
+            "wspt" => Ok(Self::Wspt),
+            _ => Err(format!(
+                "unknown queue policy: {s:?}, expected 'fcfs', 'lcfs', or 'wspt'"
+            )),
+        }
     }
 }

@@ -4,7 +4,7 @@
 mod support;
 use criterion::{BenchmarkId, Criterion, black_box, criterion_group, criterion_main};
 use dynamo_custom_policy_builtin::default_policy;
-use dynamo_router_types::config::KvRouterConfig;
+use dynamo_kv_router::config::KvRouterConfig;
 use dynamo_router_types::protocols::SelectionTraceSpec;
 use dynamo_worker_selection::config::SelectionConfig;
 use dynamo_worker_selection::selector::WorkerSelector;

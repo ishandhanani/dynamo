@@ -14,7 +14,7 @@ use tokio::sync::{Barrier, watch};
 
 use super::*;
 use crate::scheduling_compat::OverlapSignals;
-use crate::scheduling_compat::{RefreshedOverlap, RouterPolicyConfig};
+use crate::scheduling_compat::RefreshedOverlap;
 use crate::test_utils::{NoopSequencePublisher, SimpleWorkerConfig};
 use dynamo_router_types::kv_hints::KvTransferCandidates;
 use dynamo_router_types::protocols::{
@@ -366,13 +366,7 @@ fn make_queue_with_sender(
 }
 
 fn policy_profile(yaml: &str) -> PolicyProfile {
-    RouterPolicyConfig::from_yaml(yaml)
-        .unwrap()
-        .resolve_profile(
-            None,
-            None,
-            dynamo_router_types::config::RouterQueuePolicy::Fcfs,
-        )
+    PolicyProfile::from_yaml(yaml).unwrap()
 }
 
 #[allow(clippy::type_complexity)]
@@ -697,10 +691,7 @@ fn make_queue_with_blocking_refresher(
     let queue = Arc::new(SchedulerQueue::new_with_capacity(
         Arc::clone(&slots),
         cfg_rx,
-        PolicyProfile::synthetic(
-            threshold_frac,
-            dynamo_router_types::config::RouterQueuePolicy::Fcfs,
-        ),
+        PolicyProfile::synthetic(threshold_frac, RouterQueuePolicy::Fcfs),
         block_size,
         DefaultWorkerSelector::new(None, "test"),
         None,
@@ -776,8 +767,7 @@ async fn classifier_sequence_hashes_preserve_absence_empty_and_order() {
         }
     }
 
-    let profile =
-        PolicyProfile::synthetic(None, dynamo_router_types::config::RouterQueuePolicy::Fcfs);
+    let profile = PolicyProfile::synthetic(None, RouterQueuePolicy::Fcfs);
     let (queue, _slots) = make_queue_with_profile(1, 64, 256, profile);
     let pin = WorkerWithDpRank::new(0, 0);
     for hashes in [None, Some(vec![]), Some(vec![11, 7, 11])] {
@@ -834,8 +824,7 @@ async fn classifier_input_projection_benchmark() {
         .unwrap();
     assert!(retained > 0 && retained <= 1024);
     assert!(hashes.unwrap_or(0) <= 62_500);
-    let profile =
-        PolicyProfile::synthetic(None, dynamo_router_types::config::RouterQueuePolicy::Fcfs);
+    let profile = PolicyProfile::synthetic(None, RouterQueuePolicy::Fcfs);
     let (queue, _slots) = make_queue_with_profile(1, 16, 1_000_000, profile);
     let sources: Vec<_> = (0..retained)
         .map(|i| {

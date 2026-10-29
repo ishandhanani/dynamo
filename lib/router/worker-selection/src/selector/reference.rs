@@ -229,8 +229,8 @@ fn selection_weights(
             .and_then(|config| config.shared_cache_multiplier)
             .or(kv_router_config.shared_cache_multiplier)
             .unwrap_or(match kv_router_config.shared_cache_type {
-                dynamo_router_types::config::SharedCacheType::None => 0.0,
-                dynamo_router_types::config::SharedCacheType::Hicache => 0.5,
+                crate::config::SharedCacheType::None => 0.0,
+                crate::config::SharedCacheType::Hicache => 0.5,
             }),
     }
 }

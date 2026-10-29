@@ -14,7 +14,7 @@ use crate::kv_router::SelectionPolicySource;
 use dynamo_admission::classifier::{
     ClassifyEvent, ClassifyFuture, ClassifyRequest, RequestClassifier,
 };
-use dynamo_router_types::config::KvRouterConfig;
+use dynamo_kv_router::config::KvRouterConfig;
 use dynamo_router_types::protocols::RoutingConstraints;
 use dynamo_router_types::sched::ClassifierError;
 use dynamo_runtime::{

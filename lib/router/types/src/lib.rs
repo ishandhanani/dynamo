@@ -4,7 +4,8 @@
 //! Shared vocabulary of the Dynamo router.
 //!
 //! Every type that crosses a stage boundary lives here: wire protocols and KV events
-//! (`protocols`), identities, router configuration, the per-rank load row, overlap signals,
+//! (`protocols`), identities, the per-request configuration override and the hashing trio, the
+//! per-rank load row, overlap signals,
 //! busy thresholds, and the indexer's query and recovery DTOs. Stage crates depend on this
 //! crate and never on each other for a type. No tokio, no transport, no runtime.
 

@@ -2,41 +2,36 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use std::env::{self, VarError};
-use std::fmt;
 use std::path::PathBuf;
-use std::str::FromStr;
 use std::sync::OnceLock;
 use std::time::Duration;
 
-pub mod policy;
-pub mod request_classifier;
-pub mod worker_selection;
-
-use derive_builder::Builder;
 use serde::{Deserialize, Serialize};
 
-use crate::protocols::{
+use dynamo_admission::config::RouterQueuePolicy;
+use dynamo_kv_indexer::config::ApproximateCachePolicyKind;
+use dynamo_router_types::WorkerType;
+use dynamo_router_types::config::{
+    RouterConfigOverride, TrackingHashConfig, apply_deprecated_overlap_score_weight_override,
+    validate_duration_secs, validate_finite_non_negative, validate_min,
+    validate_overlap_score_credit, validate_range,
+};
+use dynamo_router_types::protocols::{
     BlockHashOptions, LocalBlockHash, complete_block_count, compute_block_hash_for_seq,
     compute_seq_hash_for_block,
 };
-use crate::tracking_hash::{
+use dynamo_router_types::tracking_hash::{
     TrackingHashAlgorithm, TrackingHashContext, TrackingHashScope, validate_tracking_hash_options,
 };
-use crate::worker_type::WorkerType;
-
-/// Default effective-ISL absolute threshold (tokens). A request bypasses to
-/// AGG only if its net-new prefill stays under this cap.
-pub const DEFAULT_CONDITIONAL_DISAGG_EFF_ISL_THRESHOLD: usize = 2048;
-
-/// Default effective-ISL ratio threshold. A request bypasses to AGG only if
-/// `eff_isl / prompt_tokens` stays under this fraction.
-pub const DEFAULT_CONDITIONAL_DISAGG_EFF_ISL_RATIO_THRESHOLD: f64 = 0.7;
+use dynamo_slot_tracker::config::RouterPrefillLoadModel;
+use dynamo_worker_selection::config::{
+    ConditionalDisaggPolicyKind, DEFAULT_CONDITIONAL_DISAGG_EFF_ISL_RATIO_THRESHOLD,
+    DEFAULT_CONDITIONAL_DISAGG_EFF_ISL_THRESHOLD, SharedCacheType,
+};
 
 const fn default_track_prefill_tokens() -> bool {
     true
 }
-
-pub const DYN_ROUTER_MIN_INITIAL_WORKERS: &str = "DYN_ROUTER_MIN_INITIAL_WORKERS";
 
 /// Selects a configured custom worker-selection policy instance.
 ///
@@ -75,22 +70,8 @@ pub enum WorkerSelectionPolicyConfigError {
     #[error("could not load worker_selection from router_policy_config: {source}")]
     Config {
         #[source]
-        source: crate::config::policy::RouterPolicyConfigError,
+        source: crate::config::RouterPolicyConfigError,
     },
-}
-
-pub fn min_initial_workers_from_env() -> anyhow::Result<usize> {
-    match env::var(DYN_ROUTER_MIN_INITIAL_WORKERS) {
-        Ok(value) => value.parse::<usize>().map_err(|error| {
-            anyhow::anyhow!(
-                "{DYN_ROUTER_MIN_INITIAL_WORKERS} must be a non-negative integer, got {value:?}: {error}"
-            )
-        }),
-        Err(VarError::NotPresent) => Ok(0),
-        Err(VarError::NotUnicode(_)) => {
-            anyhow::bail!("{DYN_ROUTER_MIN_INITIAL_WORKERS} must be valid unicode")
-        }
-    }
 }
 
 const fn default_host_cache_hit_weight() -> f64 {
@@ -118,62 +99,6 @@ fn is_default<T: Default + PartialEq>(value: &T) -> bool {
 
 const fn default_overlap_score_credit_decay() -> f64 {
     0.0
-}
-
-pub const OVERLAP_SCORE_CREDIT_RANGE_ERROR: &str =
-    "overlap_score_credit must be a finite, non-negative number";
-
-pub fn overlap_score_credit_error_message(value: f64) -> Option<&'static str> {
-    if value.is_finite() && value >= 0.0 {
-        None
-    } else {
-        Some(OVERLAP_SCORE_CREDIT_RANGE_ERROR)
-    }
-}
-
-fn validate_overlap_score_credit(value: f64) -> Result<(), String> {
-    let Some(message) = overlap_score_credit_error_message(value) else {
-        return Ok(());
-    };
-    Err(message.to_string())
-}
-
-fn validate_min(field: &str, value: f64, min: f64) -> Result<(), String> {
-    if value >= min {
-        return Ok(());
-    }
-    Err(format!("{field} must be greater than or equal to {min}"))
-}
-
-fn validate_duration_secs(field: &str, value: f64) -> Result<(), String> {
-    Duration::try_from_secs_f64(value)
-        .map(|_| ())
-        .map_err(|error| format!("{field} is not a valid duration: {error}"))
-}
-
-fn validate_finite_non_negative(field: &str, value: f64) -> Result<(), String> {
-    if value.is_finite() && value >= 0.0 {
-        return Ok(());
-    }
-    Err(format!("{field} must be finite and non-negative"))
-}
-
-fn validate_range(field: &str, value: f64, min: f64, max: f64) -> Result<(), String> {
-    if value >= min && value <= max {
-        return Ok(());
-    }
-    Err(format!("{field} must be between {min} and {max}"))
-}
-
-pub fn apply_deprecated_overlap_score_weight_override(
-    value: f64,
-    overlap_score_credit: &mut f64,
-    prefill_load_scale: &mut f64,
-) {
-    *prefill_load_scale = value;
-    if value == 0.0 {
-        *overlap_score_credit = 0.0;
-    }
 }
 
 /// Build the flat config from a key lookup; `dynamo-scheduler` feeds it the process environment.
@@ -368,288 +293,6 @@ pub fn kv_router_config_from_lookup(
 
     config.apply_policy_config()?;
     Ok(config)
-}
-
-fn apply_deprecated_overlap_score_weight_override_option(
-    value: f64,
-    overlap_score_credit: &mut Option<f64>,
-    prefill_load_scale: &mut Option<f64>,
-) {
-    *prefill_load_scale = Some(value);
-    if value == 0.0 {
-        *overlap_score_credit = Some(0.0);
-    }
-}
-
-/// Type of external shared KV cache to query during routing.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum SharedCacheType {
-    /// No shared cache (default).
-    #[default]
-    None,
-    /// HiCache L3 shared cache — queries sglang workers via the request plane.
-    Hicache,
-}
-
-/// Retention policy for a router-local primary approximate indexer.
-///
-/// This selector is intentionally process-local. Workers do not advertise it in
-/// model cards because request lifetime and release ownership live in the router.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum ApproximateCachePolicyKind {
-    /// Expire predicted entries after `router_ttl_secs`.
-    #[default]
-    Ttl,
-    /// Retain predicted entries until per-rank KV capacity requires LRU eviction.
-    Lru,
-}
-
-impl fmt::Display for ApproximateCachePolicyKind {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Ttl => f.write_str("ttl"),
-            Self::Lru => f.write_str("lru"),
-        }
-    }
-}
-
-impl FromStr for ApproximateCachePolicyKind {
-    type Err = String;
-
-    fn from_str(value: &str) -> Result<Self, Self::Err> {
-        match value {
-            "ttl" => Ok(Self::Ttl),
-            "lru" => Ok(Self::Lru),
-            _ => Err(format!(
-                "unknown approximate cache policy {value:?}, expected 'ttl' or 'lru'"
-            )),
-        }
-    }
-}
-
-impl fmt::Display for SharedCacheType {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::None => f.write_str("none"),
-            Self::Hicache => f.write_str("hicache"),
-        }
-    }
-}
-
-impl FromStr for SharedCacheType {
-    type Err = String;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s {
-            "none" => Ok(Self::None),
-            "hicache" => Ok(Self::Hicache),
-            _ => Err(format!(
-                "unknown shared_cache_type: {s:?}, expected 'none' or 'hicache'"
-            )),
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum RouterQueuePolicy {
-    #[default]
-    Fcfs,
-    Lcfs,
-    Wspt,
-}
-
-impl fmt::Display for RouterQueuePolicy {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Fcfs => f.write_str("fcfs"),
-            Self::Lcfs => f.write_str("lcfs"),
-            Self::Wspt => f.write_str("wspt"),
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum RouterPrefillLoadModel {
-    #[default]
-    None,
-    // v1.5 frontends only recognize "aic" in worker cards.
-    // TODO(v1.8): write "ais" with alias="aic" when v1.5 leaves N-2.
-    // TODO(v1.10): remove the wire "aic" alias when v1.7 writers leave N-2,
-    // provided v1.8 and later consistently emit "ais".
-    #[serde(rename = "aic", alias = "ais")]
-    Ais,
-}
-
-impl fmt::Display for RouterPrefillLoadModel {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::None => f.write_str("none"),
-            Self::Ais => f.write_str("ais"),
-        }
-    }
-}
-
-impl FromStr for RouterPrefillLoadModel {
-    type Err = String;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s {
-            "none" => Ok(Self::None),
-            "ais" | "aic" => Ok(Self::Ais),
-            _ => Err(format!(
-                "unknown prefill load model: {s:?}, expected 'none' or 'ais'"
-            )),
-        }
-    }
-}
-
-impl RouterPrefillLoadModel {
-    pub fn is_enabled(self) -> bool {
-        !matches!(self, Self::None)
-    }
-}
-
-/// Which conditional-disagg bypass policy to run.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ConditionalDisaggPolicyKind {
-    /// Bypass when effective ISL is below both the absolute and ratio thresholds.
-    #[default]
-    IslBounding,
-    /// Bypass when the chosen prefill worker is over the prefill-busy line.
-    PrefillLoad,
-    /// Bypass when either `isl_bounding` or `prefill_load` would bypass.
-    IslOrLoad,
-}
-
-impl fmt::Display for ConditionalDisaggPolicyKind {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::IslBounding => f.write_str("isl_bounding"),
-            Self::PrefillLoad => f.write_str("prefill_load"),
-            Self::IslOrLoad => f.write_str("isl_or_load"),
-        }
-    }
-}
-
-impl FromStr for ConditionalDisaggPolicyKind {
-    type Err = String;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s {
-            "isl_bounding" => Ok(Self::IslBounding),
-            "prefill_load" => Ok(Self::PrefillLoad),
-            "isl_or_load" => Ok(Self::IslOrLoad),
-            _ => Err(format!(
-                "unknown conditional_disagg_policy: {s:?}, expected 'isl_bounding', 'prefill_load', or 'isl_or_load'"
-            )),
-        }
-    }
-}
-
-impl FromStr for RouterQueuePolicy {
-    type Err = String;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s {
-            "fcfs" => Ok(Self::Fcfs),
-            "lcfs" => Ok(Self::Lcfs),
-            "wspt" => Ok(Self::Wspt),
-            _ => Err(format!(
-                "unknown queue policy: {s:?}, expected 'fcfs', 'lcfs', or 'wspt'"
-            )),
-        }
-    }
-}
-
-#[derive(Debug, Clone, Default, Deserialize)]
-struct RouterConfigOverrideSerde {
-    overlap_score_credit: Option<f64>,
-    prefill_load_scale: Option<f64>,
-    overlap_score_weight: Option<f64>,
-    router_temperature: Option<f64>,
-    assume_kv_reuse: Option<bool>,
-    track_prefill_tokens: Option<bool>,
-    shared_cache_multiplier: Option<f64>,
-}
-
-/// Override configuration for router settings that can be specified per-request
-#[derive(Debug, Clone, Default, Builder, Serialize, Deserialize)]
-#[serde(try_from = "RouterConfigOverrideSerde")]
-pub struct RouterConfigOverride {
-    /// Device-local prefix-overlap credit multiplier applied to the prefill
-    /// load before sampling. Values must be finite and non-negative. Values above
-    /// 1.0 give device overlap extra credit. Set to 0.0 to ignore prefix matching.
-    #[builder(default)]
-    pub overlap_score_credit: Option<f64>,
-
-    /// Scale applied to the adjusted prefill load after device/lower-tier
-    /// cache-hit credits have been subtracted.
-    #[builder(default)]
-    pub prefill_load_scale: Option<f64>,
-
-    #[builder(default)]
-    pub router_temperature: Option<f64>,
-
-    #[builder(default)]
-    pub assume_kv_reuse: Option<bool>,
-
-    #[builder(default)]
-    pub track_prefill_tokens: Option<bool>,
-
-    /// Per-request override of `shared_cache_multiplier`.
-    #[builder(default)]
-    pub shared_cache_multiplier: Option<f64>,
-}
-
-impl RouterConfigOverride {
-    pub fn validate(&self) -> Result<(), String> {
-        if let Some(value) = self.overlap_score_credit {
-            validate_overlap_score_credit(value)?;
-        }
-        if let Some(value) = self.prefill_load_scale {
-            validate_finite_non_negative("prefill_load_scale", value)?;
-        }
-        if let Some(value) = self.router_temperature {
-            validate_finite_non_negative("router_temperature", value)?;
-        }
-        if let Some(value) = self.shared_cache_multiplier {
-            validate_range("shared_cache_multiplier", value, 0.0, 1.0)?;
-        }
-        Ok(())
-    }
-}
-
-impl TryFrom<RouterConfigOverrideSerde> for RouterConfigOverride {
-    type Error = String;
-
-    fn try_from(compat: RouterConfigOverrideSerde) -> Result<Self, Self::Error> {
-        let mut overlap_score_credit = compat.overlap_score_credit;
-        let mut prefill_load_scale = compat.prefill_load_scale;
-
-        if let Some(overlap_score_weight) = compat.overlap_score_weight {
-            apply_deprecated_overlap_score_weight_override_option(
-                overlap_score_weight,
-                &mut overlap_score_credit,
-                &mut prefill_load_scale,
-            );
-        }
-
-        let config = Self {
-            overlap_score_credit,
-            prefill_load_scale,
-            router_temperature: compat.router_temperature,
-            assume_kv_reuse: compat.assume_kv_reuse,
-            track_prefill_tokens: compat.track_prefill_tokens,
-            shared_cache_multiplier: compat.shared_cache_multiplier,
-        };
-        config.validate()?;
-        Ok(config)
-    }
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -862,7 +505,7 @@ pub struct KvRouterConfig {
     /// Parsed startup policy document. This prevents per-model file reloads.
     #[serde(skip)]
     #[doc(hidden)]
-    pub policy_config_cache: OnceLock<crate::config::policy::RouterPolicyConfig>,
+    pub policy_config_cache: OnceLock<crate::config::RouterPolicyConfig>,
 
     /// Number of KV indexer worker threads.
     /// When > 1, uses ConcurrentRadixTreeCompressed with a thread pool for event-driven
@@ -1172,15 +815,13 @@ impl KvRouterConfig {
 
     fn loaded_policy_config(
         &self,
-    ) -> Result<
-        Option<&crate::config::policy::RouterPolicyConfig>,
-        crate::config::policy::RouterPolicyConfigError,
-    > {
+    ) -> Result<Option<&crate::config::RouterPolicyConfig>, crate::config::RouterPolicyConfigError>
+    {
         let Some(path) = self.router_policy_config.as_deref() else {
             return Ok(None);
         };
         if self.policy_config_cache.get().is_none() {
-            let parsed = crate::config::policy::RouterPolicyConfig::from_path(path)?;
+            let parsed = crate::config::RouterPolicyConfig::from_path(path)?;
             let _ = self.policy_config_cache.set(parsed);
         }
         Ok(self.policy_config_cache.get())
@@ -1189,10 +830,12 @@ impl KvRouterConfig {
     pub fn policy_profile(
         &self,
         model_name: Option<&str>,
-    ) -> Result<crate::config::policy::PolicyProfile, crate::config::policy::RouterPolicyConfigError>
-    {
+    ) -> Result<
+        dynamo_admission::policy_config::PolicyProfile,
+        crate::config::RouterPolicyConfigError,
+    > {
         let Some(policy_config) = self.loaded_policy_config()? else {
-            return Ok(crate::config::policy::PolicyProfile::synthetic(
+            return Ok(dynamo_admission::policy_config::PolicyProfile::synthetic(
                 self.router_queue_threshold,
                 self.router_queue_policy,
             ));
@@ -1208,24 +851,24 @@ impl KvRouterConfig {
     pub fn worker_selection_config(
         &self,
     ) -> Result<
-        Option<&crate::config::policy::WorkerSelectionConfig>,
-        crate::config::policy::RouterPolicyConfigError,
+        Option<&dynamo_worker_selection::config::WorkerSelectionConfig>,
+        crate::config::RouterPolicyConfigError,
     > {
         Ok(self
             .loaded_policy_config()?
-            .and_then(crate::config::policy::RouterPolicyConfig::worker_selection))
+            .and_then(crate::config::RouterPolicyConfig::worker_selection))
     }
 
     /// Return the custom request-classifier configuration from `router_policy_config`, if any.
     pub fn request_classifier_config(
         &self,
     ) -> Result<
-        Option<&crate::config::policy::RequestClassifierConfig>,
-        crate::config::policy::RouterPolicyConfigError,
+        Option<&dynamo_admission::classifier::RequestClassifierConfig>,
+        crate::config::RouterPolicyConfigError,
     > {
         Ok(self
             .loaded_policy_config()?
-            .and_then(crate::config::policy::RouterPolicyConfig::request_classifier))
+            .and_then(crate::config::RouterPolicyConfig::request_classifier))
     }
 
     /// Return one configured custom worker-selection instance, if any.
@@ -1390,8 +1033,10 @@ impl KvRouterConfig {
 
     pub fn configured_policy_profile(
         &self,
-    ) -> Result<crate::config::policy::PolicyProfile, crate::config::policy::RouterPolicyConfigError>
-    {
+    ) -> Result<
+        dynamo_admission::policy_config::PolicyProfile,
+        crate::config::RouterPolicyConfigError,
+    > {
         self.policy_profile(self.policy_model_name.as_deref())
     }
 
@@ -1460,7 +1105,7 @@ impl KvRouterConfig {
         // not treat a worker-selection-only document as a queue policy profile.
         let has_routing_profiles = self.policy_config_cache.get().map_or(
             self.router_policy_config.is_some(),
-            crate::config::policy::RouterPolicyConfig::has_routing_profiles,
+            crate::config::RouterPolicyConfig::has_routing_profiles,
         );
         if self.router_prefill_load_model.is_enabled()
             && (has_routing_profiles || self.router_queue_threshold.is_some())
@@ -1478,12 +1123,12 @@ impl KvRouterConfig {
     pub fn queueing_enabled(
         &self,
         model_name: Option<&str>,
-    ) -> Result<bool, crate::config::policy::RouterPolicyConfigError> {
+    ) -> Result<bool, crate::config::RouterPolicyConfigError> {
         Ok(self
             .policy_profile(model_name)?
             .classes()
             .iter()
-            .any(crate::config::policy::PolicyClassConfig::queueing_enabled))
+            .any(dynamo_admission::policy_config::PolicyClassConfig::queueing_enabled))
     }
 
     pub fn assume_kv_reuse(&self, config_override: Option<&RouterConfigOverride>) -> bool {
@@ -1595,6 +1240,16 @@ fn random_sequence_hashes(num_blocks: usize) -> Vec<u64> {
     (0..num_blocks).map(|_| fastrand::u64(..)).collect()
 }
 
+impl From<&KvRouterConfig> for TrackingHashConfig {
+    fn from(config: &KvRouterConfig) -> Self {
+        Self {
+            algorithm: config.router_tracking_hash,
+            key_file: config.router_tracking_key_file.clone(),
+            key_id: config.router_tracking_key_id.clone(),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     #[test]
@@ -1662,7 +1317,7 @@ mod tests {
         ] {
             let yaml = format!("router:\n  {setting}\n");
             assert!(
-                crate::config::policy::RouterPolicyConfig::from_yaml(&yaml).is_err(),
+                crate::config::RouterPolicyConfig::from_yaml(&yaml).is_err(),
                 "{setting}"
             );
         }
@@ -1685,8 +1340,10 @@ mod tests {
     }
 
     use super::*;
-    use crate::identity::RoutingPartitionRef;
-    use crate::protocols::{BlockExtraInfo, BlockMmObjectInfo, compute_seq_hash_for_block};
+    use dynamo_router_types::identity::RoutingPartitionRef;
+    use dynamo_router_types::protocols::{
+        BlockExtraInfo, BlockMmObjectInfo, compute_seq_hash_for_block,
+    };
     use std::collections::HashMap;
 
     fn test_tracking_scope(block_size: u32) -> TrackingHashScope<'static> {
@@ -2911,29 +2568,5 @@ models:
         };
         // With a threshold set, queueing is enabled
         assert!(with_threshold.queueing_enabled(None).unwrap());
-    }
-}
-
-/// The tracking-hash trio: part of the wire contract shared by hashing, the indexer, and workers.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub struct TrackingHashConfig {
-    pub algorithm: TrackingHashAlgorithm,
-    pub key_file: Option<PathBuf>,
-    pub key_id: Option<String>,
-}
-
-impl Default for TrackingHashConfig {
-    fn default() -> Self {
-        Self::from(&KvRouterConfig::default())
-    }
-}
-
-impl From<&KvRouterConfig> for TrackingHashConfig {
-    fn from(config: &KvRouterConfig) -> Self {
-        Self {
-            algorithm: config.router_tracking_hash,
-            key_file: config.router_tracking_key_file.clone(),
-            key_id: config.router_tracking_key_id.clone(),
-        }
     }
 }

@@ -5,7 +5,7 @@
 
 mod support;
 use dynamo_custom_policy_builtin::DefaultWorkerSelector;
-use dynamo_router_types::config::KvRouterConfig;
+use dynamo_kv_router::config::KvRouterConfig;
 use dynamo_router_types::kv_hints::{KvTransferCandidateSource, KvTransferCandidates};
 use dynamo_router_types::protocols::WorkerLoadProjection;
 use dynamo_router_types::protocols::{

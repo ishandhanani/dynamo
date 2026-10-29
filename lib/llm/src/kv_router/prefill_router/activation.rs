@@ -7,7 +7,7 @@ use std::sync::atomic::Ordering;
 use anyhow::{Context as _, Result};
 use tokio::sync::{oneshot, watch};
 
-use dynamo_router_types::config::KvRouterConfig;
+use dynamo_kv_router::config::KvRouterConfig;
 use dynamo_router_types::prefill_load::PrefillLoadEstimator;
 use dynamo_runtime::{
     component::Endpoint, discovery::DiscoveryQuery, pipeline::RouterMode,
@@ -640,7 +640,7 @@ mod tests {
     use crate::entrypoint::RouterConfig;
     use crate::kv_router::prefill_router::PrefillRouterLifecycle;
     use crate::protocols::common::llm_backend::{LLMEngineOutput, PreprocessedRequest};
-    use dynamo_router_types::config::KvRouterConfig;
+    use dynamo_kv_router::config::KvRouterConfig;
     use dynamo_router_types::protocols::RoutingConstraints;
     use dynamo_runtime::protocols::annotated::Annotated;
     use dynamo_runtime::{

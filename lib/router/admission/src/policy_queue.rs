@@ -9,8 +9,8 @@ use tokio::time::Instant;
 use ordered_float::OrderedFloat;
 use rustc_hash::{FxHashMap, FxHashSet};
 
-use dynamo_router_types::config::RouterQueuePolicy;
-use dynamo_router_types::config::policy::{PolicyClassConfig, PolicyProfile};
+use crate::config::RouterQueuePolicy;
+use crate::policy_config::{PolicyClassConfig, PolicyProfile};
 use dynamo_router_types::protocols::WorkerPlacement;
 use dynamo_router_types::protocols::WorkerWithDpRank;
 
@@ -985,12 +985,9 @@ fn subtract_stats(stats: &mut PolicyQueueStats, snapshot: QueueSnapshot) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use dynamo_router_types::config::policy::RouterPolicyConfig;
 
     fn profile(yaml: &str) -> PolicyProfile {
-        RouterPolicyConfig::from_yaml(yaml)
-            .unwrap()
-            .resolve_profile(None, None, RouterQueuePolicy::Fcfs)
+        PolicyProfile::from_yaml(yaml).unwrap()
     }
 
     fn admission_profile() -> PolicyProfile {

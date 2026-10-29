@@ -9,7 +9,6 @@ mod registry;
 pub use inputs::RequestClassifierContext;
 pub use progress::{RequestProgress, RequestProgressUpdater};
 
-pub use dynamo_router_types::config::request_classifier::RequestClassifierConfig;
 #[doc(hidden)]
 pub use registry::RequestClassifierRegistry;
 pub use registry::{
@@ -26,9 +25,9 @@ use async_trait::async_trait;
 use dynamo_tokens::SequenceHash;
 use tokio::time::Instant;
 
+use crate::policy_config::PolicyProfile;
 use crate::policy_queue::QueueSnapshot;
 use dynamo_router_types::busy::BusyThresholds;
-use dynamo_router_types::config::policy::PolicyProfile;
 use dynamo_router_types::protocols::{WorkerAffinityTarget, WorkerWithDpRank};
 use dynamo_router_types::sched::SessionContext;
 use dynamo_worker_selection::plugin::inputs::{WorkerCandidates, WorkerInputs};
@@ -398,4 +397,32 @@ pub trait RequestClassifier: Send + 'static {
     }
 
     async fn on_event(&mut self, _event: ClassifyEvent) {}
+}
+
+/// Startup selection and plugin-owned parameters for one request-classifier type.
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+pub struct RequestClassifierConfig {
+    classifier_type: String,
+    parameters: serde_yaml::Value,
+}
+
+impl RequestClassifierConfig {
+    /// A resolved classifier selection; `dynamo-kv-router` builds it from the policy file.
+    #[doc(hidden)]
+    pub fn new(classifier_type: String, parameters: serde_yaml::Value) -> Self {
+        Self {
+            classifier_type,
+            parameters,
+        }
+    }
+
+    /// The classifier type registered by a linked plugin crate.
+    pub fn classifier_type(&self) -> &str {
+        &self.classifier_type
+    }
+
+    /// YAML parameters owned and validated by the linked plugin crate.
+    pub fn parameters(&self) -> &serde_yaml::Value {
+        &self.parameters
+    }
 }

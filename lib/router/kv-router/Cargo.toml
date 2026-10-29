@@ -27,6 +27,8 @@ dynamo-slot-tracker = { workspace = true, features = ["replica-sync-zmq"] }
 dynamo-admission = { workspace = true }
 dynamo-worker-selection = { workspace = true }
 anyhow = { workspace = true }
+dynamo-truthy = { workspace = true }
+fastrand = "2"
 async-trait = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
@@ -46,6 +48,8 @@ axum = { version = "=0.8.4", default-features = false, features = [
 ] }
 
 [dev-dependencies]
+rustc-hash = "2.1.1"
+uuid = { workspace = true }
 dynamo-scheduler = { workspace = true, features = ["testing"] }
 dynamo-router-types = { workspace = true, features = ["testing"] }
 dynamo-kv-indexer = { workspace = true, features = ["testing"] }

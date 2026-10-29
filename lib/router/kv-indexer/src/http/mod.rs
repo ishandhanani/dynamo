@@ -42,10 +42,10 @@ use std::time::Duration;
 use tokio::net::TcpListener;
 use tokio_util::sync::CancellationToken;
 
+use crate::config::min_initial_workers_from_env;
 use crate::ingest::registry::WorkerRegistry;
 use crate::ingest::zmq::validate_endpoint as validate_zmq_endpoint;
 use axum::http::header::HeaderName;
-use dynamo_router_types::config::min_initial_workers_from_env;
 use logging::AccessLogSink;
 use server::{AppState, create_router};
 

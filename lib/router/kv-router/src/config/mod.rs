@@ -7,12 +7,24 @@
 //! place it is converted.
 
 use dynamo_admission::config::{AdmissionConfig, ClassifierConfig};
+use dynamo_admission::policy_config::RouterPolicyConfigError;
 use dynamo_kv_indexer::config::IndexerConfig;
-pub use dynamo_router_types::config::{KvRouterConfig, RouterConfigOverride, TrackingHashConfig};
-use dynamo_router_types::config::{SharedCacheType, kv_router_config_from_lookup};
+pub use dynamo_router_types::config::{RouterConfigOverride, TrackingHashConfig};
+// The flat configuration's field types, so a host that handles only the flat shape reaches
+// them here instead of depending on every stage crate.
+pub use dynamo_admission::config::RouterQueuePolicy;
+pub use dynamo_kv_indexer::config::ApproximateCachePolicyKind;
+pub use dynamo_slot_tracker::config::RouterPrefillLoadModel;
+pub use dynamo_worker_selection::config::{ConditionalDisaggPolicyKind, SharedCacheType};
+
+mod flat;
+mod policy_file;
+
 use dynamo_scheduler::config::RouterConfig;
 use dynamo_slot_tracker::config::SlotsConfig;
-use dynamo_worker_selection::config::SelectionConfig;
+use dynamo_worker_selection::config::{ConditionalDisaggConfig, SelectionConfig};
+pub use flat::*;
+pub use policy_file::{RouterPolicyConfig, RouterSettings};
 use serde::Serialize;
 
 /// Build a [`KvRouterConfig`] from defaults and standard Dynamo environment variables.
@@ -142,8 +154,8 @@ pub fn router_config(config: &KvRouterConfig) -> Result<RouterConfig, String> {
         hashing: TrackingHashConfig::from(config),
         indexer: IndexerConfig::from(config),
         slots: SlotsConfig::from(config),
-        admission: AdmissionConfig::try_from_kv_router_config(config).map_err(|e| e.to_string())?,
-        classifier: ClassifierConfig::try_from_kv_router_config(config)?,
+        admission: admission_config(config).map_err(|e| e.to_string())?,
+        classifier: classifier_config(config).map_err(|e| e.to_string())?,
         selection: SelectionConfig::from(config),
     })
 }
@@ -151,6 +163,83 @@ pub fn router_config(config: &KvRouterConfig) -> Result<RouterConfig, String> {
 /// The kernel's stage slices from a flat configuration, applying and validating it first.
 pub fn resolve_router_config(config: KvRouterConfig) -> Result<RouterConfig, String> {
     ResolvedConfig::from_kv_router_config(config).map(|resolved| resolved.router)
+}
+
+/// The admission slice: queue limits and the loaded policy file's profiles.
+pub fn admission_config(
+    config: &KvRouterConfig,
+) -> Result<AdmissionConfig, RouterPolicyConfigError> {
+    Ok(AdmissionConfig {
+        queue_threshold: config.router_queue_threshold,
+        queue_policy: config.router_queue_policy,
+        profiles: config
+            .router_policy_config
+            .as_deref()
+            .map(RouterPolicyConfig::from_path)
+            .transpose()?
+            .map(|policy| policy.profiles()),
+    })
+}
+
+/// The classifier slice: the request classifier the policy file selects, if any.
+pub fn classifier_config(
+    config: &KvRouterConfig,
+) -> Result<ClassifierConfig, RouterPolicyConfigError> {
+    Ok(ClassifierConfig {
+        request_classifier: config.request_classifier_config()?.cloned(),
+    })
+}
+
+impl From<&KvRouterConfig> for IndexerConfig {
+    fn from(config: &KvRouterConfig) -> Self {
+        Self {
+            event_threads: config.router_event_threads,
+            approximate_cache_policy: config.router_approximate_cache_policy,
+            enable_session_prefix_index: config.enable_session_prefix_index,
+            use_kv_events: config.use_kv_events,
+            ttl_secs: config.router_ttl_secs,
+            predicted_ttl_secs: config.router_predicted_ttl_secs,
+            hashing: TrackingHashConfig::from(config),
+        }
+    }
+}
+
+impl From<&KvRouterConfig> for SlotsConfig {
+    fn from(config: &KvRouterConfig) -> Self {
+        Self {
+            track_active_blocks: config.router_track_active_blocks,
+            track_output_blocks: config.router_track_output_blocks,
+            track_prefill_tokens: config.router_track_prefill_tokens,
+            prefill_load_model: config.router_prefill_load_model,
+            ttl_secs: config.router_ttl_secs,
+            predicted_ttl_secs: config.router_predicted_ttl_secs,
+        }
+    }
+}
+
+impl From<&KvRouterConfig> for SelectionConfig {
+    fn from(config: &KvRouterConfig) -> Self {
+        Self {
+            overlap_score_credit: config.overlap_score_credit,
+            overlap_score_credit_decay: config.overlap_score_credit_decay,
+            prefill_load_scale: config.prefill_load_scale,
+            decode_active_request_weight: config.decode_active_request_weight,
+            host_cache_hit_weight: config.host_cache_hit_weight,
+            disk_cache_hit_weight: config.disk_cache_hit_weight,
+            router_temperature: config.router_temperature,
+            shared_cache_multiplier: config.shared_cache_multiplier,
+            shared_cache_type: config.shared_cache_type,
+            assume_kv_reuse: config.router_assume_kv_reuse,
+            conditional_disagg: ConditionalDisaggConfig {
+                enabled: config.conditional_disagg_enabled,
+                policy: config.conditional_disagg_policy,
+                eff_isl_threshold: config.conditional_disagg_eff_isl_threshold,
+                eff_isl_ratio_threshold: config.conditional_disagg_eff_isl_ratio_threshold,
+                prefill_busy_threshold: config.conditional_disagg_prefill_busy_threshold,
+                decode_busy_threshold: config.conditional_disagg_decode_busy_threshold,
+            },
+        }
+    }
 }
 
 #[cfg(test)]
