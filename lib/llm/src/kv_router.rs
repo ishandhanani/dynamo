@@ -19,6 +19,7 @@ use dynamo_kv_router::selection::{
     SelectionRun, SessionBinding,
 };
 use dynamo_router_types::busy::RejectThresholdsProvider;
+use dynamo_router_types::config::TrackingHashConfig;
 use dynamo_router_types::config::{
     KvRouterConfig, RouterConfigOverride, min_initial_workers_from_env,
 };
@@ -749,7 +750,8 @@ impl KvRouter {
         } else {
             None
         };
-        let tracking_hash = TrackingHashContext::from_config(&kv_router_config)?;
+        let tracking_hash =
+            TrackingHashContext::from_config(&TrackingHashConfig::from(&kv_router_config))?;
         let tracking_model_name =
             resolve_tracking_model_name(tracking_hash.algorithm(), model_name.as_deref())?;
         let kv_event_source_requirement = KvEventSourceRequirement::derive(
@@ -1080,7 +1082,7 @@ impl KvRouter {
         tiered_matches: &indexer::TieredMatchDetails,
     ) -> CacheHitEstimates {
         cache_hit_estimates_from_tiered_matches(
-            &self.kv_router_config,
+            &SelectionConfig::from(&self.kv_router_config),
             self.block_size,
             tiered_matches,
         )
@@ -1863,16 +1865,18 @@ impl KvRouter {
                 })
                 .collect::<Vec<_>>()
         };
-        Ok(
-            OverlapAnalysis::new(&self.kv_router_config, self.block_size, &tiered_matches)
-                .scores_response(
-                    num_blocks,
-                    expected_workers,
-                    shared_enabled,
-                    shared_hits.as_ref(),
-                    shared_error,
-                ),
+        Ok(OverlapAnalysis::new(
+            &SelectionConfig::from(&self.kv_router_config),
+            self.block_size,
+            &tiered_matches,
         )
+        .scores_response(
+            num_blocks,
+            expected_workers,
+            shared_enabled,
+            shared_hits.as_ref(),
+            shared_error,
+        ))
     }
 
     /// Dump all events from the indexer

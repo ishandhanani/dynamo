@@ -10,6 +10,7 @@ use dynamo_admission::config::{AdmissionConfig, ClassifierConfig};
 use dynamo_kv_indexer::config::IndexerConfig;
 pub use dynamo_router_types::config::{KvRouterConfig, RouterConfigOverride, TrackingHashConfig};
 use dynamo_router_types::config::{SharedCacheType, kv_router_config_from_lookup};
+use dynamo_scheduler::config::RouterConfig;
 use dynamo_slot_tracker::config::SlotsConfig;
 use dynamo_worker_selection::config::SelectionConfig;
 use serde::Serialize;
@@ -104,43 +105,52 @@ impl From<&KvRouterConfig> for WiringConfig {
     }
 }
 
-/// The nested router configuration.
+/// Everything the composition reads from one flat configuration: the kernel's stage slices
+/// and the wiring switches the builder consumes.
 #[derive(Debug, Clone, PartialEq, Serialize)]
-pub struct RouterConfig {
-    pub hashing: TrackingHashConfig,
-    pub indexer: IndexerConfig,
-    pub slots: SlotsConfig,
-    pub admission: AdmissionConfig,
-    pub classifier: ClassifierConfig,
-    pub selection: SelectionConfig,
+pub struct ResolvedConfig {
+    pub router: RouterConfig,
     pub wiring: WiringConfig,
 }
 
-impl RouterConfig {
-    /// The single flat-to-nested conversion. Validates the flat config first, so every slice
-    /// is built from values that already passed the wire-shape checks.
-    pub fn from_kv_router_config(config: &KvRouterConfig) -> Result<Self, String> {
-        config.validate()?;
+impl ResolvedConfig {
+    /// The single flat-to-nested conversion: applies the policy file's router settings,
+    /// validates the flat config, then builds every slice from values that passed the checks.
+    pub fn from_kv_router_config(mut config: KvRouterConfig) -> Result<Self, String> {
+        config.apply_policy_config()?;
+        config.validate_config()?;
         Ok(Self {
-            hashing: TrackingHashConfig::from(config),
-            indexer: IndexerConfig::from(config),
-            slots: SlotsConfig::from(config),
-            admission: AdmissionConfig::from(config),
-            classifier: ClassifierConfig::try_from_kv_router_config(config)?,
-            selection: SelectionConfig::from(config),
-            wiring: WiringConfig::from(config),
+            router: router_config(&config)?,
+            wiring: WiringConfig::from(&config),
         })
     }
 
     /// Read the `DYN_ROUTER_*` knobs from the process environment.
     pub fn from_env() -> Result<Self, String> {
-        Self::from_kv_router_config(&try_kv_router_config_from_dynamo_env()?)
+        Self::from_kv_router_config(try_kv_router_config_from_dynamo_env()?)
     }
 
     /// The effective settings as one JSON document, for operators.
     pub fn effective(&self) -> serde_json::Value {
         serde_json::to_value(self).expect("router config serializes")
     }
+}
+
+/// The kernel's stage slices from a flat configuration whose policy file is already applied.
+pub fn router_config(config: &KvRouterConfig) -> Result<RouterConfig, String> {
+    Ok(RouterConfig {
+        hashing: TrackingHashConfig::from(config),
+        indexer: IndexerConfig::from(config),
+        slots: SlotsConfig::from(config),
+        admission: AdmissionConfig::try_from_kv_router_config(config).map_err(|e| e.to_string())?,
+        classifier: ClassifierConfig::try_from_kv_router_config(config)?,
+        selection: SelectionConfig::from(config),
+    })
+}
+
+/// The kernel's stage slices from a flat configuration, applying and validating it first.
+pub fn resolve_router_config(config: KvRouterConfig) -> Result<RouterConfig, String> {
+    ResolvedConfig::from_kv_router_config(config).map(|resolved| resolved.router)
 }
 
 #[cfg(test)]
@@ -150,14 +160,20 @@ mod tests {
     #[test]
     fn nested_config_round_trips_the_defaults() {
         let flat = KvRouterConfig::default();
-        let nested = RouterConfig::from_kv_router_config(&flat).unwrap();
+        let resolved = ResolvedConfig::from_kv_router_config(flat.clone()).unwrap();
+        let nested = &resolved.router;
         assert_eq!(nested.indexer.event_threads, flat.router_event_threads);
         assert_eq!(nested.slots.ttl_secs, flat.router_ttl_secs);
         assert_eq!(nested.admission.queue_policy, flat.router_queue_policy);
         assert_eq!(nested.selection.router_temperature, flat.router_temperature);
-        assert_eq!(nested.wiring.use_kv_events, flat.use_kv_events);
+        assert_eq!(resolved.wiring.use_kv_events, flat.use_kv_events);
         assert_eq!(nested.hashing.algorithm, flat.router_tracking_hash);
-        assert!(nested.effective().get("selection").is_some());
+        assert!(resolved.effective().get("router").is_some());
+        assert_eq!(
+            *nested,
+            RouterConfig::default(),
+            "stage defaults mirror the flat defaults"
+        );
     }
 
     #[test]

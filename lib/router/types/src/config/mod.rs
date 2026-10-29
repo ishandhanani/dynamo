@@ -2005,7 +2005,7 @@ mod tests {
     #[test]
     fn context_aware_tracking_matches_public_legacy_api() {
         let config = KvRouterConfig::default();
-        let context = TrackingHashContext::from_config(&config).unwrap();
+        let context = TrackingHashContext::from_config(&TrackingHashConfig::from(&config)).unwrap();
         let tokens: Vec<u32> = (0..8).collect();
 
         let legacy = config.compute_seq_hashes_for_tracking(
@@ -2920,6 +2920,12 @@ pub struct TrackingHashConfig {
     pub algorithm: TrackingHashAlgorithm,
     pub key_file: Option<PathBuf>,
     pub key_id: Option<String>,
+}
+
+impl Default for TrackingHashConfig {
+    fn default() -> Self {
+        Self::from(&KvRouterConfig::default())
+    }
 }
 
 impl From<&KvRouterConfig> for TrackingHashConfig {

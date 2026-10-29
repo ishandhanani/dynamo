@@ -30,11 +30,12 @@ fn bench(c: &mut Criterion) {
         });
         for (label, factory) in [("reference", reference), ("plugin", default_factory())] {
             let core = SelectionCore::try_new_local(
-                KvRouterConfig {
+                dynamo_kv_router::config::resolve_router_config(KvRouterConfig {
                     use_kv_events: false,
                     router_queue_threshold: None,
                     ..Default::default()
-                },
+                })
+                .unwrap(),
                 1,
                 Default::default(),
                 SelectionCacheConfig::default(),

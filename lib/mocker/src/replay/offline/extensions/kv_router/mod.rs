@@ -17,6 +17,7 @@ use dynamo_kv_indexer::{
 use dynamo_kv_indexer::{RadixTree, SessionPrefixIndexer};
 pub(in crate::replay) use dynamo_router_types::config::KvRouterConfig as ReplayKvRouterConfig;
 use dynamo_router_types::config::KvRouterConfig;
+use dynamo_router_types::config::TrackingHashConfig;
 use dynamo_router_types::config::policy::{PolicyClassConfig, PolicyProfile};
 use dynamo_router_types::identity::RoutingPartitionRef;
 use dynamo_router_types::overlap::OverlapSignals;
@@ -36,6 +37,7 @@ use dynamo_scheduler::overlap::OverlapAnalysis;
 use dynamo_slot_tracker::topology::WorkerDpRange;
 use dynamo_slot_tracker::{ActiveSequencesMultiWorker, SequenceRequest};
 use dynamo_tokens::SequenceHash;
+use dynamo_worker_selection::config::SelectionConfig;
 use dynamo_worker_selection::selector::{WorkerSelectionInput, WorkerSelector};
 use futures::executor::block_on;
 use futures::future::try_join_all;
@@ -706,7 +708,7 @@ impl OfflineReplayRouter {
             config.validate().map_err(anyhow::Error::msg)?;
             indexer.session_prefix_index = Some(SessionPrefixIndexer::new());
         }
-        let tracking_hash = TrackingHashContext::from_config(&config)?;
+        let tracking_hash = TrackingHashContext::from_config(&TrackingHashConfig::from(&config))?;
         let worker_config_template = replay_worker_config(args);
         let workers_with_configs = replay_workers_with_configs(args, num_workers);
         let slots = replay_slots(args, &workers_with_configs);
@@ -1114,7 +1116,12 @@ impl OfflineReplayRouter {
                 (tiered, token_seq)
             }
         };
-        let overlap = OverlapAnalysis::new(&self.config, self.block_size, &tiered).signals();
+        let overlap = OverlapAnalysis::new(
+            &SelectionConfig::from(&self.config),
+            self.block_size,
+            &tiered,
+        )
+        .signals();
 
         Ok(PendingRequest {
             uuid,

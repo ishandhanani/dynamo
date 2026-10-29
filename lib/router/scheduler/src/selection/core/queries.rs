@@ -47,7 +47,7 @@ impl SelectionCore {
                 &entry,
                 &req.prompt.view(),
                 Some(
-                    self.kv_router_config
+                    self.config
                         .assume_kv_reuse(req.router_config_override.as_ref()),
                 ),
                 false,
@@ -59,7 +59,7 @@ impl SelectionCore {
             .router_config_override
             .as_ref()
             .and_then(|cfg| cfg.track_prefill_tokens)
-            .unwrap_or(self.kv_router_config.router_track_prefill_tokens);
+            .unwrap_or(self.config.slots.track_prefill_tokens);
         Ok(entry.scheduler.get_potential_loads(
             Some(prepared.sequence_hashes),
             prepared.isl_tokens,
@@ -86,7 +86,7 @@ impl SelectionCore {
             .map_err(|error| SelectionError::Internal(error.to_string()))?;
         let schedulable_workers = self.schedulable_worker_ranks(&key);
         Ok(
-            OverlapAnalysis::new(&self.kv_router_config, entry.block_size, &tiered)
+            OverlapAnalysis::new(&self.config.selection, entry.block_size, &tiered)
                 .scores_response(num_blocks, schedulable_workers, false, None, None),
         )
     }

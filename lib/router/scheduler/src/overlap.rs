@@ -4,24 +4,24 @@
 use std::collections::HashSet;
 
 use dynamo_kv_indexer::TieredMatchDetails;
-use dynamo_router_types::config::KvRouterConfig;
 pub use dynamo_router_types::overlap::{
     CacheHitEstimates, OverlapScoresResponse, OverlapSignals, SelectedWorkerTierSnapshot,
     SharedCacheOverlapScore, TierOverlapBlocks, WorkerOverlapScore, saturating_u32,
 };
 use dynamo_router_types::protocols::{SharedCacheHits, StorageTier, WorkerWithDpRank};
+use dynamo_worker_selection::config::SelectionConfig;
 use rustc_hash::FxHashMap;
 
 /// Borrowed analysis helper. It never owns indexer details or crosses an await.
 pub struct OverlapAnalysis<'a> {
-    config: &'a KvRouterConfig,
+    config: &'a SelectionConfig,
     block_size: u32,
     tiered: &'a TieredMatchDetails,
 }
 
 impl<'a> OverlapAnalysis<'a> {
     pub fn new(
-        config: &'a KvRouterConfig,
+        config: &'a SelectionConfig,
         block_size: u32,
         tiered: &'a TieredMatchDetails,
     ) -> Self {
@@ -63,7 +63,7 @@ impl<'a> OverlapAnalysis<'a> {
 }
 
 pub fn cache_hit_estimates_from_tiered_matches(
-    config: &KvRouterConfig,
+    config: &SelectionConfig,
     block_size: u32,
     tiered_matches: &TieredMatchDetails,
 ) -> CacheHitEstimates {
@@ -224,7 +224,7 @@ pub fn build_overlap_scores_response(
     }
 }
 
-fn cache_hit_weight_for_tier(config: &KvRouterConfig, tier: StorageTier) -> f64 {
+fn cache_hit_weight_for_tier(config: &SelectionConfig, tier: StorageTier) -> f64 {
     match tier {
         StorageTier::Device => 1.0,
         StorageTier::HostPinned => config.host_cache_hit_weight,
@@ -264,7 +264,7 @@ mod tests {
                 (StorageTier::External, external),
             ]),
         };
-        let config = KvRouterConfig {
+        let config = SelectionConfig {
             host_cache_hit_weight: 0.5,
             disk_cache_hit_weight: 0.25,
             ..Default::default()
@@ -301,7 +301,7 @@ mod tests {
         };
 
         let estimates =
-            cache_hit_estimates_from_tiered_matches(&KvRouterConfig::default(), 16, &tiered);
+            cache_hit_estimates_from_tiered_matches(&SelectionConfig::default(), 16, &tiered);
 
         assert_eq!(estimates.effective_overlap_blocks[&worker_1], 3.25);
         assert_eq!(estimates.cached_tokens[&worker_1], 52);

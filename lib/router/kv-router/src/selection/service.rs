@@ -20,7 +20,7 @@ use super::OverlapScoresResponse;
 use super::SelectionCacheConfig;
 use super::SelectionError;
 use super::affinity::SessionAffinityConfig;
-use super::{KvIndexSource, SelectionCore, SelectionHost, SelectionServiceConfig};
+use super::{KvIndexSource, SelectionCore, SelectionHost};
 use super::{
     ModelLoadResponse, OverlapScoresRequest, PotentialLoadsRequest, ReadyResponse,
     ReservationRequest, ReservationResponse, SelectAndReserveRequest, SelectRequest,
@@ -168,8 +168,10 @@ impl SelectionServiceBuilder {
                 .resolve_for_worker_type(&self.kv_router_config, self.worker_type)?
                 .ok_or(crate::plugins::WorkerSelectionPolicyRegistryError::MissingDefault)?,
         };
-        let tracking_hash = Arc::new(TrackingHashContext::from_config(&self.kv_router_config)?);
-        let indexer_policy = IndexerPolicy::from_router_config(&self.kv_router_config)?;
+        let router_config =
+            crate::config::router_config(&self.kv_router_config).map_err(anyhow::Error::msg)?;
+        let tracking_hash = Arc::new(TrackingHashContext::from_config(&router_config.hashing)?);
+        let indexer_policy = IndexerPolicy::from_config(&router_config.indexer)?;
         let recover_from_peers = !self.indexer_peers.is_empty();
         let cancel_token = CancellationToken::new();
         let mut startup_guard = StartupGuard::new(cancel_token.clone());
@@ -187,7 +189,7 @@ impl SelectionServiceBuilder {
         }
         let replica_config = replica_runtime.as_ref().map(ReplicaSyncRuntime::config);
         let core = Arc::new(SelectionCore::new_inner(
-            self.kv_router_config,
+            router_config,
             self.indexer_threads,
             cancel_token.clone(),
             replica_config,
@@ -253,6 +255,21 @@ impl SelectionServiceBuilder {
             cancel_token,
         })
     }
+}
+
+/// The standalone selection service's configuration: the flat router config plus the ports,
+/// threads, and peers of one replica.
+#[derive(Debug, Clone)]
+pub struct SelectionServiceConfig {
+    pub port: u16,
+    pub threads: usize,
+    pub indexer_peers: Vec<String>,
+    pub replica_sync_port: Option<u16>,
+    pub replica_sync_peers: Vec<String>,
+    pub kv_router_config: KvRouterConfig,
+    pub selection_cache: SelectionCacheConfig,
+    /// Session stickiness TTL; `None` disables session affinity.
+    pub session_affinity_ttl: Option<Duration>,
 }
 
 impl SelectionServiceBuilder {
@@ -325,7 +342,8 @@ impl SelectionService {
         Self {
             core: Arc::new(
                 SelectionCore::try_new_local(
-                    kv_router_config,
+                    crate::config::resolve_router_config(kv_router_config)
+                        .expect("valid test config"),
                     indexer_threads,
                     cancel_token.clone(),
                     SelectionCacheConfig::default(),

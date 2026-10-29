@@ -9,20 +9,23 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
+use dynamo_admission::config::AdmissionConfig;
 use dynamo_kv_indexer::KvIndexerInterface;
+use dynamo_kv_indexer::config::IndexerConfig;
 use dynamo_kv_indexer::ingest::backend::Indexer;
 use dynamo_router_types::busy::{BusyThresholds, RejectThresholdsProvider};
-use dynamo_router_types::config::KvRouterConfig;
 use dynamo_router_types::identity::RoutingPartitionId;
 use dynamo_router_types::protocols::{
     BlockHashOptions, ExternalSequenceBlockHash, KvCacheEvent, KvCacheEventData, KvCacheStoreData,
     KvCacheStoredBlockData, RouterEvent, RoutingConstraints, StorageTier, WorkerWithDpRank,
     compute_block_hash_for_seq, compute_seq_hash_for_block,
 };
+use dynamo_scheduler::config::RouterConfig;
 use dynamo_scheduler::selection::{
     HostLoad, PromptRequest, SelectAndReserveRequest, SelectionCacheConfig, SelectionCore,
     SelectionHost, WorkerRequest, WorkerSelectionPolicyFactory,
 };
+use dynamo_worker_selection::config::SelectionConfig;
 use tokio_util::sync::CancellationToken;
 
 const BLOCK_SIZE: u32 = 16;
@@ -52,12 +55,18 @@ fn core_with_workers(
         runtime,
         workers,
         hints,
-        KvRouterConfig {
-            use_kv_events: true,
+        RouterConfig {
+            indexer: IndexerConfig {
+                use_kv_events: true,
+                ..Default::default()
+            },
             // A fractional queue threshold of 1.0 enables the class-queue gate on every
             // admission without ever holding a request: the bench measures the gate's
             // projection, not queueing.
-            router_queue_threshold: queue_gate.then_some(1.0),
+            admission: AdmissionConfig {
+                queue_threshold: queue_gate.then_some(1.0),
+                ..Default::default()
+            },
             ..Default::default()
         },
     )
@@ -67,7 +76,7 @@ fn core_with_config(
     runtime: &tokio::runtime::Runtime,
     workers: u64,
     hints: bool,
-    config: KvRouterConfig,
+    config: RouterConfig,
 ) -> SelectionCore {
     let core = SelectionCore::try_new_local(
         config,
@@ -91,9 +100,15 @@ fn core_with_reject_thresholds(
     workers: u64,
     reject: bool,
 ) -> SelectionCore {
-    let config = KvRouterConfig {
-        use_kv_events: false,
-        router_queue_threshold: None,
+    let config = RouterConfig {
+        indexer: IndexerConfig {
+            use_kv_events: false,
+            ..Default::default()
+        },
+        admission: AdmissionConfig {
+            queue_threshold: None,
+            ..Default::default()
+        },
         ..Default::default()
     };
     let reject_thresholds = reject.then(|| {
@@ -274,10 +289,19 @@ fn bench_fetch_sources(c: &mut Criterion) {
     let prompt_blocks = prompt_tokens().len() / BLOCK_SIZE as usize;
     for &workers in &[256u64, 1024, 4096] {
         for (name, multiplier) in [("credit0", 0.0), ("credit0.5", 0.5)] {
-            let config = KvRouterConfig {
-                use_kv_events: true,
-                router_queue_threshold: None,
-                shared_cache_multiplier: Some(multiplier),
+            let config = RouterConfig {
+                indexer: IndexerConfig {
+                    use_kv_events: true,
+                    ..Default::default()
+                },
+                admission: AdmissionConfig {
+                    queue_threshold: None,
+                    ..Default::default()
+                },
+                selection: SelectionConfig {
+                    shared_cache_multiplier: Some(multiplier),
+                    ..Default::default()
+                },
                 ..Default::default()
             };
             let runtime = runtime();

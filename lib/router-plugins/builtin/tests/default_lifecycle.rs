@@ -45,11 +45,12 @@ fn reserve_request(selection_id: &str) -> SelectAndReserveRequest {
 #[tokio::test]
 async fn shared_core_books_and_releases_with_the_builtin_default() {
     let core = SelectionCore::try_new_local(
-        KvRouterConfig {
+        dynamo_kv_router::config::resolve_router_config(KvRouterConfig {
             use_kv_events: false,
             router_queue_threshold: None,
             ..Default::default()
-        },
+        })
+        .unwrap(),
         1,
         Default::default(),
         SelectionCacheConfig::default(),
@@ -91,10 +92,11 @@ async fn shared_core_books_and_releases_with_the_builtin_default() {
 async fn runtime_updates_are_conditional_and_cancelled_writes_do_not_apply() {
     use dynamo_worker_selection::plugin::{RuntimePolicyError, RuntimePolicyUpdate};
     let core = SelectionCore::try_new_local(
-        KvRouterConfig {
+        dynamo_kv_router::config::resolve_router_config(KvRouterConfig {
             use_kv_events: false,
             ..Default::default()
-        },
+        })
+        .unwrap(),
         1,
         Default::default(),
         SelectionCacheConfig::default(),
@@ -172,11 +174,12 @@ async fn scoring_error_does_not_book_and_allows_retry() {
         }
     }
     let core = SelectionCore::try_new_local(
-        KvRouterConfig {
+        dynamo_kv_router::config::resolve_router_config(KvRouterConfig {
             use_kv_events: false,
             router_queue_threshold: None,
             ..Default::default()
-        },
+        })
+        .unwrap(),
         1,
         Default::default(),
         SelectionCacheConfig::default(),

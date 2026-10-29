@@ -16,6 +16,14 @@ pub struct SlotsConfig {
     pub predicted_ttl_secs: Option<f64>,
 }
 
+impl Default for SlotsConfig {
+    /// The router's defaults; the aggregate's `Default` is the single source until it leaves
+    /// the shared crate.
+    fn default() -> Self {
+        Self::from(&KvRouterConfig::default())
+    }
+}
+
 impl From<&KvRouterConfig> for SlotsConfig {
     fn from(config: &KvRouterConfig) -> Self {
         Self {

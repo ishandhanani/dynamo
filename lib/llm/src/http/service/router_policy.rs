@@ -184,10 +184,11 @@ mod tests {
 
     async fn fixture(manager: Arc<ModelManager>) -> (Router, SelectionCore, Uuid, Uuid) {
         let core = SelectionCore::try_new_local(
-            KvRouterConfig {
+            dynamo_kv_router::config::resolve_router_config(KvRouterConfig {
                 use_kv_events: false,
                 ..Default::default()
-            },
+            })
+            .unwrap(),
             1,
             Default::default(),
             SelectionCacheConfig::default(),

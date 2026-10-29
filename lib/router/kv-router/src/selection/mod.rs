@@ -19,7 +19,8 @@ pub use http_error::response as error_response;
 #[cfg(feature = "http")]
 pub use server::{AppState, run_server};
 pub use service::{
-    SelectionService, SelectionServiceBuilder, warn_for_unserved_worker_selection_policies,
+    SelectionService, SelectionServiceBuilder, SelectionServiceConfig,
+    warn_for_unserved_worker_selection_policies,
 };
 
 // TODO(v1.7): Remove these compatibility re-exports; use crate::plugins instead.

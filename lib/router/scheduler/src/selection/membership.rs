@@ -204,16 +204,24 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     use super::*;
+    use crate::config::RouterConfig;
     use crate::selection::SelectionCacheConfig;
-    use dynamo_router_types::config::KvRouterConfig;
+    use dynamo_admission::config::AdmissionConfig;
+    use dynamo_kv_indexer::config::IndexerConfig;
 
     fn core() -> Arc<SelectionCore> {
         Arc::new(
             SelectionCore::try_new_local(
-                KvRouterConfig {
-                    use_kv_events: false,
-                    router_queue_threshold: None,
-                    ..Default::default()
+                RouterConfig {
+                    indexer: IndexerConfig {
+                        use_kv_events: false,
+                        ..Default::default()
+                    },
+                    admission: AdmissionConfig {
+                        queue_threshold: None,
+                        ..Default::default()
+                    },
+                    ..RouterConfig::default()
                 },
                 1,
                 CancellationToken::new(),

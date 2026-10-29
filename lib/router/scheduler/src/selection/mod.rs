@@ -19,7 +19,7 @@ mod types;
 pub use core::{
     HostCache, HostEligibility, HostLoad, HostReplication, HostTelemetry, KvIndexSource, Selected,
     SelectionAdmission, SelectionCore, SelectionHost, SelectionOperation, SelectionOutcome,
-    SelectionPartition, SelectionRun, SelectionScheduler, SelectionServiceConfig, SessionBinding,
+    SelectionPartition, SelectionRun, SelectionScheduler, SessionBinding,
 };
 pub use dynamo_slot_tracker::mesh::{
     HostReplicaChannels, HostReplicaSyncFactory, ReplicaIngressObserver, ReplicaPeerError,

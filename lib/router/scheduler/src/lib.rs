@@ -7,6 +7,7 @@
 //! index, the slot tracker, admission, and worker selection into one service (`selection`); the
 //! selection HTTP routes behind `http`; and the nested router configuration (`config`).
 
+pub mod config;
 pub mod constraints;
 pub mod local;
 pub mod overlap;

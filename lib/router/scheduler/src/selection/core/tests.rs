@@ -16,22 +16,33 @@ use std::collections::HashSet;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::thread::sleep;
 use std::time::Duration;
+
+use crate::config::RouterConfig;
+use dynamo_admission::config::AdmissionConfig;
+use dynamo_kv_indexer::config::IndexerConfig;
+use dynamo_worker_selection::config::SelectionConfig;
 use tokio::sync::mpsc;
 
-fn test_config(use_kv_events: bool) -> dynamo_router_types::config::KvRouterConfig {
-    dynamo_router_types::config::KvRouterConfig {
-        use_kv_events,
-        router_queue_threshold: None,
+fn test_config(use_kv_events: bool) -> RouterConfig {
+    RouterConfig {
+        indexer: IndexerConfig {
+            use_kv_events,
+            ..Default::default()
+        },
+        admission: AdmissionConfig {
+            queue_threshold: None,
+            ..Default::default()
+        },
         ..Default::default()
     }
 }
 
-fn local_core(config: dynamo_router_types::config::KvRouterConfig) -> SelectionCore {
+fn local_core(config: RouterConfig) -> SelectionCore {
     local_core_with(config, 1, CancellationToken::new())
 }
 
 fn local_core_with(
-    config: dynamo_router_types::config::KvRouterConfig,
+    config: RouterConfig,
     indexer_threads: usize,
     cancel_token: CancellationToken,
 ) -> SelectionCore {
@@ -52,16 +63,17 @@ fn local_core_with(
 
 /// `new_inner` with the test defaults.
 fn core_with(
-    config: dynamo_router_types::config::KvRouterConfig,
+    config: RouterConfig,
     host: SelectionHost,
     policy_factory: Option<WorkerSelectionPolicyFactory>,
     worker_type: WorkerType,
     affinity: Option<SessionAffinityConfig>,
 ) -> SelectionCore {
     let tracking_hash = Arc::new(
-        TrackingHashContext::from_config(&config).expect("valid tracking hash configuration"),
+        TrackingHashContext::from_config(&config.hashing)
+            .expect("valid tracking hash configuration"),
     );
-    let indexer_policy = IndexerPolicy::from_router_config(&config).expect("indexer policy");
+    let indexer_policy = IndexerPolicy::from_config(&config.indexer).expect("indexer policy");
     SelectionCore::new_inner(
         config,
         1,
@@ -237,7 +249,7 @@ fn default_key() -> RoutingPartitionId {
 /// the first.
 fn saturated_core() -> Arc<SelectionCore> {
     let mut config = test_config(false);
-    config.router_queue_threshold = Some(0.0);
+    config.admission.queue_threshold = Some(0.0);
     Arc::new(local_core(config))
 }
 
@@ -475,7 +487,7 @@ async fn hint_fixture(
 
 /// Like [`hint_fixture`], with a `prompt_tokens`-token prompt and `config`.
 async fn hint_fixture_with(
-    config: dynamo_router_types::config::KvRouterConfig,
+    config: RouterConfig,
     prompt_tokens: u32,
     configure: impl Fn(&mut WorkerRequest),
 ) -> (SelectionCore, Arc<SelectionEntry>, Vec<u32>) {
@@ -562,9 +574,12 @@ async fn booked_selection_attaches_router_hint_from_a_better_source() {
 #[tokio::test]
 async fn fetchable_prefix_credit_books_an_idle_worker_with_its_hint() {
     for (multiplier, expected_worker) in [(0.0, 1), (0.5, 2)] {
-        let config = dynamo_router_types::config::KvRouterConfig {
-            shared_cache_multiplier: Some(multiplier),
-            overlap_score_credit_decay: 0.0,
+        let config = RouterConfig {
+            selection: SelectionConfig {
+                shared_cache_multiplier: Some(multiplier),
+                overlap_score_credit_decay: 0.0,
+                ..Default::default()
+            },
             ..test_config(true)
         };
         let (core, _entry, tokens) = hint_fixture_with(config, 32, hint_capable).await;
@@ -2100,7 +2115,7 @@ async fn free_of_an_in_flight_reservation_is_not_found() {
 #[tokio::test]
 async fn prefill_complete_is_idempotent_for_a_live_booking() {
     let mut config = test_config(false);
-    config.router_track_prefill_tokens = true;
+    config.slots.track_prefill_tokens = true;
     let core = local_core(config);
     core.upsert_worker(worker(1)).await.expect("worker upsert");
     core.select_and_reserve(reserve_request("live"))
@@ -2334,7 +2349,7 @@ async fn mirrored_replica_bookings_are_indexed_until_freed() {
 #[tokio::test]
 async fn lifecycle_operations_resolve_through_the_index() {
     let mut config = test_config(false);
-    config.router_track_prefill_tokens = true;
+    config.slots.track_prefill_tokens = true;
     let core = local_core(config);
 
     for (worker_id, routing_group) in [(1, "group-a"), (2, "group-b")] {
@@ -2387,8 +2402,8 @@ async fn lifecycle_operations_resolve_through_the_index() {
 #[tokio::test]
 async fn advisory_select_reports_worker_load_and_busy_evaluation() {
     let mut config = test_config(false);
-    config.conditional_disagg_prefill_busy_threshold = Some(0.5);
-    config.conditional_disagg_decode_busy_threshold = Some(0.0);
+    config.selection.conditional_disagg.prefill_busy_threshold = Some(0.5);
+    config.selection.conditional_disagg.decode_busy_threshold = Some(0.0);
     let core = local_core(config);
     let mut request = worker(1);
     request.total_kv_blocks = Some(1000);
@@ -3097,7 +3112,7 @@ async fn failed_replay_preserves_a_newer_cached_selection() {
 #[tokio::test(start_paused = true)]
 async fn free_releases_reservation_and_affinity_without_actor_progress() {
     let mut config = test_config(false);
-    config.router_queue_threshold = Some(0.0);
+    config.admission.queue_threshold = Some(0.0);
     let core = core_with(
         config,
         SelectionHost::default(),

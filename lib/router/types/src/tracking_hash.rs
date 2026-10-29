@@ -12,7 +12,7 @@ use dynamo_tokens::SequenceHash;
 use serde::{Deserialize, Serialize};
 use zeroize::Zeroizing;
 
-use crate::config::KvRouterConfig;
+use crate::config::TrackingHashConfig;
 use crate::identity::RoutingPartitionRef;
 use crate::protocols::{
     BlockHashOptions, LocalBlockHash, complete_block_count, compute_block_hash_for_seq,
@@ -114,15 +114,15 @@ impl fmt::Debug for TrackingHashContext {
 
 impl TrackingHashContext {
     /// Load and validate the runtime context from router configuration.
-    pub fn from_config(config: &KvRouterConfig) -> Result<Self> {
+    pub fn from_config(config: &TrackingHashConfig) -> Result<Self> {
         validate_tracking_hash_options(
-            config.router_tracking_hash,
-            config.router_tracking_key_file.is_some(),
-            config.router_tracking_key_id.as_deref(),
+            config.algorithm,
+            config.key_file.is_some(),
+            config.key_id.as_deref(),
         )
         .map_err(anyhow::Error::msg)?;
 
-        match config.router_tracking_hash {
+        match config.algorithm {
             TrackingHashAlgorithm::PublicXxh3V1 => Ok(Self {
                 algorithm: TrackingHashAlgorithm::PublicXxh3V1,
                 key_id: None,
@@ -130,11 +130,11 @@ impl TrackingHashContext {
             }),
             TrackingHashAlgorithm::KeyedXxh3V1 => {
                 let key_id = config
-                    .router_tracking_key_id
+                    .key_id
                     .as_deref()
                     .expect("validated keyed tracking config must have a key ID");
                 let key_path = config
-                    .router_tracking_key_file
+                    .key_file
                     .as_ref()
                     .expect("validated keyed tracking config must have a key file");
                 let key_bytes = Zeroizing::new(
@@ -285,6 +285,7 @@ fn frame_fixed(hasher: &mut blake3::Hasher, tag: u8, value: &[u8]) {
 
 #[cfg(test)]
 mod tests {
+    use crate::config::KvRouterConfig;
     use std::io::Write;
 
     use tempfile::NamedTempFile;
@@ -314,7 +315,7 @@ mod tests {
 
     #[test]
     fn public_mode_is_bit_compatible() {
-        let context = TrackingHashContext::from_config(&KvRouterConfig::default()).unwrap();
+        let context = TrackingHashContext::from_config(&TrackingHashConfig::default()).unwrap();
         let tokens: Vec<u32> = (0..8).collect();
         let options = BlockHashOptions {
             cache_namespace: Some("tenant-a"),
@@ -337,7 +338,7 @@ mod tests {
     #[test]
     fn keyed_hash_vector_pins_scope_and_chain_framing() {
         let (_key_file, config) = keyed_config("2026-01", &[0x5a; KEY_SIZE]);
-        let context = TrackingHashContext::from_config(&config).unwrap();
+        let context = TrackingHashContext::from_config(&TrackingHashConfig::from(&config)).unwrap();
         let tokens: Vec<u32> = (0..12).collect();
 
         let hashes = context.compute_sequence_hashes(
@@ -364,10 +365,11 @@ mod tests {
     #[test]
     fn keyed_contexts_are_stable_and_scope_sensitive() {
         let (_key_file, config) = keyed_config("2026-01", &[0x23; KEY_SIZE]);
-        let first = TrackingHashContext::from_config(&config).unwrap();
-        let second = TrackingHashContext::from_config(&config).unwrap();
+        let first = TrackingHashContext::from_config(&TrackingHashConfig::from(&config)).unwrap();
+        let second = TrackingHashContext::from_config(&TrackingHashConfig::from(&config)).unwrap();
         let (_next_key_file, next_config) = keyed_config("2026-02", &[0x23; KEY_SIZE]);
-        let next_epoch = TrackingHashContext::from_config(&next_config).unwrap();
+        let next_epoch =
+            TrackingHashContext::from_config(&TrackingHashConfig::from(&next_config)).unwrap();
         let tokens: Vec<u32> = (0..12).collect();
         let base_options = BlockHashOptions::default();
         let base =
@@ -454,7 +456,7 @@ mod tests {
     #[test]
     fn keyed_vectors_pin_multimodal_eagle_and_partial_block_rules() {
         let (_key_file, config) = keyed_config("2026-01", &[0x41; KEY_SIZE]);
-        let context = TrackingHashContext::from_config(&config).unwrap();
+        let context = TrackingHashContext::from_config(&TrackingHashConfig::from(&config)).unwrap();
         let tokens: Vec<u32> = (0..10).collect();
         let mm_infos = vec![
             Some(BlockExtraInfo {
@@ -507,7 +509,7 @@ mod tests {
     fn key_loading_rejects_missing_and_malformed_files_without_exposing_bytes() {
         let (_short_file, short_config) = keyed_config("2026-01", &[7; KEY_SIZE - 1]);
         assert!(
-            TrackingHashContext::from_config(&short_config)
+            TrackingHashContext::from_config(&TrackingHashConfig::from(&short_config))
                 .unwrap_err()
                 .to_string()
                 .contains("exactly 32 raw bytes")
@@ -515,7 +517,7 @@ mod tests {
 
         let (_long_file, long_config) = keyed_config("2026-01", &[8; KEY_SIZE + 1]);
         assert!(
-            TrackingHashContext::from_config(&long_config)
+            TrackingHashContext::from_config(&TrackingHashConfig::from(&long_config))
                 .unwrap_err()
                 .to_string()
                 .contains("exactly 32 raw bytes")
@@ -527,9 +529,10 @@ mod tests {
             router_tracking_key_id: Some("2026-01".to_string()),
             ..Default::default()
         };
-        let missing_error = TrackingHashContext::from_config(&missing_config)
-            .unwrap_err()
-            .to_string();
+        let missing_error =
+            TrackingHashContext::from_config(&TrackingHashConfig::from(&missing_config))
+                .unwrap_err()
+                .to_string();
         assert!(missing_error.contains("failed to read router tracking key file"));
         assert!(!missing_error.contains("/definitely/missing/tracking-key"));
 
@@ -540,16 +543,17 @@ mod tests {
             router_tracking_key_id: Some("2026-01".to_string()),
             ..Default::default()
         };
-        let unreadable_error = TrackingHashContext::from_config(&unreadable_config)
-            .unwrap_err()
-            .to_string();
+        let unreadable_error =
+            TrackingHashContext::from_config(&TrackingHashConfig::from(&unreadable_config))
+                .unwrap_err()
+                .to_string();
         assert!(unreadable_error.contains("failed to read router tracking key file"));
         assert!(!unreadable_error.contains(&unreadable_dir.path().display().to_string()));
 
         let (_key_file, valid_config) = keyed_config("2026-01", &[0xab; KEY_SIZE]);
         let debug = format!(
             "{:?}",
-            TrackingHashContext::from_config(&valid_config).unwrap()
+            TrackingHashContext::from_config(&TrackingHashConfig::from(&valid_config)).unwrap()
         );
         assert!(debug.contains("[REDACTED]"));
         assert!(!debug.contains("171"));
@@ -558,14 +562,15 @@ mod tests {
     #[test]
     fn retained_key_is_zeroizable_and_only_epoch_is_exposed() {
         let (_key_file, config) = keyed_config("2026-01", &[0xab; KEY_SIZE]);
-        let mut context = TrackingHashContext::from_config(&config).unwrap();
+        let mut context =
+            TrackingHashContext::from_config(&TrackingHashConfig::from(&config)).unwrap();
 
         assert_eq!(context.key_id(), Some("2026-01"));
         let provider_key = context.provider_key.as_mut().unwrap();
         provider_key.zeroize();
         assert_eq!(provider_key.as_ref(), &[0_u8; KEY_SIZE]);
 
-        let public = TrackingHashContext::from_config(&KvRouterConfig::default()).unwrap();
+        let public = TrackingHashContext::from_config(&TrackingHashConfig::default()).unwrap();
         assert_eq!(public.key_id(), None);
     }
 
@@ -574,7 +579,7 @@ mod tests {
         let assert_rejected_by_both = |config: &KvRouterConfig, expected: &str| {
             assert_eq!(config.validate_config().unwrap_err(), expected);
             assert_eq!(
-                TrackingHashContext::from_config(config)
+                TrackingHashContext::from_config(&TrackingHashConfig::from(config))
                     .unwrap_err()
                     .to_string(),
                 expected
@@ -607,6 +612,6 @@ mod tests {
 
         let (_key_file, keyed) = keyed_config("2026-01", &[1; KEY_SIZE]);
         assert!(keyed.validate_config().is_ok());
-        assert!(TrackingHashContext::from_config(&keyed).is_ok());
+        assert!(TrackingHashContext::from_config(&TrackingHashConfig::from(&keyed)).is_ok());
     }
 }

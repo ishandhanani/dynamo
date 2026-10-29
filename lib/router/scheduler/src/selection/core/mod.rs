@@ -5,10 +5,11 @@
 //! partitions, their catalog, and the reservation index. Selection itself is
 //! in `run`, reservations in `reservations`, worker membership in `workers`.
 
+use crate::config::RouterConfig;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use dynamo_tokens::SequenceHash;
 use once_cell::sync::OnceCell;
@@ -252,19 +253,6 @@ impl Default for HostReplication {
     }
 }
 
-#[derive(Debug, Clone)]
-pub struct SelectionServiceConfig {
-    pub port: u16,
-    pub threads: usize,
-    pub indexer_peers: Vec<String>,
-    pub replica_sync_port: Option<u16>,
-    pub replica_sync_peers: Vec<String>,
-    pub kv_router_config: dynamo_router_types::config::KvRouterConfig,
-    pub selection_cache: SelectionCacheConfig,
-    /// Session stickiness TTL; `None` disables session affinity.
-    pub session_affinity_ttl: Option<Duration>,
-}
-
 type SelectionEntries = RwLock<HashMap<RoutingPartitionId, Arc<OnceCell<Arc<SelectionEntry>>>>>;
 
 pub struct SelectionCore {
@@ -282,9 +270,7 @@ pub struct SelectionCore {
     /// workers publish to directly, or when the embedding host feeds events.
     listens_for_kv_events: bool,
     indexer_registry: Arc<WorkerRegistry>,
-    kv_router_config: dynamo_router_types::config::KvRouterConfig,
-    /// The selection slice handed to the policy factory for every partition.
-    selection_config: dynamo_worker_selection::config::SelectionConfig,
+    config: RouterConfig,
     worker_selection_policy_factory: WorkerSelectionPolicyFactory,
     host: SelectionHost,
     worker_type: WorkerType,
@@ -332,14 +318,14 @@ impl SelectionCore {
 
     /// Create a local selector and report invalid tracking configuration.
     pub fn try_new_local(
-        kv_router_config: dynamo_router_types::config::KvRouterConfig,
+        config: RouterConfig,
         indexer_threads: usize,
         cancel_token: CancellationToken,
         cache_config: SelectionCacheConfig,
         policy_factory: WorkerSelectionPolicyFactory,
     ) -> anyhow::Result<Self> {
         Self::try_new_local_with_host(
-            kv_router_config,
+            config,
             indexer_threads,
             cancel_token,
             cache_config,
@@ -353,7 +339,7 @@ impl SelectionCore {
     #[cfg(feature = "bench")]
     #[doc(hidden)]
     pub fn bench_try_new_local_with_host(
-        kv_router_config: dynamo_router_types::config::KvRouterConfig,
+        config: RouterConfig,
         indexer_threads: usize,
         cancel_token: CancellationToken,
         cache_config: SelectionCacheConfig,
@@ -361,7 +347,7 @@ impl SelectionCore {
         host: SelectionHost,
     ) -> anyhow::Result<Self> {
         Self::try_new_local_with_host(
-            kv_router_config,
+            config,
             indexer_threads,
             cancel_token,
             cache_config,
@@ -371,23 +357,17 @@ impl SelectionCore {
     }
 
     fn try_new_local_with_host(
-        mut kv_router_config: dynamo_router_types::config::KvRouterConfig,
+        config: RouterConfig,
         indexer_threads: usize,
         cancel_token: CancellationToken,
         cache_config: SelectionCacheConfig,
         policy_factory: WorkerSelectionPolicyFactory,
         host: SelectionHost,
     ) -> anyhow::Result<Self> {
-        kv_router_config
-            .apply_policy_config()
-            .map_err(anyhow::Error::msg)?;
-        kv_router_config
-            .validate_config()
-            .map_err(anyhow::Error::msg)?;
-        let tracking_hash = Arc::new(TrackingHashContext::from_config(&kv_router_config)?);
-        let indexer_policy = IndexerPolicy::from_router_config(&kv_router_config)?;
+        let tracking_hash = Arc::new(TrackingHashContext::from_config(&config.hashing)?);
+        let indexer_policy = IndexerPolicy::from_config(&config.indexer)?;
         Ok(Self::new_inner(
-            kv_router_config,
+            config,
             indexer_threads,
             cancel_token,
             None,
@@ -409,7 +389,7 @@ impl SelectionCore {
     #[allow(clippy::too_many_arguments)]
     #[doc(hidden)]
     pub fn new_inner(
-        kv_router_config: dynamo_router_types::config::KvRouterConfig,
+        config: RouterConfig,
         indexer_threads: usize,
         cancel_token: CancellationToken,
         replica_config: Option<ReplicaSyncConfig>,
@@ -427,9 +407,7 @@ impl SelectionCore {
             WorkerRegistry::new_with_cancel_token(indexer_threads, cancel_token.clone())
                 .with_retained_indexers(),
         );
-        let listens_for_kv_events = kv_router_config.use_kv_events;
-        let selection_config =
-            dynamo_worker_selection::config::SelectionConfig::from(&kv_router_config);
+        let listens_for_kv_events = config.indexer.use_kv_events;
         indexer_registry.set_indexer_policy(indexer_policy);
         if signal_indexer_ready {
             indexer_registry.signal_ready();
@@ -442,8 +420,7 @@ impl SelectionCore {
             reservation_sweep_started: OnceCell::new(),
             listens_for_kv_events,
             indexer_registry,
-            kv_router_config,
-            selection_config,
+            config,
             worker_selection_policy_factory,
             host,
             worker_type,
