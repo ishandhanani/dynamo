@@ -29,8 +29,8 @@ use dynamo_kv_router::{
     },
     scheduling::{
         BusyThresholds, CacheHitEstimates, OverlapAnalysis, OverloadedWorkerProvider,
-        PairedPoolRoom, PotentialLoad, RejectThresholdsProvider, RequestClassifier,
-        RequestClassifierContext, SchedulingRequest, WorkerAvailabilityProvider,
+        PotentialLoad, RejectThresholdsProvider, RequestClassifier,
+        RequestClassifierContext, WorkerAvailabilityProvider,
         effective_prefill_tokens,
         overlap::cache_hit_estimates_from_tiered_matches,
         queue::{BookingHandle, SchedulerBookingDescriptor},
@@ -618,8 +618,6 @@ pub struct KvRouter {
     teardown_task_guard: Option<dynamo_runtime::engine::EngineContextGuard>,
     /// Optional session-aware logical prefix index.
     session_prefix_index: Option<Arc<SessionPrefixIndexer>>,
-    /// The availability filter selection applies: reachable workers, narrowed by LoRA.
-    available_workers: WorkerAvailabilityProvider,
 }
 
 fn resolve_tracking_model_name(
@@ -891,7 +889,7 @@ impl KvRouter {
                 prefill_load_estimator: prefill_load_estimator.clone(),
                 overloaded_worker_provider,
                 reject_thresholds,
-                available_worker_provider: Arc::clone(&available_worker_provider),
+                available_worker_provider,
                 registration_availability_provider,
                 shared_cache: shared_cache.clone(),
                 // The availability provider refreshes LoRA eligibility at admission.
@@ -933,41 +931,7 @@ impl KvRouter {
             shared_cache,
             teardown_task_guard: None,
             session_prefix_index,
-            available_workers: available_worker_provider,
         })
-    }
-
-    /// Judge each policy class's decode wait limit on `pool`, the decode pool that serves
-    /// this prefill router's requests next. Returns `false` when a pool is already set.
-    pub(crate) fn set_paired_pool(&self, pool: Arc<dyn PairedPoolRoom>) -> bool {
-        self.selection.scheduler().set_paired_pool(pool)
-    }
-
-    /// Whether some worker rank this router could serve `request` on has booked load within
-    /// `limits`, read directly from this router's scheduler. `request` is the prefill hop's,
-    /// so this is a coarse admission check: decode selection still enforces the exact
-    /// eligibility of the decode leg.
-    ///
-    /// Applied: worker reachability and the request's LoRA, through the same availability
-    /// filter selection uses. That filter narrows LoRA candidates by the request's pin and
-    /// allowed workers, which on the prefill hop name prefill workers, so a LoRA request
-    /// carrying either is judged on reachability alone. Not applied: a decode pin, routing
-    /// constraints, and the KV-transfer domain of the prefill worker the hop picks.
-    pub(crate) fn has_room_for_prefill_request(
-        &self,
-        request: &SchedulingRequest,
-        limits: &BusyThresholds,
-    ) -> bool {
-        let lora_candidates_are_ours = request.lora_name.is_none()
-            || (request.pinned_worker.is_none() && request.allowed_worker_ids.is_none());
-        let available = if lora_candidates_are_ours {
-            (self.available_workers)(request)
-        } else {
-            self.client.available_instance_ids()
-        };
-        self.selection
-            .scheduler()
-            .any_rank_has_room(limits, available.as_deref())
     }
 
     /// Whether some reachable worker rank of this router has booked load within `limits`,
