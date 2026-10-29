@@ -7,12 +7,14 @@
 //! A host builds a [`Topology`] from its discovery sources and hands the same
 //! snapshot to every reader (selection, load probes, metrics, shared caches),
 //! so there is one view of which workers exist and what they advertise. The
-//! row's config type `C` is the host's: the types crate carries the shape and
-//! the diff, not the engine configuration.
+//! row's config type `C` is the host's: the kernel carries the shape and the
+//! diff, not the engine configuration. Stage crates read a snapshot through
+//! [`WorkerLookup`] and never name `Topology`.
 
 use std::sync::Arc;
 
-use crate::protocols::WorkerId;
+use dynamo_router_types::eligibility::WorkerLookup;
+use dynamo_router_types::protocols::WorkerId;
 
 /// One serving worker and the configuration it advertised.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -150,6 +152,23 @@ impl<C: PartialEq> Topology<C> {
 
 /// A shared, immutable snapshot: what a watch channel carries.
 pub type SharedTopology<C> = Arc<Topology<C>>;
+
+impl<C> WorkerLookup<C> for Topology<C> {
+    fn config(&self, worker_id: WorkerId) -> Option<&C> {
+        Topology::get(self, worker_id)
+    }
+
+    fn workers<'a>(&'a self) -> impl Iterator<Item = (WorkerId, &'a C)>
+    where
+        C: 'a,
+    {
+        self.iter()
+    }
+
+    fn capacity_hint(&self) -> usize {
+        self.len()
+    }
+}
 
 /// One change between two topology snapshots.
 #[derive(Clone, Debug, PartialEq, Eq)]

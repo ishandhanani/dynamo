@@ -6,7 +6,6 @@ use std::collections::HashSet;
 use dynamo_admission::runtime::RequestLifecycle;
 use dynamo_kv_indexer::RoutingDecisionHashes;
 use dynamo_router_types::config::RouterConfigOverride;
-use dynamo_router_types::constraints::{Constraints, resolve_pinned_worker_rank};
 use dynamo_router_types::eligibility::RoutingEligibility;
 use dynamo_router_types::kv_hints::KvHint;
 use dynamo_router_types::protocols::QueueRejection;
@@ -15,6 +14,7 @@ use dynamo_router_types::protocols::{
 };
 use dynamo_router_types::sched::AdvisoryWorkerLoad;
 use dynamo_runtime::{dynamo_nvtx_range, pipeline::Error};
+use dynamo_scheduler::constraints::{Constraints, resolve_pinned_worker_rank};
 use dynamo_scheduler::queue::BookingHandle;
 
 use crate::{

@@ -10,8 +10,8 @@
 
 use std::collections::HashSet;
 
-use crate::config::RouterConfigOverride;
-use crate::protocols::{
+use dynamo_router_types::config::RouterConfigOverride;
+use dynamo_router_types::protocols::{
     DpRank, RoutingConstraints, WorkerAffinityTarget, WorkerId, WorkerWithDpRank,
 };
 

@@ -7,11 +7,13 @@
 //! index, the slot tracker, admission, and worker selection into one service (`selection`); the
 //! selection HTTP routes behind `http`; and the nested router configuration (`config`).
 
+pub mod constraints;
 pub mod local;
 pub mod overlap;
 pub mod overlap_refresh;
 pub mod queue;
 pub mod selection;
+pub mod topology;
 
 #[cfg(any(test, feature = "testing", feature = "bench"))]
 pub mod test_utils;

@@ -12,7 +12,6 @@ pub mod affinity;
 pub mod busy;
 pub mod cache;
 pub mod config;
-pub mod constraints;
 pub mod eligibility;
 pub mod identity;
 pub mod kv_hints;
@@ -22,7 +21,6 @@ pub mod protocols;
 pub mod sched;
 pub mod selection_inputs;
 pub mod slots;
-pub mod topology;
 pub mod tracking_hash;
 pub mod worker_type;
 

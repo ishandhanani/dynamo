@@ -8,10 +8,10 @@ use crate::protocols::{
     DpRank, RoutingConstraints, WorkerAffinityTarget, WorkerConfigLike, WorkerId, WorkerWithDpRank,
 };
 use crate::sched::KvSchedulerError;
-use crate::topology::Topology;
 
 /// A worker table the eligibility checks read: the per-worker map the
-/// scheduler keeps, or a [`Topology`] snapshot.
+/// scheduler keeps, or its `Topology` snapshot, which implements this in
+/// the kernel.
 pub trait WorkerLookup<C> {
     fn config(&self, worker_id: WorkerId) -> Option<&C>;
     fn workers<'a>(&'a self) -> impl Iterator<Item = (WorkerId, &'a C)>
@@ -35,23 +35,6 @@ impl<C> WorkerLookup<C> for HashMap<WorkerId, C> {
 
     fn capacity_hint(&self) -> usize {
         self.capacity()
-    }
-}
-
-impl<C> WorkerLookup<C> for Topology<C> {
-    fn config(&self, worker_id: WorkerId) -> Option<&C> {
-        Topology::get(self, worker_id)
-    }
-
-    fn workers<'a>(&'a self) -> impl Iterator<Item = (WorkerId, &'a C)>
-    where
-        C: 'a,
-    {
-        self.iter()
-    }
-
-    fn capacity_hint(&self) -> usize {
-        self.len()
     }
 }
 
