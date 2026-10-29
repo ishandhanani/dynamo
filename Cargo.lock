@@ -3060,6 +3060,7 @@ name = "dynamo-scheduler"
 version = "1.7.0"
 dependencies = [
  "anyhow",
+ "arc-swap",
  "async-trait",
  "criterion",
  "crossbeam-queue",
