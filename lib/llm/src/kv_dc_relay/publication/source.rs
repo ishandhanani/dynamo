@@ -309,7 +309,7 @@ mod tests {
     use std::time::Duration;
 
     use dynamo_kv_indexer::cuckoo::{CkfConfig, DcCkfState};
-    use dynamo_router_types::identity::{
+    use dynamo_router_protocol::identity::{
         CacheSemanticsId, DcId, IdentitySource, IndexerDomainId, PoolId, RoutingScopeId,
     };
 

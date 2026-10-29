@@ -418,7 +418,7 @@ fn generate_mm_routing_info(
             )
             .map_err(|_| "multimodal kwargs_data must contain valid base64")?;
         let identifier = preprocessed_mm_identifier("image", &raw_kwargs);
-        let hash = dynamo_router_types::protocols::hash_mm_identifier(&identifier)
+        let hash = dynamo_router_protocol::protocols::hash_mm_identifier(&identifier)
             .ok_or("content-derived multimodal identifier must not be empty")?;
         let placeholder = placeholder
             .as_object()
@@ -557,7 +557,7 @@ fn generate_mm_routing_info(
                     .is_none_or(|mask| mask[global_position - *offset]);
                 if should_embed {
                     expected_tokens[global_position - block_start] =
-                        dynamo_router_types::protocols::pad_value_for_mm_hash(*hash);
+                        dynamo_router_protocol::protocols::pad_value_for_mm_hash(*hash);
                 }
             }
         }
@@ -2023,16 +2023,16 @@ pub(crate) mod tests {
         )
         .expect("build request");
 
-        let hash_a = dynamo_router_types::protocols::hash_mm_identifier(
+        let hash_a = dynamo_router_protocol::protocols::hash_mm_identifier(
             &preprocessed_mm_identifier("image", b"opaque-a"),
         )
         .expect("content-derived hash");
-        let hash_b = dynamo_router_types::protocols::hash_mm_identifier(
+        let hash_b = dynamo_router_protocol::protocols::hash_mm_identifier(
             &preprocessed_mm_identifier("image", b"opaque-b"),
         )
         .expect("content-derived hash");
-        let pad_a = dynamo_router_types::protocols::pad_value_for_mm_hash(hash_a);
-        let pad_b = dynamo_router_types::protocols::pad_value_for_mm_hash(hash_b);
+        let pad_a = dynamo_router_protocol::protocols::pad_value_for_mm_hash(hash_a);
+        let pad_b = dynamo_router_protocol::protocols::pad_value_for_mm_hash(hash_b);
         let mm = preprocessed
             .mm_routing_info
             .as_ref()
@@ -2090,10 +2090,10 @@ pub(crate) mod tests {
             .mm_routing_info
             .as_ref()
             .expect("base request keeps exact MM routing");
-        let request_hashes = dynamo_router_types::protocols::compute_block_hash_for_seq(
+        let request_hashes = dynamo_router_protocol::protocols::compute_block_hash_for_seq(
             &routing.routing_token_ids,
             4,
-            dynamo_router_types::protocols::BlockHashOptions::default(),
+            dynamo_router_protocol::protocols::BlockHashOptions::default(),
         );
         let marked_identifier = preprocessed
             .extra_args
@@ -2150,11 +2150,11 @@ pub(crate) mod tests {
         let routing = generate_mm_routing_info(&request, 5)
             .expect("valid sparse MM routing metadata")
             .expect("MM routing projection");
-        let mm_hash = dynamo_router_types::protocols::hash_mm_identifier(
+        let mm_hash = dynamo_router_protocol::protocols::hash_mm_identifier(
             &preprocessed_mm_identifier("image", b"sparse"),
         )
         .expect("content-derived identifier");
-        let pad = dynamo_router_types::protocols::pad_value_for_mm_hash(mm_hash);
+        let pad = dynamo_router_protocol::protocols::pad_value_for_mm_hash(mm_hash);
         assert_eq!(routing.info.routing_token_ids, vec![10, pad, 42, pad, 20]);
 
         for (name, token_ids, features, expected_error) in [

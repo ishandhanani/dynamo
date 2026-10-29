@@ -11,7 +11,7 @@ use dynamo_backend_common::{
 };
 use dynamo_kv_indexer::{KvIndexerInterface, KvIndexerMetrics, LocalKvIndexer};
 use dynamo_llm::kv_router::publisher::{KvEventPublisher, KvEventSourceConfig};
-use dynamo_router_types::protocols::{
+use dynamo_router_protocol::protocols::{
     KV_EVENT_SUBJECT, KvCacheEventData, RouterEvent, compute_block_hash_for_seq,
 };
 use dynamo_runtime::distributed::DistributedConfig;

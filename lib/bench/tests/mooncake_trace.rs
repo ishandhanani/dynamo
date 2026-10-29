@@ -32,8 +32,8 @@ use dynamo_mocker::loadgen::{ReplayRequestHashes, SessionTrace, Trace, TurnTrace
 use dynamo_mocker::replay::{
     ReplayTimedKvEvent, ReplayTimedRequest, ReplayWorkerArtifacts, native_g1_parent_chain_artifact,
 };
-use dynamo_router_types::protocols::LocalBlockHash;
-use dynamo_router_types::protocols::{
+use dynamo_router_protocol::protocols::LocalBlockHash;
+use dynamo_router_protocol::protocols::{
     ExternalSequenceBlockHash, KvCacheEvent, KvCacheEventData, KvCacheRemoveData, KvCacheStoreData,
     KvCacheStoredBlockData, OverlapScores, StorageTier, TokensWithHashes, WorkerWithDpRank,
 };

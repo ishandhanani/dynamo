@@ -14,7 +14,7 @@ pub use selector::{DefaultWorkerSelector, DefaultWorkerSelectorControl};
 
 use crate::config::SelectionConfig;
 use crate::plugin::{WorkerSelectionPolicy, WorkerSelectionPolicyFactory};
-use dynamo_router_types::WorkerType;
+use dynamo_router_protocol::WorkerType;
 use parking_lot::Mutex;
 use std::sync::Arc;
 

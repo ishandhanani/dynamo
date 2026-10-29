@@ -7,7 +7,7 @@
 //! truncates them. So the index stores only `u32` positions and reads keys back through
 //! the edge, and short edges keep no index at all.
 
-use dynamo_router_types::protocols::{ExternalSequenceBlockHash, LocalBlockHash};
+use dynamo_router_protocol::protocols::{ExternalSequenceBlockHash, LocalBlockHash};
 
 type EdgeEntry = (LocalBlockHash, ExternalSequenceBlockHash);
 

@@ -13,7 +13,7 @@ use std::sync::atomic::AtomicU32;
 use rmp_serde as rmps;
 use rustc_hash::FxHashMap;
 
-use dynamo_router_types::protocols::{DpRank, PlacementEvent, StorageTier, WorkerWithDpRank};
+use dynamo_router_protocol::protocols::{DpRank, PlacementEvent, StorageTier, WorkerWithDpRank};
 
 mod convert;
 mod deserialize;

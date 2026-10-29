@@ -16,7 +16,7 @@ use dynamo_kv_router::plugins::{
     WorkerSelectionPolicyParameters, WorkerSelectionPolicyProviderError,
     WorkerSelectionPolicyRegistry, WorkerSelectionPolicyRegistryError,
 };
-use dynamo_router_types::WorkerType;
+use dynamo_router_protocol::WorkerType;
 use dynamo_worker_selection::plugin::WorkerSelectionPolicyFactory;
 use dynamo_worker_selection::plugin::{WorkerFilter, WorkerSelectionPolicy};
 use filter::MinimumDeviceOverlapFilter;
@@ -116,10 +116,10 @@ pub fn register(
 mod tests {
     use std::collections::HashMap;
 
-    use dynamo_router_types::overlap::OverlapSignals;
-    use dynamo_router_types::protocols::{RoutingConstraints, WorkerConfigLike};
-    use dynamo_router_types::sched::ScheduleMode;
-    use dynamo_router_types::sched::{
+    use dynamo_router_protocol::overlap::OverlapSignals;
+    use dynamo_router_protocol::protocols::{RoutingConstraints, WorkerConfigLike};
+    use dynamo_router_protocol::sched::ScheduleMode;
+    use dynamo_router_protocol::sched::{
         KvSchedulerError, SchedulingRequest, WorkerSelectionPolicyError,
     };
     use dynamo_worker_selection::selector::{WorkerSelectionInput, WorkerSelector};

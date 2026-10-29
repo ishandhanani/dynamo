@@ -25,7 +25,7 @@ use crate::model_type::{ModelInput, ModelType};
 use crate::protocols::tensor::TensorModelConfig;
 use anyhow::{Context, Result};
 use derive_builder::Builder;
-use dynamo_router_types::identity::{ExplicitIdentityMap, IndexerIdentitySpec};
+use dynamo_router_protocol::identity::{ExplicitIdentityMap, IndexerIdentitySpec};
 use dynamo_runtime::{slug::Slug, storage::kv};
 use serde::{Deserialize, Serialize};
 use tokenizers::Tokenizer as HfTokenizer;

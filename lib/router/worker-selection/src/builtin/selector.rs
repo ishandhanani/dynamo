@@ -9,8 +9,8 @@ use crate::plugin::{
     WorkerSelectionPolicy,
 };
 use crate::selector::{WorkerSelectionInput, WorkerSelector};
-use dynamo_router_types::protocols::{WorkerConfigLike, WorkerSelectionResult};
-use dynamo_router_types::sched::KvSchedulerError;
+use dynamo_router_protocol::protocols::{WorkerConfigLike, WorkerSelectionResult};
+use dynamo_router_protocol::sched::KvSchedulerError;
 use parking_lot::Mutex;
 use std::sync::Arc;
 

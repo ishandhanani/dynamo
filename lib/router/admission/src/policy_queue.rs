@@ -11,8 +11,8 @@ use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::config::RouterQueuePolicy;
 use crate::policy_config::{PolicyClassConfig, PolicyProfile};
-use dynamo_router_types::protocols::WorkerPlacement;
-use dynamo_router_types::protocols::WorkerWithDpRank;
+use dynamo_router_protocol::protocols::WorkerPlacement;
+use dynamo_router_protocol::protocols::WorkerWithDpRank;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct QueueSnapshot {
@@ -49,7 +49,7 @@ pub struct QueueMetadata {
     pub arrival_offset_secs: f64,
 }
 
-pub use dynamo_router_types::protocols::{QueueLimitKind, QueueRejection};
+pub use dynamo_router_protocol::protocols::{QueueLimitKind, QueueRejection};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct PolicyQueueStats {

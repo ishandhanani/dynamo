@@ -14,7 +14,7 @@ use serde::Deserialize;
 use serde::de::DeserializeOwned;
 use tokio::net::TcpListener;
 
-use dynamo_router_types::protocols::WorkerId;
+use dynamo_router_protocol::protocols::WorkerId;
 use dynamo_slot_tracker::http::envelope::{json_error, json_ok, json_rejection};
 use dynamo_slot_tracker::http::replica_sync as replica_sync_http;
 

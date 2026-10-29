@@ -9,7 +9,7 @@ use std::ffi::CStr;
 use std::sync::atomic::{AtomicU32, Ordering};
 
 use dynamo_llm::kv_router::publisher::KvEventPublisher;
-use dynamo_router_types::protocols::*;
+use dynamo_router_protocol::protocols::*;
 use dynamo_runtime::discovery::DiscoveryQuery;
 use dynamo_runtime::{DistributedRuntime, Worker};
 

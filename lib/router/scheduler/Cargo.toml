@@ -14,7 +14,7 @@ description = "The Dynamo router kernel: SelectionCore runs the stages atomicall
 [features]
 default = []
 bench = [
-  "dynamo-router-types/bench",
+  "dynamo-router-protocol/bench",
   "dynamo-kv-indexer/bench",
   "dynamo-slot-tracker/bench",
   "dynamo-worker-selection/bench",
@@ -25,7 +25,7 @@ profile = ["dynamo-kv-indexer/profile"]
 testing = ["dynamo-worker-selection/testing", "dynamo-kv-indexer/testing", "dynamo-slot-tracker/testing"]
 
 [dependencies]
-dynamo-router-types = { workspace = true }
+dynamo-router-protocol = { workspace = true }
 dynamo-kv-indexer = { workspace = true, features = ["ingest-zmq"] }
 dynamo-slot-tracker = { workspace = true, features = ["replica-sync-zmq"] }
 dynamo-admission = { workspace = true }
@@ -48,7 +48,7 @@ dynamo-tokens = { workspace = true }
 once_cell = { version = "1" }
 
 [dev-dependencies]
-dynamo-router-types = { workspace = true, features = ["testing"] }
+dynamo-router-protocol = { workspace = true, features = ["testing"] }
 dynamo-kv-indexer = { workspace = true, features = ["testing"] }
 dynamo-slot-tracker = { workspace = true, features = ["testing"] }
 dynamo-worker-selection = { workspace = true, features = ["testing"] }

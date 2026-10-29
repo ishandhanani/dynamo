@@ -7,7 +7,7 @@ disaggregation, the session-affinity table (`affinity`), and the policies Dynamo
 
 ## Guardrails
 
-- Depend only on `dynamo-router-types` for router vocabulary. `dynamo-runtime` depends on this
+- Depend only on `dynamo-router-protocol` for router vocabulary. `dynamo-runtime` depends on this
   crate for its route pickers; never introduce a dependency back on the runtime or on `lib/llm`.
 - The selection hot path is per request: no allocation per candidate beyond the existing
   candidate rows, no `dyn` dispatch per rank, and every change to `selector` or `builtin`

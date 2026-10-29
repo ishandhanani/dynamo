@@ -100,7 +100,7 @@ dynamo-scheduler = { path = "../../router/scheduler" }
 dynamo-kv-router = { path = "../../router/kv-router" }
 dynamo-kv-indexer = { path = "../../router/kv-indexer" }
 dynamo-slot-tracker = { path = "../../router/slot-tracker" }
-dynamo-router-types = { path = "../../router/types" }
+dynamo-router-protocol = { path = "../../router/protocol" }
 dynamo-custom-policy-builtin = { path = "../../router-plugins/builtin" }
 dynamo-worker-selection-policy-catalog = { path = "../../router-plugins/catalog", optional = true }
 clap = { version = "4.5", features = ["derive"], optional = true }

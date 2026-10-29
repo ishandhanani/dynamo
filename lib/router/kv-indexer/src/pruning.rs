@@ -17,7 +17,7 @@ use tokio::sync::watch;
 use tokio::time::{Duration, Instant};
 use tokio_util::sync::CancellationToken;
 
-use dynamo_router_types::protocols::{ExternalSequenceBlockHash, WorkerId, WorkerWithDpRank};
+use dynamo_router_protocol::protocols::{ExternalSequenceBlockHash, WorkerId, WorkerWithDpRank};
 
 const WORKER_EXPIRY_HEAP_REBUILD_THRESHOLD: usize = 10;
 /// Approximate TTL expirations are rounded up to this interval. A non-zero TTL
@@ -631,7 +631,7 @@ impl WorkerPruneManagerInner {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use dynamo_router_types::protocols::WorkerWithDpRank;
+    use dynamo_router_protocol::protocols::WorkerWithDpRank;
     use tokio::time::{self, Duration, Instant};
 
     impl<T: Clone + Hash + Eq + Ord> PruneManager<T> {

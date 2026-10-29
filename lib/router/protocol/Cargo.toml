@@ -2,14 +2,14 @@
 # SPDX-License-Identifier: Apache-2.0
 
 [package]
-name = "dynamo-router-types"
+name = "dynamo-router-protocol"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
 license.workspace = true
 homepage.workspace = true
 repository.workspace = true
-description = "Shared vocabulary of the Dynamo router: wire protocols, identities, config, and the types that cross stage boundaries"
+description = "Protocol vocabulary of the Dynamo router: wire protocols and KV events, identities, hashing, the per-request override, and the types that cross stage boundaries"
 
 [features]
 default = []

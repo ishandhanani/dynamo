@@ -16,7 +16,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use dashmap::DashMap;
-use dynamo_router_types::protocols::{ActiveSequenceEvent, ActiveSequenceEventData};
+use dynamo_router_protocol::protocols::{ActiveSequenceEvent, ActiveSequenceEventData};
 use dynamo_runtime::component::Endpoint;
 use dynamo_runtime::traits::DistributedRuntimeProvider;
 
@@ -705,7 +705,7 @@ impl Default for LoadEstimator {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use dynamo_router_types::protocols::{ActiveSequenceEventBatch, WorkerWithDpRank};
+    use dynamo_router_protocol::protocols::{ActiveSequenceEventBatch, WorkerWithDpRank};
     use dynamo_runtime::config::environment_names::zmq_broker as broker_env;
     use dynamo_runtime::distributed::DistributedConfig;
     use dynamo_runtime::transports::event_plane::EventPublisher;

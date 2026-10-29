@@ -210,11 +210,11 @@ mod tests {
     use dynamo_kv_indexer::cuckoo::{
         CkfConfig, ConsumerInstanceId, DcCkfState, LaneLease, ProducerIdentity,
     };
-    use dynamo_router_types::identity::{
+    use dynamo_router_protocol::identity::{
         CacheSemanticsId, DcId, IdentitySource, IndexerDomainId, PoolId, RoutingScopeId,
     };
-    use dynamo_router_types::protocols::LocalBlockHash;
-    use dynamo_router_types::protocols::{
+    use dynamo_router_protocol::protocols::LocalBlockHash;
+    use dynamo_router_protocol::protocols::{
         BlockHashOptions, ExternalSequenceBlockHash, KvCacheEvent, KvCacheEventData,
         KvCacheStoreData, KvCacheStoredBlockData, RouterEvent, compute_block_hash_for_seq,
         compute_seq_hash_for_block,

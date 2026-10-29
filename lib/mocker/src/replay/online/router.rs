@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright (c) 2025-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-use dynamo_router_types::config::TrackingHashConfig;
+use dynamo_router_protocol::config::TrackingHashConfig;
 use std::sync::Arc;
 use std::sync::Mutex;
 #[cfg(test)]
@@ -15,13 +15,13 @@ use dynamo_kv_indexer::{
     MatchDetails, ThreadPoolIndexer, TieredMatchDetails, query_lower_tiers_with_options,
 };
 use dynamo_kv_router::config::KvRouterConfig;
-use dynamo_router_types::identity::RoutingPartitionRef;
-use dynamo_router_types::protocols::{
+use dynamo_router_protocol::identity::RoutingPartitionRef;
+use dynamo_router_protocol::protocols::{
     BlockHashOptions, RouterEvent, RoutingConstraints, StorageTier, WorkerId,
     compute_block_hash_for_seq,
 };
-use dynamo_router_types::sched::{ScheduleMode, ScheduleRequest, SessionContext};
-use dynamo_router_types::tracking_hash::{TrackingHashContext, TrackingHashScope};
+use dynamo_router_protocol::sched::{ScheduleMode, ScheduleRequest, SessionContext};
+use dynamo_router_protocol::tracking_hash::{TrackingHashContext, TrackingHashScope};
 use dynamo_scheduler::overlap::OverlapAnalysis;
 use dynamo_worker_selection::config::SelectionConfig;
 use tokio::sync::mpsc;
@@ -168,7 +168,10 @@ impl KvCacheEventSink for ReplayKvEventSink {
         Ok(())
     }
 
-    fn publish(&self, event: dynamo_router_types::protocols::KvCacheEvent) -> anyhow::Result<()> {
+    fn publish(
+        &self,
+        event: dynamo_router_protocol::protocols::KvCacheEvent,
+    ) -> anyhow::Result<()> {
         self.event_tx
             .send(RouterEvent::new(self.worker_id, event))
             .map_err(|_| anyhow!("replay router event channel closed"))
@@ -176,7 +179,7 @@ impl KvCacheEventSink for ReplayKvEventSink {
 
     fn publish_with_storage_tier(
         &self,
-        event: dynamo_router_types::protocols::KvCacheEvent,
+        event: dynamo_router_protocol::protocols::KvCacheEvent,
         storage_tier: StorageTier,
     ) -> anyhow::Result<()> {
         self.event_tx
@@ -436,7 +439,7 @@ impl KvReplayRouter {
         &self,
         isl_tokens: usize,
         track_prefill_tokens: bool,
-    ) -> Vec<dynamo_router_types::protocols::PotentialLoad> {
+    ) -> Vec<dynamo_router_protocol::protocols::PotentialLoad> {
         self.scheduler.get_potential_loads(
             None,
             isl_tokens,
@@ -550,7 +553,7 @@ impl ReplayRouter {
         &self,
         isl_tokens: usize,
         track_prefill_tokens: bool,
-    ) -> Vec<dynamo_router_types::protocols::PotentialLoad> {
+    ) -> Vec<dynamo_router_protocol::protocols::PotentialLoad> {
         match self {
             Self::RoundRobin(_) => Vec::new(),
             Self::Kv(router) => router.debug_potential_loads(isl_tokens, track_prefill_tokens),
@@ -578,7 +581,7 @@ mod tests {
     use std::time::Duration;
 
     use dynamo_admission::config::RouterQueuePolicy;
-    use dynamo_router_types::protocols::{
+    use dynamo_router_protocol::protocols::{
         ExternalSequenceBlockHash, KvCacheEvent, KvCacheEventData, KvCacheStoreData,
         KvCacheStoredBlockData, LocalBlockHash, StorageTier, WorkerWithDpRank,
         compute_block_hash_for_seq,

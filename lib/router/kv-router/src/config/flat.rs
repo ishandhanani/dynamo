@@ -10,17 +10,17 @@ use serde::{Deserialize, Serialize};
 
 use dynamo_admission::config::RouterQueuePolicy;
 use dynamo_kv_indexer::config::ApproximateCachePolicyKind;
-use dynamo_router_types::WorkerType;
-use dynamo_router_types::config::{
+use dynamo_router_protocol::WorkerType;
+use dynamo_router_protocol::config::{
     RouterConfigOverride, TrackingHashConfig, apply_deprecated_overlap_score_weight_override,
     validate_duration_secs, validate_finite_non_negative, validate_min,
     validate_overlap_score_credit, validate_range,
 };
-use dynamo_router_types::protocols::{
+use dynamo_router_protocol::protocols::{
     BlockHashOptions, LocalBlockHash, complete_block_count, compute_block_hash_for_seq,
     compute_seq_hash_for_block,
 };
-use dynamo_router_types::tracking_hash::{
+use dynamo_router_protocol::tracking_hash::{
     TrackingHashAlgorithm, TrackingHashContext, TrackingHashScope, validate_tracking_hash_options,
 };
 use dynamo_slot_tracker::config::RouterPrefillLoadModel;
@@ -1340,8 +1340,8 @@ mod tests {
     }
 
     use super::*;
-    use dynamo_router_types::identity::RoutingPartitionRef;
-    use dynamo_router_types::protocols::{
+    use dynamo_router_protocol::identity::RoutingPartitionRef;
+    use dynamo_router_protocol::protocols::{
         BlockExtraInfo, BlockMmObjectInfo, compute_seq_hash_for_block,
     };
     use std::collections::HashMap;

@@ -9,7 +9,7 @@ use std::sync::{Arc, Weak};
 use dynamo_kv_indexer::cuckoo::{
     ConsumerInstanceId, DcCkfDelta, DcCkfSnapshot, LaneLease, ProducerIdentity,
 };
-use dynamo_router_types::identity::PoolId;
+use dynamo_router_protocol::identity::PoolId;
 use futures_util::FutureExt as _;
 use parking_lot::Mutex;
 use tokio::sync::{Semaphore, mpsc, oneshot};
@@ -937,10 +937,10 @@ mod tests {
     use std::time::Duration;
 
     use dynamo_kv_indexer::cuckoo::{CkfConfig, DcCkfBucketImage, DcCkfState, ProducerIdentity};
-    use dynamo_router_types::identity::{
+    use dynamo_router_protocol::identity::{
         CacheSemanticsId, DcId, IdentitySource, IndexerDomainId, PoolId, RoutingScopeId,
     };
-    use dynamo_router_types::protocols::{
+    use dynamo_router_protocol::protocols::{
         ExternalSequenceBlockHash, KvCacheEvent, KvCacheEventData, KvCacheStoreData,
         KvCacheStoredBlockData, LocalBlockHash, RouterEvent,
     };

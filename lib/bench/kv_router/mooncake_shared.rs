@@ -8,8 +8,8 @@ use dynamo_kv_indexer::{
     BranchShardedIndexer, ConcurrentRadixTreeCompressed, PositionalIndexer, ThreadPoolIndexer,
 };
 use dynamo_kv_indexer::{KvIndexer, KvIndexerInterface, KvIndexerMetrics};
-use dynamo_router_types::protocols::LocalBlockHash;
-use dynamo_router_types::protocols::{KvCacheEvent, KvCacheEventData, StorageTier};
+use dynamo_router_protocol::protocols::LocalBlockHash;
+use dynamo_router_protocol::protocols::{KvCacheEvent, KvCacheEventData, StorageTier};
 use tokio_util::sync::CancellationToken;
 
 use dynamo_bench::kv_router_common::replay::WorkerReplayArtifacts;

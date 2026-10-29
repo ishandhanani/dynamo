@@ -15,12 +15,12 @@ use super::{
 };
 use crate::config::SelectionConfig;
 use crate::plugin::WorkerTransferInput;
-use dynamo_router_types::eligibility::RoutingEligibility;
-use dynamo_router_types::kv_hints::KvTransferScope;
-use dynamo_router_types::protocols::{
+use dynamo_router_protocol::eligibility::RoutingEligibility;
+use dynamo_router_protocol::kv_hints::KvTransferScope;
+use dynamo_router_protocol::protocols::{
     WorkerConfigLike, WorkerId, WorkerSelectionResult, WorkerWithDpRank,
 };
-use dynamo_router_types::sched::{KvSchedulerError, SchedulingRequest};
+use dynamo_router_protocol::sched::{KvSchedulerError, SchedulingRequest};
 
 #[cfg(any(test, feature = "testing", feature = "bench"))]
 fn softmax_sample_entries<T: Copy>(
@@ -674,10 +674,10 @@ mod tests {
 
     use super::super::test_support::*;
     use super::*;
-    use dynamo_router_types::config::RouterConfigOverride;
-    use dynamo_router_types::overlap::OverlapSignals;
-    use dynamo_router_types::protocols::SharedCacheHits;
-    use dynamo_router_types::sched::ScheduleMode;
+    use dynamo_router_protocol::config::RouterConfigOverride;
+    use dynamo_router_protocol::overlap::OverlapSignals;
+    use dynamo_router_protocol::protocols::SharedCacheHits;
+    use dynamo_router_protocol::sched::ScheduleMode;
 
     fn worker_logit(
         selector: &DefaultWorkerSelector,
@@ -714,14 +714,14 @@ mod tests {
         let mut request = base_request(64);
         request.worker_loads.insert(
             WorkerWithDpRank::from_worker_id(0),
-            dynamo_router_types::protocols::WorkerLoadProjection {
+            dynamo_router_protocol::protocols::WorkerLoadProjection {
                 active_prefill_tokens: 7,
                 ..Default::default()
             },
         );
         request.worker_loads.insert(
             WorkerWithDpRank::from_worker_id(1),
-            dynamo_router_types::protocols::WorkerLoadProjection {
+            dynamo_router_protocol::protocols::WorkerLoadProjection {
                 active_prefill_tokens: 11,
                 ..Default::default()
             },
@@ -761,7 +761,7 @@ mod tests {
 
     #[test]
     fn empty_prompt_routes_by_load() {
-        use dynamo_router_types::test_utils::SimpleWorkerConfig;
+        use dynamo_router_protocol::test_utils::SimpleWorkerConfig;
 
         // Workers 0 and 1 sit on the prefill floor with decode backlog. Worker 2 is one
         // prefill block above the floor with no decode backlog, so it must win.
@@ -771,7 +771,7 @@ mod tests {
         let mut request = base_request(0);
         request.worker_loads = (0..3)
             .map(|id| {
-                let load = dynamo_router_types::protocols::WorkerLoadProjection {
+                let load = dynamo_router_protocol::protocols::WorkerLoadProjection {
                     active_prefill_tokens: if id == 2 { 1616 } else { 1600 },
                     active_decode_blocks: if id == 2 { 0 } else { 50 },
                     ..Default::default()
@@ -806,7 +806,7 @@ mod tests {
 
     #[test]
     fn test_default_selector_randomizes_zero_temperature_ties() {
-        use dynamo_router_types::test_utils::SimpleWorkerConfig;
+        use dynamo_router_protocol::test_utils::SimpleWorkerConfig;
 
         let config = SelectionConfig {
             router_temperature: 0.0,
@@ -843,7 +843,7 @@ mod tests {
             affinity_target: None,
             pinned_worker: None,
             allowed_worker_ids: None,
-            routing_constraints: dynamo_router_types::protocols::RoutingConstraints::default(),
+            routing_constraints: dynamo_router_protocol::protocols::RoutingConstraints::default(),
             shared_cache_hits: None,
             resp_tx: None,
         };
@@ -875,7 +875,7 @@ mod tests {
 
     #[test]
     fn seeded_selector_is_stable_for_ties_and_temperature_sampling() {
-        use dynamo_router_types::test_utils::SimpleWorkerConfig;
+        use dynamo_router_protocol::test_utils::SimpleWorkerConfig;
 
         for (temperature, expected_prefix) in [
             (
@@ -958,7 +958,7 @@ mod tests {
 
     #[test]
     fn per_request_overrides_change_selection() {
-        use dynamo_router_types::test_utils::SimpleWorkerConfig;
+        use dynamo_router_protocol::test_utils::SimpleWorkerConfig;
 
         let warm_worker = WorkerWithDpRank::from_worker_id(0);
         let cold_worker = WorkerWithDpRank::from_worker_id(1);
@@ -978,7 +978,7 @@ mod tests {
             .insert(warm_worker, 2);
         request.worker_loads.insert(
             warm_worker,
-            dynamo_router_types::protocols::WorkerLoadProjection {
+            dynamo_router_protocol::protocols::WorkerLoadProjection {
                 active_decode_blocks: 1,
                 ..Default::default()
             },
@@ -1045,7 +1045,7 @@ mod tests {
 
     #[test]
     fn test_overloaded_high_overlap_worker_is_skipped() {
-        use dynamo_router_types::test_utils::SimpleWorkerConfig;
+        use dynamo_router_protocol::test_utils::SimpleWorkerConfig;
 
         let selector = DefaultWorkerSelector::new(
             Some(SelectionConfig {
@@ -1083,7 +1083,7 @@ mod tests {
 
     #[test]
     fn test_all_eligible_workers_overloaded_returns_overload_error() {
-        use dynamo_router_types::test_utils::SimpleWorkerConfig;
+        use dynamo_router_protocol::test_utils::SimpleWorkerConfig;
 
         let selector = DefaultWorkerSelector::new(
             Some(SelectionConfig {
@@ -1114,8 +1114,8 @@ mod tests {
 
     #[test]
     fn default_policy_retains_eligible_affinity_and_falls_back_when_overloaded() {
-        use dynamo_router_types::protocols::WorkerAffinityTarget;
-        use dynamo_router_types::test_utils::SimpleWorkerConfig;
+        use dynamo_router_protocol::protocols::WorkerAffinityTarget;
+        use dynamo_router_protocol::test_utils::SimpleWorkerConfig;
 
         let selector = DefaultWorkerSelector::new(
             Some(SelectionConfig {
@@ -1189,7 +1189,7 @@ mod tests {
 
     #[test]
     fn test_overloaded_pinned_worker_is_not_rerouted() {
-        use dynamo_router_types::test_utils::SimpleWorkerConfig;
+        use dynamo_router_protocol::test_utils::SimpleWorkerConfig;
 
         let selector = DefaultWorkerSelector::new(Some(SelectionConfig::default()), "test");
         let workers = HashMap::from([
@@ -1247,7 +1247,7 @@ mod tests {
             affinity_target: None,
             pinned_worker: None,
             allowed_worker_ids: None,
-            routing_constraints: dynamo_router_types::protocols::RoutingConstraints {
+            routing_constraints: dynamo_router_protocol::protocols::RoutingConstraints {
                 required_taints: HashSet::from(["mdc-b".to_string()]),
                 preferred_taints: HashMap::new(),
             },
@@ -1306,7 +1306,7 @@ mod tests {
             affinity_target: None,
             pinned_worker: None,
             allowed_worker_ids: None,
-            routing_constraints: dynamo_router_types::protocols::RoutingConstraints {
+            routing_constraints: dynamo_router_protocol::protocols::RoutingConstraints {
                 required_taints: HashSet::from(["mdc-b".to_string()]),
                 preferred_taints: HashMap::new(),
             },
@@ -1383,7 +1383,7 @@ mod tests {
                 affinity_target: None,
                 pinned_worker: None,
                 allowed_worker_ids: None,
-                routing_constraints: dynamo_router_types::protocols::RoutingConstraints {
+                routing_constraints: dynamo_router_protocol::protocols::RoutingConstraints {
                     required_taints: HashSet::from([required_taint.clone()]),
                     preferred_taints: HashMap::new(),
                 },
@@ -1458,7 +1458,7 @@ mod tests {
             affinity_target: None,
             pinned_worker: None,
             allowed_worker_ids: None,
-            routing_constraints: dynamo_router_types::protocols::RoutingConstraints {
+            routing_constraints: dynamo_router_protocol::protocols::RoutingConstraints {
                 required_taints: HashSet::new(),
                 preferred_taints: HashMap::from([("mdc-a".to_string(), 0.85)]),
             },
@@ -1529,7 +1529,7 @@ mod tests {
             affinity_target: None,
             pinned_worker: None,
             allowed_worker_ids: None,
-            routing_constraints: dynamo_router_types::protocols::RoutingConstraints {
+            routing_constraints: dynamo_router_protocol::protocols::RoutingConstraints {
                 required_taints: HashSet::new(),
                 preferred_taints: HashMap::from([("mdc-a".to_string(), -0.25)]),
             },
@@ -1559,7 +1559,7 @@ mod tests {
     /// Worker 0 has lower logit (less work), so it wins.
     #[test]
     fn test_shared_cache_hits_scoring() {
-        use dynamo_router_types::test_utils::SimpleWorkerConfig;
+        use dynamo_router_protocol::test_utils::SimpleWorkerConfig;
 
         let block_size = 1u32;
         let isl = 4usize;
@@ -1572,7 +1572,7 @@ mod tests {
         let mut effective_cached_tokens = rustc_hash::FxHashMap::default();
         effective_cached_tokens.insert(worker0, 2);
 
-        let mut tier_overlap_blocks = dynamo_router_types::overlap::TierOverlapBlocks::default();
+        let mut tier_overlap_blocks = dynamo_router_protocol::overlap::TierOverlapBlocks::default();
         tier_overlap_blocks.device.insert(worker0, 2);
 
         #[allow(clippy::single_range_in_vec_init)]
@@ -1616,7 +1616,7 @@ mod tests {
             affinity_target: None,
             pinned_worker: None,
             allowed_worker_ids: None,
-            routing_constraints: dynamo_router_types::protocols::RoutingConstraints::default(),
+            routing_constraints: dynamo_router_protocol::protocols::RoutingConstraints::default(),
             shared_cache_hits: Some(shared_hits),
             resp_tx: Some(Box::new(crate::selector::OneshotResponder(tx))),
         };
@@ -1639,7 +1639,7 @@ mod tests {
 
     #[test]
     fn test_prefill_load_scale_applies_after_overlap_credits() {
-        use dynamo_router_types::test_utils::SimpleWorkerConfig;
+        use dynamo_router_protocol::test_utils::SimpleWorkerConfig;
 
         let block_size = 16u32;
         let isl = 64usize;
@@ -1649,7 +1649,7 @@ mod tests {
         let mut effective_cached_tokens = rustc_hash::FxHashMap::default();
         effective_cached_tokens.insert(worker0, 32);
 
-        let mut tier_overlap_blocks = dynamo_router_types::overlap::TierOverlapBlocks::default();
+        let mut tier_overlap_blocks = dynamo_router_protocol::overlap::TierOverlapBlocks::default();
         tier_overlap_blocks.device.insert(worker0, 2);
 
         let config = SelectionConfig {
@@ -1694,7 +1694,7 @@ mod tests {
             affinity_target: None,
             pinned_worker: None,
             allowed_worker_ids: None,
-            routing_constraints: dynamo_router_types::protocols::RoutingConstraints::default(),
+            routing_constraints: dynamo_router_protocol::protocols::RoutingConstraints::default(),
             shared_cache_hits: None,
             resp_tx: Some(Box::new(crate::selector::OneshotResponder(tx))),
         };
@@ -1716,7 +1716,7 @@ mod tests {
 
     #[test]
     fn test_overlap_credit_above_one_can_prefer_colocated_worker() {
-        use dynamo_router_types::test_utils::SimpleWorkerConfig;
+        use dynamo_router_protocol::test_utils::SimpleWorkerConfig;
 
         let block_size = 16u32;
         let warm_worker = WorkerWithDpRank::from_worker_id(0);
@@ -1738,7 +1738,7 @@ mod tests {
             .insert(warm_worker, 64);
         request.worker_loads.insert(
             warm_worker,
-            dynamo_router_types::protocols::WorkerLoadProjection {
+            dynamo_router_protocol::protocols::WorkerLoadProjection {
                 active_decode_blocks: 5,
                 ..Default::default()
             },
@@ -1793,7 +1793,7 @@ mod tests {
         request.overlap.tier_overlap_blocks.device.insert(worker, 6);
         request.worker_loads.insert(
             worker,
-            dynamo_router_types::protocols::WorkerLoadProjection {
+            dynamo_router_protocol::protocols::WorkerLoadProjection {
                 active_prefill_tokens: 16,
                 active_decode_blocks: 2,
                 active_requests: 0,
@@ -1820,7 +1820,7 @@ mod tests {
         let mut request = base_request(0);
         request.worker_loads.insert(
             worker,
-            dynamo_router_types::protocols::WorkerLoadProjection {
+            dynamo_router_protocol::protocols::WorkerLoadProjection {
                 active_decode_blocks: 100,
                 active_requests: 4,
                 ..Default::default()
@@ -1856,7 +1856,7 @@ mod tests {
         request.overlap.tier_overlap_blocks.device.insert(worker, 3);
         request.worker_loads.insert(
             worker,
-            dynamo_router_types::protocols::WorkerLoadProjection {
+            dynamo_router_protocol::protocols::WorkerLoadProjection {
                 active_decode_blocks: 10,
                 ..Default::default()
             },
@@ -1874,7 +1874,7 @@ mod tests {
 
     #[test]
     fn test_overlap_credit_decay_can_prefer_less_loaded_cold_worker() {
-        use dynamo_router_types::test_utils::SimpleWorkerConfig;
+        use dynamo_router_protocol::test_utils::SimpleWorkerConfig;
 
         let block_size = 16u32;
         let warm_worker = WorkerWithDpRank::from_worker_id(0);
@@ -1896,7 +1896,7 @@ mod tests {
             .insert(warm_worker, 64);
         request.worker_loads.insert(
             warm_worker,
-            dynamo_router_types::protocols::WorkerLoadProjection {
+            dynamo_router_protocol::protocols::WorkerLoadProjection {
                 active_prefill_tokens: 48,
                 ..Default::default()
             },
@@ -1945,7 +1945,7 @@ mod tests {
 
     #[test]
     fn test_effective_overlap_falls_back_when_tier_blocks_are_absent() {
-        use dynamo_router_types::test_utils::SimpleWorkerConfig;
+        use dynamo_router_protocol::test_utils::SimpleWorkerConfig;
 
         let block_size = 16u32;
         let isl = 64usize;
@@ -1996,7 +1996,7 @@ mod tests {
             affinity_target: None,
             pinned_worker: None,
             allowed_worker_ids: None,
-            routing_constraints: dynamo_router_types::protocols::RoutingConstraints::default(),
+            routing_constraints: dynamo_router_protocol::protocols::RoutingConstraints::default(),
             shared_cache_hits: None,
             resp_tx: Some(Box::new(crate::selector::OneshotResponder(tx))),
         };
@@ -2061,7 +2061,7 @@ mod tests {
     /// Without shared cache hits, the scoring should be unchanged.
     #[test]
     fn test_no_shared_cache_unchanged() {
-        use dynamo_router_types::test_utils::SimpleWorkerConfig;
+        use dynamo_router_protocol::test_utils::SimpleWorkerConfig;
 
         let block_size = 16u32;
         let isl = 64usize;
@@ -2101,7 +2101,7 @@ mod tests {
             affinity_target: None,
             pinned_worker: None,
             allowed_worker_ids: None,
-            routing_constraints: dynamo_router_types::protocols::RoutingConstraints::default(),
+            routing_constraints: dynamo_router_protocol::protocols::RoutingConstraints::default(),
             shared_cache_hits: None,
             resp_tx: Some(Box::new(crate::selector::OneshotResponder(tx))),
         };

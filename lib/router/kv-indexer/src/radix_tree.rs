@@ -14,7 +14,7 @@ use rustc_hash::{FxBuildHasher, FxHashMap, FxHashSet};
 
 use super::compressed_radix::{NodeState, append_dump_events};
 use super::{EventWarningKind, MatchDetails, PreBoundEventCounters};
-use dynamo_router_types::protocols::*;
+use dynamo_router_protocol::protocols::*;
 
 pub(crate) type SharedRadixBlock = Rc<RefCell<RadixBlock>>;
 type WorkerLookup = FxHashMap<ExternalSequenceBlockHash, SharedRadixBlock>;

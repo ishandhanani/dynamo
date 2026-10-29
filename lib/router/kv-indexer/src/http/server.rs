@@ -19,8 +19,8 @@ use crate::KvIndexerCounterCollector;
 use crate::KvIndexerMetrics;
 use crate::TieredMatchDetails;
 use crate::overlap::{MooncakeOverlapSummary, build_mooncake_overlap_summaries};
-use dynamo_router_types::identity::{RoutingPartitionId, default_routing_group};
-use dynamo_router_types::protocols::{
+use dynamo_router_protocol::identity::{RoutingPartitionId, default_routing_group};
+use dynamo_router_protocol::protocols::{
     BlockHashOptions, LocalBlockHash, WorkerId, compute_block_hash_for_seq,
 };
 

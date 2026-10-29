@@ -27,9 +27,9 @@ use tokio::time::Instant;
 
 use crate::policy_config::PolicyProfile;
 use crate::policy_queue::QueueSnapshot;
-use dynamo_router_types::busy::BusyThresholds;
-use dynamo_router_types::protocols::{WorkerAffinityTarget, WorkerWithDpRank};
-use dynamo_router_types::sched::SessionContext;
+use dynamo_router_protocol::busy::BusyThresholds;
+use dynamo_router_protocol::protocols::{WorkerAffinityTarget, WorkerWithDpRank};
+use dynamo_router_protocol::sched::SessionContext;
 use dynamo_worker_selection::plugin::inputs::{WorkerCandidates, WorkerInputs};
 
 #[derive(Debug)]
@@ -285,7 +285,7 @@ impl ClassifyRequest {
 }
 
 /// Error returned by [`RequestClassifier::classify`].
-pub use dynamo_router_types::sched::ClassifierError;
+pub use dynamo_router_protocol::sched::ClassifierError;
 
 /// Cause delivered to the classifier when a request aborts. Produced by the
 /// router or the worker path, not by the classifier.

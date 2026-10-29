@@ -28,8 +28,8 @@ use super::{
     ObservedEnqueueReceipt, ThreadPoolObservationPlan, ThreadPoolObservationSnapshot,
 };
 use crate::pruning::{BlockEntry, PruneConfig, WorkerPruneManager};
-use dynamo_router_types::protocols::AttemptId;
-use dynamo_router_types::protocols::*;
+use dynamo_router_protocol::protocols::AttemptId;
+use dynamo_router_protocol::protocols::*;
 use dynamo_tokens::SequenceHash;
 #[cfg(feature = "bench")]
 use std::sync::atomic::{AtomicBool, Ordering as AtomicOrdering};
@@ -710,7 +710,7 @@ impl<T: SyncIndexer> ThreadPoolIndexer<T> {
 
     fn cache_owner_thread_idx(
         &self,
-        state_source: dynamo_router_types::identity::CacheOwnerId,
+        state_source: dynamo_router_protocol::identity::CacheOwnerId,
     ) -> usize {
         let owner_key = ResidencyOwner::cache_owner(state_source)
             .compact_key()

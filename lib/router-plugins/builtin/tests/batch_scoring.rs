@@ -6,7 +6,7 @@ mod support;
 
 use std::sync::{Arc, Mutex};
 
-use dynamo_router_types::sched::WorkerSelectionPolicyError;
+use dynamo_router_protocol::sched::WorkerSelectionPolicyError;
 use dynamo_worker_selection::plugin::{
     WorkerCandidate, WorkerCandidates, WorkerFilter, WorkerInputView, WorkerInputs, WorkerPicker,
     WorkerScorer, WorkerSelectionContext, WorkerSelectionPolicy,
@@ -287,7 +287,7 @@ fn picker_columns_and_costs_stay_aligned_after_a_scoring_error() {
         vec![Box::new(FailSecondScoreOnce(0))],
         Box::new(CheckColumns),
     );
-    let select = |request: &dynamo_router_types::sched::SchedulingRequest| {
+    let select = |request: &dynamo_router_protocol::sched::SchedulingRequest| {
         policy.select_worker(support::selection_input(&workers, request, 16))
     };
     assert!(
@@ -352,7 +352,7 @@ fn unwritten_costs_cannot_reuse_a_previous_selection_or_scorer() {
     let error = select().unwrap_err();
     assert!(matches!(
         error,
-        dynamo_router_types::sched::KvSchedulerError::WorkerSelectionPolicy(
+        dynamo_router_protocol::sched::KvSchedulerError::WorkerSelectionPolicy(
             WorkerSelectionPolicyError::NonFiniteCost {
                 scorer_index: 1,
                 row: 0

@@ -5,8 +5,8 @@ use std::collections::VecDeque;
 
 use dynamo_kv_indexer::recovery::{CursorObservation, CursorState};
 #[cfg(test)]
-use dynamo_router_types::protocols::KvCacheEventData;
-use dynamo_router_types::protocols::{DpRank, ResetScope, RouterEvent, WorkerId};
+use dynamo_router_protocol::protocols::KvCacheEventData;
+use dynamo_router_protocol::protocols::{DpRank, ResetScope, RouterEvent, WorkerId};
 
 pub(super) type RecoveryKey = (WorkerId, DpRank);
 
@@ -213,7 +213,7 @@ impl RankState {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use dynamo_router_types::protocols::{
+    use dynamo_router_protocol::protocols::{
         ExternalSequenceBlockHash, KvCacheEvent, KvCacheStoreData, KvCacheStoredBlockData,
         LocalBlockHash,
     };

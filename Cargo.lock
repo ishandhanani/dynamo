@@ -2261,7 +2261,7 @@ version = "1.7.0"
 dependencies = [
  "async-trait",
  "criterion",
- "dynamo-router-types",
+ "dynamo-router-protocol",
  "dynamo-tokens",
  "dynamo-worker-selection",
  "futures-util",
@@ -2320,7 +2320,7 @@ dependencies = [
  "dynamo-kv-indexer",
  "dynamo-kv-router",
  "dynamo-mocker",
- "dynamo-router-types",
+ "dynamo-router-protocol",
  "dynamo-slot-tracker",
  "dynamo-tokens",
  "flate2",
@@ -2360,7 +2360,7 @@ dependencies = [
  "criterion",
  "dynamo-admission",
  "dynamo-kv-router",
- "dynamo-router-types",
+ "dynamo-router-protocol",
  "dynamo-scheduler",
  "dynamo-worker-selection",
  "fastrand",
@@ -2390,7 +2390,7 @@ name = "dynamo-custom-policy-example-disagg-filter-score-pick"
 version = "1.7.0"
 dependencies = [
  "dynamo-kv-router",
- "dynamo-router-types",
+ "dynamo-router-protocol",
  "dynamo-worker-selection",
  "serde",
 ]
@@ -2411,7 +2411,7 @@ name = "dynamo-custom-policy-example-simple-filter-score-pick"
 version = "1.7.0"
 dependencies = [
  "dynamo-kv-router",
- "dynamo-router-types",
+ "dynamo-router-protocol",
  "dynamo-worker-selection",
  "serde",
  "serde_json",
@@ -2422,7 +2422,7 @@ name = "dynamo-custom-policy-example-simple-stacked-score-pick"
 version = "1.7.0"
 dependencies = [
  "dynamo-kv-router",
- "dynamo-router-types",
+ "dynamo-router-protocol",
  "dynamo-worker-selection",
  "serde",
 ]
@@ -2432,7 +2432,7 @@ name = "dynamo-custom-policy-example-soft-pin-repin"
 version = "1.7.0"
 dependencies = [
  "dynamo-kv-router",
- "dynamo-router-types",
+ "dynamo-router-protocol",
  "dynamo-worker-selection",
  "serde",
 ]
@@ -2485,7 +2485,7 @@ dependencies = [
  "dynamo-kv-router",
  "dynamo-llm",
  "dynamo-protocols",
- "dynamo-router-types",
+ "dynamo-router-protocol",
  "dynamo-runtime",
  "dynamo-scheduler",
  "dynamo-worker-selection",
@@ -2565,7 +2565,7 @@ dependencies = [
  "criterion",
  "dashmap",
  "dynamo-metrics",
- "dynamo-router-types",
+ "dynamo-router-protocol",
  "dynamo-tokens",
  "dynamo-truthy",
  "fastrand",
@@ -2600,7 +2600,7 @@ dependencies = [
  "axum 0.8.4",
  "dynamo-admission",
  "dynamo-kv-indexer",
- "dynamo-router-types",
+ "dynamo-router-protocol",
  "dynamo-scheduler",
  "dynamo-slot-tracker",
  "dynamo-truthy",
@@ -2665,7 +2665,7 @@ dependencies = [
  "dynamo-protocols",
  "dynamo-renderer",
  "dynamo-rl",
- "dynamo-router-types",
+ "dynamo-router-protocol",
  "dynamo-runtime",
  "dynamo-scheduler",
  "dynamo-slot-tracker",
@@ -2800,7 +2800,7 @@ dependencies = [
  "dynamo-custom-policy-builtin",
  "dynamo-kv-indexer",
  "dynamo-kv-router",
- "dynamo-router-types",
+ "dynamo-router-protocol",
  "dynamo-scheduler",
  "dynamo-slot-tracker",
  "dynamo-tokens",
@@ -2944,7 +2944,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "dynamo-router-types"
+name = "dynamo-router-protocol"
 version = "1.7.0"
 dependencies = [
  "anyhow",
@@ -2990,7 +2990,7 @@ dependencies = [
  "derive_builder",
  "dynamo-http-server",
  "dynamo-metrics",
- "dynamo-router-types",
+ "dynamo-router-protocol",
  "dynamo-truthy",
  "dynamo-worker-selection",
  "educe",
@@ -3070,7 +3070,7 @@ dependencies = [
  "crossbeam-queue",
  "dynamo-admission",
  "dynamo-kv-indexer",
- "dynamo-router-types",
+ "dynamo-router-protocol",
  "dynamo-slot-tracker",
  "dynamo-tokens",
  "dynamo-worker-selection",
@@ -3101,7 +3101,7 @@ dependencies = [
  "dynamo-kv-indexer",
  "dynamo-llm",
  "dynamo-mocker",
- "dynamo-router-types",
+ "dynamo-router-protocol",
  "dynamo-runtime",
  "dynamo-scheduler",
  "dynamo-sglang-sidecar",
@@ -3125,7 +3125,7 @@ dependencies = [
  "clap",
  "dynamo-backend-common",
  "dynamo-llm",
- "dynamo-router-types",
+ "dynamo-router-protocol",
  "dynamo-runtime",
  "dynamo-sidecar-common",
  "futures",
@@ -3210,7 +3210,7 @@ dependencies = [
  "crossbeam-utils",
  "dashmap",
  "dynamo-kv-indexer",
- "dynamo-router-types",
+ "dynamo-router-protocol",
  "dynamo-tokens",
  "fastrand",
  "indexmap 2.14.0",
@@ -3351,7 +3351,7 @@ dependencies = [
  "dynamo-kv-indexer",
  "dynamo-llm",
  "dynamo-mocker",
- "dynamo-router-types",
+ "dynamo-router-protocol",
  "dynamo-runtime",
  "dynamo-scheduler",
  "dynamo-sidecar-common",
@@ -3405,7 +3405,7 @@ dependencies = [
  "blake3",
  "criterion",
  "dashmap",
- "dynamo-router-types",
+ "dynamo-router-protocol",
  "dynamo-slot-tracker",
  "fastrand",
  "parking_lot",
@@ -5500,7 +5500,7 @@ dependencies = [
  "async-once-cell",
  "cbindgen",
  "dynamo-llm",
- "dynamo-router-types",
+ "dynamo-router-protocol",
  "dynamo-runtime",
  "libc",
  "once_cell",

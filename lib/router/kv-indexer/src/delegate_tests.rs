@@ -10,7 +10,7 @@ use super::*;
 use crate::test_utils::{
     make_clear_event_with_dp_rank, make_remove_event, make_store_event_with_dp_rank,
 };
-use dynamo_router_types::protocols::*;
+use dynamo_router_protocol::protocols::*;
 
 #[derive(Default)]
 struct Recorder(Mutex<Vec<(bool, ExternalSequenceBlockHash)>>);

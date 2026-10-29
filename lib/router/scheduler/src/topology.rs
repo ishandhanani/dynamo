@@ -13,8 +13,8 @@
 
 use std::sync::Arc;
 
-use dynamo_router_types::eligibility::WorkerLookup;
-use dynamo_router_types::protocols::WorkerId;
+use dynamo_router_protocol::eligibility::WorkerLookup;
+use dynamo_router_protocol::protocols::WorkerId;
 
 /// One serving worker and the configuration it advertised.
 #[derive(Clone, Debug, PartialEq, Eq)]

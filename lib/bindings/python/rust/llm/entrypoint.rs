@@ -14,12 +14,12 @@ use pyo3::{
 };
 use pyo3_async_runtimes::TaskLocals;
 
-use dynamo_router_types::tracking_hash::TrackingHashAlgorithm as RsTrackingHashAlgorithm;
+use dynamo_router_protocol::tracking_hash::TrackingHashAlgorithm as RsTrackingHashAlgorithm;
 use dynamo_kv_router::config::ApproximateCachePolicyKind as RsApproximateCachePolicyKind;
 use dynamo_kv_router::config::ConditionalDisaggPolicyKind as RsConditionalDisaggPolicyKind;
 use dynamo_kv_router::config::KvRouterConfig as RsKvRouterConfig;
 use dynamo_kv_router::config::RouterPrefillLoadModel as RsRouterPrefillLoadModel;
-use dynamo_router_types::config::apply_deprecated_overlap_score_weight_override;
+use dynamo_router_protocol::config::apply_deprecated_overlap_score_weight_override;
 use dynamo_llm::admission_gate::WorkerAdmissionGate;
 use dynamo_llm::discovery::LoadThresholdConfig as RsLoadThresholdConfig;
 use dynamo_llm::entrypoint::EngineConfig as RsEngineConfig;

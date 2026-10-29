@@ -9,7 +9,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::recovery::{CursorObservation, CursorState};
 use crate::zmq_wire::{ZmqEventNormalizer, decode_event_batch};
-use dynamo_router_types::protocols::{WorkerId, WorkerWithDpRank};
+use dynamo_router_protocol::protocols::{WorkerId, WorkerWithDpRank};
 
 use super::backend::Indexer;
 use super::registry::ListenerRecord;
@@ -537,7 +537,7 @@ async fn run_listener(
 mod tests {
     use super::*;
     use crate::ingest::backend::create_indexer;
-    use dynamo_router_types::protocols::compute_block_hash_for_seq;
+    use dynamo_router_protocol::protocols::compute_block_hash_for_seq;
     use std::time::Duration;
 
     #[rstest::rstest]

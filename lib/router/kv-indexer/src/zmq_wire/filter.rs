@@ -6,7 +6,7 @@ use serde::Deserializer;
 use serde::Serialize;
 use serde::de::IgnoredAny;
 
-use dynamo_router_types::protocols::BlockExtraInfo;
+use dynamo_router_protocol::protocols::BlockExtraInfo;
 
 #[derive(Debug, Deserialize)]
 #[serde(untagged)]

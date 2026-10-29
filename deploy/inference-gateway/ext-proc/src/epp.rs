@@ -24,8 +24,8 @@ use dynamo_llm::preprocessor::OpenAIPreprocessor;
 use dynamo_llm::protocols::common::extensions::{NvExt, NvExtProvider, routing_constraints_to_kv};
 use dynamo_llm::types::openai::completions::NvCreateCompletionRequest;
 use dynamo_protocols::types::Prompt;
-use dynamo_router_types::config::RouterConfigOverride;
-use dynamo_router_types::protocols::{RoutingConstraints, WorkerWithDpRank};
+use dynamo_router_protocol::config::RouterConfigOverride;
+use dynamo_router_protocol::protocols::{RoutingConstraints, WorkerWithDpRank};
 use dynamo_runtime::discovery::{
     DiscoveryInstance, DiscoveryQuery, hash_container_name, hash_pod_name,
 };

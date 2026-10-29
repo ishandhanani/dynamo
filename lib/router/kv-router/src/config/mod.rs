@@ -2,14 +2,14 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! The router configuration, assembled: the per-stage slices owned by their crates, the hashing
-//! trio from the types crate, and the composition switches the builder reads once. The flat
+//! trio from the protocol crate, and the composition switches the builder reads once. The flat
 //! [`KvRouterConfig`] stays the wire shape embedded in model deployment cards; this is the one
 //! place it is converted.
 
 use dynamo_admission::config::{AdmissionConfig, ClassifierConfig};
 use dynamo_admission::policy_config::RouterPolicyConfigError;
 use dynamo_kv_indexer::config::IndexerConfig;
-pub use dynamo_router_types::config::{RouterConfigOverride, TrackingHashConfig};
+pub use dynamo_router_protocol::config::{RouterConfigOverride, TrackingHashConfig};
 // The flat configuration's field types, so a host that handles only the flat shape reaches
 // them here instead of depending on every stage crate.
 pub use dynamo_admission::config::RouterQueuePolicy;

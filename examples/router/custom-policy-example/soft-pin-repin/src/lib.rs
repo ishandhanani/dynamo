@@ -14,8 +14,8 @@ use dynamo_kv_router::plugins::{
     WorkerSelectionPolicyParameters, WorkerSelectionPolicyProviderError,
     WorkerSelectionPolicyRegistry, WorkerSelectionPolicyRegistryError,
 };
-use dynamo_router_types::protocols::WorkerAffinityTarget;
-use dynamo_router_types::sched::WorkerSelectionPolicyError;
+use dynamo_router_protocol::protocols::WorkerAffinityTarget;
+use dynamo_router_protocol::sched::WorkerSelectionPolicyError;
 use dynamo_worker_selection::plugin::WorkerSelectionPolicyFactory;
 use dynamo_worker_selection::plugin::{
     ScoredWorkerCandidate, WorkerInputView, WorkerInputs, WorkerPicker, WorkerSelectionContext,
@@ -123,11 +123,13 @@ pub fn register(
 mod tests {
     use std::collections::HashMap;
 
-    use dynamo_router_types::overlap::OverlapSignals;
-    use dynamo_router_types::protocols::WorkerLoadProjection;
-    use dynamo_router_types::protocols::{RoutingConstraints, WorkerConfigLike, WorkerWithDpRank};
-    use dynamo_router_types::sched::ScheduleMode;
-    use dynamo_router_types::sched::SchedulingRequest;
+    use dynamo_router_protocol::overlap::OverlapSignals;
+    use dynamo_router_protocol::protocols::WorkerLoadProjection;
+    use dynamo_router_protocol::protocols::{
+        RoutingConstraints, WorkerConfigLike, WorkerWithDpRank,
+    };
+    use dynamo_router_protocol::sched::ScheduleMode;
+    use dynamo_router_protocol::sched::SchedulingRequest;
     use dynamo_worker_selection::selector::{WorkerSelectionInput, WorkerSelector};
 
     use super::*;

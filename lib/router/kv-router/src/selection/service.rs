@@ -8,8 +8,8 @@ use tokio_util::sync::CancellationToken;
 
 use crate::config::KvRouterConfig;
 use dynamo_kv_indexer::ingest::backend::IndexerPolicy;
-use dynamo_router_types::protocols::WorkerId;
-use dynamo_router_types::tracking_hash::TrackingHashContext;
+use dynamo_router_protocol::protocols::WorkerId;
+use dynamo_router_protocol::tracking_hash::TrackingHashContext;
 use dynamo_scheduler::scheduling_compat::PotentialLoad;
 use dynamo_slot_tracker::mesh::{
     PeerManager, ReplicaPeerError, ReplicaSyncRuntime, setup_replica_sync,
@@ -27,7 +27,7 @@ use super::{
     SelectResponse, WorkerCatalogRecord, WorkerPatchRequest, WorkerRequest,
 };
 use crate::plugins::RouterPluginRegistry;
-use dynamo_router_types::WorkerType;
+use dynamo_router_protocol::WorkerType;
 
 pub struct SelectionServiceBuilder {
     kv_router_config: KvRouterConfig,
@@ -772,7 +772,7 @@ worker_selection:
                     router_queue_threshold: None,
                     ..Default::default()
                 },
-                dynamo_router_types::WorkerType::Aggregated,
+                dynamo_router_protocol::WorkerType::Aggregated,
                 Default::default(),
             )
             .session_affinity(ttl)

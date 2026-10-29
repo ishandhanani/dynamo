@@ -18,11 +18,11 @@ use super::prompt_membership_trie::PromptMembershipTrie;
 use super::sharded_lock::ShardedRwLock;
 use super::single::PromptMembershipDelta;
 use super::topology::WorkerTopologyChange;
-use dynamo_router_types::busy::FullRankCounts;
-use dynamo_router_types::load::WorkerCapacity;
-use dynamo_router_types::protocols::WorkerWithDpRank;
+use dynamo_router_protocol::busy::FullRankCounts;
+use dynamo_router_protocol::load::WorkerCapacity;
+use dynamo_router_protocol::protocols::WorkerWithDpRank;
 
-pub use dynamo_router_types::protocols::WorkerLoadProjection;
+pub use dynamo_router_protocol::protocols::WorkerLoadProjection;
 
 pub type PotentialLoadMaps = (
     FxHashMap<WorkerWithDpRank, usize>,
@@ -482,7 +482,7 @@ mod tests {
     use crate::prefill_tracker::AnchoredPrefillSnapshot;
     use crate::single::{PromptMembershipRemove, PromptMembershipStore};
     use crate::topology::RemovedWorkerState;
-    use dynamo_router_types::protocols::WorkerWithDpRank;
+    use dynamo_router_protocol::protocols::WorkerWithDpRank;
 
     fn worker(worker_id: u64, dp_rank: u32) -> WorkerWithDpRank {
         WorkerWithDpRank::new(worker_id, dp_rank)
@@ -746,7 +746,7 @@ mod tests {
 
     #[test]
     fn projection_pass_counts_full_ranks_against_each_ranks_capacity() {
-        use dynamo_router_types::busy::BusyThresholds;
+        use dynamo_router_protocol::busy::BusyThresholds;
 
         let worker_a = worker(1, 0);
         let worker_b = worker(2, 0);

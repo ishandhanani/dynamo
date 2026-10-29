@@ -4,13 +4,15 @@
 //! Worker input groups, stored snapshots, and component-scoped borrowed views: the rows the
 //! host builds per eligible rank and the views each filter, scorer, and picker reads them
 //! through. The load column and the capacity it is judged against are shared vocabulary from
-//! `dynamo_router_types::load`, re-exported here.
+//! `dynamo_router_protocol::load`, re-exported here.
 
 use std::ops::BitOr;
 
-use dynamo_router_types::protocols::{SharedCacheHits, WorkerConfigLike, WorkerWithDpRank};
+use dynamo_router_protocol::protocols::{SharedCacheHits, WorkerConfigLike, WorkerWithDpRank};
 
-pub use dynamo_router_types::load::{DEFAULT_MAX_BATCHED_TOKENS, WorkerCapacity, WorkerLoadInput};
+pub use dynamo_router_protocol::load::{
+    DEFAULT_MAX_BATCHED_TOKENS, WorkerCapacity, WorkerLoadInput,
+};
 
 /// Host-owned row materialized once for the union of component input requirements.
 #[doc(hidden)]
@@ -413,7 +415,7 @@ impl WorkerInfo {
         self.capacity.total_kv_blocks()
     }
 
-    /// Both advertised values, as [`BusyThresholds::has_room`](dynamo_router_types::busy::BusyThresholds::has_room) takes them.
+    /// Both advertised values, as [`BusyThresholds::has_room`](dynamo_router_protocol::busy::BusyThresholds::has_room) takes them.
     pub fn capacity(&self) -> WorkerCapacity {
         self.capacity
     }

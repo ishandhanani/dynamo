@@ -28,8 +28,8 @@ use super::concurrent_radix_tree_compressed::mix_worker;
 use super::{
     EventKind, KvIndexerMetrics, KvRouterError, SyncIndexer, WorkerLookupStats, WorkerTask,
 };
-use dynamo_router_types::kv_hints::{KvTransferCandidateSource, KvTransferCandidates};
-use dynamo_router_types::protocols::{
+use dynamo_router_protocol::kv_hints::{KvTransferCandidateSource, KvTransferCandidates};
+use dynamo_router_protocol::protocols::{
     ExternalSequenceBlockHash, KvCacheEvent, KvCacheEventData, KvCacheEventError, KvCacheStoreData,
     KvCacheStoredBlockData, LocalBlockHash, OverlapScores, ResetScope, ResidencyDomain,
     ResidencyOwner, ResidencyOwnerKey, ResidencyProjection, ResidencyRoutingSnapshot, RouterEvent,
@@ -955,7 +955,7 @@ impl LowerTierIndexer {
                         }),
                         dp_rank,
                     },
-                    dynamo_router_types::protocols::StorageTier::Device,
+                    dynamo_router_protocol::protocols::StorageTier::Device,
                     owner.domain(),
                 );
                 event.state_source = source;
@@ -1584,12 +1584,12 @@ mod tests {
 
     use crate::test_utils::{remove_event, router_event, stored_blocks_with_sequence_hashes};
     use crate::{KvIndexerInterface, ThreadPoolIndexer};
-    use dynamo_router_types::identity::{
+    use dynamo_router_protocol::identity::{
         CacheOwnerId, CacheSemanticsId, DcId, IdentitySource, IndexerDomainId, PoolId,
         RoutingScopeId, StableDpSlotId,
     };
-    use dynamo_router_types::kv_hints::KvTransferCandidateSource;
-    use dynamo_router_types::protocols::{
+    use dynamo_router_protocol::kv_hints::KvTransferCandidateSource;
+    use dynamo_router_protocol::protocols::{
         ExternalSequenceBlockHash, KvCacheEventData, KvCacheStoreData, LocalBlockHash,
         ResidencyDomain, ResidencyOwner, ResidencyProjection, ResidencyRoutingSnapshot,
         RouterEvent, RouterHintSourceMetadata, StorageTier, WireResidencyDomain, WorkerWithDpRank,
@@ -1623,7 +1623,7 @@ mod tests {
         parent_hash: Option<u64>,
         local_values: &[u64],
         external_hashes: &[u64],
-    ) -> dynamo_router_types::protocols::RouterEvent {
+    ) -> dynamo_router_protocol::protocols::RouterEvent {
         router_event(
             worker_id,
             event_id,
@@ -1647,7 +1647,7 @@ mod tests {
         external_hashes: &[u64],
         domain: ResidencyDomain,
     ) -> RouterEvent {
-        let event = dynamo_router_types::protocols::KvCacheEvent {
+        let event = dynamo_router_protocol::protocols::KvCacheEvent {
             event_id,
             dp_rank: 0,
             data: KvCacheEventData::Stored(KvCacheStoreData {
@@ -1690,8 +1690,8 @@ mod tests {
 
         fn apply_event(
             &mut self,
-            event: dynamo_router_types::protocols::RouterEvent,
-        ) -> Result<(), dynamo_router_types::protocols::KvCacheEventError> {
+            event: dynamo_router_protocol::protocols::RouterEvent,
+        ) -> Result<(), dynamo_router_protocol::protocols::KvCacheEventError> {
             self.index.apply_event(&mut self.worker_blocks, event)
         }
 
@@ -1738,7 +1738,7 @@ mod tests {
             )
         }
 
-        fn dump_events(&self) -> Vec<dynamo_router_types::protocols::RouterEvent> {
+        fn dump_events(&self) -> Vec<dynamo_router_protocol::protocols::RouterEvent> {
             LowerTierIndexer::dump_events(&self.worker_blocks)
         }
     }
@@ -1813,7 +1813,7 @@ mod tests {
         index
             .apply_event(RouterEvent::with_residency_domain(
                 7,
-                dynamo_router_types::protocols::KvCacheEvent {
+                dynamo_router_protocol::protocols::KvCacheEvent {
                     event_id: 4,
                     data: KvCacheEventData::Cleared,
                     dp_rank: 0,
@@ -1844,7 +1844,7 @@ mod tests {
         index
             .apply_event(RouterEvent::with_cache_owner(
                 7,
-                dynamo_router_types::protocols::KvCacheEvent {
+                dynamo_router_protocol::protocols::KvCacheEvent {
                     event_id: 6,
                     data: KvCacheEventData::Cleared,
                     dp_rank: 0,
@@ -1868,7 +1868,7 @@ mod tests {
                 session_id: None,
                 storage_tier: StorageTier::Device,
                 residency_domain: WireResidencyDomain::default(),
-                event: dynamo_router_types::protocols::KvCacheEvent {
+                event: dynamo_router_protocol::protocols::KvCacheEvent {
                     event_id: 7,
                     data: KvCacheEventData::Cleared,
                     dp_rank: 0,
@@ -3009,7 +3009,9 @@ mod tests {
     // --- dump_events tests ---
 
     /// Helper: replay dumped events into a fresh indexer and return it.
-    fn replay_dump(events: Vec<dynamo_router_types::protocols::RouterEvent>) -> TestLowerTierIndex {
+    fn replay_dump(
+        events: Vec<dynamo_router_protocol::protocols::RouterEvent>,
+    ) -> TestLowerTierIndex {
         let mut fresh = TestLowerTierIndex::new();
         for event in events {
             fresh.apply_event(event).unwrap();

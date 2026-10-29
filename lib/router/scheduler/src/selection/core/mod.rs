@@ -32,15 +32,15 @@ use dynamo_kv_indexer::overlap::MooncakeOverlapSummary;
 use dynamo_kv_indexer::{
     LowerTierQueryOptions, RoutingDecisionHashes, SharedKvCache, TieredMatchDetails,
 };
-use dynamo_router_types::identity::RoutingPartitionId;
-use dynamo_router_types::kv_hints::{
+use dynamo_router_protocol::identity::RoutingPartitionId;
+use dynamo_router_protocol::kv_hints::{
     KvHint, KvHintAction, KvSourceLocationsPayload, KvTransferCandidateSource, KvTransferCandidates,
 };
-use dynamo_router_types::protocols::{
+use dynamo_router_protocol::protocols::{
     LocalBlockHash, PrefillLoadHint, SharedCacheHits, WorkerAffinityTarget, WorkerConfigLike,
     WorkerId, WorkerWithDpRank,
 };
-use dynamo_router_types::tracking_hash::{TrackingHashContext, TrackingHashScope};
+use dynamo_router_protocol::tracking_hash::{TrackingHashContext, TrackingHashScope};
 use dynamo_slot_tracker::mesh::{
     HostReplicaSyncFactory, ReplicaInbox, ReplicaSyncConfig, SchedulerLoadSink, ScopedReplicaEvent,
     ScopedSequencePublisher, setup_scoped_replica_sync,
@@ -83,7 +83,7 @@ use super::types::{
     SelectResponse, SelectionWorkerConfig, SelectionWorkerLoad, WorkerCatalogRecord,
     WorkerLifecycle, WorkerPatchRequest, WorkerRequest,
 };
-use dynamo_router_types::WorkerType;
+use dynamo_router_protocol::WorkerType;
 use dynamo_slot_tracker::mesh::AffinityBindingEvent;
 use dynamo_worker_selection::plugin::WorkerSelectionPolicyFactory;
 

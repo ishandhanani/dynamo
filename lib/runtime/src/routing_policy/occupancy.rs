@@ -10,7 +10,7 @@ use std::{
 };
 
 use dashmap::{DashMap, mapref::entry::Entry};
-use dynamo_router_types::slots::{LoadTracker, SlotEvent, SlotId};
+use dynamo_router_protocol::slots::{LoadTracker, SlotEvent, SlotId};
 
 use super::{CandidateView, RouteContext, RouteDecision, RoutePicker, RoutePolicy};
 use crate::{component::Endpoint, traits::DistributedRuntimeProvider};

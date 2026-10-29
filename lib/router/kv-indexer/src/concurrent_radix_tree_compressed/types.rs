@@ -7,7 +7,7 @@ use rustc_hash::FxHashMap;
 
 use super::node::Node;
 use super::worker_set::WorkerSet;
-use dynamo_router_types::protocols::*;
+use dynamo_router_protocol::protocols::*;
 
 /// Thread-safe shared reference to a Node.
 pub(super) type SharedNode = Arc<Node>;

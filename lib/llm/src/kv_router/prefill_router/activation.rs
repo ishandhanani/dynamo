@@ -8,7 +8,7 @@ use anyhow::{Context as _, Result};
 use tokio::sync::{oneshot, watch};
 
 use dynamo_kv_router::config::KvRouterConfig;
-use dynamo_router_types::prefill_load::PrefillLoadEstimator;
+use dynamo_router_protocol::prefill_load::PrefillLoadEstimator;
 use dynamo_runtime::{
     component::Endpoint, discovery::DiscoveryQuery, pipeline::RouterMode,
     prelude::DistributedRuntimeProvider,
@@ -641,7 +641,7 @@ mod tests {
     use crate::kv_router::prefill_router::PrefillRouterLifecycle;
     use crate::protocols::common::llm_backend::{LLMEngineOutput, PreprocessedRequest};
     use dynamo_kv_router::config::KvRouterConfig;
-    use dynamo_router_types::protocols::RoutingConstraints;
+    use dynamo_router_protocol::protocols::RoutingConstraints;
     use dynamo_runtime::protocols::annotated::Annotated;
     use dynamo_runtime::{
         DistributedRuntime, Runtime,

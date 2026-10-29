@@ -23,8 +23,8 @@ use dynamo_kv_indexer::cuckoo::{
     DcCkfPublisher, DcCkfRankReplacement, DcCkfSnapshot, DcCkfState, LaneLease, ProducerIdentity,
 };
 #[cfg(test)]
-use dynamo_router_types::protocols::ExternalSequenceBlockHash;
-use dynamo_router_types::protocols::{
+use dynamo_router_protocol::protocols::ExternalSequenceBlockHash;
+use dynamo_router_protocol::protocols::{
     DpRank, KvCacheEventData, KvCacheEventError, RouterEvent, WorkerId, WorkerWithDpRank,
 };
 #[cfg(feature = "ckf-diagnostics")]
@@ -270,7 +270,7 @@ async fn send_actor_fault(
 pub(super) struct StreamScope {
     pub(super) relay_incarnation: u64,
     pub(super) layout_generation: u64,
-    pub(super) pool_id: dynamo_router_types::identity::PoolId,
+    pub(super) pool_id: dynamo_router_protocol::identity::PoolId,
 }
 
 #[derive(Debug, Clone)]
@@ -1466,10 +1466,10 @@ mod tests {
         KvIndexerMetrics, LocalKvIndexer, WorkerKvQueryResponse,
         cuckoo::{CkfCommitState, CkfFailureDomain, ConsumerInstanceId},
     };
-    use dynamo_router_types::identity::{
+    use dynamo_router_protocol::identity::{
         CacheSemanticsId, DcId, IdentitySource, IndexerDomainId, PoolId, RoutingScopeId,
     };
-    use dynamo_router_types::protocols::{
+    use dynamo_router_protocol::protocols::{
         KvCacheEvent, KvCacheRemoveData, KvCacheStoreData, KvCacheStoredBlockData, LocalBlockHash,
     };
     use dynamo_runtime::{component::Instance, protocols::EndpointId};

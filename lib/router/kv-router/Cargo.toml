@@ -21,7 +21,7 @@ testing = ["dynamo-scheduler/testing"]
 
 [dependencies]
 dynamo-scheduler = { workspace = true }
-dynamo-router-types = { workspace = true }
+dynamo-router-protocol = { workspace = true }
 dynamo-kv-indexer = { workspace = true, features = ["http"] }
 dynamo-slot-tracker = { workspace = true, features = ["replica-sync-zmq"] }
 dynamo-admission = { workspace = true }
@@ -51,7 +51,7 @@ axum = { version = "=0.8.4", default-features = false, features = [
 rustc-hash = "2.1.1"
 uuid = { workspace = true }
 dynamo-scheduler = { workspace = true, features = ["testing"] }
-dynamo-router-types = { workspace = true, features = ["testing"] }
+dynamo-router-protocol = { workspace = true, features = ["testing"] }
 dynamo-kv-indexer = { workspace = true, features = ["testing"] }
 dynamo-slot-tracker = { workspace = true, features = ["testing"] }
 dynamo-worker-selection = { workspace = true, features = ["testing"] }

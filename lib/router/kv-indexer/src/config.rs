@@ -7,7 +7,7 @@ use std::env::{self, VarError};
 use std::fmt;
 use std::str::FromStr;
 
-use dynamo_router_types::config::TrackingHashConfig;
+use dynamo_router_protocol::config::TrackingHashConfig;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, PartialEq, Serialize)]

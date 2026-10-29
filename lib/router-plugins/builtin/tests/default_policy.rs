@@ -3,10 +3,10 @@
 mod support;
 use dynamo_custom_policy_builtin::{DefaultWorkerSelector, default_policy, default_registry};
 use dynamo_kv_router::config::KvRouterConfig;
-use dynamo_router_types::WorkerType;
-use dynamo_router_types::identity::RoutingPartitionRef;
-use dynamo_router_types::protocols::WorkerWithDpRank;
-use dynamo_router_types::sched::WorkerSelectionPolicyError;
+use dynamo_router_protocol::WorkerType;
+use dynamo_router_protocol::identity::RoutingPartitionRef;
+use dynamo_router_protocol::protocols::WorkerWithDpRank;
+use dynamo_router_protocol::sched::WorkerSelectionPolicyError;
 use dynamo_worker_selection::config::SelectionConfig;
 use dynamo_worker_selection::plugin::{
     WorkerInputView, WorkerInputs, WorkerPicker, WorkerSelectionContext, WorkerSelectionPolicy,
@@ -209,7 +209,7 @@ fn runtime_cache_tier_weights_change_selection_without_device_credit() {
             }
             if name == "shared_cache_multiplier" {
                 request.shared_cache_hits = Some(
-                    dynamo_router_types::protocols::SharedCacheHits::from_ranges(
+                    dynamo_router_protocol::protocols::SharedCacheHits::from_ranges(
                         std::iter::once(0..10).collect(),
                     ),
                 );
@@ -276,7 +276,7 @@ fn seeded_selection_matches_reference_across_cache_and_load_shapes() {
                 };
                 if mode % 8 >= 4 {
                     request.shared_cache_hits = Some(
-                        dynamo_router_types::protocols::SharedCacheHits::from_ranges(vec![
+                        dynamo_router_protocol::protocols::SharedCacheHits::from_ranges(vec![
                             1..3,
                             5..12,
                         ]),
@@ -397,7 +397,7 @@ fn empty_prompt_routes_by_load() {
     request.overlap = Default::default();
     for (worker, load) in &mut request.worker_loads {
         let unloaded = worker.worker_id == 2;
-        *load = dynamo_router_types::protocols::WorkerLoadProjection {
+        *load = dynamo_router_protocol::protocols::WorkerLoadProjection {
             active_prefill_tokens: if unloaded { 1616 } else { 1600 },
             active_decode_blocks: if unloaded { 0 } else { 50 },
             ..Default::default()
@@ -636,7 +636,7 @@ fn mandatory_pin_is_preserved() {
 
 #[test]
 fn configured_parameters_replace_request_score_overrides() {
-    use dynamo_router_types::config::RouterConfigOverride;
+    use dynamo_router_protocol::config::RouterConfigOverride;
     let (workers, mut request) = fixture(2, 160);
     for (worker, load) in &mut request.worker_loads {
         load.active_prefill_tokens = 0;
@@ -791,7 +791,7 @@ fn shared_cache_credit_defaults_and_legacy_precedence_apply_to_selection() {
             .insert(*worker, if worker.worker_id == 0 { 3 } else { 0 });
     }
     #[allow(clippy::single_range_in_vec_init)]
-    let hits = dynamo_router_types::protocols::SharedCacheHits::from_ranges(vec![0..4]);
+    let hits = dynamo_router_protocol::protocols::SharedCacheHits::from_ranges(vec![0..4]);
     request.shared_cache_hits = Some(hits);
 
     let mut registry = default_registry();

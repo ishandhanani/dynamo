@@ -33,7 +33,7 @@ use super::shard_handle::AsyncShardHandle;
 use super::{
     AnchorRef, AnchorTask, KvIndexerInterface, KvRouterError, ShardSizeSnapshot, ThreadPoolIndexer,
 };
-use dynamo_router_types::protocols::*;
+use dynamo_router_protocol::protocols::*;
 
 type WorkerRoutingLookup = DashMap<ExternalSequenceBlockHash, BlockRoutingEntry, FxBuildHasher>;
 type DumpedBlockSet = FxHashSet<(WorkerWithDpRank, ExternalSequenceBlockHash)>;

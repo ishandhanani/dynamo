@@ -20,23 +20,23 @@ use dynamo_kv_router::selection::{
     PromptView, Selected, SelectionAdmission, SelectionError, SelectionOperation, SelectionOutcome,
     SelectionRun, SessionBinding,
 };
-use dynamo_router_types::busy::RejectThresholdsProvider;
-use dynamo_router_types::config::RouterConfigOverride;
-use dynamo_router_types::config::TrackingHashConfig;
-use dynamo_router_types::identity::{DEFAULT_ROUTING_GROUP, RoutingPartitionRef};
-use dynamo_router_types::kv_hints::KvHint;
-use dynamo_router_types::overlap::CacheHitEstimates;
-use dynamo_router_types::prefill_load::PrefillLoadEstimator;
-use dynamo_router_types::prefill_load::effective_prefill_tokens;
-use dynamo_router_types::protocols::PotentialLoad;
-use dynamo_router_types::protocols::{
+use dynamo_router_protocol::busy::RejectThresholdsProvider;
+use dynamo_router_protocol::config::RouterConfigOverride;
+use dynamo_router_protocol::config::TrackingHashConfig;
+use dynamo_router_protocol::identity::{DEFAULT_ROUTING_GROUP, RoutingPartitionRef};
+use dynamo_router_protocol::kv_hints::KvHint;
+use dynamo_router_protocol::overlap::CacheHitEstimates;
+use dynamo_router_protocol::prefill_load::PrefillLoadEstimator;
+use dynamo_router_protocol::prefill_load::effective_prefill_tokens;
+use dynamo_router_protocol::protocols::PotentialLoad;
+use dynamo_router_protocol::protocols::{
     BlockExtraInfo, BlockHashOptions, KV_EVENT_SUBJECT, PrefillLoadHint, RouterEvent,
     RouterRequest, RouterResponse, RoutingConstraints, TokensWithHashes, WorkerConfigLike,
     WorkerId, WorkerWithDpRank, compute_block_hash_for_seq,
 };
-use dynamo_router_types::sched::KvSchedulerError;
-use dynamo_router_types::sched::{OverloadedWorkerProvider, WorkerAvailabilityProvider};
-use dynamo_router_types::tracking_hash::{
+use dynamo_router_protocol::sched::KvSchedulerError;
+use dynamo_router_protocol::sched::{OverloadedWorkerProvider, WorkerAvailabilityProvider};
+use dynamo_router_protocol::tracking_hash::{
     TrackingHashAlgorithm, TrackingHashContext, TrackingHashScope,
 };
 use dynamo_runtime::{
@@ -61,7 +61,7 @@ use dynamo_worker_selection::selector::WorkerInputs;
 use futures::stream;
 
 // Re-export from dynamo-kv-router crate
-pub use dynamo_router_types::protocols;
+pub use dynamo_router_protocol::protocols;
 
 pub(crate) mod embedded;
 pub mod encoder_router;
@@ -77,7 +77,7 @@ pub(crate) mod routing_load;
 pub mod sequence;
 pub mod shared_cache;
 
-pub use dynamo_router_types::overlap::OverlapScoresResponse;
+pub use dynamo_router_protocol::overlap::OverlapScoresResponse;
 // TODO(v1.7): Remove these compatibility aliases; use kv_router::plugins instead.
 pub use encoder_router::EncoderRouter;
 pub use indexer::Indexer;
@@ -381,9 +381,9 @@ fn start_approximate_lru_metrics(
 
 pub(crate) fn to_worker_selection_session_context(
     context: &crate::protocols::common::extensions::AgentContext,
-) -> dynamo_router_types::sched::SessionContext {
+) -> dynamo_router_protocol::sched::SessionContext {
     use crate::protocols::common::extensions::{AgentContext, InputTrigger};
-    use dynamo_router_types::sched::{SessionContext, WorkerSelectionInputTrigger};
+    use dynamo_router_protocol::sched::{SessionContext, WorkerSelectionInputTrigger};
 
     // Keep this exhaustive so a new wire-level field must be handled here.
     let AgentContext {
@@ -481,7 +481,7 @@ pub enum FindBestMatchOutcome {
         kv_hint: Option<KvHint>,
     },
     QueueRejected {
-        rejection: dynamo_router_types::protocols::QueueRejection,
+        rejection: dynamo_router_protocol::protocols::QueueRejection,
     },
 }
 
@@ -500,7 +500,7 @@ pub struct AdmittedFindBestMatchOutcome {
     pub(super) booking: Option<BookingHandle>,
     /// The selected worker's scheduler-load snapshot; set only by advisory
     /// probes (`FindBestMatchAdmission::WithoutAdmission`), which never book.
-    pub(super) advisory_load: Option<dynamo_router_types::sched::AdvisoryWorkerLoad>,
+    pub(super) advisory_load: Option<dynamo_router_protocol::sched::AdvisoryWorkerLoad>,
 }
 
 impl AdmittedFindBestMatchOutcome {
@@ -1231,7 +1231,7 @@ impl KvRouter {
         priority_jump: f64,
         strict_priority: u32,
         policy_class: Option<String>,
-        session_context: Option<dynamo_router_types::sched::SessionContext>,
+        session_context: Option<dynamo_router_protocol::sched::SessionContext>,
         expected_output_tokens: Option<u32>,
         pinned_worker: Option<WorkerWithDpRank>,
         allowed_worker_ids: Option<HashSet<WorkerId>>,
@@ -1281,7 +1281,7 @@ impl KvRouter {
         priority_jump: f64,
         strict_priority: u32,
         policy_class: Option<String>,
-        session_context: Option<dynamo_router_types::sched::SessionContext>,
+        session_context: Option<dynamo_router_protocol::sched::SessionContext>,
         expected_output_tokens: Option<u32>,
         pinned_worker: Option<WorkerWithDpRank>,
         allowed_worker_ids: Option<HashSet<WorkerId>>,
@@ -1324,9 +1324,9 @@ impl KvRouter {
         priority_jump: f64,
         strict_priority: u32,
         policy_class: Option<String>,
-        session_context: Option<dynamo_router_types::sched::SessionContext>,
+        session_context: Option<dynamo_router_protocol::sched::SessionContext>,
         expected_output_tokens: Option<u32>,
-        affinity_target: Option<dynamo_router_types::protocols::WorkerAffinityTarget>,
+        affinity_target: Option<dynamo_router_protocol::protocols::WorkerAffinityTarget>,
         pinned_worker: Option<WorkerWithDpRank>,
         allowed_worker_ids: Option<HashSet<WorkerId>>,
         routing_constraints: RoutingConstraints,
@@ -2019,8 +2019,8 @@ mod tests {
     use std::collections::{HashMap, HashSet};
 
     use async_trait::async_trait;
-    use dynamo_router_types::protocols::compute_seq_hash_for_block;
-    use dynamo_router_types::sched::WorkerSelectionPolicyError;
+    use dynamo_router_protocol::protocols::compute_seq_hash_for_block;
+    use dynamo_router_protocol::sched::WorkerSelectionPolicyError;
     use dynamo_runtime::{DistributedRuntime, Runtime, distributed::DistributedConfig};
     use tokio::sync::watch;
 
@@ -2062,7 +2062,7 @@ mod tests {
     #[test]
     fn worker_selection_receives_complete_session_context() {
         use crate::protocols::common::extensions::{AgentContext, InputTrigger};
-        use dynamo_router_types::sched::WorkerSelectionInputTrigger;
+        use dynamo_router_protocol::sched::WorkerSelectionInputTrigger;
 
         let context = AgentContext {
             session_id: "child-session".into(),
@@ -2169,7 +2169,7 @@ mod tests {
     }
 
     struct FakeSharedCache {
-        hits: Option<dynamo_router_types::protocols::SharedCacheHits>,
+        hits: Option<dynamo_router_protocol::protocols::SharedCacheHits>,
         should_error: bool,
     }
 
@@ -2180,7 +2180,7 @@ mod tests {
             _tokens: &[u32],
             _block_size: u32,
             _cache_namespace: Option<&str>,
-        ) -> Result<dynamo_router_types::protocols::SharedCacheHits, KvRouterError> {
+        ) -> Result<dynamo_router_protocol::protocols::SharedCacheHits, KvRouterError> {
             if self.should_error {
                 Err(KvRouterError::IndexerOffline)
             } else {
@@ -2658,7 +2658,7 @@ mod tests {
     #[case::concurrent(2)]
     #[tokio::test]
     async fn session_prefix_tracking_survives_shared_core_selection(#[case] threads: u32) {
-        use dynamo_router_types::protocols::{ExternalSequenceBlockHash, StorageTier};
+        use dynamo_router_protocol::protocols::{ExternalSequenceBlockHash, StorageTier};
 
         let component = make_test_component("session-prefix-core").await;
         let endpoint = component.endpoint("backend");
@@ -2757,7 +2757,7 @@ mod tests {
                     0.0,
                     0,
                     None,
-                    Some(dynamo_router_types::sched::SessionContext::new(
+                    Some(dynamo_router_protocol::sched::SessionContext::new(
                         session.into(),
                         None,
                         None,
@@ -2990,7 +2990,7 @@ mod tests {
     /// the scheduler's booking cleanup.
     #[tokio::test]
     async fn request_lease_manager_releases_bookings_only_once_scheduler_is_set() {
-        use dynamo_router_types::protocols::SchedulerBookingDescriptor;
+        use dynamo_router_protocol::protocols::SchedulerBookingDescriptor;
 
         let router = tracked_router("lease-manager").await;
         let worker = WorkerWithDpRank::from_worker_id(1);
@@ -3040,7 +3040,7 @@ mod tests {
 
         use dynamo_kv_indexer::TieredMatchDetails;
         use dynamo_kv_indexer::ingest::backend::RemotePrimary;
-        use dynamo_router_types::protocols::LocalBlockHash;
+        use dynamo_router_protocol::protocols::LocalBlockHash;
 
         /// Records park until `release` is notified.
         struct PausedRecord {
@@ -3383,7 +3383,7 @@ mod tests {
             "parked instance served"
         );
         // Another partition constructs its own.
-        let other = dynamo_router_types::identity::RoutingPartitionId::new(
+        let other = dynamo_router_protocol::identity::RoutingPartitionId::new(
             "other-model",
             DEFAULT_ROUTING_GROUP,
         );
@@ -3451,7 +3451,7 @@ mod tests {
             Some(Arc::new(FakeSharedCache {
                 #[allow(clippy::single_range_in_vec_init)]
                 hits: Some(
-                    dynamo_router_types::protocols::SharedCacheHits::from_ranges(vec![0..2]),
+                    dynamo_router_protocol::protocols::SharedCacheHits::from_ranges(vec![0..2]),
                 ),
                 should_error: false,
             })),
@@ -3586,7 +3586,7 @@ mod tests {
             Some(Arc::new(FakeSharedCache {
                 #[allow(clippy::single_range_in_vec_init)]
                 hits: Some(
-                    dynamo_router_types::protocols::SharedCacheHits::from_ranges(vec![0..2]),
+                    dynamo_router_protocol::protocols::SharedCacheHits::from_ranges(vec![0..2]),
                 ),
                 should_error: false,
             })),
@@ -3618,7 +3618,7 @@ mod tests {
 
     #[tokio::test]
     async fn client_availability_distinguishes_startup_from_last_worker_removal() {
-        use dynamo_router_types::eligibility::{RoutingEligibility, WorkerEligibilityError};
+        use dynamo_router_protocol::eligibility::{RoutingEligibility, WorkerEligibilityError};
 
         const DECODE_WORKER: u64 = 1;
         const PREFILL_WORKER: u64 = 2;

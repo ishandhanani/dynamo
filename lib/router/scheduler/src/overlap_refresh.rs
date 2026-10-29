@@ -27,8 +27,8 @@ use std::time::Duration;
 use async_trait::async_trait;
 
 use dynamo_kv_indexer::{LowerTierQueryOptions, TieredMatchProvider};
-use dynamo_router_types::kv_hints::KvTransferCandidates;
-use dynamo_router_types::protocols::LocalBlockHash;
+use dynamo_router_protocol::kv_hints::KvTransferCandidates;
+use dynamo_router_protocol::protocols::LocalBlockHash;
 use dynamo_worker_selection::config::SelectionConfig;
 
 use crate::overlap::{OverlapAnalysis, OverlapSignals};
@@ -36,7 +36,7 @@ use crate::overlap::{OverlapAnalysis, OverlapSignals};
 /// Result of a successful overlap refresh.
 ///
 /// Carries everything required to overwrite the overlap-related fields on a
-/// [`SchedulingRequest`](dynamo_router_types::sched::SchedulingRequest) at dequeue time.
+/// [`SchedulingRequest`](dynamo_router_protocol::sched::SchedulingRequest) at dequeue time.
 #[derive(Debug, Clone, Default)]
 pub struct RefreshedOverlap {
     pub overlap: OverlapSignals,
@@ -225,7 +225,7 @@ mod tests {
     use super::*;
     use crate::scheduling_compat::OverlapSignals;
     use dynamo_kv_indexer::{KvRouterError, MatchDetails, TieredMatchDetails};
-    use dynamo_router_types::protocols::{OverlapScores, WorkerWithDpRank};
+    use dynamo_router_protocol::protocols::{OverlapScores, WorkerWithDpRank};
     use std::{
         collections::HashMap,
         sync::{

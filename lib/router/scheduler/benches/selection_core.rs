@@ -13,9 +13,9 @@ use dynamo_admission::config::AdmissionConfig;
 use dynamo_kv_indexer::KvIndexerInterface;
 use dynamo_kv_indexer::config::IndexerConfig;
 use dynamo_kv_indexer::ingest::backend::Indexer;
-use dynamo_router_types::busy::{BusyThresholds, RejectThresholdsProvider};
-use dynamo_router_types::identity::RoutingPartitionId;
-use dynamo_router_types::protocols::{
+use dynamo_router_protocol::busy::{BusyThresholds, RejectThresholdsProvider};
+use dynamo_router_protocol::identity::RoutingPartitionId;
+use dynamo_router_protocol::protocols::{
     BlockHashOptions, ExternalSequenceBlockHash, KvCacheEvent, KvCacheEventData, KvCacheStoreData,
     KvCacheStoredBlockData, RouterEvent, RoutingConstraints, StorageTier, WorkerWithDpRank,
     compute_block_hash_for_seq, compute_seq_hash_for_block,

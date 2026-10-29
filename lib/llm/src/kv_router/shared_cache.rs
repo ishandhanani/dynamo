@@ -32,7 +32,7 @@ use crate::{
     utils::zmq::{connect_sub_socket, multipart_message},
 };
 use dynamo_kv_indexer::{KvRouterError, SharedKvCache};
-use dynamo_router_types::protocols::{SharedCacheHits, WorkerId};
+use dynamo_router_protocol::protocols::{SharedCacheHits, WorkerId};
 
 const SGLANG_HICACHE_MOONCAKE_RUNTIME_KEY: &str = "sglang_hicache_mooncake";
 const MOONCAKE_EVENT_RECONNECT_DELAY: Duration = Duration::from_secs(1);

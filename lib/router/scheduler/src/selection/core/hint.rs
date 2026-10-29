@@ -4,7 +4,7 @@
 //! The KV transfer hint attached to a booked selection.
 
 use super::*;
-use dynamo_router_types::kv_hints::KvTransferSourceChoice;
+use dynamo_router_protocol::kv_hints::KvTransferSourceChoice;
 
 /// Whether any worker in the published partition snapshot advertises a router
 /// hint worker type (worker-level metadata, so one rank suffices).
@@ -18,7 +18,7 @@ pub(super) fn hint_capable_partition(configs: &HashMap<WorkerId, SelectionWorker
 }
 
 /// The fetch payload for the source worker selection chose (see
-/// [`dynamo_router_types::kv_hints::KvTransferSourceSummary`]). The endpoint comes from the
+/// [`dynamo_router_protocol::kv_hints::KvTransferSourceSummary`]). The endpoint comes from the
 /// current snapshot, so a source that left since selection gets no hint.
 pub(super) fn transfer_hint_payload(
     configs: &HashMap<WorkerId, SelectionWorkerConfig>,

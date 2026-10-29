@@ -5,7 +5,7 @@ use dynamo_mocker::common::protocols::MockerConfig;
 use dynamo_mocker::loadgen::{SessionPartitionSpec, Trace};
 use dynamo_mocker::replay::ReplayKvEventVisibility;
 pub use dynamo_mocker::replay::ReplayWorkerArtifacts as WorkerReplayArtifacts;
-use dynamo_router_types::protocols::KvCacheEventData;
+use dynamo_router_protocol::protocols::KvCacheEventData;
 #[allow(unused_imports)]
 pub use dynamo_slot_tracker::NoopSequencePublisher;
 use indicatif::ProgressBar;

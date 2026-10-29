@@ -17,7 +17,7 @@ use dynamo_admission::classifier::{
     RequestClassifierRegistryError, RequestProgress,
 };
 use dynamo_kv_router::plugins::RouterPluginRegistry;
-use dynamo_router_types::sched::ClassifierError;
+use dynamo_router_protocol::sched::ClassifierError;
 use dynamo_worker_selection::plugin::WorkerCandidates;
 use parking_lot::Mutex;
 use thiserror::Error;
@@ -101,7 +101,7 @@ impl Inner {
         input_tokens: usize,
         progress: RequestProgress,
         session_final: bool,
-        pinned_worker: Option<dynamo_router_types::protocols::WorkerWithDpRank>,
+        pinned_worker: Option<dynamo_router_protocol::protocols::WorkerWithDpRank>,
     ) -> Result<Arc<Notify>, ThunderAgentError> {
         let capacities = self.capacity_provider.snapshot();
         self.state.lock().register(
@@ -232,7 +232,13 @@ impl Drop for PendingClassification {
 async fn await_release<T>(
     mut pending: PendingClassification,
     value: T,
-) -> Result<(T, Option<dynamo_router_types::protocols::WorkerWithDpRank>), ThunderAgentError> {
+) -> Result<
+    (
+        T,
+        Option<dynamo_router_protocol::protocols::WorkerWithDpRank>,
+    ),
+    ThunderAgentError,
+> {
     pending.inner.start_scheduler();
     let inner = Arc::clone(&pending.inner);
     let request_id = pending.request_id.clone();
@@ -341,7 +347,7 @@ impl RequestClassifier for ThunderAgentClassifier {
 mod tests {
     use std::time::Duration;
 
-    use dynamo_router_types::protocols::WorkerWithDpRank;
+    use dynamo_router_protocol::protocols::WorkerWithDpRank;
     use dynamo_worker_selection::plugin::{WorkerCapacity, WorkerInfo};
 
     use super::scheduler::ProgramLifecycle;

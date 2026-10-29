@@ -359,8 +359,8 @@ impl RawRequestClassifierConfig {
 mod tests {
     use super::*;
     use dynamo_admission::policy_config::*;
-    use dynamo_router_types::load::{WorkerCapacity, WorkerLoadInput};
-    use dynamo_router_types::protocols::{WorkerLoadProjection, WorkerWithDpRank};
+    use dynamo_router_protocol::load::{WorkerCapacity, WorkerLoadInput};
+    use dynamo_router_protocol::protocols::{WorkerLoadProjection, WorkerWithDpRank};
     use rustc_hash::FxHashMap;
 
     fn prefill_load(active_prefill_tokens: usize) -> WorkerLoadInput {
@@ -627,7 +627,7 @@ models:
 
         // An unreported budget is taken as DEFAULT_MAX_BATCHED_TOKENS.
         limits.prefill_busy_threshold_frac = Some(0.5);
-        let half_default = (dynamo_router_types::load::DEFAULT_MAX_BATCHED_TOKENS / 2) as usize;
+        let half_default = (dynamo_router_protocol::load::DEFAULT_MAX_BATCHED_TOKENS / 2) as usize;
         assert!(limits.has_room(&prefill_load(half_default), WorkerCapacity::default()));
         assert!(!limits.has_room(&prefill_load(half_default + 1), WorkerCapacity::default()));
     }
@@ -966,7 +966,7 @@ policy_classes:
 
     #[test]
     fn prefill_budget_defaults_when_unreported() {
-        use dynamo_router_types::load::DEFAULT_MAX_BATCHED_TOKENS;
+        use dynamo_router_protocol::load::DEFAULT_MAX_BATCHED_TOKENS;
         assert_eq!(
             WorkerCapacity::default().prefill_budget(),
             DEFAULT_MAX_BATCHED_TOKENS
@@ -1012,7 +1012,7 @@ policy_classes:
             prefill_busy_threshold: Some(10),
             ..Default::default()
         };
-        let config = dynamo_router_types::test_utils::SimpleWorkerConfig {
+        let config = dynamo_router_protocol::test_utils::SimpleWorkerConfig {
             data_parallel_start_rank: 2,
             data_parallel_size: 2,
             ..Default::default()

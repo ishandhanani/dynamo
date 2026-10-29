@@ -7,7 +7,7 @@ use std::ops::Deref;
 
 use rustc_hash::FxHashSet;
 
-use dynamo_router_types::protocols::WorkerWithDpRank;
+use dynamo_router_protocol::protocols::WorkerWithDpRank;
 
 /// Workers plus the XOR of their mixed ids. Two sets with the same members have the same
 /// fingerprint; two sets with different members collide with probability about 2^-64. All

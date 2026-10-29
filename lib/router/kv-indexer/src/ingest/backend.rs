@@ -19,7 +19,7 @@ use crate::{
     MatchDetails, RoutingDecisionHashes, SyncIndexer, TieredMatchDetails, TieredMatchProvider,
     record_unsupported_residency_event,
 };
-use dynamo_router_types::protocols::{
+use dynamo_router_protocol::protocols::{
     DpRank, ExternalSequenceBlockHash, KvCacheEventData, LocalBlockHash, OverlapScores,
     ResidencyProjection, ResidencyRoutingSnapshot, RouterEvent, WorkerId, WorkerWithDpRank,
 };
@@ -892,7 +892,7 @@ impl TieredMatchProvider for Indexer {
 pub mod test_util {
     use super::{Indexer, SideIndexer};
     use crate::KvIndexerInterface;
-    use dynamo_router_types::protocols::{
+    use dynamo_router_protocol::protocols::{
         ExternalSequenceBlockHash, KvCacheEvent, KvCacheEventData, KvCacheStoreData,
         KvCacheStoredBlockData, LocalBlockHash, RouterEvent, StorageTier,
         compute_seq_hash_for_block,
@@ -997,7 +997,7 @@ mod tests {
     use super::*;
     use crate::KvIndexerInterface;
     use crate::{EventKind, EventStatus};
-    use dynamo_router_types::protocols::{
+    use dynamo_router_protocol::protocols::{
         KvCacheEvent, LocalBlockHash, ResidencyDomain, StorageTier, WorkerWithDpRank,
     };
 
@@ -1656,7 +1656,7 @@ mod session_tests {
     use super::test_util::store_event;
     use super::*;
     use crate::SessionPrefixIndexer;
-    use dynamo_router_types::protocols::{KvCacheEvent, KvCacheRemoveData, StorageTier};
+    use dynamo_router_protocol::protocols::{KvCacheEvent, KvCacheRemoveData, StorageTier};
 
     fn make_session_test_indexer() -> (Indexer, Arc<SessionPrefixIndexer>) {
         let session_prefix_index = Arc::new(SessionPrefixIndexer::new());

@@ -19,9 +19,9 @@ use dynamo_kv_router::selection::{
     PromptRequest, SelectAndReserveRequest as CoreSelectAndReserveRequest, SelectionError,
     SelectionService, SelectionServiceBuilder, warn_for_unserved_worker_selection_policies,
 };
-use dynamo_router_types::WorkerType;
-use dynamo_router_types::identity::DEFAULT_ROUTING_GROUP;
-use dynamo_router_types::protocols::RoutingConstraints;
+use dynamo_router_protocol::WorkerType;
+use dynamo_router_protocol::identity::DEFAULT_ROUTING_GROUP;
+use dynamo_router_protocol::protocols::RoutingConstraints;
 use kube::Client;
 use tokio_util::sync::CancellationToken;
 
@@ -267,7 +267,7 @@ mod tests {
 
     use dynamo_kv_router::plugins::WorkerSelectionPolicyParameters;
     use dynamo_kv_router::selection::{CatalogReconciler, WorkerRequest};
-    use dynamo_router_types::sched::WorkerSelectionPolicyError;
+    use dynamo_router_protocol::sched::WorkerSelectionPolicyError;
     use dynamo_worker_selection::plugin::{
         WorkerInputView, WorkerPicker, WorkerSelectionContext, WorkerSelectionPolicy,
         WorkerSelectionPolicyFactory,

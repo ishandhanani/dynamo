@@ -22,8 +22,8 @@ use crate::{
     ThreadPoolIndexer, WireTieredMatchDetails, record_unsupported_residency_event,
 };
 use arc_swap::ArcSwap;
-use dynamo_router_types::kv_hints::{KvTransferCandidateSource, KvTransferCandidates};
-use dynamo_router_types::protocols::{
+use dynamo_router_protocol::kv_hints::{KvTransferCandidateSource, KvTransferCandidates};
+use dynamo_router_protocol::protocols::{
     LocalBlockHash, ResidencyProjection, ResidencyRoutingSnapshot, RouterEvent, StorageTier,
 };
 use rustc_hash::FxHashMap;
@@ -368,11 +368,11 @@ mod tests {
     use super::*;
     use crate::KvIndexerInterface;
     use crate::test_utils::{router_event, stored_blocks_with_sequence_hashes};
-    use dynamo_router_types::identity::{
+    use dynamo_router_protocol::identity::{
         CacheOwnerId, CacheSemanticsId, DcId, IdentitySource, IndexerDomainId, PoolId,
         RoutingScopeId, StableDpSlotId,
     };
-    use dynamo_router_types::protocols::{
+    use dynamo_router_protocol::protocols::{
         ExternalSequenceBlockHash, KvCacheEvent, KvCacheEventData, KvCacheStoreData,
         LocalBlockHash, OverlapScores, RouterEvent, WorkerWithDpRank,
     };
@@ -430,7 +430,7 @@ mod tests {
         parent_hash: Option<u64>,
         local_values: &[u64],
         external_hashes: &[u64],
-    ) -> dynamo_router_types::protocols::RouterEvent {
+    ) -> dynamo_router_protocol::protocols::RouterEvent {
         router_event(
             worker_id,
             event_id,

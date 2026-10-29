@@ -16,7 +16,9 @@ use dynamo_mocker::services::bootstrap::{
     BootstrapParticipantRole, BootstrapServer, BootstrapServerConfig, ParticipantRegistration,
     connect_to_prefill,
 };
-use dynamo_router_types::protocols::{ExternalSequenceBlockHash, KvCacheEvent, KvCacheEventData};
+use dynamo_router_protocol::protocols::{
+    ExternalSequenceBlockHash, KvCacheEvent, KvCacheEventData,
+};
 use tokio::sync::{OwnedSemaphorePermit, mpsc, oneshot};
 use uuid::Uuid;
 

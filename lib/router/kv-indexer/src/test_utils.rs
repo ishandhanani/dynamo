@@ -5,7 +5,7 @@
 //! crate's tests and, behind the `testing` (or `bench`) feature, for dependents' tests.
 
 use crate::KvIndexerInterface;
-use dynamo_router_types::protocols::{
+use dynamo_router_protocol::protocols::{
     ExternalSequenceBlockHash, KvCacheEvent, KvCacheEventData, KvCacheRemoveData, KvCacheStoreData,
     KvCacheStoredBlockData, LocalBlockHash, OverlapScores, RouterEvent, WorkerId, WorkerWithDpRank,
     compute_seq_hash_for_block,

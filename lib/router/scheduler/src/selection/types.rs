@@ -14,10 +14,10 @@ pub use crate::scheduling_compat::{
 };
 use crate::scheduling_compat::{PotentialLoad, SessionContext, WorkerSelectionInputTrigger};
 use dynamo_kv_indexer::overlap::MooncakeOverlapSummary;
-use dynamo_router_types::config::RouterConfigOverride;
-use dynamo_router_types::identity::{RoutingPartitionId, default_routing_group};
-use dynamo_router_types::kv_hints::{KvHint, WorkerKvTransferKeys, WorkerKvTransferKeysCache};
-use dynamo_router_types::protocols::{
+use dynamo_router_protocol::config::RouterConfigOverride;
+use dynamo_router_protocol::identity::{RoutingPartitionId, default_routing_group};
+use dynamo_router_protocol::kv_hints::{KvHint, WorkerKvTransferKeys, WorkerKvTransferKeysCache};
+use dynamo_router_protocol::protocols::{
     BlockExtraInfo, DpRank, KvHintTransferWorkerMetadata, KvTransferEnforcement,
     RoutingConstraints, WorkerAffinityTarget, WorkerConfigLike, WorkerId, WorkerWithDpRank,
 };

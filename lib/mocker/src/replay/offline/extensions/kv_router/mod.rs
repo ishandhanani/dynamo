@@ -18,19 +18,19 @@ use dynamo_kv_indexer::{
 use dynamo_kv_indexer::{RadixTree, SessionPrefixIndexer};
 pub(in crate::replay) use dynamo_kv_router::config::KvRouterConfig as ReplayKvRouterConfig;
 use dynamo_kv_router::config::KvRouterConfig;
-use dynamo_router_types::config::TrackingHashConfig;
-use dynamo_router_types::identity::RoutingPartitionRef;
-use dynamo_router_types::overlap::OverlapSignals;
-use dynamo_router_types::protocols::LocalBlockHash;
-use dynamo_router_types::protocols::WorkerLoadProjection;
-use dynamo_router_types::protocols::WorkerPlacement;
-use dynamo_router_types::protocols::{
+use dynamo_router_protocol::config::TrackingHashConfig;
+use dynamo_router_protocol::identity::RoutingPartitionRef;
+use dynamo_router_protocol::overlap::OverlapSignals;
+use dynamo_router_protocol::protocols::LocalBlockHash;
+use dynamo_router_protocol::protocols::WorkerLoadProjection;
+use dynamo_router_protocol::protocols::WorkerPlacement;
+use dynamo_router_protocol::protocols::{
     BlockHashOptions, KvCacheEventData, PrefillLoadHint, RouterEvent, RoutingConstraints, WorkerId,
     WorkerWithDpRank, compute_block_hash_for_seq,
 };
-use dynamo_router_types::sched::ScheduleMode;
-use dynamo_router_types::sched::{SchedulingRequest, SessionContext};
-use dynamo_router_types::tracking_hash::{
+use dynamo_router_protocol::sched::ScheduleMode;
+use dynamo_router_protocol::sched::{SchedulingRequest, SessionContext};
+use dynamo_router_protocol::tracking_hash::{
     TrackingHashAlgorithm, TrackingHashContext, TrackingHashScope,
 };
 use dynamo_scheduler::overlap::OverlapAnalysis;
@@ -65,36 +65,38 @@ pub(in crate::replay) use composition::{KvReplayComposition, RoundRobinReplayCom
 #[derive(Clone, Copy)]
 enum KvEventSummary {
     Stored {
-        parent_hash: Option<dynamo_router_types::protocols::ExternalSequenceBlockHash>,
+        parent_hash: Option<dynamo_router_protocol::protocols::ExternalSequenceBlockHash>,
         start_position: Option<u32>,
         count: usize,
-        first: Option<dynamo_router_types::protocols::ExternalSequenceBlockHash>,
-        last: Option<dynamo_router_types::protocols::ExternalSequenceBlockHash>,
+        first: Option<dynamo_router_protocol::protocols::ExternalSequenceBlockHash>,
+        last: Option<dynamo_router_protocol::protocols::ExternalSequenceBlockHash>,
     },
     Removed {
         count: usize,
-        first: Option<dynamo_router_types::protocols::ExternalSequenceBlockHash>,
-        last: Option<dynamo_router_types::protocols::ExternalSequenceBlockHash>,
+        first: Option<dynamo_router_protocol::protocols::ExternalSequenceBlockHash>,
+        last: Option<dynamo_router_protocol::protocols::ExternalSequenceBlockHash>,
     },
     Cleared,
 }
 
 impl KvEventSummary {
-    fn from_data(data: &dynamo_router_types::protocols::KvCacheEventData) -> Self {
+    fn from_data(data: &dynamo_router_protocol::protocols::KvCacheEventData) -> Self {
         match data {
-            dynamo_router_types::protocols::KvCacheEventData::Stored(stored) => Self::Stored {
+            dynamo_router_protocol::protocols::KvCacheEventData::Stored(stored) => Self::Stored {
                 parent_hash: stored.parent_hash,
                 start_position: stored.start_position,
                 count: stored.blocks.len(),
                 first: stored.blocks.first().map(|block| block.block_hash),
                 last: stored.blocks.last().map(|block| block.block_hash),
             },
-            dynamo_router_types::protocols::KvCacheEventData::Removed(removed) => Self::Removed {
-                count: removed.block_hashes.len(),
-                first: removed.block_hashes.first().copied(),
-                last: removed.block_hashes.last().copied(),
-            },
-            dynamo_router_types::protocols::KvCacheEventData::Cleared => Self::Cleared,
+            dynamo_router_protocol::protocols::KvCacheEventData::Removed(removed) => {
+                Self::Removed {
+                    count: removed.block_hashes.len(),
+                    first: removed.block_hashes.first().copied(),
+                    last: removed.block_hashes.last().copied(),
+                }
+            }
+            dynamo_router_protocol::protocols::KvCacheEventData::Cleared => Self::Cleared,
         }
     }
 }
@@ -1343,13 +1345,13 @@ mod tests {
     use dynamo_slot_tracker::config::RouterPrefillLoadModel;
 
     use dynamo_admission::config::RouterQueuePolicy;
-    use dynamo_router_types::prefill_load::PrefillLoadEstimator;
-    use dynamo_router_types::protocols::{
+    use dynamo_router_protocol::prefill_load::PrefillLoadEstimator;
+    use dynamo_router_protocol::protocols::{
         BlockHashOptions, ExternalSequenceBlockHash, KvCacheEvent, KvCacheEventData,
         KvCacheStoreData, KvCacheStoredBlockData, LocalBlockHash, RouterEvent, StorageTier,
         WorkerId, WorkerWithDpRank, compute_block_hash_for_seq,
     };
-    use dynamo_router_types::tracking_hash::TrackingHashAlgorithm;
+    use dynamo_router_protocol::tracking_hash::TrackingHashAlgorithm;
     use rustc_hash::FxHashMap;
     use serde_json::Value;
     use tempfile::NamedTempFile;
@@ -2036,7 +2038,7 @@ models:
             .on_request_arrival(&ordinary_class_name, None, 0.0)
             .unwrap_err();
         let rejection = error
-            .downcast_ref::<dynamo_router_types::protocols::QueueRejection>()
+            .downcast_ref::<dynamo_router_protocol::protocols::QueueRejection>()
             .expect("replay should preserve the typed queue rejection");
         assert_eq!(rejection.policy_class, "latency_uncached");
         assert_eq!(rejection.current, 0);
@@ -2062,7 +2064,7 @@ models:
             .on_request_arrival(&rejected_after_shrink, Some(cached_hashes), 0.0)
             .unwrap_err();
         let rejection = error
-            .downcast_ref::<dynamo_router_types::protocols::QueueRejection>()
+            .downcast_ref::<dynamo_router_protocol::protocols::QueueRejection>()
             .expect("worker removal should retain the typed queue rejection");
         assert_eq!(rejection.current, 2);
         assert_eq!(rejection.limit, 1);
@@ -2617,7 +2619,7 @@ policy_classes:
                 event_id: 100,
                 dp_rank: rank,
                 data: KvCacheEventData::Removed(
-                    dynamo_router_types::protocols::KvCacheRemoveData {
+                    dynamo_router_protocol::protocols::KvCacheRemoveData {
                         block_hashes: hashes.into_iter().map(ExternalSequenceBlockHash).collect(),
                     },
                 ),

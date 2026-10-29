@@ -15,7 +15,7 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result, anyhow, bail};
 use dynamo_custom_policy_builtin::DefaultWorkerSelectorControl;
-use dynamo_router_types::WorkerType;
+use dynamo_router_protocol::WorkerType;
 use dynamo_worker_selection::plugin::{RuntimePolicyConfig, RuntimePolicyUpdate};
 use parking_lot::Mutex;
 

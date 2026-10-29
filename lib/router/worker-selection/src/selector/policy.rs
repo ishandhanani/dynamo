@@ -11,14 +11,17 @@ use super::{
     worker_info,
 };
 
+#[cfg(any(test, feature = "testing", feature = "bench"))]
 use crate::config::SelectionConfig;
-use dynamo_router_types::eligibility::RoutingEligibility;
-use dynamo_router_types::kv_hints::{KvTransferSourceSummary, KvTransferTarget};
-use dynamo_router_types::protocols::{
+use dynamo_router_protocol::eligibility::RoutingEligibility;
+use dynamo_router_protocol::kv_hints::{KvTransferSourceSummary, KvTransferTarget};
+use dynamo_router_protocol::protocols::{
     SelectionTrace, SelectionTraceSpec, WorkerConfigLike, WorkerId, WorkerSelectionResult,
     WorkerWithDpRank,
 };
-use dynamo_router_types::sched::{KvSchedulerError, SchedulingRequest, WorkerSelectionPolicyError};
+use dynamo_router_protocol::sched::{
+    KvSchedulerError, SchedulingRequest, WorkerSelectionPolicyError,
+};
 
 use crate::plugin::{
     CacheSnapshot, CandidateData, ScoredWorkerCandidate, WorkerCacheData, WorkerCandidate,
@@ -74,7 +77,7 @@ impl WorkerSelectionPolicy {
     /// Build a policy with no filters.
     ///
     /// `worker_label` identifies the worker pool in routing logs. A typed policy factory normally
-    /// passes [`dynamo_router_types::WorkerType::as_str`]. The config argument is retained for API compatibility;
+    /// passes [`dynamo_router_protocol::WorkerType::as_str`]. The config argument is retained for API compatibility;
     /// policy parameters belong to the supplied scorers and picker and are not retained here.
     pub fn new(
         worker_label: &'static str,
@@ -87,7 +90,7 @@ impl WorkerSelectionPolicy {
     /// Build a policy from ordered filters, additive scorers, and one picker.
     ///
     /// `worker_label` identifies the worker pool in routing logs. A typed policy factory normally
-    /// passes [`dynamo_router_types::WorkerType::as_str`]. The config argument is retained for API compatibility;
+    /// passes [`dynamo_router_protocol::WorkerType::as_str`]. The config argument is retained for API compatibility;
     /// policy parameters belong to the supplied scorers and picker and are not retained here.
     pub fn new_with_filters(
         worker_label: &'static str,
@@ -216,7 +219,7 @@ impl WorkerSelectionPolicy {
     /// Construct the native reference implementation for parity tests and benchmarks.
     ///
     /// `worker_label` selects the built-in scoring and logging contract. Typed hosts use
-    /// [`dynamo_router_types::WorkerType::default_selector_label`] to preserve Dynamo's historical behavior.
+    /// [`dynamo_router_protocol::WorkerType::default_selector_label`] to preserve Dynamo's historical behavior.
     #[cfg(any(test, feature = "testing", feature = "bench"))]
     pub fn reference(config: SelectionConfig, worker_label: &'static str) -> Self {
         let picker = DefaultWorkerPicker::new();
@@ -663,8 +666,8 @@ impl WorkerSelectionPolicy {
 #[cfg(test)]
 mod tests {
     use crate::plugin::WorkerInputView;
-    use dynamo_router_types::protocols::WorkerWithDpRank;
-    use dynamo_router_types::sched::SessionContext;
+    use dynamo_router_protocol::protocols::WorkerWithDpRank;
+    use dynamo_router_protocol::sched::SessionContext;
     use std::{
         cell::Cell,
         collections::{HashMap, HashSet},
@@ -675,7 +678,7 @@ mod tests {
     use super::super::DefaultWorkerSelector;
     use super::super::test_support::*;
     use super::*;
-    use dynamo_router_types::sched::WorkerSelectionInputTrigger;
+    use dynamo_router_protocol::sched::WorkerSelectionInputTrigger;
 
     fn uses_exclusive_affinity(selector: &impl WorkerSelector<TaintedWorkerConfig>) -> bool {
         selector.uses_exclusive_affinity_target()
@@ -842,7 +845,7 @@ mod tests {
         let (traced, trace) = policy
             .select_worker_traced(
                 input(),
-                Some(dynamo_router_types::protocols::SelectionTraceSpec { top_k: 3 }),
+                Some(dynamo_router_protocol::protocols::SelectionTraceSpec { top_k: 3 }),
             )
             .unwrap();
         assert_eq!(traced.worker.worker_id, 7);
@@ -912,8 +915,8 @@ mod tests {
 
     #[test]
     fn components_read_fetchable_prefixes_only_when_declared() {
-        use dynamo_router_types::kv_hints::KvTransferCandidates;
-        use dynamo_router_types::protocols::{
+        use dynamo_router_protocol::kv_hints::KvTransferCandidates;
+        use dynamo_router_protocol::protocols::{
             ExternalSequenceBlockHash, KvHintTransferWorkerMetadata,
         };
         use std::sync::{Arc, Mutex};
@@ -1105,7 +1108,7 @@ mod tests {
         }
 
         let config = |max_num_batched_tokens, total_kv_blocks| {
-            dynamo_router_types::test_utils::SimpleWorkerConfig {
+            dynamo_router_protocol::test_utils::SimpleWorkerConfig {
                 max_num_batched_tokens,
                 total_kv_blocks,
                 ..Default::default()
@@ -1138,11 +1141,11 @@ mod tests {
 
     #[test]
     fn prepared_candidates_select_like_rows_built_at_selection() {
-        use dynamo_router_types::kv_hints::KvTransferCandidates;
-        use dynamo_router_types::protocols::{
+        use dynamo_router_protocol::kv_hints::KvTransferCandidates;
+        use dynamo_router_protocol::protocols::{
             ExternalSequenceBlockHash, KvHintTransferWorkerMetadata,
         };
-        use dynamo_router_types::sched::ScheduleMode;
+        use dynamo_router_protocol::sched::ScheduleMode;
 
         struct Worker {
             dp_size: u32,
@@ -1697,7 +1700,7 @@ mod tests {
             (1, TaintedWorkerConfig::default()),
         ]);
         let mut request = base_request(128);
-        request.mode = dynamo_router_types::sched::ScheduleMode::Tracked {
+        request.mode = dynamo_router_protocol::sched::ScheduleMode::Tracked {
             request_id: "test".into(),
         };
         request

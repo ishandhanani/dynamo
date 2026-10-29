@@ -4,7 +4,7 @@
 use std::{collections::HashSet, sync::Arc};
 
 use dynamo_metrics::collect::SourceSet;
-use dynamo_router_types::protocols::WorkerId;
+use dynamo_router_protocol::protocols::WorkerId;
 use dynamo_runtime::metrics::PrometheusMetric;
 use prometheus::{
     IntGaugeVec, Opts,

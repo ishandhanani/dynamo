@@ -18,7 +18,7 @@ use std::time::Duration;
 #[cfg(test)]
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use dynamo_router_types::protocols::{KvCacheEventError, RouterEvent};
+use dynamo_router_protocol::protocols::{KvCacheEventError, RouterEvent};
 
 use super::global::{GlobalCkfIndexer, GlobalCkfIngestOutcome, LaneLease, ProducerIdentity};
 use super::ingestion_pool::{GlobalCkfIngestionError, GlobalCkfIngestionPool};
@@ -127,7 +127,7 @@ struct TestSinkFaults {
     drop_next: AtomicBool,
 }
 
-/// Actor-backed local producer-to-consumer composition for one [`PoolId`](dynamo_router_types::identity::PoolId)
+/// Actor-backed local producer-to-consumer composition for one [`PoolId`](dynamo_router_protocol::identity::PoolId)
 /// lane.
 pub struct LocalCkfAdapter {
     state: DcCkfState,
@@ -362,10 +362,10 @@ fn map_publish_error(error: DcCkfPublishError<LocalCkfDeltaSinkError>) -> LocalC
 
 #[cfg(test)]
 mod tests {
-    use dynamo_router_types::identity::{
+    use dynamo_router_protocol::identity::{
         CacheSemanticsId, DcId, IdentitySource, IndexerDomainId, PoolId, RoutingScopeId,
     };
-    use dynamo_router_types::protocols::{
+    use dynamo_router_protocol::protocols::{
         ExternalSequenceBlockHash, KvCacheEvent, KvCacheEventData, KvCacheRemoveData,
         KvCacheStoreData, KvCacheStoredBlockData, LocalBlockHash,
     };

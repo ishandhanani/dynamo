@@ -14,8 +14,8 @@ use super::multi_worker::{
 };
 use super::prompt_registry::WorkerLoadSnapshot;
 use super::single::PrefillCompletion;
-use dynamo_router_types::protocols::SchedulerBookingDescriptor;
-use dynamo_router_types::protocols::{
+use dynamo_router_protocol::protocols::SchedulerBookingDescriptor;
+use dynamo_router_protocol::protocols::{
     ActiveSequenceEvent, ActiveSequenceEventData, MAX_REPLICA_BATCH_DURATION,
     MAX_REPLICA_BATCH_EVENTS, WorkerWithDpRank,
 };

@@ -9,12 +9,12 @@ use std::collections::{HashMap, HashSet};
 use std::time::Duration;
 
 use criterion::{BenchmarkId, Criterion, Throughput, black_box, criterion_group, criterion_main};
-use dynamo_router_types::overlap::OverlapSignals;
-use dynamo_router_types::protocols::WorkerLoadProjection;
-use dynamo_router_types::protocols::{
+use dynamo_router_protocol::overlap::OverlapSignals;
+use dynamo_router_protocol::protocols::WorkerLoadProjection;
+use dynamo_router_protocol::protocols::{
     RoutingConstraints, WorkerConfigLike, WorkerId, WorkerWithDpRank,
 };
-use dynamo_router_types::sched::{ScheduleMode, SchedulingRequest, WorkerSelectionPolicyError};
+use dynamo_router_protocol::sched::{ScheduleMode, SchedulingRequest, WorkerSelectionPolicyError};
 use dynamo_worker_selection::config::SelectionConfig;
 use dynamo_worker_selection::plugin::{
     WorkerCandidate, WorkerCandidates, WorkerFilter, WorkerInputView, WorkerInputs, WorkerPicker,

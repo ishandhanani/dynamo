@@ -3,7 +3,7 @@
 
 use rustc_hash::FxHashSet;
 
-use dynamo_router_types::protocols::WorkerWithDpRank;
+use dynamo_router_protocol::protocols::WorkerWithDpRank;
 
 #[inline]
 pub(crate) fn reconcile_active_workers(

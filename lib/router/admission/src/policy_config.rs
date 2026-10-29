@@ -59,7 +59,7 @@ impl PolicyClassConfig {
     }
 }
 
-pub use dynamo_router_types::busy::{BusyThresholds, FullRankCounts, RejectThresholdsProvider};
+pub use dynamo_router_protocol::busy::{BusyThresholds, FullRankCounts, RejectThresholdsProvider};
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct PolicyProfile {

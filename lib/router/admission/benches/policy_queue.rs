@@ -13,7 +13,7 @@ use criterion::{
 };
 use dynamo_admission::policy_config::PolicyProfile;
 use dynamo_admission::policy_queue::{PolicyQueue, QueueSnapshot};
-use dynamo_router_types::protocols::{WorkerPlacement, WorkerWithDpRank};
+use dynamo_router_protocol::protocols::{WorkerPlacement, WorkerWithDpRank};
 
 #[derive(Debug, Clone, Copy)]
 struct BenchRequest {

@@ -3,8 +3,8 @@
 
 mod support;
 
-use dynamo_router_types::protocols::SharedCacheHits;
-use dynamo_router_types::sched::WorkerSelectionPolicyError;
+use dynamo_router_protocol::protocols::SharedCacheHits;
+use dynamo_router_protocol::sched::WorkerSelectionPolicyError;
 use dynamo_worker_selection::plugin::{
     WorkerCacheInput, WorkerCandidate, WorkerCandidates, WorkerFilter, WorkerInputView,
     WorkerInputs, WorkerPicker, WorkerScorer, WorkerSelectionContext, WorkerSelectionPolicy,

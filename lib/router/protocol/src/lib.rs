@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-//! Shared vocabulary of the Dynamo router.
+//! Protocol vocabulary of the Dynamo router.
 //!
 //! Every type that crosses a stage boundary lives here: wire protocols and KV events
 //! (`protocols`), identities, the per-request configuration override and the hashing trio, the

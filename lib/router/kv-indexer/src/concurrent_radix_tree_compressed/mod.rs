@@ -18,7 +18,7 @@ use super::{
     AnchorRef, AnchorTask, EventKind, EventWarningKind, KvIndexerMetrics, KvRouterError,
     MatchDetails, PreBoundEventCounters, SyncIndexer, WorkerLookupStats, WorkerTask,
 };
-use dynamo_router_types::protocols::*;
+use dynamo_router_protocol::protocols::*;
 
 mod block_lookup;
 mod children;

@@ -23,7 +23,7 @@ use std::future::Future;
 
 use super::{AnchorCapableSyncIndexer, AnchorRef, AnchorTask, KvRouterError, ShardSizeSnapshot};
 use crate::{KvIndexerInterface, ThreadPoolIndexer};
-use dynamo_router_types::protocols::*;
+use dynamo_router_protocol::protocols::*;
 
 /// Async abstraction over one routing shard.
 ///
@@ -176,7 +176,7 @@ mod tests {
 
     fn store_event_for(worker_id: u64, dp_rank: u32, values: &[u64]) -> RouterEvent {
         let locals: Vec<LocalBlockHash> = values.iter().copied().map(LocalBlockHash).collect();
-        let seq_hashes = dynamo_router_types::protocols::compute_seq_hash_for_block(&locals);
+        let seq_hashes = dynamo_router_protocol::protocols::compute_seq_hash_for_block(&locals);
         router_event(
             worker_id,
             0,

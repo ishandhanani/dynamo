@@ -15,9 +15,9 @@ use crate::{
     ActiveSequencesMultiWorker, PrefillCompletion, ReplicaWorkerPolicy, SequenceError,
     SequenceRequest,
 };
-use dynamo_router_types::identity::RoutingPartitionId;
-use dynamo_router_types::protocols::PotentialLoad;
-use dynamo_router_types::protocols::{PrefillLoadHint, WorkerId, WorkerWithDpRank};
+use dynamo_router_protocol::identity::RoutingPartitionId;
+use dynamo_router_protocol::protocols::PotentialLoad;
+use dynamo_router_protocol::protocols::{PrefillLoadHint, WorkerId, WorkerWithDpRank};
 
 use crate::mesh::{
     ReplicaInbox, ReplicaSyncConfig, ScopedReplicaEvent, ScopedSequencePublisher,
@@ -495,7 +495,7 @@ mod tests {
     use tokio::sync::mpsc;
 
     use super::*;
-    use dynamo_router_types::protocols::{ActiveSequenceEvent, ActiveSequenceEventData};
+    use dynamo_router_protocol::protocols::{ActiveSequenceEvent, ActiveSequenceEventData};
 
     fn registry() -> SlotTrackerRegistry {
         SlotTrackerRegistry::new(CancellationToken::new())

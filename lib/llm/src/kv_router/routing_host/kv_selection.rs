@@ -5,14 +5,14 @@ use std::collections::HashSet;
 
 use dynamo_admission::runtime::RequestLifecycle;
 use dynamo_kv_indexer::RoutingDecisionHashes;
-use dynamo_router_types::config::RouterConfigOverride;
-use dynamo_router_types::eligibility::RoutingEligibility;
-use dynamo_router_types::kv_hints::KvHint;
-use dynamo_router_types::protocols::QueueRejection;
-use dynamo_router_types::protocols::{
+use dynamo_router_protocol::config::RouterConfigOverride;
+use dynamo_router_protocol::eligibility::RoutingEligibility;
+use dynamo_router_protocol::kv_hints::KvHint;
+use dynamo_router_protocol::protocols::QueueRejection;
+use dynamo_router_protocol::protocols::{
     BlockExtraInfo, RoutingConstraints, WorkerAffinityTarget, WorkerId, WorkerWithDpRank,
 };
-use dynamo_router_types::sched::AdvisoryWorkerLoad;
+use dynamo_router_protocol::sched::AdvisoryWorkerLoad;
 use dynamo_runtime::{dynamo_nvtx_range, pipeline::Error};
 use dynamo_scheduler::constraints::{Constraints, resolve_pinned_worker_rank};
 use dynamo_scheduler::queue::BookingHandle;
@@ -81,7 +81,7 @@ pub(super) struct SelectionOptions {
     pub(super) affinity_target: Option<AffinityTarget>,
     pub(super) planned_worker: Option<WorkerWithDpRank>,
     pub(super) policy_class: Option<String>,
-    pub(super) session_context: Option<dynamo_router_types::sched::SessionContext>,
+    pub(super) session_context: Option<dynamo_router_protocol::sched::SessionContext>,
     pub(super) admission: FindBestMatchAdmission,
 }
 
@@ -96,7 +96,7 @@ struct BestMatchArgs<'a> {
     priority_jump: f64,
     strict_priority: u32,
     policy_class: Option<String>,
-    session_context: Option<dynamo_router_types::sched::SessionContext>,
+    session_context: Option<dynamo_router_protocol::sched::SessionContext>,
     expected_output_tokens: Option<u32>,
     affinity_target: Option<WorkerAffinityTarget>,
     pinned_worker: Option<WorkerWithDpRank>,
@@ -389,8 +389,8 @@ fn pinned_worker_hint(
 mod tests {
     use std::collections::{HashMap, HashSet};
 
-    use dynamo_router_types::eligibility::{RoutingEligibility, WorkerEligibilityError};
-    use dynamo_router_types::protocols::{
+    use dynamo_router_protocol::eligibility::{RoutingEligibility, WorkerEligibilityError};
+    use dynamo_router_protocol::protocols::{
         RoutingConstraints, WorkerAffinityTarget, WorkerWithDpRank,
     };
 

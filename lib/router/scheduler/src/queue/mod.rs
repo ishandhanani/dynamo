@@ -26,14 +26,14 @@ use dynamo_admission::policy_config::{
     BusyThresholds, FullRankCounts, PolicyClassConfig, PolicyProfile, RejectThresholdsProvider,
 };
 use dynamo_admission::policy_queue::{PolicyQueue, QueueMetadata, QueueSnapshot};
-use dynamo_router_types::eligibility::{RoutingEligibility, worker_config_for_rank};
-use dynamo_router_types::prefill_load::{PrefillLoadEstimator, effective_prefill_tokens};
-use dynamo_router_types::protocols::WorkerPlacement;
-use dynamo_router_types::protocols::{
+use dynamo_router_protocol::eligibility::{RoutingEligibility, worker_config_for_rank};
+use dynamo_router_protocol::prefill_load::{PrefillLoadEstimator, effective_prefill_tokens};
+use dynamo_router_protocol::protocols::WorkerPlacement;
+use dynamo_router_protocol::protocols::{
     LocalBlockHash, PrefillLoadHint, SelectionTrace, SelectionTraceSpec, WorkerConfigLike,
     WorkerId, WorkerSelectionResult, WorkerWithDpRank,
 };
-use dynamo_router_types::sched::{
+use dynamo_router_protocol::sched::{
     AdvisorySchedulingResponse, AdvisoryWorkerLoad, AttemptId, KvSchedulerError,
     NonMaxOverlapSelection, NonMaxOverlapSelectionObserver, OverloadedWorkerProvider,
     SchedulingContext, SchedulingRequest, SchedulingResponse, WorkerAvailabilityProvider,
@@ -52,7 +52,7 @@ use dynamo_worker_selection::selector::{
 };
 
 // The fallback lives beside `WorkerCapacity`; this path stays for existing importers.
-pub use dynamo_router_types::load::DEFAULT_MAX_BATCHED_TOKENS;
+pub use dynamo_router_protocol::load::DEFAULT_MAX_BATCHED_TOKENS;
 
 mod capacity;
 
@@ -254,7 +254,7 @@ impl RuntimePolicyControl {
     }
 }
 
-pub use dynamo_router_types::protocols::SchedulerBookingDescriptor;
+pub use dynamo_router_protocol::protocols::SchedulerBookingDescriptor;
 
 #[derive(Debug)]
 enum SchedulerCleanupTarget {

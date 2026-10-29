@@ -24,8 +24,8 @@ use std::time::{Duration, Instant};
 use std::sync::atomic::Ordering;
 
 use dynamo_kv_indexer::cuckoo::{CkfConfig, CkfFailureAction};
-use dynamo_router_types::identity::PoolId;
-use dynamo_router_types::protocols::{DpRank, KvCacheEventError, SchedulerLoad, WorkerId};
+use dynamo_router_protocol::identity::PoolId;
+use dynamo_router_protocol::protocols::{DpRank, KvCacheEventError, SchedulerLoad, WorkerId};
 use dynamo_runtime::component::Component;
 use dynamo_runtime::component::{Client, Instance};
 use dynamo_runtime::protocols::EndpointId;
@@ -1020,7 +1020,7 @@ fn new_relay_incarnation() -> anyhow::Result<u64> {
 #[allow(clippy::too_many_arguments)]
 async fn run_host_supervisor(
     component: Component,
-    ckf_dc_id: dynamo_router_types::identity::DcId,
+    ckf_dc_id: dynamo_router_protocol::identity::DcId,
     mut membership_rx: watch::Receiver<DcMembershipView>,
     statuses: Arc<RwLock<HashMap<EndpointId, SharedEndpointStatus>>>,
     pools: Arc<PoolRegistry>,
@@ -1251,7 +1251,7 @@ fn record_host_failure(cancel: &CancellationToken, terminal: &HostTerminalState,
 
 fn reject_duplicate_live_pools(
     view: &mut DcMembershipView,
-    dc_id: dynamo_router_types::identity::DcId,
+    dc_id: dynamo_router_protocol::identity::DcId,
 ) {
     let mut owners: HashMap<PoolId, Vec<EndpointId>> = HashMap::new();
     for (endpoint, membership) in view.endpoints.iter() {
@@ -1411,7 +1411,7 @@ fn report_producer_fence_trigger(endpoint: &EndpointId, trigger: &ProducerFenceT
 #[allow(clippy::too_many_arguments)]
 async fn run_endpoint_slot(
     component: Component,
-    ckf_dc_id: dynamo_router_types::identity::DcId,
+    ckf_dc_id: dynamo_router_protocol::identity::DcId,
     endpoint: EndpointId,
     mut metadata_rx: watch::Receiver<Option<EndpointMembership>>,
     status: SharedEndpointStatus,
@@ -1955,7 +1955,7 @@ async fn diagnostic_tick() {
 #[allow(clippy::too_many_arguments)]
 async fn start_endpoint_pool(
     component: Component,
-    ckf_dc_id: dynamo_router_types::identity::DcId,
+    ckf_dc_id: dynamo_router_protocol::identity::DcId,
     endpoint: EndpointId,
     binding: ActorBinding,
     registrations: Vec<CanonicalModelRegistration>,
@@ -2618,10 +2618,10 @@ mod tests {
     }
 
     use dynamo_kv_indexer::cuckoo::{CkfFailureDisposition, CkfFailurePoint};
-    use dynamo_router_types::identity::{
+    use dynamo_router_protocol::identity::{
         CacheSemanticsId, DcId, IdentitySource, IndexerDomainId, RoutingScopeId,
     };
-    use dynamo_router_types::protocols::{KV_EVENT_SUBJECT, WorkerWithDpRank};
+    use dynamo_router_protocol::protocols::{KV_EVENT_SUBJECT, WorkerWithDpRank};
     use dynamo_runtime::{
         DistributedRuntime, Runtime,
         discovery::{DiscoveryInstance, DiscoverySpec, EventTransportKind},

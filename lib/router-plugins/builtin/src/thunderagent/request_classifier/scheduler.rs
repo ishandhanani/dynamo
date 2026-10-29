@@ -7,7 +7,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use dynamo_admission::classifier::{ClassifyEvent, RequestProgress};
-use dynamo_router_types::protocols::WorkerWithDpRank;
+use dynamo_router_protocol::protocols::WorkerWithDpRank;
 use tokio::sync::Notify;
 
 use super::super::ThunderAgentConfig;

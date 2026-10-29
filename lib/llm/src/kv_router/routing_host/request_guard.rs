@@ -21,7 +21,7 @@ use crate::{
 use dynamo_admission::classifier::AbortCause;
 use dynamo_admission::runtime::RequestLifecycle;
 use dynamo_kv_indexer::{ApproximateAcquireMode, ApproximateLruBlock, RoutingDecisionHashes};
-use dynamo_router_types::protocols::{
+use dynamo_router_protocol::protocols::{
     BlockExtraInfo, BlockHashOptions, WorkerWithDpRank, compute_block_hash_for_seq,
     compute_next_seq_hash,
 };
@@ -1092,7 +1092,7 @@ mod output_block_tests {
 #[cfg(test)]
 mod output_hash_tests {
     use super::*;
-    use dynamo_router_types::protocols::{BlockMmObjectInfo, compute_seq_hash_for_block};
+    use dynamo_router_protocol::protocols::{BlockMmObjectInfo, compute_seq_hash_for_block};
 
     fn direct_blocks(
         tokens: &[u32],

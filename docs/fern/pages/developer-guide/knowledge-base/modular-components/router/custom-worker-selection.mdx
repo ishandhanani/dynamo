@@ -56,7 +56,7 @@ Use `dynamo_kv_router::plugins` for plugin registration and these modules for pl
 
 Dynamo owns scheduler queues, eligibility checks, reservations, lifecycle synchronization, and the default selector implementation. Low-level host interfaces such as `WorkerSelector` are used to connect Dynamo components; external plugins use `WorkerSelectionPolicy`.
 
-`dynamo-kv-router` is the composition crate: it re-exports the plugin contracts at `dynamo_kv_router::plugins::worker_selection` and `dynamo_kv_router::plugins::request_classifier`, so a policy crate can depend on it alone, or on `dynamo-worker-selection` and `dynamo-router-types` directly.
+`dynamo-kv-router` is the composition crate: it re-exports the plugin contracts at `dynamo_kv_router::plugins::worker_selection` and `dynamo_kv_router::plugins::request_classifier`, so a policy crate can depend on it alone, or on `dynamo-worker-selection` and `dynamo-router-protocol` directly.
 
 ## Build the Policy
 
@@ -85,8 +85,8 @@ cargo add \
   dynamo-worker-selection
 cargo add \
   --manifest-path "$POLICY_DIR/policy/Cargo.toml" \
-  --path "$DYNAMO_DIR/lib/router/types" \
-  dynamo-router-types
+  --path "$DYNAMO_DIR/lib/router/protocol" \
+  dynamo-router-protocol
 
 # Add parameter deserialization to the policy crate.
 cargo add \

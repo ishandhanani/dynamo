@@ -4,11 +4,11 @@
 use std::collections::HashSet;
 
 use dynamo_kv_indexer::TieredMatchDetails;
-pub use dynamo_router_types::overlap::{
+pub use dynamo_router_protocol::overlap::{
     CacheHitEstimates, OverlapScoresResponse, OverlapSignals, SelectedWorkerTierSnapshot,
     SharedCacheOverlapScore, TierOverlapBlocks, WorkerOverlapScore, saturating_u32,
 };
-use dynamo_router_types::protocols::{SharedCacheHits, StorageTier, WorkerWithDpRank};
+use dynamo_router_protocol::protocols::{SharedCacheHits, StorageTier, WorkerWithDpRank};
 use dynamo_worker_selection::config::SelectionConfig;
 use rustc_hash::FxHashMap;
 
@@ -239,7 +239,7 @@ mod tests {
 
     use crate::test_utils::SimpleWorkerConfig;
     use dynamo_kv_indexer::{LowerTierMatchDetails, MatchDetails};
-    use dynamo_router_types::protocols::{OverlapScores, SharedCacheHits, WorkerWithDpRank};
+    use dynamo_router_protocol::protocols::{OverlapScores, SharedCacheHits, WorkerWithDpRank};
 
     #[test]
     fn converts_weighted_and_raw_tier_overlap_once() {

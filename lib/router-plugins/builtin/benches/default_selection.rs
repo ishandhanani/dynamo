@@ -5,7 +5,7 @@ mod support;
 use criterion::{BenchmarkId, Criterion, black_box, criterion_group, criterion_main};
 use dynamo_custom_policy_builtin::default_policy;
 use dynamo_kv_router::config::KvRouterConfig;
-use dynamo_router_types::protocols::SelectionTraceSpec;
+use dynamo_router_protocol::protocols::SelectionTraceSpec;
 use dynamo_worker_selection::config::SelectionConfig;
 use dynamo_worker_selection::selector::WorkerSelector;
 use std::alloc::{GlobalAlloc, Layout, System};
@@ -170,7 +170,7 @@ impl dynamo_worker_selection::plugin::WorkerScorer for LoadScorer {
         _: &dynamo_worker_selection::plugin::WorkerSelectionContext<'_>,
         candidates: dynamo_worker_selection::plugin::WorkerCandidates<'_>,
         costs: &mut [f64],
-    ) -> Result<(), dynamo_router_types::sched::WorkerSelectionPolicyError> {
+    ) -> Result<(), dynamo_router_protocol::sched::WorkerSelectionPolicyError> {
         for (candidate, cost) in candidates.iter().zip(costs) {
             *cost = candidate.load().unwrap().active_requests() as f64 * self.0;
         }
@@ -184,7 +184,7 @@ impl dynamo_worker_selection::plugin::WorkerPicker for MinimumPicker {
         &mut self,
         _: &dynamo_worker_selection::plugin::WorkerSelectionContext<'_>,
         input: dynamo_worker_selection::plugin::WorkerInputView<'_>,
-    ) -> Result<usize, dynamo_router_types::sched::WorkerSelectionPolicyError> {
+    ) -> Result<usize, dynamo_router_protocol::sched::WorkerSelectionPolicyError> {
         Ok(input
             .candidates()
             .iter()
@@ -252,7 +252,7 @@ fn shared_cache(c: &mut Criterion) {
                         request.overlap.tier_overlap_blocks = Default::default();
                     }
                     request.shared_cache_hits = Some(
-                        dynamo_router_types::protocols::SharedCacheHits::from_ranges(
+                        dynamo_router_protocol::protocols::SharedCacheHits::from_ranges(
                             (0..range_count).map(|i| i * 4..i * 4 + 2).collect(),
                         ),
                     );
@@ -288,9 +288,9 @@ fn shared_cache(c: &mut Criterion) {
 /// Like the selection service's config, it caches its hashed keys.
 struct HintWorker {
     topology: std::collections::HashMap<String, String>,
-    keys: dynamo_router_types::kv_hints::WorkerKvTransferKeysCache,
+    keys: dynamo_router_protocol::kv_hints::WorkerKvTransferKeysCache,
 }
-impl dynamo_router_types::protocols::WorkerConfigLike for HintWorker {
+impl dynamo_router_protocol::protocols::WorkerConfigLike for HintWorker {
     fn data_parallel_start_rank(&self) -> u32 {
         0
     }
@@ -306,9 +306,9 @@ impl dynamo_router_types::protocols::WorkerConfigLike for HintWorker {
     fn kv_hint_transfer_metadata_for_dp_rank(
         &self,
         _dp_rank: u32,
-    ) -> Option<dynamo_router_types::protocols::KvHintTransferWorkerMetadata<'_>> {
+    ) -> Option<dynamo_router_protocol::protocols::KvHintTransferWorkerMetadata<'_>> {
         Some(
-            dynamo_router_types::protocols::KvHintTransferWorkerMetadata {
+            dynamo_router_protocol::protocols::KvHintTransferWorkerMetadata {
                 worker_type: "prefill",
                 source_control_endpoint: Some("tcp://worker:23280"),
             },
@@ -322,7 +322,7 @@ impl dynamo_router_types::protocols::WorkerConfigLike for HintWorker {
     }
     fn kv_transfer_keys(
         &self,
-    ) -> std::borrow::Cow<'_, dynamo_router_types::kv_hints::WorkerKvTransferKeys> {
+    ) -> std::borrow::Cow<'_, dynamo_router_protocol::kv_hints::WorkerKvTransferKeys> {
         std::borrow::Cow::Borrowed(self.keys.get_or_init(self))
     }
 }
@@ -374,9 +374,9 @@ fn kv_transfer(c: &mut Criterion) {
                     .collect();
                 sources.sort_unstable();
                 request.kv_transfer_candidates =
-                    Some(dynamo_router_types::kv_hints::KvTransferCandidates {
+                    Some(dynamo_router_protocol::kv_hints::KvTransferCandidates {
                         block_hashes: (0..128)
-                            .map(dynamo_router_types::protocols::ExternalSequenceBlockHash)
+                            .map(dynamo_router_protocol::protocols::ExternalSequenceBlockHash)
                             .collect(),
                         owner_prefix_blocks: sources,
                         routing_snapshot: None,

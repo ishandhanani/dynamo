@@ -16,8 +16,8 @@ use crate::{
     ApproximateLruReleaseAck, KvIndexer, KvIndexerInterface, KvRouterError, RoutingDecisionHashes,
 };
 use crate::{ConcurrentRadixTreeCompressed, ThreadPoolIndexer};
-use dynamo_router_types::protocols::AttemptId;
-use dynamo_router_types::protocols::{LocalBlockHash, TokensWithHashes, WorkerWithDpRank};
+use dynamo_router_protocol::protocols::AttemptId;
+use dynamo_router_protocol::protocols::{LocalBlockHash, TokensWithHashes, WorkerWithDpRank};
 
 use super::backend::{Indexer, RemotePrimary, SideIndexer};
 

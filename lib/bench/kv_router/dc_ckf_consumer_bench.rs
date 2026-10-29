@@ -27,10 +27,10 @@ use dynamo_kv_indexer::cuckoo::{
     GlobalCkfIngestionPoolConfig, GlobalCkfManifest, LaneLease, PrefixSearchConfig,
     ProducerIdentity,
 };
-use dynamo_router_types::identity::{
+use dynamo_router_protocol::identity::{
     CacheSemanticsId, DcId, IdentitySource, IndexerDomainId, PoolId, RoutingScopeId,
 };
-use dynamo_router_types::protocols::{
+use dynamo_router_protocol::protocols::{
     ExternalSequenceBlockHash, KvCacheEvent, KvCacheEventData, KvCacheRemoveData, KvCacheStoreData,
     KvCacheStoredBlockData, LocalBlockHash, RouterEvent, WorkerWithDpRank,
     compute_seq_hash_for_block,

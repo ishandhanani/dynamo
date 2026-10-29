@@ -18,7 +18,7 @@ use dynamo_admission::classifier::RequestClassifierRegistry;
 use dynamo_admission::classifier::{
     RequestClassifierFactory, RequestClassifierProvider, RequestClassifierRegistryError,
 };
-use dynamo_router_types::WorkerType;
+use dynamo_router_protocol::WorkerType;
 use dynamo_worker_selection::plugin::WorkerSelectionPolicyFactory;
 
 /// Parses one policy instance's YAML parameters and creates its partition factory.
@@ -328,7 +328,7 @@ impl RouterPluginRegistry {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use dynamo_router_types::identity::RoutingPartitionRef;
+    use dynamo_router_protocol::identity::RoutingPartitionRef;
     use dynamo_worker_selection::config::SelectionConfig;
     use dynamo_worker_selection::plugin::WorkerSelectionPolicyError;
     use dynamo_worker_selection::selector::{

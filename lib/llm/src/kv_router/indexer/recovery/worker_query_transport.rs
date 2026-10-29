@@ -10,7 +10,7 @@ use dynamo_kv_indexer::{
     KvStateAgentIdentity, KvStateAgentStatus, WorkerKvQueryKind, WorkerKvQueryRequest,
     WorkerKvQueryResponse,
 };
-use dynamo_router_types::protocols::{DpRank, WorkerId};
+use dynamo_router_protocol::protocols::{DpRank, WorkerId};
 use dynamo_runtime::{
     component::{Component, Instance},
     pipeline::{AddressedPushRouter, AddressedRequest, AsyncEngine, ManyOut, SingleIn},

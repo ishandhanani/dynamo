@@ -18,8 +18,8 @@ use super::envelope::{json_error, json_ok, json_rejection};
 use super::replica_sync as replica_sync_http;
 use crate::SequenceError;
 use crate::mesh::PeerManager;
-use dynamo_router_types::identity::{RoutingPartitionId, default_routing_group};
-use dynamo_router_types::protocols::WorkerWithDpRank;
+use dynamo_router_protocol::identity::{RoutingPartitionId, default_routing_group};
+use dynamo_router_protocol::protocols::WorkerWithDpRank;
 
 use crate::registry::{RegistryError, ServiceError, SlotTrackerRegistry};
 

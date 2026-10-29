@@ -10,7 +10,7 @@ routing:
   1. ``sglang.srt.managers.schedule_batch._compute_pad_value(hash)`` must
      equal ``MM_PAD_SHIFT_VALUE + (hash % (1 << 30))`` with
      ``MM_PAD_SHIFT_VALUE == 1_000_000``. Mirrored in Rust at
-     ``dynamo_router_types::protocols::pad_value_for_mm_hash`` (shared by the
+     ``dynamo_router_protocol::protocols::pad_value_for_mm_hash`` (shared by the
      frontend and the kv-router's vLLM-event normalization). Pinned by
      the Rust unit ``pad_value_matches_sglang_protocol`` on our side;
      this test pins the same constants on sglang's side so a future

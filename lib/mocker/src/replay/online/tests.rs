@@ -8,7 +8,7 @@ use std::time::Duration;
 
 use dynamo_kv_router::config::KvRouterConfig;
 
-use dynamo_router_types::prefill_load::PrefillLoadEstimator;
+use dynamo_router_protocol::prefill_load::PrefillLoadEstimator;
 use dynamo_slot_tracker::config::RouterPrefillLoadModel;
 use tokio::sync::{Notify, mpsc, watch};
 use tokio::time::Instant;

@@ -20,7 +20,7 @@ use crate::test_utils::{
     make_store_event_with_start_position, query_scores, remove_event, router_event,
     snapshot_events, snapshot_tree, stored_blocks_with_sequence_hashes,
 };
-use dynamo_router_types::protocols::*;
+use dynamo_router_protocol::protocols::*;
 
 // ============================================================================
 // KvIndexerInterface tests - parametrized over all implementations

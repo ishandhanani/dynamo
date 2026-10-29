@@ -36,10 +36,10 @@ use dynamo_kv_indexer::{
     KvIndexerMetrics, KvStateAgentIdentity, KvStateAgentStatus, KvStateAttachmentStatus,
     KvStateProtocolVersion, LocalKvIndexer,
 };
-use dynamo_router_types::identity::{
+use dynamo_router_protocol::identity::{
     CacheOwnerId, CanonicalIdentityMaterial, ExplicitIdentityMap, StableDpSlotId,
 };
-use dynamo_router_types::protocols::{
+use dynamo_router_protocol::protocols::{
     KvCacheEvent, KvCacheEventData, PlacementEvent, ResidencyDomain, ResidencyOwner, RouterEvent,
     RouterHintSourceMetadata, StorageTier, WorkerWithDpRank,
 };
@@ -754,8 +754,8 @@ impl<P: RouterEventBatchSink + 'static> Coordinator<P> {
         worker: WorkerWithDpRank,
         domain: ResidencyDomain,
     ) -> Result<u64> {
-        let placement = dynamo_router_types::protocols::Placement {
-            owner: dynamo_router_types::protocols::PlacementOwner::LocalWorker(worker),
+        let placement = dynamo_router_protocol::protocols::Placement {
+            owner: dynamo_router_protocol::protocols::PlacementOwner::LocalWorker(worker),
             tier: StorageTier::Device,
             residency_domain: domain,
         };
@@ -1890,11 +1890,11 @@ mod tests {
 
     use dynamo_kv_indexer::WorkerKvQueryResponse;
     use dynamo_kv_indexer::zmq_wire::{BlockHashValue, RawKvEvent};
-    use dynamo_router_types::identity::{
+    use dynamo_router_protocol::identity::{
         CacheSemanticsId, DcId, IdentitySource, IndexerDomainId, PoolId, RoutingScopeId,
         StableDpSlotId,
     };
-    use dynamo_router_types::protocols::{
+    use dynamo_router_protocol::protocols::{
         ExternalSequenceBlockHash, KvCacheStoreData, KvCacheStoredBlockData, LocalBlockHash,
         Placement, PlacementOwner,
     };

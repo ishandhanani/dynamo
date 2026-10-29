@@ -9,8 +9,8 @@ use super::reservations::{
 };
 use super::*;
 use dynamo_kv_indexer::ingest::backend::{RemotePrimary, test_util::store_event};
-use dynamo_router_types::protocols::{ActiveSequenceEvent, ActiveSequenceEventData};
-use dynamo_router_types::protocols::{RoutingConstraints, StorageTier};
+use dynamo_router_protocol::protocols::{ActiveSequenceEvent, ActiveSequenceEventData};
+use dynamo_router_protocol::protocols::{RoutingConstraints, StorageTier};
 use dynamo_slot_tracker::mesh::HostReplicaChannels;
 use std::collections::HashSet;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -492,7 +492,7 @@ async fn hint_fixture_with(
     configure: impl Fn(&mut WorkerRequest),
 ) -> (SelectionCore, Arc<SelectionEntry>, Vec<u32>) {
     use dynamo_kv_indexer::KvIndexerInterface;
-    use dynamo_router_types::protocols::{BlockHashOptions, compute_block_hash_for_seq};
+    use dynamo_router_protocol::protocols::{BlockHashOptions, compute_block_hash_for_seq};
 
     let core = local_core(config);
     for worker_id in [1, 2] {
@@ -638,7 +638,7 @@ async fn router_hint_needs_capable_workers() {
 #[tokio::test]
 async fn hint_capability_tracks_catalog_membership() {
     use dynamo_kv_indexer::KvIndexerInterface;
-    use dynamo_router_types::protocols::{BlockHashOptions, compute_block_hash_for_seq};
+    use dynamo_router_protocol::protocols::{BlockHashOptions, compute_block_hash_for_seq};
 
     let (core, entry, tokens) = hint_fixture(|_| {}).await;
     let hashes: Vec<u64> = compute_block_hash_for_seq(&tokens, 4, BlockHashOptions::default())
@@ -3270,7 +3270,7 @@ async fn partition_sessions_keep_independent_bindings() {
 
 #[tokio::test]
 async fn rejoined_worker_feeds_partition_index() {
-    use dynamo_router_types::protocols::{BlockHashOptions, compute_block_hash_for_seq};
+    use dynamo_router_protocol::protocols::{BlockHashOptions, compute_block_hash_for_seq};
     for update_only in [false, true] {
         let core = local_core(test_config(true));
         let request = worker_with_kv_events(1);
@@ -3496,9 +3496,9 @@ fn transfer_hint_for_selection(
         .get(&target.worker_id)?
         .kv_transfer_keys()
         .target()?;
-    let scope = dynamo_router_types::kv_hints::KvTransferScope::of([(target_keys, local)]);
+    let scope = dynamo_router_protocol::kv_hints::KvTransferScope::of([(target_keys, local)]);
     let source =
-        dynamo_router_types::kv_hints::KvTransferSourceSummary::new(candidates, configs, scope)
+        dynamo_router_protocol::kv_hints::KvTransferSourceSummary::new(candidates, configs, scope)
             .source_for(target, target_keys, local)?;
     transfer_hint_payload(configs, source, candidates)
 }
@@ -3534,7 +3534,7 @@ fn hint_candidates(
     KvTransferCandidates {
         block_hashes: hashes
             .iter()
-            .map(|h| dynamo_router_types::protocols::ExternalSequenceBlockHash(*h))
+            .map(|h| dynamo_router_protocol::protocols::ExternalSequenceBlockHash(*h))
             .collect(),
         owner_prefix_blocks: owners,
         routing_snapshot: None,
@@ -3589,11 +3589,11 @@ fn hint_source_must_share_the_target_worker_type() {
 
 #[test]
 fn hint_resolves_a_persistent_cache_owner_over_a_state_agent_worker() {
-    use dynamo_router_types::identity::{
+    use dynamo_router_protocol::identity::{
         CacheOwnerId, CacheSemanticsId, DcId, IdentitySource, IndexerDomainId, PoolId,
         RoutingScopeId, StableDpSlotId,
     };
-    use dynamo_router_types::protocols::{
+    use dynamo_router_protocol::protocols::{
         ResidencyOwner, ResidencyProjection, ResidencyRoutingSnapshot, RouterHintSourceMetadata,
     };
     let mut stale = hint_config("prefill", &[(0, "tcp://stale-worker:23280")]);
@@ -3644,7 +3644,7 @@ fn hint_resolves_a_persistent_cache_owner_over_a_state_agent_worker() {
 
 #[test]
 fn hint_is_dropped_when_the_selected_source_left() {
-    let source = dynamo_router_types::kv_hints::KvTransferSourceChoice {
+    let source = dynamo_router_protocol::kv_hints::KvTransferSourceChoice {
         source: WorkerWithDpRank::new(8, 0).into(),
         prefix_blocks: 2,
     };
@@ -3665,7 +3665,7 @@ fn island_config(endpoint: &str, island: &str) -> SelectionWorkerConfig {
     config.topology_domains = HashMap::from([(ISLAND_DOMAIN.to_string(), island.to_string())]);
     config.kv_transfer_domain = Some(ISLAND_DOMAIN.to_string());
     config.kv_transfer_enforcement =
-        Some(dynamo_router_types::protocols::KvTransferEnforcement::Required);
+        Some(dynamo_router_protocol::protocols::KvTransferEnforcement::Required);
     config
 }
 
@@ -3716,7 +3716,7 @@ fn hint_source_must_share_the_target_island() {
 fn preferred_island_falls_back_to_a_cross_island_source() {
     let mut target = island_config("tcp://target:23280", "a");
     target.kv_transfer_enforcement =
-        Some(dynamo_router_types::protocols::KvTransferEnforcement::Preferred);
+        Some(dynamo_router_protocol::protocols::KvTransferEnforcement::Preferred);
     let configs = HashMap::from([
         (7, target),
         (8, island_config("tcp://same-island:23280", "a")),
@@ -3746,11 +3746,11 @@ fn preferred_island_falls_back_to_a_cross_island_source() {
 
 #[test]
 fn cache_owner_island_is_published_or_taken_from_its_attached_worker() {
-    use dynamo_router_types::identity::{
+    use dynamo_router_protocol::identity::{
         CacheOwnerId, CacheSemanticsId, DcId, IdentitySource, IndexerDomainId, PoolId,
         RoutingScopeId, StableDpSlotId,
     };
-    use dynamo_router_types::protocols::{
+    use dynamo_router_protocol::protocols::{
         ResidencyOwner, ResidencyProjection, ResidencyRoutingSnapshot, RouterHintSourceMetadata,
     };
     let owner = |slot: u8| {

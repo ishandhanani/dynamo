@@ -833,7 +833,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "dynamo-router-types"
+name = "dynamo-router-protocol"
 version = "1.7.0"
 dependencies = [
  "anyhow",
@@ -877,7 +877,7 @@ dependencies = [
  "derive_builder",
  "dynamo-http-server",
  "dynamo-prometheus-names",
- "dynamo-router-types",
+ "dynamo-router-protocol",
  "dynamo-truthy",
  "dynamo-worker-selection",
  "educe",
@@ -967,7 +967,7 @@ dependencies = [
  "async-trait",
  "blake3",
  "dashmap",
- "dynamo-router-types",
+ "dynamo-router-protocol",
  "fastrand",
  "parking_lot",
  "rustc-hash",

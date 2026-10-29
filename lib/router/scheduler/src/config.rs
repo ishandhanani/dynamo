@@ -8,7 +8,7 @@ use std::time::Duration;
 
 use dynamo_admission::config::{AdmissionConfig, ClassifierConfig};
 use dynamo_kv_indexer::config::IndexerConfig;
-use dynamo_router_types::config::{RouterConfigOverride, TrackingHashConfig};
+use dynamo_router_protocol::config::{RouterConfigOverride, TrackingHashConfig};
 use dynamo_slot_tracker::config::SlotsConfig;
 use dynamo_worker_selection::config::SelectionConfig;
 use serde::Serialize;

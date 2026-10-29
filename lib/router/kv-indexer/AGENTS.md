@@ -7,7 +7,7 @@ The KV cache index of the Dynamo router: every index tree, the KV event wire for
 
 ## Guardrails
 
-- Depend only on `dynamo-router-types` for router vocabulary. The optional
+- Depend only on `dynamo-router-protocol` for router vocabulary. The optional
   `dynamo-runtime` dependency exists for the `runtime-protocols` feature alone and is
   slated for removal; do not widen it.
 - Never introduce `lib/llm` / `dynamo-llm` dependencies, gated or ungated.

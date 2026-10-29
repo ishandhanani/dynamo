@@ -4,10 +4,10 @@
 use std::io::Write;
 
 use criterion::{BenchmarkId, Criterion, Throughput, black_box, criterion_group, criterion_main};
-use dynamo_router_types::config::TrackingHashConfig;
-use dynamo_router_types::identity::RoutingPartitionRef;
-use dynamo_router_types::protocols::{BlockHashOptions, compute_block_hash_for_seq};
-use dynamo_router_types::tracking_hash::{
+use dynamo_router_protocol::config::TrackingHashConfig;
+use dynamo_router_protocol::identity::RoutingPartitionRef;
+use dynamo_router_protocol::protocols::{BlockHashOptions, compute_block_hash_for_seq};
+use dynamo_router_protocol::tracking_hash::{
     TrackingHashAlgorithm, TrackingHashContext, TrackingHashScope,
 };
 use tempfile::NamedTempFile;

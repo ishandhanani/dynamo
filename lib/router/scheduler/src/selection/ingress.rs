@@ -9,7 +9,7 @@ use super::error::SelectionError;
 use super::types::WorkerCatalogRecord;
 use dynamo_kv_indexer::ingest::backend::Indexer;
 use dynamo_kv_indexer::ingest::registry::WorkerRegistry;
-use dynamo_router_types::identity::RoutingPartitionId;
+use dynamo_router_protocol::identity::RoutingPartitionId;
 
 /// Builds and feeds a partition's index ([`super::KvIndexSource::Owned`]).
 ///

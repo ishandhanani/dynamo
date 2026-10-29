@@ -9,7 +9,7 @@ use parking_lot::RwLock;
 use rustc_hash::{FxBuildHasher, FxHashMap, FxHashSet};
 
 use crate::cleanup::{self, CleanableNode, CleanupGuard, CleanupState};
-use dynamo_router_types::protocols::WorkerWithDpRank;
+use dynamo_router_protocol::protocols::WorkerWithDpRank;
 
 type SharedNode = Arc<RwLock<PromptTrieNode>>;
 

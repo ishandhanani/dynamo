@@ -7,7 +7,7 @@
 use axum::Json;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
-use dynamo_router_types::sched::KvSchedulerError;
+use dynamo_router_protocol::sched::KvSchedulerError;
 
 use super::SelectionError;
 

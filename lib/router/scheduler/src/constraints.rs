@@ -10,8 +10,8 @@
 
 use std::collections::HashSet;
 
-use dynamo_router_types::config::RouterConfigOverride;
-use dynamo_router_types::protocols::{
+use dynamo_router_protocol::config::RouterConfigOverride;
+use dynamo_router_protocol::protocols::{
     DpRank, RoutingConstraints, WorkerAffinityTarget, WorkerId, WorkerWithDpRank,
 };
 

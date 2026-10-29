@@ -7,7 +7,7 @@ replica mesh that keeps peers' load views in sync (`replica-sync-zmq`), and, beh
 
 ## Guardrails
 
-- Depend only on `dynamo-router-types` for router vocabulary and on `dynamo-kv-indexer`
+- Depend only on `dynamo-router-protocol` for router vocabulary and on `dynamo-kv-indexer`
   only for the ZMQ socket helper behind `replica-sync-zmq`. Never introduce
   `dynamo-runtime` or `lib/llm` / `dynamo-llm` dependencies, gated or ungated.
 - The standalone service (`http`) must stay usable by processes that run no other Dynamo

@@ -10,7 +10,7 @@ use tokio::sync::{Notify, mpsc::Sender};
 
 use anyhow::Context as _;
 use async_trait::async_trait;
-use dynamo_router_types::prefill_load::PrefillLoadEstimator;
+use dynamo_router_protocol::prefill_load::PrefillLoadEstimator;
 use dynamo_runtime::{
     DistributedRuntime,
     discovery::{DiscoveryInstance, DiscoveryQuery, DiscoveryStream, ModelCardInstanceId},
@@ -2371,9 +2371,9 @@ request_classifier:
             (0..2)
                 .map(|instance| (
                     WorkerType::Aggregated,
-                    dynamo_router_types::identity::RoutingPartitionId::new(
+                    dynamo_router_protocol::identity::RoutingPartitionId::new(
                         format!("classifier-model-{instance}"),
-                        dynamo_router_types::identity::DEFAULT_ROUTING_GROUP
+                        dynamo_router_protocol::identity::DEFAULT_ROUTING_GROUP
                     ),
                 ))
                 .collect::<Vec<_>>()

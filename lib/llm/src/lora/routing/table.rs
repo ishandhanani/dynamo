@@ -4,7 +4,7 @@
 //! LoRA Routing Table - Thread-safe data structure for storing LoRA allocation decisions.
 
 use dashmap::DashMap;
-use dynamo_router_types::protocols::WorkerWithDpRank;
+use dynamo_router_protocol::protocols::WorkerWithDpRank;
 use std::sync::Arc;
 use std::time::Instant;
 

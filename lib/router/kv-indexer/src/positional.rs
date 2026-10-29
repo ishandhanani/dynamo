@@ -32,7 +32,7 @@ use super::{
     SyncIndexer, WorkerLookupStats, WorkerTask,
 };
 use crate::active_set::reconcile_active_workers;
-use dynamo_router_types::protocols::{
+use dynamo_router_protocol::protocols::{
     DpRank, ExternalSequenceBlockHash, KvCacheEvent, KvCacheEventData, KvCacheEventError,
     KvCacheStoreData, KvCacheStoredBlockData, LocalBlockHash, OverlapScores, RouterEvent, WorkerId,
     WorkerWithDpRank,
@@ -554,10 +554,11 @@ impl PositionalIndexer {
                     worker_id: worker.worker_id,
                     state_source: None,
                     session_id: None,
-                    storage_tier: dynamo_router_types::protocols::StorageTier::Device,
-                    residency_domain: dynamo_router_types::protocols::WireResidencyDomain::explicit(
-                        dynamo_router_types::protocols::ResidencyDomain::Worker,
-                    ),
+                    storage_tier: dynamo_router_protocol::protocols::StorageTier::Device,
+                    residency_domain:
+                        dynamo_router_protocol::protocols::WireResidencyDomain::explicit(
+                            dynamo_router_protocol::protocols::ResidencyDomain::Worker,
+                        ),
                     event: KvCacheEvent {
                         event_id,
                         data: KvCacheEventData::Stored(KvCacheStoreData {
@@ -980,7 +981,7 @@ impl PositionalIndexer {
 mod tests {
     use super::{LevelIndex, PositionalIndexer, SearchMode};
     use crate::test_utils::{assert_overlap_scores_eq, make_store_event};
-    use dynamo_router_types::protocols::{LocalBlockHash, RouterEvent, WorkerWithDpRank};
+    use dynamo_router_protocol::protocols::{LocalBlockHash, RouterEvent, WorkerWithDpRank};
     use rustc_hash::FxHashMap;
 
     fn local_hashes(hashes: &[u64]) -> Vec<LocalBlockHash> {

@@ -6,14 +6,14 @@ use std::time::Instant;
 
 use tokio::sync::oneshot;
 
-pub use dynamo_router_types::cache::{
+pub use dynamo_router_protocol::cache::{
     IndexerQueryRequest, IndexerQueryResponse, IndexerRecordRoutingDecisionRequest,
     IndexerRecordRoutingDecisionResponse, KvRouterError, KvStateAgentIdentity, KvStateAgentStatus,
     KvStateAttachmentStatus, KvStateProtocolVersion, KvStateRecoveryReceipt, MatchDetails,
     MaybeError, RoutingDecisionHashes, WireLowerTierMatchDetails, WireOverlapScores,
     WireTieredMatchDetails, WorkerKvQueryKind, WorkerKvQueryRequest, WorkerKvQueryResponse,
 };
-use dynamo_router_types::protocols::*;
+use dynamo_router_protocol::protocols::*;
 use dynamo_tokens::SequenceHash;
 
 #[cfg(feature = "bench")]

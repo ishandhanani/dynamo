@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! The admission slice of the router configuration: queue policy and limits, plus the policy
-//! classes and classifier settings (re-exported from the types crate).
+//! classes and classifier settings (the profiles in `policy_config`).
 
 use std::fmt;
 use std::str::FromStr;

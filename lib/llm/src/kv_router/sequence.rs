@@ -10,7 +10,7 @@
 mod direct_zmq;
 
 use dynamo_kv_router::selection::{ModelLoadResponse, SelectionService};
-use dynamo_router_types::protocols::{
+use dynamo_router_protocol::protocols::{
     ActiveSequenceEvent, ActiveSequenceEventBatch, MAX_REPLICA_BATCH_DURATION,
     MAX_REPLICA_BATCH_EVENTS, SchedulerGroup, SchedulerLoad, WorkerWithDpRank,
 };
@@ -147,7 +147,7 @@ impl ActiveSequenceEventPublisher {
         self.enqueue(ActiveSequenceEvent {
             request_id,
             worker,
-            data: dynamo_router_types::protocols::ActiveSequenceEventData::MarkPrefillCompleted,
+            data: dynamo_router_protocol::protocols::ActiveSequenceEventData::MarkPrefillCompleted,
             router_id: worker.worker_id,
             lora_name: None,
         })
@@ -605,7 +605,7 @@ async fn run_scheduler_load_publisher(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use dynamo_router_types::protocols::ActiveSequenceEventData;
+    use dynamo_router_protocol::protocols::ActiveSequenceEventData;
     use tokio::time::Instant;
 
     fn free_event(request_id: impl Into<String>) -> ActiveSequenceEvent {
@@ -1074,7 +1074,7 @@ mod tests {
         let model = |name: &str, worker_id, blocks, tokens| ModelLoadResponse {
             model_name: name.into(),
             routing_group: "default".into(),
-            loads: vec![dynamo_router_types::protocols::PotentialLoad {
+            loads: vec![dynamo_router_protocol::protocols::PotentialLoad {
                 worker_id,
                 dp_rank: 0,
                 potential_decode_blocks: blocks,
@@ -1127,7 +1127,7 @@ mod tests {
                     router_queue_threshold: None,
                     ..Default::default()
                 },
-                dynamo_router_types::WorkerType::Aggregated,
+                dynamo_router_protocol::WorkerType::Aggregated,
                 dynamo_custom_policy_builtin::default_registry(),
             )
             .indexer_threads(1)

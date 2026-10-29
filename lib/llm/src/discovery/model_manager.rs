@@ -12,8 +12,8 @@ use std::{
 use arc_swap::ArcSwap;
 use dashmap::{DashMap, mapref::entry::Entry};
 use dynamo_kv_router::config::KvRouterConfig;
-use dynamo_router_types::prefill_load::PrefillLoadEstimator;
-use dynamo_router_types::protocols::{
+use dynamo_router_protocol::prefill_load::PrefillLoadEstimator;
+use dynamo_router_protocol::protocols::{
     KvTransferEnforcement, RoutingConstraints, WorkerId, WorkerWithDpRank,
 };
 use dynamo_worker_selection::selector::WorkerInputs;
@@ -2925,7 +2925,7 @@ mod tests {
     use super::*;
     use std::collections::HashMap;
 
-    use dynamo_router_types::protocols::{KV_EVENT_SUBJECT, WorkerWithDpRank};
+    use dynamo_router_protocol::protocols::{KV_EVENT_SUBJECT, WorkerWithDpRank};
     use dynamo_runtime::{
         DistributedRuntime, Runtime,
         discovery::{Discovery, DiscoverySpec, MockDiscovery, SharedMockRegistry},

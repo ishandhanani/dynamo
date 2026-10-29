@@ -9,8 +9,8 @@ use std::{
 };
 
 use dynamo_admission::classifier::AbortCause;
-use dynamo_router_types::protocols::{TokensWithHashes, WorkerConfigLike, WorkerWithDpRank};
-use dynamo_router_types::sched::KvSchedulerError;
+use dynamo_router_protocol::protocols::{TokensWithHashes, WorkerConfigLike, WorkerWithDpRank};
+use dynamo_router_protocol::sched::KvSchedulerError;
 use dynamo_runtime::{
     error::{DynamoError, ErrorType, match_error_chain},
     metrics::frontend_perf::{STAGE_ROUTE, StageGuard},

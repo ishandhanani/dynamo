@@ -12,7 +12,7 @@ use super::children::{ChildInsertResult, NodeChildren};
 use super::state::CrtcNodeState;
 use super::types::*;
 use super::worker_set::WorkerSet;
-use dynamo_router_types::protocols::*;
+use dynamo_router_protocol::protocols::*;
 
 fn record_last_matched_hash(
     last_matched_hashes: &mut Option<&mut FxHashMap<WorkerWithDpRank, ExternalSequenceBlockHash>>,

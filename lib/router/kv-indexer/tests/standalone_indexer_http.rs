@@ -18,8 +18,8 @@ use std::time::Duration;
 use dynamo_kv_indexer::http::server::{AppState, create_router};
 use dynamo_kv_indexer::ingest::registry::WorkerRegistry;
 use dynamo_kv_indexer::zmq_wire::{BlockHashValue, RawKvEvent};
-use dynamo_router_types::identity::RoutingPartitionId;
-use dynamo_router_types::protocols::{
+use dynamo_router_protocol::identity::RoutingPartitionId;
+use dynamo_router_protocol::protocols::{
     BlockHashOptions, ExternalSequenceBlockHash, KvCacheEvent, KvCacheEventData, KvCacheStoreData,
     KvCacheStoredBlockData, LocalBlockHash, RouterEvent, StorageTier, compute_block_hash_for_seq,
     compute_seq_hash_for_block,

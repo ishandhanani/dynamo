@@ -26,8 +26,8 @@ use dynamo_admission::classifier::RequestClassifierFactory;
 #[cfg(test)]
 use dynamo_kv_router::config::KvRouterConfig;
 use dynamo_kv_router::plugins::RouterPlugins;
-use dynamo_router_types::WorkerType;
-use dynamo_router_types::identity::RoutingPartitionRef;
+use dynamo_router_protocol::WorkerType;
+use dynamo_router_protocol::identity::RoutingPartitionRef;
 use dynamo_runtime::{DistributedRuntime, metrics::MetricsHierarchy};
 use dynamo_worker_selection::config::SelectionConfig;
 use dynamo_worker_selection::plugin::WorkerSelectionPolicy;
@@ -356,7 +356,7 @@ async fn run_watcher(
     metrics: Arc<dynamo_http_server::metrics::Metrics>,
     chat_engine_factory: Option<ChatEngineFactoryCallback>,
     prefill_load_estimator: Option<
-        Arc<dyn dynamo_router_types::prefill_load::PrefillLoadEstimator>,
+        Arc<dyn dynamo_router_protocol::prefill_load::PrefillLoadEstimator>,
     >,
     local_model_path: Option<PathBuf>,
     tokenizer_backend: Option<TokenizerBackend>,

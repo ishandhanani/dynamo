@@ -15,8 +15,8 @@ use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
 
 use crate::KvIndexerMetrics;
-use dynamo_router_types::identity::RoutingPartitionId;
-use dynamo_router_types::protocols::WorkerId;
+use dynamo_router_protocol::identity::RoutingPartitionId;
+use dynamo_router_protocol::protocols::WorkerId;
 
 use super::backend::{Indexer, IndexerPolicy, create_indexer_with_policy};
 use super::listener::spawn_zmq_listener;
@@ -907,7 +907,7 @@ impl WorkerRegistry {
 mod tests {
     use super::*;
     use crate::ingest::backend::test_util::store_event;
-    use dynamo_router_types::protocols::{LocalBlockHash, StorageTier, WorkerWithDpRank};
+    use dynamo_router_protocol::protocols::{LocalBlockHash, StorageTier, WorkerWithDpRank};
     use std::future::Future;
     use std::sync::atomic::Ordering;
     use std::task::{Context, Poll, Waker};

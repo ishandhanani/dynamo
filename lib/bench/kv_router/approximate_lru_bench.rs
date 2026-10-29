@@ -20,8 +20,8 @@ use dynamo_kv_indexer::{
     ApproximateRetentionConfig, KvIndexerInterface, KvIndexerMetrics,
 };
 use dynamo_kv_indexer::{ConcurrentRadixTreeCompressed, ThreadPoolIndexer};
-use dynamo_router_types::protocols::AttemptId;
-use dynamo_router_types::protocols::{LocalBlockHash, WorkerWithDpRank};
+use dynamo_router_protocol::protocols::AttemptId;
+use dynamo_router_protocol::protocols::{LocalBlockHash, WorkerWithDpRank};
 use dynamo_tokens::SequenceHash;
 use serde::Serialize;
 use tokio::sync::{Notify, oneshot};

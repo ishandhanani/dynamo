@@ -7,8 +7,8 @@ use std::sync::{Arc, Weak};
 use std::time::{Duration, Instant};
 
 use dynamo_kv_indexer::cuckoo::{CkfBuildError, CkfConfig, DcCkfState, ProducerIdentity};
-use dynamo_router_types::identity::PoolId;
-use dynamo_router_types::protocols::{ActiveLoad, SchedulerLoad, WorkerId, WorkerWithDpRank};
+use dynamo_router_protocol::identity::PoolId;
+use dynamo_router_protocol::protocols::{ActiveLoad, SchedulerLoad, WorkerId, WorkerWithDpRank};
 use dynamo_runtime::protocols::EndpointId;
 use dynamo_runtime::transports::event_plane::EventEnvelope;
 use parking_lot::Mutex;
@@ -1606,10 +1606,10 @@ fn validate_roles(roles: &[WorkerRole]) -> anyhow::Result<()> {
 mod tests {
     use std::sync::{Arc, mpsc as std_mpsc};
 
-    use dynamo_router_types::identity::{
+    use dynamo_router_protocol::identity::{
         CacheSemanticsId, DcId, IdentitySource, IndexerDomainId, RoutingScopeId,
     };
-    use dynamo_router_types::protocols::{
+    use dynamo_router_protocol::protocols::{
         ExternalSequenceBlockHash, KvCacheEvent, KvCacheEventData, KvCacheStoreData,
         KvCacheStoredBlockData, LocalBlockHash, RouterEvent,
     };
@@ -3379,7 +3379,9 @@ mod tests {
             dp_rank,
             active_decode_blocks: 3,
             active_prefill_tokens: 4,
-            group: dynamo_router_types::protocols::SchedulerGroup::Standalone { scheduler_id: 7 },
+            group: dynamo_router_protocol::protocols::SchedulerGroup::Standalone {
+                scheduler_id: 7,
+            },
         }
     }
 

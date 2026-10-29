@@ -1369,7 +1369,7 @@ mod tests {
         CkfCommitState, CkfConfig, CkfFailureAction, CkfFailureDomain, ConsumerInstanceId,
         DcCkfState, GlobalCkfBucketImage, GlobalCkfManifest, PrefixSearchConfig,
     };
-    use dynamo_router_types::identity::{
+    use dynamo_router_protocol::identity::{
         CacheSemanticsId, DcId, IdentitySource, IndexerDomainId, PoolId, RoutingScopeId,
     };
 

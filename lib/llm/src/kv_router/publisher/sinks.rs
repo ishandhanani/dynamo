@@ -7,8 +7,8 @@ use std::sync::Arc;
 use anyhow::Result;
 
 use dynamo_kv_indexer::{KvRouterError, LocalKvIndexer};
-use dynamo_router_types::protocols::RouterEventSink;
-use dynamo_router_types::protocols::{
+use dynamo_router_protocol::protocols::RouterEventSink;
+use dynamo_router_protocol::protocols::{
     KvCacheEvent, KvCacheEventData, ResidencyDomain, RouterEvent, StorageTier,
 };
 use dynamo_runtime::transports::event_plane::EventPublisher;

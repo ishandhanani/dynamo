@@ -17,7 +17,7 @@ from __future__ import annotations
 from typing import Any
 
 # Mirror of sglang's MultimodalItem._compute_pad_value, also pinned in Rust
-# (dynamo_router_types::protocols::pad_value_for_mm_hash). Must stay in lockstep.
+# (dynamo_router_protocol::protocols::pad_value_for_mm_hash). Must stay in lockstep.
 MM_PAD_SHIFT_VALUE = 1_000_000
 MM_PAD_HASH_MASK = (1 << 30) - 1
 

@@ -6,10 +6,10 @@ use std::time::{Duration, Instant};
 use dynamo_tokens::SequenceHash;
 use serde::Deserialize;
 
-use dynamo_router_types::protocols::{
+use dynamo_router_protocol::protocols::{
     BlockExtraInfo, BlockHashOptions, LocalBlockHash, compute_block_hash_for_seq,
 };
-use dynamo_router_types::tracking_hash::{TrackingHashContext, TrackingHashScope};
+use dynamo_router_protocol::tracking_hash::{TrackingHashContext, TrackingHashScope};
 
 use super::error::SelectionError;
 

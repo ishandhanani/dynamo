@@ -14,5 +14,5 @@ description = "Soft session-affinity repin policy example for Dynamo"
 [dependencies]
 dynamo-kv-router = { workspace = true }
 dynamo-worker-selection = { workspace = true }
-dynamo-router-types = { workspace = true }
+dynamo-router-protocol = { workspace = true }
 serde.workspace = true

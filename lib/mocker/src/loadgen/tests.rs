@@ -6,7 +6,7 @@ use std::io::Write;
 use aisimulate_core::replay::loadgen::{
     ReplayRequestHashes, TraceFileFormat, validate_trace_files,
 };
-use dynamo_router_types::protocols::{
+use dynamo_router_protocol::protocols::{
     BlockHashOptions, compute_block_hash_for_seq, compute_seq_hash_for_block,
 };
 use tempfile::NamedTempFile;

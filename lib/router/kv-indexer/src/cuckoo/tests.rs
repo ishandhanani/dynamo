@@ -3,7 +3,7 @@
 
 use rustc_hash::{FxHashMap, FxHashSet};
 
-use dynamo_router_types::protocols::{LocalBlockHash, compute_seq_hash_for_block};
+use dynamo_router_protocol::protocols::{LocalBlockHash, compute_seq_hash_for_block};
 
 use super::addressing::{CkfAddressing, CkfProbe};
 use super::bucket::{CuckooBucketStore, PackedBucket, TransposedCkfTable};
@@ -174,7 +174,7 @@ fn bounded_relocation_rolls_back_every_write_and_emits_no_dirty_bucket() {
 
     assert!(matches!(
         result,
-        Err(dynamo_router_types::protocols::KvCacheEventError::CapacityExhausted)
+        Err(dynamo_router_protocol::protocols::KvCacheEventError::CapacityExhausted)
     ));
     assert_eq!(view.load_bucket(0), full_a);
     assert_eq!(view.load_bucket(1), full_b);
@@ -775,7 +775,7 @@ fn store_remove_churn_drains_every_physical_slot() {
 #[test]
 fn new_event_errors_have_finite_metric_labels() {
     use crate::{EventKind, EventStatus, KvIndexerMetrics};
-    use dynamo_router_types::protocols::KvCacheEventError;
+    use dynamo_router_protocol::protocols::KvCacheEventError;
 
     let metrics = KvIndexerMetrics::new_unregistered();
     metrics.increment_event_applied(EventKind::Stored, Err(KvCacheEventError::CapacityExhausted));

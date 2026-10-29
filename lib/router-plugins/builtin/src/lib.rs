@@ -6,7 +6,7 @@
 //! Routing hosts always link the default through `default_registry`. The optional custom
 //! catalog adds the named default, two-tier, and ThunderAgent providers through `register`. The default
 //! itself uses the same public candidate inputs and scorer/picker dispatch as external policies.
-//! Sequence tracking lives in dynamo-slot-tracker, eligibility in dynamo-router-types, and
+//! Sequence tracking lives in dynamo-slot-tracker, eligibility in dynamo-router-protocol, and
 //! admission in dynamo-admission; this crate only ships policies.
 
 mod default;
@@ -40,8 +40,8 @@ pub fn register(registry: &mut RouterPluginRegistry) -> Result<(), RouterPluginR
 mod tests {
     use dynamo_kv_router::config::KvRouterConfig;
     use dynamo_kv_router::plugins::WorkerSelectionPolicyRegistryError;
-    use dynamo_router_types::WorkerType;
-    use dynamo_router_types::identity::RoutingPartitionRef;
+    use dynamo_router_protocol::WorkerType;
+    use dynamo_router_protocol::identity::RoutingPartitionRef;
     use dynamo_worker_selection::plugin::WorkerSelectionPolicyFactory;
 
     use super::*;

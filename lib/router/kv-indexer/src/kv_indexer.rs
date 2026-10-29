@@ -18,8 +18,8 @@ use super::{
     MatchRequest, PreBoundEventCounters, RadixTree, RoutingDecisionRequest, panic_payload_message,
 };
 use crate::pruning::{BlockEntry, PruneConfig, WorkerPruneManager};
-use dynamo_router_types::protocols::AttemptId;
-use dynamo_router_types::protocols::*;
+use dynamo_router_protocol::protocols::AttemptId;
+use dynamo_router_protocol::protocols::*;
 use dynamo_tokens::SequenceHash;
 
 fn apply_event_with_counters(

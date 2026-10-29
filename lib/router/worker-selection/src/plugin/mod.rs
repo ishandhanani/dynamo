@@ -26,12 +26,12 @@ pub use inputs::{
 pub use crate::config::SelectionConfig;
 pub use crate::config::{WorkerSelectionConfig, WorkerSelectionInstance};
 pub use crate::selector::WorkerSelectionPolicy;
-pub use dynamo_router_types::sched::{
+pub use dynamo_router_protocol::sched::{
     SessionContext, WorkerSelectionInputTrigger, WorkerSelectionPolicyError,
 };
 
-use dynamo_router_types::WorkerType;
-use dynamo_router_types::identity::RoutingPartitionRef;
+use dynamo_router_protocol::WorkerType;
+use dynamo_router_protocol::identity::RoutingPartitionRef;
 use std::sync::Arc;
 
 /// Factory that creates one worker-selection policy per routing partition.

@@ -16,11 +16,11 @@ use super::*;
 use crate::scheduling_compat::OverlapSignals;
 use crate::scheduling_compat::RefreshedOverlap;
 use crate::test_utils::{NoopSequencePublisher, SimpleWorkerConfig};
-use dynamo_router_types::kv_hints::KvTransferCandidates;
-use dynamo_router_types::protocols::{
+use dynamo_router_protocol::kv_hints::KvTransferCandidates;
+use dynamo_router_protocol::protocols::{
     ActiveSequenceEvent, ExternalSequenceBlockHash, WorkerSelectionResult, WorkerWithDpRank,
 };
-use dynamo_router_types::sched::{KvSchedulerError, ScheduleMode, WorkerSelectionPolicyError};
+use dynamo_router_protocol::sched::{KvSchedulerError, ScheduleMode, WorkerSelectionPolicyError};
 use dynamo_slot_tracker::topology::WorkerDpRange;
 use dynamo_slot_tracker::{ActiveSequencesMultiWorker, SequencePublisher};
 use dynamo_worker_selection::plugin::{
@@ -711,7 +711,7 @@ fn make_request(
 ) -> (
     SchedulingRequest,
     tokio::sync::oneshot::Receiver<
-        Result<SchedulingResponse, dynamo_router_types::sched::KvSchedulerError>,
+        Result<SchedulingResponse, dynamo_router_protocol::sched::KvSchedulerError>,
     >,
 ) {
     let (tx, rx) = tokio::sync::oneshot::channel();
@@ -736,7 +736,7 @@ fn make_request(
         affinity_target: None,
         pinned_worker: None,
         allowed_worker_ids: None,
-        routing_constraints: dynamo_router_types::protocols::RoutingConstraints::default(),
+        routing_constraints: dynamo_router_protocol::protocols::RoutingConstraints::default(),
         shared_cache_hits: None,
         resp_tx: Some(Box::new(
             dynamo_worker_selection::selector::OneshotResponder(tx),
@@ -3081,7 +3081,7 @@ policy_classes:
     assert_eq!(rejection.policy_class, "capped");
     assert_eq!(
         rejection.limit_kind,
-        dynamo_router_types::protocols::QueueLimitKind::Requests
+        dynamo_router_protocol::protocols::QueueLimitKind::Requests
     );
     assert_eq!(rejection.current, 1);
     assert_eq!(rejection.limit, 1);
@@ -3286,7 +3286,7 @@ async fn test_worker_updates_after_empty_start() {
     assert!(
         matches!(
             resp,
-            Err(dynamo_router_types::sched::KvSchedulerError::NoEndpoints)
+            Err(dynamo_router_protocol::sched::KvSchedulerError::NoEndpoints)
         ),
         "expected NoEndpoints before worker updates, got {resp:?}"
     );
@@ -3489,7 +3489,7 @@ async fn test_incompatible_required_taints_fail_without_queueing() {
     cfg_tx.send(configs).unwrap();
 
     let (mut req, rx) = make_request("tainted", 256);
-    req.routing_constraints = dynamo_router_types::protocols::RoutingConstraints {
+    req.routing_constraints = dynamo_router_protocol::protocols::RoutingConstraints {
         required_taints: HashSet::from(["mdc-b".to_string()]),
         preferred_taints: HashMap::new(),
     };

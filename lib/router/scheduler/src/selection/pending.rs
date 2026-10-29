@@ -12,8 +12,8 @@ use std::time::{Duration, Instant};
 use dynamo_tokens::SequenceHash;
 use parking_lot::Mutex;
 
-use dynamo_router_types::identity::RoutingPartitionId;
-use dynamo_router_types::protocols::{LocalBlockHash, WorkerWithDpRank};
+use dynamo_router_protocol::identity::RoutingPartitionId;
+use dynamo_router_protocol::protocols::{LocalBlockHash, WorkerWithDpRank};
 
 /// How long a pending selection lives before it is evicted.
 const SELECTION_CACHE_TTL: Duration = Duration::from_secs(120);

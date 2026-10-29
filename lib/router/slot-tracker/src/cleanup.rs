@@ -30,7 +30,7 @@ use std::time::Instant;
 use parking_lot::RwLock;
 use rustc_hash::FxHashMap;
 
-pub use dynamo_router_types::CLEANUP_INTERVAL_MS;
+pub use dynamo_router_protocol::CLEANUP_INTERVAL_MS;
 
 /// Node type that participates in the reverse-BFS cleanup sweep.
 pub trait CleanableNode: Sized + Send + Sync + 'static {

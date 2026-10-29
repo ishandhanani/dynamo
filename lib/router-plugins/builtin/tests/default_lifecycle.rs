@@ -5,8 +5,8 @@ use dynamo_kv_router::config::KvRouterConfig;
 use dynamo_kv_router::selection::{
     PromptRequest, SelectAndReserveRequest, SelectionCacheConfig, SelectionCore, WorkerRequest,
 };
-use dynamo_router_types::identity::RoutingPartitionId;
-use dynamo_router_types::protocols::RoutingConstraints;
+use dynamo_router_protocol::identity::RoutingPartitionId;
+use dynamo_router_protocol::protocols::RoutingConstraints;
 
 fn worker(worker_id: u64) -> WorkerRequest {
     WorkerRequest {
@@ -141,7 +141,7 @@ async fn runtime_updates_are_conditional_and_cancelled_writes_do_not_apply() {
 
 #[tokio::test]
 async fn scoring_error_does_not_book_and_allows_retry() {
-    use dynamo_router_types::sched::WorkerSelectionPolicyError;
+    use dynamo_router_protocol::sched::WorkerSelectionPolicyError;
     use dynamo_worker_selection::plugin::{
         WorkerCandidates, WorkerInputView, WorkerPicker, WorkerScorer, WorkerSelectionContext,
         WorkerSelectionPolicy,

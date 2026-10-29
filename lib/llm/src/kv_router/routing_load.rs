@@ -5,7 +5,7 @@ use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use dynamo_router_types::protocols::WorkerWithDpRank;
+use dynamo_router_protocol::protocols::WorkerWithDpRank;
 use dynamo_slot_tracker::SchedulerLoadSnapshot;
 use parking_lot::Mutex;
 use tokio::sync::mpsc;

@@ -13,7 +13,7 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use dynamo_router_types::protocols::{KvCacheEventData, KvCacheEventError, RouterEvent};
+use dynamo_router_protocol::protocols::{KvCacheEventData, KvCacheEventError, RouterEvent};
 
 static IGNORED_RESIDENCY_EVENT_COUNT: AtomicU64 = AtomicU64::new(0);
 
@@ -580,7 +580,7 @@ mod export {
     mod tests {
         use super::*;
         use crate::KvIndexerMetrics;
-        use dynamo_router_types::protocols::KvCacheEventError;
+        use dynamo_router_protocol::protocols::KvCacheEventError;
         use prometheus::{Registry, TextEncoder};
 
         fn output(registry: &Registry) -> String {

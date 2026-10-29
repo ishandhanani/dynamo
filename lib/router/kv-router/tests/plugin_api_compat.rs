@@ -18,9 +18,9 @@ use dynamo_kv_router::plugins::worker_selection::{
     WorkerCandidate, WorkerCandidates, WorkerFilter, WorkerInputView, WorkerInputs, WorkerPicker,
     WorkerScorer, WorkerSelectionContext, WorkerSelectionPolicy,
 };
-use dynamo_router_types::WorkerType;
-use dynamo_router_types::identity::RoutingPartitionRef;
-use dynamo_router_types::sched::WorkerSelectionPolicyError;
+use dynamo_router_protocol::WorkerType;
+use dynamo_router_protocol::identity::RoutingPartitionRef;
+use dynamo_router_protocol::sched::WorkerSelectionPolicyError;
 
 struct LegacyPolicy;
 
@@ -34,7 +34,7 @@ impl WorkerFilter for LegacyPolicy {
         context: &WorkerSelectionContext<'_>,
         candidate: WorkerCandidate<'_>,
     ) -> Result<bool, WorkerSelectionPolicyError> {
-        let _: Option<&dynamo_router_types::sched::SessionContext> = context.session_context();
+        let _: Option<&dynamo_router_protocol::sched::SessionContext> = context.session_context();
         let _: Option<u32> = context.expected_output_tokens();
         let cache = candidate.cache().expect("requested cache inputs");
         Ok(cache.device_overlap_blocks() + cache.host_overlap_blocks() >= 0.0)
