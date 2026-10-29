@@ -21,6 +21,19 @@ impl RoutingHost {
     ) -> Result<SelectionOutcome, Error> {
         let context_id = request.context().id().to_string();
         let staged_kv = StagedKv::for_request(request.content());
+        // A decode leg with staged KV follows a prefill that is already running: the
+        // prefill hop was its admission gate, and a KV-routed prefill queue judged its
+        // class limits on both pools. It books here without waiting; reject thresholds
+        // still apply. A conditional-disagg bypass has nothing staged and still waits,
+        // since this queue is its only gate.
+        let admission = match admission {
+            FindBestMatchAdmission::WithAdmission
+                if phase == RequestPhase::Decode && staged_kv == StagedKv::Present =>
+            {
+                FindBestMatchAdmission::AdmittedUpstream
+            }
+            admission => admission,
+        };
         let policy_class = request.metadata().get("policy-class").cloned();
         let session_context = request
             .agent_context
