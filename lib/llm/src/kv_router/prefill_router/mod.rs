@@ -27,7 +27,12 @@ use futures::stream::{self, StreamExt};
 
 use crate::{
     discovery::{ModelManager, WorkerSetTarget, WorkerSetTargetId},
-    kv_router::{RoutingHost, SelectionPolicySource, routing_host::PrefillDispatch},
+    kv_router::{
+        RoutingHost, SelectionPolicySource,
+        routing_host::{
+            AttachedRoutePlan, DECODE_ROUTE_PLAN_KEY, PREFILL_ROUTE_PLAN_KEY, PrefillDispatch,
+        },
+    },
     protocols::common::{
         extensions::{SESSION_AFFINITY_CONTEXT_KEY, SessionAffinityId},
         llm_backend::{LLMEngineOutput, PreprocessedRequest},
@@ -43,6 +48,7 @@ use crate::{
 mod activation;
 mod admission;
 mod conditional_bypass;
+mod front_admission;
 mod handoff;
 mod query;
 use activation::ActivationSnapshot;
@@ -241,6 +247,8 @@ pub struct PrefillRouter {
     /// Decode routing owns conditional-disagg planning and dispatch. This is
     /// installed after the frontend constructs its one decode `RoutingHost`.
     decode_routing_host: OnceLock<Arc<RoutingHost>>,
+    /// POC: one admission queue in front of both pools, rebuilt per prefill binding.
+    front_admission: Mutex<Option<(WorkerSetTargetId, Arc<front_admission::FrontAdmission>)>>,
     selection_policy: Option<SelectionPolicySource>,
     model_manager: Arc<ModelManager>,
     cancel_token: CancellationToken,
@@ -561,6 +569,47 @@ impl
 
         let router = &binding.router;
         let endpoint_id = &binding.endpoint_id;
+
+        // POC front admission: one queue admits the request against both pools and one
+        // serializer books the prefill and decode workers before anything is sent. The
+        // hosts below send the attached plans instead of selecting or queueing again.
+        if preselected_worker.is_none()
+            && let Some(stage) = self.front_admission_for(&binding)
+        {
+            let mut decode = req.clone();
+            decode.stop_conditions.max_tokens = original_max_tokens;
+            let existing_override = decode.router_config_override.take();
+            decode.router_config_override = Some(build_decode_router_override(
+                existing_override,
+                self.conditional_disagg_policy.is_enabled(),
+            ));
+            let model_manager = Arc::clone(&self.model_manager);
+            let prefill_endpoint = endpoint_id.clone();
+            let (prefill_plan, decode_plan) = stage
+                .admit(front_admission::FrontAdmissionRequest {
+                    request_id: request_id.clone(),
+                    metadata: context.metadata().clone(),
+                    session_affinity: context
+                        .get_optional::<SessionAffinityId>(SESSION_AFFINITY_CONTEXT_KEY)
+                        .ok()
+                        .flatten()
+                        .map(|id| id.as_ref().clone()),
+                    policy_class: context.metadata().get("policy-class").cloned(),
+                    prefill: prefill_context.content().clone(),
+                    decode,
+                    decode_constraints: Box::new(move |worker_id| {
+                        model_manager
+                            .get_kv_transfer_routing_constraints(&prefill_endpoint, worker_id)
+                    }),
+                })
+                .await?;
+            prefill_context.insert_unique(
+                PREFILL_ROUTE_PLAN_KEY,
+                AttachedRoutePlan::new(prefill_plan),
+            );
+            context.insert_unique(DECODE_ROUTE_PLAN_KEY, AttachedRoutePlan::new(decode_plan));
+        }
+
         let mut prefill_completion = None;
         let prefill_result: Result<(PrefillOutcome, Option<RoutingConstraints>)> = async {
             let PrefillDispatch {
@@ -726,6 +775,7 @@ fn independent_prefill_context(
 }
 
 impl PrefillRouter {
+    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn conditional_disagg_enabled(&self) -> bool {
         self.conditional_disagg_policy.is_enabled()
     }
@@ -744,6 +794,47 @@ impl PrefillRouter {
             Err(_) => anyhow::bail!(
                 "PrefillRouter already has a different decode RoutingHost; rebuild requires a new PrefillRouter"
             ),
+        }
+    }
+
+    /// POC: the front admission stage for `binding`, when enabled and both hops are
+    /// KV-routed. Rebuilt when the prefill binding changes.
+    fn front_admission_for(
+        &self,
+        binding: &PrefillBinding,
+    ) -> Option<Arc<front_admission::FrontAdmission>> {
+        if !front_admission::front_admission_enabled()
+            || !binding.prefill_router_mode.is_kv_routing()
+            || !self.decode_router_mode.is_kv_routing()
+        {
+            return None;
+        }
+        let decode_host = self.decode_routing_host.get()?;
+        binding.router.kv_router_if_enabled()?;
+        decode_host.kv_router_if_enabled()?;
+        let mut slot = self.front_admission.lock();
+        if let Some((target_id, stage)) = slot.as_ref()
+            && *target_id == binding.target_id
+        {
+            return Some(Arc::clone(stage));
+        }
+        match front_admission::FrontAdmission::spawn(
+            Arc::clone(&binding.router),
+            Arc::clone(decode_host),
+            self.model_name.clone(),
+        ) {
+            Ok(stage) => {
+                tracing::info!(
+                    model_name = %self.model_name,
+                    "front admission enabled: one queue books prefill and decode before dispatch"
+                );
+                *slot = Some((binding.target_id.clone(), Arc::clone(&stage)));
+                Some(stage)
+            }
+            Err(error) => {
+                tracing::warn!(%error, "front admission unavailable; using per-hop queues");
+                None
+            }
         }
     }
 
