@@ -65,7 +65,7 @@ fn parallel_planning_enabled() -> bool {
 /// Derives the decode leg's routing constraints from the prefill worker the
 /// serializer booked (its KV-transfer domain).
 pub(crate) type DecodeConstraintsFn =
-    Box<dyn FnOnce(u64) -> Result<Option<RoutingConstraints>> + Send + 'static>;
+    Box<dyn FnOnce(u64) -> Result<Option<RoutingConstraints>> + Send + Sync + 'static>;
 
 /// What one admission needs: the two planning requests, built by the caller.
 pub(crate) struct FrontAdmissionRequest {
