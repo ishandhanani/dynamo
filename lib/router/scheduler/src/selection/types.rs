@@ -14,10 +14,10 @@ pub use crate::scheduling_compat::{
 };
 use crate::scheduling_compat::{PotentialLoad, SessionContext, WorkerSelectionInputTrigger};
 use dynamo_kv_indexer::overlap::MooncakeOverlapSummary;
-use dynamo_router_types::config::RouterConfigOverride;
-use dynamo_router_types::identity::{RoutingPartitionId, default_routing_group};
-use dynamo_router_types::kv_hints::{KvHint, WorkerKvTransferKeys, WorkerKvTransferKeysCache};
-use dynamo_router_types::protocols::{
+use dynamo_router_protocol::config::RouterConfigOverride;
+use dynamo_router_protocol::identity::{RoutingPartitionId, default_routing_group};
+use dynamo_router_protocol::kv_hints::{KvHint, WorkerKvTransferKeys, WorkerKvTransferKeysCache};
+use dynamo_router_protocol::protocols::{
     BlockExtraInfo, DpRank, KvHintTransferWorkerMetadata, KvTransferEnforcement,
     RoutingConstraints, WorkerAffinityTarget, WorkerConfigLike, WorkerId, WorkerWithDpRank,
 };
@@ -26,8 +26,9 @@ use super::input::{MmRoutingInfoRequest, PromptRequest};
 
 pub const DEFAULT_MODEL_NAME: &str = "default";
 
-#[cfg_attr(not(feature = "http"), allow(dead_code))]
-pub(super) const REQUEST_BODY_LIMIT_BYTES: usize = 8 * 1024 * 1024;
+/// Request body limit the selection service applies to its JSON routes.
+#[doc(hidden)]
+pub const REQUEST_BODY_LIMIT_BYTES: usize = 8 * 1024 * 1024;
 
 fn default_model_name() -> String {
     DEFAULT_MODEL_NAME.to_string()

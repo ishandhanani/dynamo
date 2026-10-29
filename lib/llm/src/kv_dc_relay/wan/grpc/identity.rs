@@ -4,7 +4,7 @@
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use dynamo_kv_indexer::cuckoo::{DcCkfFormatIdentity, ProducerIdentity};
-use dynamo_router_types::identity::{
+use dynamo_router_protocol::identity::{
     CacheSemanticsId, DcId, IdentitySource, IndexerDomainId, PoolId, RoutingScopeId,
 };
 use dynamo_runtime::protocols::EndpointId;

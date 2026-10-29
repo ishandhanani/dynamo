@@ -11,10 +11,9 @@ use std::time::Duration;
 use criterion::{
     BatchSize, BenchmarkId, Criterion, Throughput, black_box, criterion_group, criterion_main,
 };
+use dynamo_admission::policy_config::PolicyProfile;
 use dynamo_admission::policy_queue::{PolicyQueue, QueueSnapshot};
-use dynamo_router_types::config::RouterQueuePolicy;
-use dynamo_router_types::config::policy::{PolicyProfile, RouterPolicyConfig};
-use dynamo_router_types::protocols::{WorkerPlacement, WorkerWithDpRank};
+use dynamo_router_protocol::protocols::{WorkerPlacement, WorkerWithDpRank};
 
 #[derive(Debug, Clone, Copy)]
 struct BenchRequest {
@@ -25,7 +24,7 @@ fn profile() -> PolicyProfile {
     static PROFILE: OnceLock<PolicyProfile> = OnceLock::new();
     PROFILE
         .get_or_init(|| {
-            RouterPolicyConfig::from_yaml(
+            PolicyProfile::from_yaml(
                 r#"
 default_policy_family: bench
 uncached_isl_buckets:
@@ -39,7 +38,6 @@ policy_classes:
 "#,
             )
             .unwrap()
-            .resolve_profile(None, None, RouterQueuePolicy::Fcfs)
         })
         .clone()
 }

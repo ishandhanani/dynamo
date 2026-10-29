@@ -6,8 +6,8 @@ use std::collections::HashMap;
 use anyhow::{Context, Result};
 use serde::Deserialize;
 
-use dynamo_router_types::identity::RoutingPartitionId;
-use dynamo_router_types::protocols::RouterEvent;
+use dynamo_router_protocol::identity::RoutingPartitionId;
+use dynamo_router_protocol::protocols::RouterEvent;
 
 use crate::ingest::registry::WorkerRegistry;
 

@@ -8,7 +8,7 @@ use dynamo_kv_indexer::{
     KvIndexerDelegate, KvIndexerInterface, ThreadPoolIndexer,
     concurrent_radix_tree_compressed::ConcurrentRadixTreeCompressed,
 };
-use dynamo_router_types::protocols::*;
+use dynamo_router_protocol::protocols::*;
 
 struct Delegate;
 impl KvIndexerDelegate for Delegate {

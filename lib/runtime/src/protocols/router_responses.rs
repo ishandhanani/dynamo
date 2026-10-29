@@ -2,9 +2,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! `MaybeError` for the router's typed request-plane responses, so hosts can carry them over the
-//! runtime's typed streams. The response types live in `dynamo-router-types`; the trait lives here.
+//! runtime's typed streams. The response types live in `dynamo-router-protocol`; the trait lives here.
 
-use dynamo_router_types::cache::{
+use dynamo_router_protocol::cache::{
     IndexerQueryResponse, IndexerRecordRoutingDecisionResponse, WorkerKvQueryResponse,
 };
 

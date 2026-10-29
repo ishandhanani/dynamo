@@ -14,9 +14,9 @@ use crate::kv_router::SelectionPolicySource;
 use dynamo_admission::classifier::{
     ClassifyEvent, ClassifyFuture, ClassifyRequest, RequestClassifier,
 };
-use dynamo_router_types::config::KvRouterConfig;
-use dynamo_router_types::protocols::RoutingConstraints;
-use dynamo_router_types::sched::ClassifierError;
+use dynamo_kv_router::config::KvRouterConfig;
+use dynamo_router_protocol::protocols::RoutingConstraints;
+use dynamo_router_protocol::sched::ClassifierError;
 use dynamo_runtime::{
     DistributedRuntime, Runtime,
     component::{Client, Instance},
@@ -2353,7 +2353,7 @@ async fn track_request(
 /// Scheduler-reported loads with no prompt, the way the reservation tests read them.
 async fn potential_loads(
     router: &RoutingHost,
-) -> Vec<dynamo_router_types::protocols::PotentialLoad> {
+) -> Vec<dynamo_router_protocol::protocols::PotentialLoad> {
     router
         .kv_router()
         .get_potential_loads(&[], None, None, None, None)
@@ -2362,7 +2362,7 @@ async fn potential_loads(
 }
 
 fn active_requests_for(
-    loads: &[dynamo_router_types::protocols::PotentialLoad],
+    loads: &[dynamo_router_protocol::protocols::PotentialLoad],
     worker_id: u64,
     dp_rank: u32,
 ) -> usize {

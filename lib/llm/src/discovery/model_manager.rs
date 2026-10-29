@@ -11,9 +11,9 @@ use std::{
 
 use arc_swap::ArcSwap;
 use dashmap::{DashMap, mapref::entry::Entry};
-use dynamo_router_types::config::KvRouterConfig;
-use dynamo_router_types::prefill_load::PrefillLoadEstimator;
-use dynamo_router_types::protocols::{
+use dynamo_kv_router::config::KvRouterConfig;
+use dynamo_router_protocol::prefill_load::PrefillLoadEstimator;
+use dynamo_router_protocol::protocols::{
     KvTransferEnforcement, RoutingConstraints, WorkerId, WorkerWithDpRank,
 };
 use dynamo_worker_selection::selector::WorkerInputs;
@@ -2398,8 +2398,8 @@ impl ModelManager {
                 .map(|c| c.shared_cache_type)
                 .unwrap_or_default()
             {
-                dynamo_router_types::config::SharedCacheType::None => None,
-                dynamo_router_types::config::SharedCacheType::Hicache => {
+                dynamo_worker_selection::config::SharedCacheType::None => None,
+                dynamo_worker_selection::config::SharedCacheType::Hicache => {
                     let worker_component_name = &endpoint.id().component;
                     tracing::info!(
                         worker_component = worker_component_name,
@@ -2925,7 +2925,7 @@ mod tests {
     use super::*;
     use std::collections::HashMap;
 
-    use dynamo_router_types::protocols::{KV_EVENT_SUBJECT, WorkerWithDpRank};
+    use dynamo_router_protocol::protocols::{KV_EVENT_SUBJECT, WorkerWithDpRank};
     use dynamo_runtime::{
         DistributedRuntime, Runtime,
         discovery::{Discovery, DiscoverySpec, MockDiscovery, SharedMockRegistry},

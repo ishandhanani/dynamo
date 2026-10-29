@@ -6,7 +6,7 @@ use std::fmt;
 use std::sync::{Arc, OnceLock};
 
 use dynamo_kv_indexer::cuckoo::ProducerIdentity;
-use dynamo_router_types::identity::{IdentitySource, PoolId};
+use dynamo_router_protocol::identity::{IdentitySource, PoolId};
 use dynamo_runtime::protocols::EndpointId;
 use serde::{Deserialize, Deserializer, Serialize};
 
@@ -553,7 +553,9 @@ impl PoolIdentitySources {
 
 #[cfg(test)]
 mod tests {
-    use dynamo_router_types::identity::{CacheSemanticsId, DcId, IndexerDomainId, RoutingScopeId};
+    use dynamo_router_protocol::identity::{
+        CacheSemanticsId, DcId, IndexerDomainId, RoutingScopeId,
+    };
 
     use super::*;
 

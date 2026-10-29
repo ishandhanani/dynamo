@@ -13,7 +13,7 @@ use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
 use dynamo_kv_indexer::zmq_wire::{KvEventOwnership, Locality, RawKvEvent};
-use dynamo_router_types::protocols::StorageTier as RouterStorageTier;
+use dynamo_router_protocol::protocols::StorageTier as RouterStorageTier;
 
 use super::SharedCacheStatusTracker;
 use super::tracker::{

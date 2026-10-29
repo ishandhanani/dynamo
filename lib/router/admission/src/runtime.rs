@@ -15,9 +15,9 @@ use tokio::sync::{Mutex as AsyncMutex, Notify, mpsc};
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
-use dynamo_router_types::protocols::WorkerWithDpRank;
-use dynamo_router_types::sched::KvSchedulerError;
-use dynamo_router_types::selection_inputs::{WorkerInputRows, WorkerInputs};
+use dynamo_router_protocol::protocols::WorkerWithDpRank;
+use dynamo_router_protocol::sched::KvSchedulerError;
+use dynamo_worker_selection::plugin::inputs::{WorkerInputRows, WorkerInputs};
 
 static NEXT_CLASSIFICATION_ID: AtomicU64 = AtomicU64::new(1);
 static NEXT_LIFECYCLE_GENERATION: AtomicU64 = AtomicU64::new(1);
@@ -547,9 +547,9 @@ mod tests {
     use tokio_util::sync::CancellationToken;
 
     use super::*;
-    use dynamo_router_types::protocols::WorkerWithDpRank;
-    use dynamo_router_types::sched::KvSchedulerError;
-    use dynamo_router_types::selection_inputs::WorkerCandidates;
+    use dynamo_router_protocol::protocols::WorkerWithDpRank;
+    use dynamo_router_protocol::sched::KvSchedulerError;
+    use dynamo_worker_selection::plugin::inputs::WorkerCandidates;
 
     struct PassThrough;
 

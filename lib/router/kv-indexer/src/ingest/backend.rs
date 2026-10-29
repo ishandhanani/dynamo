@@ -10,6 +10,8 @@ use tokio_util::sync::CancellationToken;
 
 use crate::ConcurrentRadixTreeCompressed;
 use crate::ThreadPoolIndexer;
+use crate::config::ApproximateCachePolicyKind;
+use crate::config::IndexerConfig;
 use crate::pruning::PruneConfig;
 use crate::{
     ApproximateLruIncarnation, ApproximateLruStats, ApproximateRetentionConfig, KvIndexer,
@@ -17,8 +19,7 @@ use crate::{
     MatchDetails, RoutingDecisionHashes, SyncIndexer, TieredMatchDetails, TieredMatchProvider,
     record_unsupported_residency_event,
 };
-use dynamo_router_types::config::{ApproximateCachePolicyKind, KvRouterConfig};
-use dynamo_router_types::protocols::{
+use dynamo_router_protocol::protocols::{
     DpRank, ExternalSequenceBlockHash, KvCacheEventData, LocalBlockHash, OverlapScores,
     ResidencyProjection, ResidencyRoutingSnapshot, RouterEvent, WorkerId, WorkerWithDpRank,
 };
@@ -39,7 +40,7 @@ pub enum PrimaryRetention {
 
 /// Indexer shape derived from router configuration, mirroring the frontend
 /// `KvRouter` indexer resolution so a selection service built from the same
-/// `KvRouterConfig` indexes the same way.
+/// the router configuration indexes the same way.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct IndexerPolicy {
     pub primary: PrimaryRetention,
@@ -67,15 +68,15 @@ impl IndexerPolicy {
     /// Rejects the same combinations the frontend rejects. The local side indexer
     /// is TTL-only, so `router_approximate_cache_policy=lru` is rejected with
     /// `use_kv_events=true` and falls back to TTL with a warning otherwise.
-    pub fn from_router_config(config: &KvRouterConfig) -> Result<Self> {
+    pub fn from_config(config: &IndexerConfig) -> Result<Self> {
         if config.use_kv_events
-            && config.router_approximate_cache_policy == ApproximateCachePolicyKind::Lru
+            && config.approximate_cache_policy == ApproximateCachePolicyKind::Lru
         {
             anyhow::bail!(
                 "router_approximate_cache_policy=lru requires use_kv_events=false; the local side indexer is TTL-only"
             );
         }
-        if config.router_predicted_ttl_secs.is_some() && !config.use_kv_events {
+        if config.predicted_ttl_secs.is_some() && !config.use_kv_events {
             anyhow::bail!(
                 "router_predicted_ttl_secs requires use_kv_events=true; \
                  do not combine a primary approximate indexer with a side approximate indexer"
@@ -84,20 +85,16 @@ impl IndexerPolicy {
         if config.use_kv_events {
             return Ok(Self {
                 primary: PrimaryRetention::EventDriven,
-                side_ttl: config
-                    .router_predicted_ttl_secs
-                    .map(Duration::from_secs_f64),
+                side_ttl: config.predicted_ttl_secs.map(Duration::from_secs_f64),
             });
         }
-        if config.router_approximate_cache_policy == ApproximateCachePolicyKind::Lru {
+        if config.approximate_cache_policy == ApproximateCachePolicyKind::Lru {
             tracing::warn!(
                 "router_approximate_cache_policy=lru is not supported by the selection service yet; falling back to TTL retention"
             );
         }
         Ok(Self {
-            primary: PrimaryRetention::ApproximateTtl(Duration::from_secs_f64(
-                config.router_ttl_secs,
-            )),
+            primary: PrimaryRetention::ApproximateTtl(Duration::from_secs_f64(config.ttl_secs)),
             side_ttl: None,
         })
     }
@@ -895,7 +892,7 @@ impl TieredMatchProvider for Indexer {
 pub mod test_util {
     use super::{Indexer, SideIndexer};
     use crate::KvIndexerInterface;
-    use dynamo_router_types::protocols::{
+    use dynamo_router_protocol::protocols::{
         ExternalSequenceBlockHash, KvCacheEvent, KvCacheEventData, KvCacheStoreData,
         KvCacheStoredBlockData, LocalBlockHash, RouterEvent, StorageTier,
         compute_seq_hash_for_block,
@@ -1000,7 +997,7 @@ mod tests {
     use super::*;
     use crate::KvIndexerInterface;
     use crate::{EventKind, EventStatus};
-    use dynamo_router_types::protocols::{
+    use dynamo_router_protocol::protocols::{
         KvCacheEvent, LocalBlockHash, ResidencyDomain, StorageTier, WorkerWithDpRank,
     };
 
@@ -1497,58 +1494,58 @@ mod tests {
 
     #[test]
     fn indexer_policy_mirrors_frontend_resolution() {
-        let event_driven = KvRouterConfig::default();
+        let event_driven = IndexerConfig::default();
         assert_eq!(
-            IndexerPolicy::from_router_config(&event_driven).unwrap(),
+            IndexerPolicy::from_config(&event_driven).unwrap(),
             IndexerPolicy::event_driven()
         );
 
-        let side = KvRouterConfig {
-            router_predicted_ttl_secs: Some(2.5),
+        let side = IndexerConfig {
+            predicted_ttl_secs: Some(2.5),
             ..Default::default()
         };
         assert_eq!(
-            IndexerPolicy::from_router_config(&side).unwrap().side_ttl,
+            IndexerPolicy::from_config(&side).unwrap().side_ttl,
             Some(Duration::from_secs_f64(2.5))
         );
 
-        let approximate = KvRouterConfig {
+        let approximate = IndexerConfig {
             use_kv_events: false,
-            router_ttl_secs: 30.0,
+            ttl_secs: 30.0,
             ..Default::default()
         };
         assert_eq!(
-            IndexerPolicy::from_router_config(&approximate).unwrap(),
+            IndexerPolicy::from_config(&approximate).unwrap(),
             IndexerPolicy {
                 primary: PrimaryRetention::ApproximateTtl(Duration::from_secs(30)),
                 side_ttl: None,
             }
         );
 
-        let lru_without_events = KvRouterConfig {
+        let lru_without_events = IndexerConfig {
             use_kv_events: false,
-            router_approximate_cache_policy: ApproximateCachePolicyKind::Lru,
+            approximate_cache_policy: ApproximateCachePolicyKind::Lru,
             ..Default::default()
         };
         assert!(matches!(
-            IndexerPolicy::from_router_config(&lru_without_events)
+            IndexerPolicy::from_config(&lru_without_events)
                 .unwrap()
                 .primary,
             PrimaryRetention::ApproximateTtl(_)
         ));
 
-        let lru_with_events = KvRouterConfig {
-            router_approximate_cache_policy: ApproximateCachePolicyKind::Lru,
+        let lru_with_events = IndexerConfig {
+            approximate_cache_policy: ApproximateCachePolicyKind::Lru,
             ..Default::default()
         };
-        assert!(IndexerPolicy::from_router_config(&lru_with_events).is_err());
+        assert!(IndexerPolicy::from_config(&lru_with_events).is_err());
 
-        let side_without_events = KvRouterConfig {
+        let side_without_events = IndexerConfig {
             use_kv_events: false,
-            router_predicted_ttl_secs: Some(1.0),
+            predicted_ttl_secs: Some(1.0),
             ..Default::default()
         };
-        assert!(IndexerPolicy::from_router_config(&side_without_events).is_err());
+        assert!(IndexerPolicy::from_config(&side_without_events).is_err());
     }
 
     #[tokio::test]
@@ -1659,7 +1656,7 @@ mod session_tests {
     use super::test_util::store_event;
     use super::*;
     use crate::SessionPrefixIndexer;
-    use dynamo_router_types::protocols::{KvCacheEvent, KvCacheRemoveData, StorageTier};
+    use dynamo_router_protocol::protocols::{KvCacheEvent, KvCacheRemoveData, StorageTier};
 
     fn make_session_test_indexer() -> (Indexer, Arc<SessionPrefixIndexer>) {
         let session_prefix_index = Arc::new(SessionPrefixIndexer::new());

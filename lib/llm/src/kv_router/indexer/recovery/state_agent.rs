@@ -18,8 +18,8 @@ use dashmap::DashMap;
 use dynamo_kv_indexer::{
     KvStateAgentIdentity, KvStateAgentStatus, KvStateProtocolVersion, WorkerKvQueryResponse,
 };
-use dynamo_router_types::identity::CacheOwnerId;
-use dynamo_router_types::protocols::{
+use dynamo_router_protocol::identity::CacheOwnerId;
+use dynamo_router_protocol::protocols::{
     KvCacheEvent, KvCacheEventData, ResetScope, ResidencyDomain, ResidencyProjection,
     ResidencyRoutingSnapshot, RouterEvent, RouterHintSourceMetadata, StorageTier, WorkerWithDpRank,
 };
@@ -2400,12 +2400,12 @@ mod tests {
         KvStateRecoveryReceipt, LowerTierIndexers, LowerTierQueryOptions, MatchDetails,
         query_lower_tiers_with_options,
     };
-    use dynamo_router_types::identity::{
+    use dynamo_router_protocol::identity::{
         CacheSemanticsId, DcId, IdentitySource, IndexerDomainId, PoolId, RoutingScopeId,
         StableDpSlotId,
     };
-    use dynamo_router_types::kv_hints::KvTransferCandidateSource;
-    use dynamo_router_types::protocols::{
+    use dynamo_router_protocol::kv_hints::KvTransferCandidateSource;
+    use dynamo_router_protocol::protocols::{
         ExternalSequenceBlockHash, KvCacheRemoveData, KvCacheStoreData, KvCacheStoredBlockData,
         LocalBlockHash, ResidencyOwner, RouterHintSourceMetadata, WorkerWithDpRank,
     };

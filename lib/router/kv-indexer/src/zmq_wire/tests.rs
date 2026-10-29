@@ -7,7 +7,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use rmp_serde::{from_slice, to_vec, to_vec_named};
 use serde::Serialize;
 
-use dynamo_router_types::protocols::{
+use dynamo_router_protocol::protocols::{
     BlockExtraInfo, BlockHashOptions, BlockMmObjectInfo, ExternalSequenceBlockHash,
     KvCacheEventData, PlacementEvent, PlacementOwner, StorageTier, WorkerWithDpRank,
     compute_block_hash_for_seq,

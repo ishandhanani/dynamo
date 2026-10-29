@@ -10,11 +10,11 @@ use std::{
     sync::Arc,
 };
 
-use dynamo_router_types::protocols::WorkerId;
-use dynamo_router_types::topology::{Topology, WorkerRow};
+use dynamo_router_protocol::protocols::WorkerId;
 use dynamo_runtime::component::Endpoint;
 use dynamo_runtime::discovery::DiscoveryQuery;
 use dynamo_runtime::prelude::DistributedRuntimeProvider;
+use dynamo_scheduler::topology::{Topology, WorkerRow};
 use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
 

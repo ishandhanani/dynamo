@@ -8,12 +8,13 @@
 //! selection HTTP routes behind `http`; and the nested router configuration (`config`).
 
 pub mod config;
+pub mod constraints;
 pub mod local;
 pub mod overlap;
 pub mod overlap_refresh;
-pub mod plugins;
 pub mod queue;
 pub mod selection;
+pub mod topology;
 
 #[cfg(any(test, feature = "testing", feature = "bench"))]
 pub mod test_utils;
@@ -25,15 +26,14 @@ pub mod scheduling_compat {
     pub use crate::overlap::*;
     pub use crate::overlap_refresh::*;
     pub use dynamo_admission::classifier::*;
+    pub use dynamo_admission::policy_config::*;
     pub use dynamo_admission::policy_queue::*;
     pub use dynamo_admission::runtime::{RequestClassifierRuntime, RequestLifecycle};
-    pub use dynamo_router_types::busy::*;
-    pub use dynamo_router_types::config;
-    pub use dynamo_router_types::config::policy::*;
-    pub use dynamo_router_types::eligibility::*;
-    pub use dynamo_router_types::prefill_load::*;
-    pub use dynamo_router_types::protocols::{PotentialLoad, WorkerPlacement};
-    pub use dynamo_router_types::sched::*;
+    pub use dynamo_router_protocol::config;
+    pub use dynamo_router_protocol::eligibility::*;
+    pub use dynamo_router_protocol::prefill_load::*;
+    pub use dynamo_router_protocol::protocols::{PotentialLoad, WorkerPlacement};
+    pub use dynamo_router_protocol::sched::*;
     pub use dynamo_worker_selection::lora::*;
     pub use dynamo_worker_selection::plugin::{WorkerSelectionConfig, WorkerSelectionInstance};
     pub use dynamo_worker_selection::selector;
@@ -41,4 +41,4 @@ pub mod scheduling_compat {
 
 pub use local::LocalScheduler;
 pub use queue::SchedulerQueue;
-pub use selection::{SelectionCore, SelectionService, SelectionServiceBuilder};
+pub use selection::SelectionCore;

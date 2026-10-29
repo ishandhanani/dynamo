@@ -30,8 +30,8 @@ use super::{
     KvRouterError,
     pruning::{BlockEntry, PruneConfig, WorkerPruneManager},
 };
-use dynamo_router_types::protocols::AttemptId;
-use dynamo_router_types::protocols::{
+use dynamo_router_protocol::protocols::AttemptId;
+use dynamo_router_protocol::protocols::{
     ExternalSequenceBlockHash, KvCacheEvent, KvCacheEventData, KvCacheRemoveData, KvCacheStoreData,
     KvCacheStoredBlockData, LocalBlockHash, RouterEvent, WorkerWithDpRank,
 };
@@ -1071,7 +1071,7 @@ impl ApproximateLruLane {
 mod tests {
     use super::*;
     use crate::{ConcurrentRadixTreeCompressed, KvIndexerInterface, ThreadPoolIndexer};
-    use dynamo_router_types::protocols::compute_seq_hash_for_block;
+    use dynamo_router_protocol::protocols::compute_seq_hash_for_block;
     use std::time::Duration;
 
     fn worker() -> WorkerWithDpRank {

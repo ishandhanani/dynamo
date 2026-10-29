@@ -3,7 +3,7 @@
 
 use rustc_hash::{FxBuildHasher, FxHashMap, FxHashSet};
 
-use dynamo_router_types::protocols::*;
+use dynamo_router_protocol::protocols::*;
 
 pub(crate) fn append_dump_events(
     events: &mut Vec<RouterEvent>,

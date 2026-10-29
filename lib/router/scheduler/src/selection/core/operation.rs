@@ -13,10 +13,10 @@ use crate::queue::BookingHandle;
 use crate::scheduling_compat::{
     AdvisoryWorkerLoad, QueueRejection, SchedulingResponse, SessionContext,
 };
-use dynamo_router_types::config::RouterConfigOverride;
-use dynamo_router_types::identity::RoutingPartitionId;
-use dynamo_router_types::kv_hints::KvHint;
-use dynamo_router_types::protocols::{
+use dynamo_router_protocol::config::RouterConfigOverride;
+use dynamo_router_protocol::identity::RoutingPartitionId;
+use dynamo_router_protocol::kv_hints::KvHint;
+use dynamo_router_protocol::protocols::{
     LocalBlockHash, RoutingConstraints, SharedCacheHits, WorkerAffinityTarget, WorkerId,
     WorkerWithDpRank,
 };

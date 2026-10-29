@@ -7,7 +7,7 @@ use aisimulate_core::{
     ForwardPassMetrics, ForwardPassPerfModel, ForwardPassPerfModelConfig, ForwardPassPerfReadiness,
     ScheduledRequestMetrics,
 };
-use dynamo_router_types::prefill_load::PrefillLoadEstimator;
+use dynamo_router_protocol::prefill_load::PrefillLoadEstimator;
 use dynamo_mocker::common::perf_model::AisCallback;
 use pyo3::prelude::*;
 use std::sync::Arc;

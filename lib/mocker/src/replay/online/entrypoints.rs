@@ -4,7 +4,7 @@
 use std::collections::VecDeque;
 
 use anyhow::{Result, anyhow, bail};
-use dynamo_router_types::config::KvRouterConfig;
+use dynamo_kv_router::config::KvRouterConfig;
 use tokio_util::sync::CancellationToken;
 
 use crate::common::protocols::{DirectRequest, MockerConfig};

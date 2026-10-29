@@ -6,7 +6,7 @@
 //! Routing hosts always link the default through `default_registry`. The optional custom
 //! catalog adds the named default, two-tier, and ThunderAgent providers through `register`. The default
 //! itself uses the same public candidate inputs and scorer/picker dispatch as external policies.
-//! Sequence tracking lives in dynamo-slot-tracker, eligibility in dynamo-router-types, and
+//! Sequence tracking lives in dynamo-slot-tracker, eligibility in dynamo-router-protocol, and
 //! admission in dynamo-admission; this crate only ships policies.
 
 mod default;
@@ -22,7 +22,7 @@ pub fn default_registry() -> RouterPluginRegistry {
     RouterPluginRegistry::default().with_default_factory(default_factory())
 }
 
-use dynamo_scheduler::plugins::{RouterPluginRegistry, RouterPluginRegistryError};
+use dynamo_kv_router::plugins::{RouterPluginRegistry, RouterPluginRegistryError};
 
 /// Register the named providers Dynamo ships, without changing the host's default factory.
 ///
@@ -38,10 +38,10 @@ pub fn register(registry: &mut RouterPluginRegistry) -> Result<(), RouterPluginR
 
 #[cfg(test)]
 mod tests {
-    use dynamo_router_types::WorkerType;
-    use dynamo_router_types::config::KvRouterConfig;
-    use dynamo_router_types::identity::RoutingPartitionRef;
-    use dynamo_scheduler::plugins::WorkerSelectionPolicyRegistryError;
+    use dynamo_kv_router::config::KvRouterConfig;
+    use dynamo_kv_router::plugins::WorkerSelectionPolicyRegistryError;
+    use dynamo_router_protocol::WorkerType;
+    use dynamo_router_protocol::identity::RoutingPartitionRef;
     use dynamo_worker_selection::plugin::WorkerSelectionPolicyFactory;
 
     use super::*;
@@ -92,7 +92,11 @@ worker_selection:
             WorkerType::Prefill,
             WorkerType::Decode,
         ] {
-            factory(&config, worker_type, partition);
+            factory(
+                &dynamo_worker_selection::config::SelectionConfig::from(&config),
+                worker_type,
+                partition,
+            );
         }
     }
 

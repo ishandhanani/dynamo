@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use dynamo_ext_proc::run;
-use dynamo_scheduler::plugins::WorkerSelectionPolicyRegistry;
+use dynamo_kv_router::plugins::WorkerSelectionPolicyRegistry;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {

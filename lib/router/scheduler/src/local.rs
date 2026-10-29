@@ -20,14 +20,14 @@ use crate::queue::{
 use crate::scheduling_compat::{RequestClassifierRuntime, RequestLifecycle};
 use dynamo_admission::classifier::{ClassifyRequest, RequestClassifier};
 #[cfg(test)]
-use dynamo_router_types::config::RouterQueuePolicy;
-use dynamo_router_types::config::policy::{PolicyProfile, RejectThresholdsProvider};
-use dynamo_router_types::prefill_load::PrefillLoadEstimator;
-use dynamo_router_types::protocols::RoutingConstraints;
-use dynamo_router_types::protocols::{
+use dynamo_admission::config::RouterQueuePolicy;
+use dynamo_admission::policy_config::{PolicyProfile, RejectThresholdsProvider};
+use dynamo_router_protocol::prefill_load::PrefillLoadEstimator;
+use dynamo_router_protocol::protocols::RoutingConstraints;
+use dynamo_router_protocol::protocols::{
     LocalBlockHash, SelectionTraceSpec, WorkerConfigLike, WorkerId, WorkerWithDpRank,
 };
-use dynamo_router_types::sched::{
+use dynamo_router_protocol::sched::{
     AdmissionAttempt, AdmittedSchedulingResponse, AdvisorySchedulingResponse, AttemptId,
     KvSchedulerError, NonMaxOverlapSelectionObserver, OverloadedWorkerProvider, PotentialLoad,
     ScheduleMode, ScheduleRequest, SchedulingRequest, SchedulingResponse, TierOverlapBlocks,
@@ -132,7 +132,7 @@ where
             worker_loads: FxHashMap::default(),
             resp_tx: resp_tx.map(|tx| {
                 Box::new(dynamo_worker_selection::selector::OneshotResponder(tx))
-                    as Box<dyn dynamo_router_types::sched::SchedulingResponder>
+                    as Box<dyn dynamo_router_protocol::sched::SchedulingResponder>
             }),
         };
 
@@ -534,7 +534,7 @@ where
         tier_overlap_blocks: TierOverlapBlocks,
         effective_overlap_blocks: FxHashMap<WorkerWithDpRank, f64>,
         effective_cached_tokens: FxHashMap<WorkerWithDpRank, usize>,
-        router_config_override: Option<&dynamo_router_types::config::RouterConfigOverride>,
+        router_config_override: Option<&dynamo_router_protocol::config::RouterConfigOverride>,
         update_states: bool,
         lora_name: Option<String>,
         priority_jump: f64,
@@ -543,7 +543,7 @@ where
         pinned_worker: Option<WorkerWithDpRank>,
         allowed_worker_ids: Option<HashSet<WorkerId>>,
         routing_constraints: RoutingConstraints,
-        shared_cache_hits: Option<dynamo_router_types::protocols::SharedCacheHits>,
+        shared_cache_hits: Option<dynamo_router_protocol::protocols::SharedCacheHits>,
     ) -> Result<SchedulingResponse, KvSchedulerError> {
         self.schedule_with_block_hashes(
             maybe_request_id,
@@ -581,7 +581,7 @@ where
         tier_overlap_blocks: TierOverlapBlocks,
         effective_overlap_blocks: FxHashMap<WorkerWithDpRank, f64>,
         effective_cached_tokens: FxHashMap<WorkerWithDpRank, usize>,
-        router_config_override: Option<&dynamo_router_types::config::RouterConfigOverride>,
+        router_config_override: Option<&dynamo_router_protocol::config::RouterConfigOverride>,
         update_states: bool,
         lora_name: Option<String>,
         priority_jump: f64,
@@ -590,7 +590,7 @@ where
         pinned_worker: Option<WorkerWithDpRank>,
         allowed_worker_ids: Option<HashSet<WorkerId>>,
         routing_constraints: RoutingConstraints,
-        shared_cache_hits: Option<dynamo_router_types::protocols::SharedCacheHits>,
+        shared_cache_hits: Option<dynamo_router_protocol::protocols::SharedCacheHits>,
     ) -> Result<SchedulingResponse, KvSchedulerError> {
         self.schedule_with_policy_class_and_block_hashes(
             maybe_request_id,
@@ -625,7 +625,7 @@ where
         tier_overlap_blocks: TierOverlapBlocks,
         effective_overlap_blocks: FxHashMap<WorkerWithDpRank, f64>,
         effective_cached_tokens: FxHashMap<WorkerWithDpRank, usize>,
-        router_config_override: Option<&dynamo_router_types::config::RouterConfigOverride>,
+        router_config_override: Option<&dynamo_router_protocol::config::RouterConfigOverride>,
         update_states: bool,
         lora_name: Option<String>,
         priority_jump: f64,
@@ -635,7 +635,7 @@ where
         pinned_worker: Option<WorkerWithDpRank>,
         allowed_worker_ids: Option<HashSet<WorkerId>>,
         routing_constraints: RoutingConstraints,
-        shared_cache_hits: Option<dynamo_router_types::protocols::SharedCacheHits>,
+        shared_cache_hits: Option<dynamo_router_protocol::protocols::SharedCacheHits>,
     ) -> Result<SchedulingResponse, KvSchedulerError> {
         let mode = ScheduleMode::from_legacy(maybe_request_id, update_states)?;
         self.schedule_request(ScheduleRequest {
@@ -927,7 +927,7 @@ where
             let by_worker = effective_cached_tokens
                 .iter()
                 .map(|(worker, cached_tokens)| {
-                    let delta = dynamo_router_types::prefill_load::effective_prefill_tokens(
+                    let delta = dynamo_router_protocol::prefill_load::effective_prefill_tokens(
                         isl_tokens,
                         *cached_tokens,
                     );
@@ -981,7 +981,7 @@ mod tests {
     use crate::scheduling_compat::ClassifyFuture;
     use crate::scheduling_compat::{BusyThresholds, PrefillLoadEstimator};
     use crate::test_utils::{NoopSequencePublisher, SimpleWorkerConfig};
-    use dynamo_router_types::protocols::{ActiveSequenceEvent, ActiveSequenceEventData};
+    use dynamo_router_protocol::protocols::{ActiveSequenceEvent, ActiveSequenceEventData};
     use dynamo_slot_tracker::SequenceSubscriber;
     use dynamo_worker_selection::plugin::WorkerCandidates;
     use dynamo_worker_selection::selector::DefaultWorkerSelector;
@@ -1020,7 +1020,7 @@ mod tests {
                     token_sequence: None,
                     track_prefill_tokens: true,
                     expected_output_tokens: None,
-                    prefill_load_hint: Some(dynamo_router_types::protocols::PrefillLoadHint {
+                    prefill_load_hint: Some(dynamo_router_protocol::protocols::PrefillLoadHint {
                         initial_effective_prefill_tokens: 64,
                         expected_prefill_duration: None,
                     }),
@@ -1222,7 +1222,7 @@ mod tests {
             affinity_target: None,
             pinned_worker: None,
             allowed_worker_ids: None,
-            routing_constraints: dynamo_router_types::protocols::RoutingConstraints::default(),
+            routing_constraints: dynamo_router_protocol::protocols::RoutingConstraints::default(),
             router_config_override: None,
             priority_jump: 0.0,
             strict_priority: 0,
@@ -1579,7 +1579,7 @@ mod tests {
                 token_sequence: None,
                 track_prefill_tokens: true,
                 expected_output_tokens: None,
-                prefill_load_hint: Some(dynamo_router_types::protocols::PrefillLoadHint {
+                prefill_load_hint: Some(dynamo_router_protocol::protocols::PrefillLoadHint {
                     initial_effective_prefill_tokens: 64,
                     expected_prefill_duration: None,
                 }),
@@ -1639,7 +1639,7 @@ mod tests {
                 None,
                 None,
                 None,
-                dynamo_router_types::protocols::RoutingConstraints::default(),
+                dynamo_router_protocol::protocols::RoutingConstraints::default(),
                 None,
             )
             .await
@@ -1670,7 +1670,7 @@ mod tests {
                 TierOverlapBlocks::default(),
                 Default::default(),
                 Default::default(),
-                Some(&dynamo_router_types::config::RouterConfigOverride {
+                Some(&dynamo_router_protocol::config::RouterConfigOverride {
                     track_prefill_tokens: Some(false),
                     ..Default::default()
                 }),
@@ -1681,7 +1681,7 @@ mod tests {
                 None,
                 None,
                 None,
-                dynamo_router_types::protocols::RoutingConstraints::default(),
+                dynamo_router_protocol::protocols::RoutingConstraints::default(),
                 None,
             )
             .await
@@ -1727,7 +1727,7 @@ mod tests {
                 None,
                 None,
                 None,
-                dynamo_router_types::protocols::RoutingConstraints::default(),
+                dynamo_router_protocol::protocols::RoutingConstraints::default(),
                 None,
             )
             .await
@@ -1774,7 +1774,7 @@ mod tests {
                 None,
                 None,
                 None,
-                dynamo_router_types::protocols::RoutingConstraints::default(),
+                dynamo_router_protocol::protocols::RoutingConstraints::default(),
                 None,
             )
             .await
@@ -1799,7 +1799,7 @@ mod tests {
                         None,
                         None,
                         None,
-                        dynamo_router_types::protocols::RoutingConstraints::default(),
+                        dynamo_router_protocol::protocols::RoutingConstraints::default(),
                         None,
                     )
                     .await
@@ -1845,7 +1845,7 @@ mod tests {
                 None,
                 None,
                 None,
-                dynamo_router_types::protocols::RoutingConstraints::default(),
+                dynamo_router_protocol::protocols::RoutingConstraints::default(),
                 None,
             )
             .await
@@ -1870,7 +1870,7 @@ mod tests {
                         None,
                         None,
                         None,
-                        dynamo_router_types::protocols::RoutingConstraints::default(),
+                        dynamo_router_protocol::protocols::RoutingConstraints::default(),
                         None,
                     )
                     .await
@@ -1930,7 +1930,7 @@ mod tests {
                 None,
                 None,
                 None,
-                dynamo_router_types::protocols::RoutingConstraints::default(),
+                dynamo_router_protocol::protocols::RoutingConstraints::default(),
                 None,
             )
             .await
@@ -1955,7 +1955,7 @@ mod tests {
                         None,
                         None,
                         None,
-                        dynamo_router_types::protocols::RoutingConstraints::default(),
+                        dynamo_router_protocol::protocols::RoutingConstraints::default(),
                         None,
                     )
                     .await
@@ -2014,7 +2014,7 @@ mod tests {
                 None,
                 None,
                 None,
-                dynamo_router_types::protocols::RoutingConstraints::default(),
+                dynamo_router_protocol::protocols::RoutingConstraints::default(),
                 None,
             )
             .await
@@ -2039,7 +2039,7 @@ mod tests {
                         None,
                         None,
                         None,
-                        dynamo_router_types::protocols::RoutingConstraints::default(),
+                        dynamo_router_protocol::protocols::RoutingConstraints::default(),
                         None,
                     )
                     .await
@@ -2096,7 +2096,7 @@ mod tests {
                 None,
                 None,
                 None,
-                dynamo_router_types::protocols::RoutingConstraints::default(),
+                dynamo_router_protocol::protocols::RoutingConstraints::default(),
                 None,
             )
             .await
@@ -2201,7 +2201,7 @@ mod tests {
                 None,
                 None,
                 None,
-                dynamo_router_types::protocols::RoutingConstraints::default(),
+                dynamo_router_protocol::protocols::RoutingConstraints::default(),
                 None,
             )
             .await
@@ -2429,7 +2429,7 @@ mod tests {
                 None,
                 None,
                 None,
-                dynamo_router_types::protocols::RoutingConstraints::default(),
+                dynamo_router_protocol::protocols::RoutingConstraints::default(),
                 None,
             )
             .await

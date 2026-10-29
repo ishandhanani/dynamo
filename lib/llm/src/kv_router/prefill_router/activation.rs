@@ -7,13 +7,14 @@ use std::sync::atomic::Ordering;
 use anyhow::{Context as _, Result};
 use tokio::sync::{oneshot, watch};
 
-use dynamo_router_types::config::KvRouterConfig;
-use dynamo_router_types::prefill_load::PrefillLoadEstimator;
+use dynamo_kv_router::config::KvRouterConfig;
+use dynamo_router_protocol::prefill_load::PrefillLoadEstimator;
 use dynamo_runtime::{
     component::Endpoint, discovery::DiscoveryQuery, pipeline::RouterMode,
     prelude::DistributedRuntimeProvider,
 };
 use dynamo_worker_selection::conditional_disagg::make_conditional_disagg_policy;
+use dynamo_worker_selection::config::SelectionConfig;
 
 use super::{PrefillBinding, PrefillBuildContext, PrefillLifecycleState, PrefillRouter};
 
@@ -206,7 +207,8 @@ impl PrefillRouter {
     ) -> Arc<Self> {
         let cancel_token = parent_token.child_token();
         let (target_tx, target_rx) = watch::channel(None);
-        let conditional_disagg_policy = make_conditional_disagg_policy(kv_router_config.as_ref());
+        let selection_config = kv_router_config.as_ref().map(SelectionConfig::from);
+        let conditional_disagg_policy = make_conditional_disagg_policy(selection_config.as_ref());
         let conditional_disagg_prefill_busy_threshold = kv_router_config.as_ref().and_then(|c| {
             c.conditional_disagg_prefill_busy_threshold
                 .or(c.router_queue_threshold)
@@ -638,8 +640,8 @@ mod tests {
     use crate::entrypoint::RouterConfig;
     use crate::kv_router::prefill_router::PrefillRouterLifecycle;
     use crate::protocols::common::llm_backend::{LLMEngineOutput, PreprocessedRequest};
-    use dynamo_router_types::config::KvRouterConfig;
-    use dynamo_router_types::protocols::RoutingConstraints;
+    use dynamo_kv_router::config::KvRouterConfig;
+    use dynamo_router_protocol::protocols::RoutingConstraints;
     use dynamo_runtime::protocols::annotated::Annotated;
     use dynamo_runtime::{
         DistributedRuntime, Runtime,

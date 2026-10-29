@@ -29,11 +29,11 @@
 
 use std::sync::Arc;
 
-use dynamo_router_types::config::KvRouterConfig;
-use dynamo_scheduler::plugins::{
+use dynamo_kv_router::plugins::{
     RouterPluginRegistry, WorkerSelectionPolicyParameters, WorkerSelectionPolicyProviderError,
     WorkerSelectionPolicyRegistryError,
 };
+use dynamo_worker_selection::config::SelectionConfig;
 use dynamo_worker_selection::plugin::{
     WorkerCacheInputs, WorkerInputView, WorkerInputs, WorkerLoadInput, WorkerPicker,
     WorkerSelectionContext, WorkerSelectionPolicy, WorkerSelectionPolicyError,
@@ -166,9 +166,8 @@ fn provider(
     parameters.validate()?;
 
     Ok(Arc::new(
-        move |config: &KvRouterConfig, worker_type, _partition| {
+        move |_config: &SelectionConfig, worker_type, _partition| {
             WorkerSelectionPolicy::new(
-                config.clone(),
                 worker_type.as_str(),
                 Vec::new(),
                 Box::new(TwoTierCostFnPicker { parameters }),
@@ -187,11 +186,13 @@ pub fn register(
 mod tests {
     use std::collections::HashMap;
 
-    use dynamo_router_types::overlap::OverlapSignals;
-    use dynamo_router_types::protocols::WorkerLoadProjection;
-    use dynamo_router_types::protocols::{RoutingConstraints, WorkerConfigLike, WorkerWithDpRank};
-    use dynamo_router_types::sched::ScheduleMode;
-    use dynamo_router_types::sched::SchedulingRequest;
+    use dynamo_router_protocol::overlap::OverlapSignals;
+    use dynamo_router_protocol::protocols::WorkerLoadProjection;
+    use dynamo_router_protocol::protocols::{
+        RoutingConstraints, WorkerConfigLike, WorkerWithDpRank,
+    };
+    use dynamo_router_protocol::sched::ScheduleMode;
+    use dynamo_router_protocol::sched::SchedulingRequest;
     use dynamo_worker_selection::selector::{WorkerSelectionInput, WorkerSelector};
 
     use super::*;
@@ -268,7 +269,6 @@ mod tests {
         }
         let configs = HashMap::from(workers.map(|(id, _, _)| (id, TestWorker)));
         WorkerSelectionPolicy::new(
-            KvRouterConfig::default(),
             "test",
             Vec::new(),
             Box::new(TwoTierCostFnPicker { parameters }),

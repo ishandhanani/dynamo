@@ -5,7 +5,7 @@ use std::time::Instant;
 
 use tokio::sync::oneshot;
 
-use dynamo_router_types::protocols::WorkerId;
+use dynamo_router_protocol::protocols::WorkerId;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct EventCompletion {

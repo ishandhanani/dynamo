@@ -33,12 +33,12 @@ use super::single::{
 };
 use super::topology::{WorkerDpRange, WorkerTable, WorkerTopologyChange, WorkerTopologyError};
 use super::{PotentialLoadMaps, PrefillTokenDeltas, WorkerLoadProjection};
-use dynamo_router_types::busy::FullRankCounts;
-use dynamo_router_types::protocols::{
+use dynamo_router_protocol::busy::FullRankCounts;
+use dynamo_router_protocol::load::WorkerCapacity;
+use dynamo_router_protocol::protocols::{
     ActiveSequenceEvent, ActiveSequenceEventData, PrefillLoadHint, WorkerId, WorkerWithDpRank,
 };
-use dynamo_router_types::protocols::{AttemptId, SchedulerBookingDescriptor};
-use dynamo_router_types::selection_inputs::WorkerCapacity;
+use dynamo_router_protocol::protocols::{AttemptId, SchedulerBookingDescriptor};
 
 // How often we force expire stale requests across all workers. See the comment
 // in ActiveSequencesMultiWorker::force_expire_requests_across_all_workers for
@@ -95,7 +95,7 @@ fn active_request_expiry_duration_from_lookup(
 
 /// Complete scheduler-owned load for one worker rank.
 ///
-/// This is an in-process snapshot rather than the event-plane [`ActiveLoad`](dynamo_router_types::protocols::ActiveLoad)
+/// This is an in-process snapshot rather than the event-plane [`ActiveLoad`](dynamo_router_protocol::protocols::ActiveLoad)
 /// protocol. Scheduler publishers always own both active-load fields, while remote wire updates may
 /// contain only a subset of fields.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1662,7 +1662,7 @@ mod tests {
     use super::*;
     use crate::NoopSequencePublisher;
     use crate::prefill_tracker::PrefillTimeLoadError;
-    use dynamo_router_types::protocols::{
+    use dynamo_router_protocol::protocols::{
         ActiveSequenceEvent, ActiveSequenceEventData, BlockHashOptions, PrefillLoadHint,
         compute_block_hash_for_seq, compute_seq_hash_for_block,
     };

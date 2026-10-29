@@ -3,7 +3,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use dynamo_router_types::protocols::{WorkerId, WorkerWithDpRank};
+use dynamo_router_protocol::protocols::{WorkerId, WorkerWithDpRank};
 use dynamo_runtime::{component::Instance, protocols::EndpointId};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;

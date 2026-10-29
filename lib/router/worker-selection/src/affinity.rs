@@ -23,8 +23,8 @@ use tokio::sync::futures::OwnedNotified;
 use tokio::time::Instant;
 use tokio_util::sync::CancellationToken;
 
-pub use dynamo_router_types::affinity::{AffinityReplicaSink, AffinityVersion};
-pub use dynamo_router_types::protocols::WorkerAffinityTarget as AffinityTarget;
+pub use dynamo_router_protocol::affinity::{AffinityReplicaSink, AffinityVersion};
+pub use dynamo_router_protocol::protocols::WorkerAffinityTarget as AffinityTarget;
 
 pub const MAX_SESSION_AFFINITY_TTL_SECS: u64 = 31_536_000;
 pub const MAX_SESSION_AFFINITY_ENTRIES: usize = 65_536;

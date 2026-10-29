@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use arc_swap::{ArcSwap, Guard};
 use dynamo_kv_indexer::cuckoo::{CKF_LANE_COUNT, GlobalCkfIndexer};
-use dynamo_router_types::identity::{
+use dynamo_router_protocol::identity::{
     CacheSemanticsId, CanonicalIdentityMaterial, DcId, IndexerDomainId, PoolId, RoutingScopeId,
 };
 use dynamo_runtime::protocols::EndpointId;
@@ -262,8 +262,10 @@ mod tests {
         CkfConfig, ConsumerInstanceId, DcCkfState, GlobalCkfIngestOutcome, GlobalCkfManifest,
         GlobalCkfSnapshot, LaneLease, PrefixSearchConfig, ProducerIdentity,
     };
-    use dynamo_router_types::identity::{ExplicitIdentityMap, IdentitySource, IndexerIdentitySpec};
-    use dynamo_router_types::protocols::{
+    use dynamo_router_protocol::identity::{
+        ExplicitIdentityMap, IdentitySource, IndexerIdentitySpec,
+    };
+    use dynamo_router_protocol::protocols::{
         BlockHashOptions, ExternalSequenceBlockHash, KvCacheEvent, KvCacheEventData,
         KvCacheStoreData, KvCacheStoredBlockData, RouterEvent, compute_block_hash_for_seq,
         compute_seq_hash_for_block,

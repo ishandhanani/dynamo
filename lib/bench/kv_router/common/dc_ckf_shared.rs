@@ -9,7 +9,7 @@ use anyhow::{Context, bail};
 use dynamo_kv_indexer::cuckoo::CanonicalSequenceBlockHash;
 use dynamo_mocker::loadgen::{SessionTrace, Trace};
 use dynamo_mocker::replay::ReplayWorkerArtifacts;
-use dynamo_router_types::protocols::{
+use dynamo_router_protocol::protocols::{
     ExternalSequenceBlockHash, KvCacheEvent, KvCacheEventData, KvCacheStoreData, WorkerWithDpRank,
 };
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -504,7 +504,7 @@ mod tests {
     use std::path::PathBuf;
 
     use dynamo_mocker::replay::ReplayTimedKvEvent;
-    use dynamo_router_types::protocols::{
+    use dynamo_router_protocol::protocols::{
         ExternalSequenceBlockHash, KvCacheRemoveData, KvCacheStoreData, KvCacheStoredBlockData,
         LocalBlockHash,
     };

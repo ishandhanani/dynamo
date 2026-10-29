@@ -27,16 +27,16 @@ use std::time::Duration;
 use async_trait::async_trait;
 
 use dynamo_kv_indexer::{LowerTierQueryOptions, TieredMatchProvider};
-use dynamo_router_types::config::KvRouterConfig;
-use dynamo_router_types::kv_hints::KvTransferCandidates;
-use dynamo_router_types::protocols::LocalBlockHash;
+use dynamo_router_protocol::kv_hints::KvTransferCandidates;
+use dynamo_router_protocol::protocols::LocalBlockHash;
+use dynamo_worker_selection::config::SelectionConfig;
 
 use crate::overlap::{OverlapAnalysis, OverlapSignals};
 
 /// Result of a successful overlap refresh.
 ///
 /// Carries everything required to overwrite the overlap-related fields on a
-/// [`SchedulingRequest`](dynamo_router_types::sched::SchedulingRequest) at dequeue time.
+/// [`SchedulingRequest`](dynamo_router_protocol::sched::SchedulingRequest) at dequeue time.
 #[derive(Debug, Clone, Default)]
 pub struct RefreshedOverlap {
     pub overlap: OverlapSignals,
@@ -68,12 +68,12 @@ pub trait OverlapScoresRefresh: Send + Sync {
 
 pub struct TieredOverlapRefresher<P> {
     provider: P,
-    config: KvRouterConfig,
+    config: SelectionConfig,
     block_size: u32,
 }
 
 impl<P> TieredOverlapRefresher<P> {
-    pub fn new(provider: P, config: KvRouterConfig, block_size: u32) -> Self {
+    pub fn new(provider: P, config: SelectionConfig, block_size: u32) -> Self {
         Self {
             provider,
             config,
@@ -225,7 +225,7 @@ mod tests {
     use super::*;
     use crate::scheduling_compat::OverlapSignals;
     use dynamo_kv_indexer::{KvRouterError, MatchDetails, TieredMatchDetails};
-    use dynamo_router_types::protocols::{OverlapScores, WorkerWithDpRank};
+    use dynamo_router_protocol::protocols::{OverlapScores, WorkerWithDpRank};
     use std::{
         collections::HashMap,
         sync::{
@@ -335,7 +335,7 @@ mod tests {
                 calls: Arc::clone(&calls),
                 fail: false,
             },
-            KvRouterConfig::default(),
+            SelectionConfig::default(),
             16,
         );
         let worker = WorkerWithDpRank::new(4, 0);
@@ -351,7 +351,7 @@ mod tests {
 
         let failing = TieredOverlapRefresher::new(
             FakeProvider { calls, fail: true },
-            KvRouterConfig::default(),
+            SelectionConfig::default(),
             16,
         );
         assert!(failing.refresh(&[LocalBlockHash(1)], false).await.is_none());

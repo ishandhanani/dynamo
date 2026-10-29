@@ -9,7 +9,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context as _, Result};
 use bytes::Bytes;
-use dynamo_router_types::protocols::{KvCacheEvent, KvCacheEventData, StorageTier};
+use dynamo_router_protocol::protocols::{KvCacheEvent, KvCacheEventData, StorageTier};
 use futures::{Sink, SinkExt, StreamExt};
 use serde::Serialize;
 use tmq::{
@@ -425,7 +425,7 @@ where
 
 #[cfg(test)]
 mod tests {
-    use dynamo_router_types::protocols::{
+    use dynamo_router_protocol::protocols::{
         ExternalSequenceBlockHash, KvCacheEvent, KvCacheStoreData, KvCacheStoredBlockData,
         LocalBlockHash,
     };
@@ -573,7 +573,7 @@ mod tests {
     #[test]
     fn encoded_batch_decodes_through_router_zmq_wire() {
         use dynamo_kv_indexer::zmq_wire::{KvEventBatch, RawKvEvent as WireKvEvent};
-        use dynamo_router_types::protocols::KvCacheRemoveData;
+        use dynamo_router_protocol::protocols::KvCacheRemoveData;
 
         let stored = RawKvEvent {
             event: stored_event(),

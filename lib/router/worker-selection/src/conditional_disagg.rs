@@ -9,8 +9,9 @@
 
 use async_trait::async_trait;
 
-use dynamo_router_types::config::{ConditionalDisaggPolicyKind, KvRouterConfig};
-pub use dynamo_router_types::config::{
+use crate::config::ConditionalDisaggPolicyKind;
+use crate::config::SelectionConfig;
+pub use crate::config::{
     DEFAULT_CONDITIONAL_DISAGG_EFF_ISL_RATIO_THRESHOLD,
     DEFAULT_CONDITIONAL_DISAGG_EFF_ISL_THRESHOLD,
 };
@@ -81,12 +82,12 @@ pub trait ConditionalDisaggPolicy: Send + Sync {
 /// Build the configured conditional-disagg policy. Returns a disabled policy
 /// when conditional disagg is not enabled.
 pub fn make_conditional_disagg_policy(
-    config: Option<&KvRouterConfig>,
+    config: Option<&SelectionConfig>,
 ) -> Box<dyn ConditionalDisaggPolicy> {
     let Some(config) = config else {
         return Box::new(IslBoundingPolicy::disabled());
     };
-    match config.conditional_disagg_policy {
+    match config.conditional_disagg.policy {
         ConditionalDisaggPolicyKind::IslBounding => {
             Box::new(IslBoundingPolicy::from_config(config))
         }
@@ -97,7 +98,7 @@ pub fn make_conditional_disagg_policy(
     }
 }
 
-pub fn policy_needs_prefill_worker_busy(config: Option<&KvRouterConfig>) -> bool {
+pub fn policy_needs_prefill_worker_busy(config: Option<&SelectionConfig>) -> bool {
     make_conditional_disagg_policy(config).needs_prefill_worker_busy()
 }
 
@@ -119,11 +120,11 @@ impl IslBoundingPolicy {
         }
     }
 
-    pub fn from_config(config: &KvRouterConfig) -> Self {
+    pub fn from_config(config: &SelectionConfig) -> Self {
         Self {
-            enabled: config.conditional_disagg_enabled,
-            eff_isl_threshold: config.conditional_disagg_eff_isl_threshold,
-            eff_isl_ratio_threshold: config.conditional_disagg_eff_isl_ratio_threshold,
+            enabled: config.conditional_disagg.enabled,
+            eff_isl_threshold: config.conditional_disagg.eff_isl_threshold,
+            eff_isl_ratio_threshold: config.conditional_disagg.eff_isl_ratio_threshold,
         }
     }
 
@@ -174,9 +175,9 @@ impl PrefillLoadPolicy {
         Self { enabled }
     }
 
-    pub fn from_config(config: &KvRouterConfig) -> Self {
+    pub fn from_config(config: &SelectionConfig) -> Self {
         Self {
-            enabled: config.conditional_disagg_enabled,
+            enabled: config.conditional_disagg.enabled,
         }
     }
 
@@ -222,7 +223,7 @@ impl IslOrLoadPolicy {
         Self { isl, load }
     }
 
-    pub fn from_config(config: &KvRouterConfig) -> Self {
+    pub fn from_config(config: &SelectionConfig) -> Self {
         Self {
             isl: IslBoundingPolicy::from_config(config),
             load: PrefillLoadPolicy::from_config(config),

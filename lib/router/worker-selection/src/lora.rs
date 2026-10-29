@@ -7,7 +7,7 @@ use std::collections::HashSet;
 
 use rustc_hash::FxHashSet;
 
-use dynamo_router_types::protocols::{WorkerId, WorkerWithDpRank};
+use dynamo_router_protocol::protocols::{WorkerId, WorkerWithDpRank};
 
 /// Host-owned knowledge of which workers can serve a LoRA adapter.
 ///

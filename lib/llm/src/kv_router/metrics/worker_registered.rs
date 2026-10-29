@@ -1,14 +1,11 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-use std::{
-    collections::HashSet,
-    sync::{Arc, Weak},
-};
+use std::{collections::HashSet, sync::Arc};
 
-use dynamo_router_types::protocols::WorkerId;
+use dynamo_metrics::collect::SourceSet;
+use dynamo_router_protocol::protocols::WorkerId;
 use dynamo_runtime::metrics::PrometheusMetric;
-use parking_lot::Mutex;
 use prometheus::{
     IntGaugeVec, Opts,
     core::{Collector, Desc},
@@ -37,7 +34,7 @@ pub(crate) struct RouterWorkerRegistration {
 pub(super) struct RouterWorkerRegistered {
     opts: Opts,
     descriptor: IntGaugeVec,
-    sources: Arc<Mutex<Vec<Weak<RouterWorkerRegistration>>>>,
+    sources: SourceSet<RouterWorkerRegistration>,
 }
 
 impl PrometheusMetric for RouterWorkerRegistered {
@@ -45,7 +42,7 @@ impl PrometheusMetric for RouterWorkerRegistered {
         Ok(Self {
             descriptor: IntGaugeVec::new(opts.clone(), LABELS)?,
             opts,
-            sources: Arc::new(Mutex::new(Vec::new())),
+            sources: SourceSet::new(),
         })
     }
 }
@@ -64,9 +61,7 @@ impl RouterWorkerRegistered {
             cancellation,
             available_workers,
         });
-        let mut sources = self.sources.lock();
-        sources.retain(|source| source.strong_count() > 0);
-        sources.push(Arc::downgrade(&source));
+        self.sources.attach(&source);
         source
     }
 }
@@ -81,14 +76,9 @@ impl Collector for RouterWorkerRegistered {
         // across router owners without deleting another live owner's registration.
         let gauge = IntGaugeVec::new(self.opts.clone(), LABELS)
             .expect("validated router worker metric options");
-        let mut sources = self.sources.lock();
-        sources.retain(|source| {
-            let Some(source) = source.upgrade() else {
-                return false;
-            };
-            if source.cancellation.is_cancelled() || source.workers.has_changed().is_err() {
-                return false;
-            }
+        for source in self.sources.live(|source| {
+            !source.cancellation.is_cancelled() && source.workers.has_changed().is_ok()
+        }) {
             // Registration is request-independent: apply the client's hard availability,
             // before request-specific LoRA eligibility, and never its overload signal.
             let available = source.available_workers.as_ref().map(|provider| provider());
@@ -110,8 +100,7 @@ impl Collector for RouterWorkerRegistered {
                         .set(1);
                 }
             }
-            true
-        });
+        }
         gauge.collect()
     }
 }

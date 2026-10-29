@@ -6,7 +6,7 @@ events to a plugin (`runtime`).
 
 ## Guardrails
 
-- Depend only on `dynamo-router-types` for router vocabulary; never introduce `dynamo-runtime`
+- Depend only on `dynamo-router-protocol` for router vocabulary; never introduce `dynamo-runtime`
   or `lib/llm` dependencies.
 - The policy queue is on the admission hot path: keep push/pop allocation-free beyond the entry
   itself and gate changes on the `policy_queue` bench.

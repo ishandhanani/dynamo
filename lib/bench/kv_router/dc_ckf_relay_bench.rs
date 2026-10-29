@@ -31,10 +31,10 @@ use dynamo_kv_indexer::cuckoo::{
     DcCkfPublicationBatch, DcCkfPublisher, DcCkfState, LaneLease, ProducerIdentity,
 };
 use dynamo_mocker::replay::ReplayWorkerArtifacts;
-use dynamo_router_types::identity::{
+use dynamo_router_protocol::identity::{
     CacheSemanticsId, DcId, IdentitySource, IndexerDomainId, PoolId, RoutingScopeId,
 };
-use dynamo_router_types::protocols::{
+use dynamo_router_protocol::protocols::{
     ExternalSequenceBlockHash, KvCacheEvent, KvCacheEventData, KvCacheEventError, RouterEvent,
 };
 use serde::Serialize;

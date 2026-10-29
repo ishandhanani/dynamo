@@ -12,7 +12,7 @@ pub use dynamo_kv_indexer::zmq_wire::create_stored_blocks;
 #[cfg(test)]
 use dynamo_kv_indexer::zmq_wire::*;
 use dynamo_kv_indexer::{KvIndexerMetrics, LocalKvIndexer};
-use dynamo_router_types::protocols::*;
+use dynamo_router_protocol::protocols::*;
 use dynamo_runtime::component::{Component, Endpoint};
 use dynamo_runtime::discovery::{DiscoverySpec, EventScope};
 use dynamo_runtime::protocols::EndpointId;

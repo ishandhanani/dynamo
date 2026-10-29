@@ -18,10 +18,10 @@ use dynamo_kv_indexer::cuckoo::{
     DcCkfPublisher, DcCkfState, GlobalCkfIndexer, GlobalCkfIngestOutcome, GlobalCkfLaneIngestor,
     GlobalCkfManifest, LaneLease, ProducerIdentity,
 };
-use dynamo_router_types::identity::{
+use dynamo_router_protocol::identity::{
     CacheSemanticsId, DcId, IdentitySource, IndexerDomainId, PoolId, RoutingScopeId,
 };
-use dynamo_router_types::protocols::{OverlapScores, RouterEvent, WorkerWithDpRank};
+use dynamo_router_protocol::protocols::{OverlapScores, RouterEvent, WorkerWithDpRank};
 use rustc_hash::FxHashMap;
 
 const MAX_LANES: usize = 16;
@@ -249,14 +249,14 @@ impl DirectCkfParityIndexer {
 
     pub fn find_matches(
         &mut self,
-        sequence: &[dynamo_router_types::protocols::LocalBlockHash],
+        sequence: &[dynamo_router_protocol::protocols::LocalBlockHash],
     ) -> Result<OverlapScores> {
         self.find_matches_with_mode(sequence, DirectCkfParityMatchMode::FullMap)
     }
 
     pub fn find_matches_with_mode(
         &mut self,
-        sequence: &[dynamo_router_types::protocols::LocalBlockHash],
+        sequence: &[dynamo_router_protocol::protocols::LocalBlockHash],
         mode: DirectCkfParityMatchMode,
     ) -> Result<OverlapScores> {
         self.exact_drain()?;
@@ -307,8 +307,8 @@ fn map_publish_result(
 
 #[cfg(test)]
 mod tests {
-    use dynamo_router_types::protocols::LocalBlockHash;
-    use dynamo_router_types::protocols::{
+    use dynamo_router_protocol::protocols::LocalBlockHash;
+    use dynamo_router_protocol::protocols::{
         ExternalSequenceBlockHash, KvCacheEvent, KvCacheEventData, KvCacheRemoveData,
         KvCacheStoreData, KvCacheStoredBlockData,
     };

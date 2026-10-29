@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #[cfg(feature = "select-service")]
-use dynamo_scheduler::plugins::RouterPluginRegistry;
+use dynamo_kv_router::plugins::RouterPluginRegistry;
 use pythonize::{depythonize, pythonize};
 use serde::Deserialize;
 use std::collections::HashMap;
@@ -23,21 +23,22 @@ use crate::Endpoint;
 ))]
 use clap::Parser;
 #[cfg(feature = "select-service")]
-use dynamo_scheduler::config::try_kv_router_config_from_dynamo_env;
-use dynamo_router_types::config::{KvRouterConfig, RouterConfigOverride};
-use dynamo_scheduler::plugins::RouterPlugins;
-use dynamo_router_types::protocols::compute_block_hash_for_seq;
-use dynamo_router_types::protocols::*;
+use dynamo_kv_router::config::try_kv_router_config_from_dynamo_env;
+use dynamo_kv_router::config::KvRouterConfig;
+use dynamo_router_protocol::config::RouterConfigOverride;
+use dynamo_kv_router::plugins::RouterPlugins;
+use dynamo_router_protocol::protocols::compute_block_hash_for_seq;
+use dynamo_router_protocol::protocols::*;
 #[cfg(feature = "kv-indexer")]
 use dynamo_kv_indexer::http::{self as indexer, IndexerConfig};
 #[cfg(feature = "select-service")]
-use dynamo_scheduler::selection;
-use dynamo_scheduler::selection::{OverlapScoresRequest, PotentialLoadsRequest, PromptRequest, ReservationRequest, SelectAndReserveRequest, SelectRequest, SelectionCacheConfig as RsSelectionCacheConfig, SelectionError, SelectionService as RustSelectionService, SelectionServiceBuilder, SelectionServiceConfig, WorkerPatchRequest, WorkerRequest, warn_for_unserved_worker_selection_policies};
+use dynamo_kv_router::selection;
+use dynamo_kv_router::selection::{OverlapScoresRequest, PotentialLoadsRequest, PromptRequest, ReservationRequest, SelectAndReserveRequest, SelectRequest, SelectionCacheConfig as RsSelectionCacheConfig, SelectionError, SelectionService as RustSelectionService, SelectionServiceBuilder, SelectionServiceConfig, WorkerPatchRequest, WorkerRequest, warn_for_unserved_worker_selection_policies};
 #[cfg(feature = "slot-tracker")]
 use dynamo_slot_tracker::http::{self as slot_tracker, SlotTrackerConfig};
 #[cfg(feature = "select-service")]
-use dynamo_router_types::WorkerType;
-use dynamo_router_types::tracking_hash::TrackingHashAlgorithm;
+use dynamo_router_protocol::WorkerType;
+use dynamo_router_protocol::tracking_hash::TrackingHashAlgorithm;
 use rs::pipeline::{AsyncEngine, SingleIn};
 use rs::protocols::annotated::Annotated as RsAnnotated;
 use tracing::Instrument;
@@ -561,7 +562,7 @@ where
             cli.selection_cache_max_bytes,
         ),
     };
-    let builder = config.service_builder(WorkerType::Aggregated, policy_registry);
+    let builder = SelectionServiceBuilder::from_config(&config, WorkerType::Aggregated, policy_registry);
     let rt = tokio::runtime::Runtime::new()?;
     let service = rt.block_on(builder.build())?;
     rt.block_on(selection::run_server(config.port, service))
@@ -1498,7 +1499,7 @@ impl KvEventPublisher {
 #[pyclass]
 #[derive(Clone)]
 pub(crate) struct OverlapScores {
-    inner: dynamo_router_types::protocols::OverlapScores,
+    inner: dynamo_router_protocol::protocols::OverlapScores,
 }
 
 #[pymethods]
@@ -1524,7 +1525,7 @@ enum RadixTreeRequest {
     FindMatches {
         local_block_hashes: Vec<LocalBlockHash>,
         early_exit: bool,
-        response_tx: mpsc::SyncSender<dynamo_router_types::protocols::OverlapScores>,
+        response_tx: mpsc::SyncSender<dynamo_router_protocol::protocols::OverlapScores>,
     },
     ApplyEvent {
         worker_id: WorkerId,
@@ -1978,7 +1979,7 @@ async fn create_kv_router_from_endpoint(
     block_size: usize,
     kv_router_config: Option<KvRouterConfig>,
     load_threshold_config: RsLoadThresholdConfig,
-    prefill_load_estimator: Option<Arc<dyn dynamo_router_types::prefill_load::PrefillLoadEstimator>>,
+    prefill_load_estimator: Option<Arc<dyn dynamo_router_protocol::prefill_load::PrefillLoadEstimator>>,
     plugins: RouterPlugins,
 ) -> anyhow::Result<llm_rs::kv_router::RoutingHostBuilder> {
     // The model manager owns the per-endpoint topology, shared caches and
@@ -2106,9 +2107,9 @@ async fn create_kv_router_from_endpoint(
             factory(
                 config,
                 policy_worker_role,
-                dynamo_router_types::identity::RoutingPartitionRef::new(
+                dynamo_router_protocol::identity::RoutingPartitionRef::new(
                     &policy_model_name,
-                    dynamo_router_types::identity::DEFAULT_ROUTING_GROUP,
+                    dynamo_router_protocol::identity::DEFAULT_ROUTING_GROUP,
                 ),
             )
         }))

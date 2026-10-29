@@ -12,9 +12,9 @@ mod scorer;
 
 use std::sync::Arc;
 
-use dynamo_router_types::config::KvRouterConfig;
-use dynamo_scheduler::plugins::RouterPluginRegistry;
-use dynamo_scheduler::plugins::{
+use dynamo_kv_router::plugins::RouterPluginRegistry;
+use dynamo_kv_router::plugins::worker_selection::SelectionConfig;
+use dynamo_kv_router::plugins::{
     WorkerSelectionPolicyParameters, WorkerSelectionPolicyProviderError,
     WorkerSelectionPolicyRegistryError,
 };
@@ -50,7 +50,7 @@ fn provider(
     let min_device_overlap_blocks = parameters.min_device_overlap_blocks;
 
     Ok(Arc::new(
-        move |config: &KvRouterConfig, worker_type, _partition| {
+        move |config: &SelectionConfig, worker_type, _partition| {
             let policy = build_policy(config, worker_type.as_str(), min_device_overlap_blocks);
             let config = config.clone();
             policy.with_runtime_config(
@@ -81,7 +81,7 @@ fn provider(
 }
 
 fn build_policy(
-    config: &KvRouterConfig,
+    _config: &SelectionConfig,
     worker_label: &'static str,
     min_device_overlap_blocks: f64,
 ) -> WorkerSelectionPolicy {
@@ -89,7 +89,6 @@ fn build_policy(
         min_device_overlap_blocks,
     })];
     WorkerSelectionPolicy::new_with_filters(
-        config.clone(),
         worker_label,
         filters,
         vec![Box::new(ActiveRequestsScorer)],

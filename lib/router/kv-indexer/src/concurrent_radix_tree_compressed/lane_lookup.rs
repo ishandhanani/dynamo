@@ -22,7 +22,7 @@ use rustc_hash::FxHashMap;
 use super::block_lookup::{BlockLookup, Slot};
 use super::node::CleanupEdge;
 use super::types::SharedNode;
-use dynamo_router_types::protocols::{ExternalSequenceBlockHash, WorkerWithDpRank};
+use dynamo_router_protocol::protocols::{ExternalSequenceBlockHash, WorkerWithDpRank};
 
 /// A lane-local name for a node the lane holds. Non-zero so a lookup slot holding a key
 /// and an id stays 12 bytes.

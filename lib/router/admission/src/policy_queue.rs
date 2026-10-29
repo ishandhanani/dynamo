@@ -9,10 +9,10 @@ use tokio::time::Instant;
 use ordered_float::OrderedFloat;
 use rustc_hash::{FxHashMap, FxHashSet};
 
-use dynamo_router_types::config::RouterQueuePolicy;
-use dynamo_router_types::config::policy::{PolicyClassConfig, PolicyProfile};
-use dynamo_router_types::protocols::WorkerPlacement;
-use dynamo_router_types::protocols::WorkerWithDpRank;
+use crate::config::RouterQueuePolicy;
+use crate::policy_config::{PolicyClassConfig, PolicyProfile};
+use dynamo_router_protocol::protocols::WorkerPlacement;
+use dynamo_router_protocol::protocols::WorkerWithDpRank;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct QueueSnapshot {
@@ -49,7 +49,7 @@ pub struct QueueMetadata {
     pub arrival_offset_secs: f64,
 }
 
-pub use dynamo_router_types::protocols::{QueueLimitKind, QueueRejection};
+pub use dynamo_router_protocol::protocols::{QueueLimitKind, QueueRejection};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct PolicyQueueStats {
@@ -985,12 +985,9 @@ fn subtract_stats(stats: &mut PolicyQueueStats, snapshot: QueueSnapshot) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use dynamo_router_types::config::policy::RouterPolicyConfig;
 
     fn profile(yaml: &str) -> PolicyProfile {
-        RouterPolicyConfig::from_yaml(yaml)
-            .unwrap()
-            .resolve_profile(None, None, RouterQueuePolicy::Fcfs)
+        PolicyProfile::from_yaml(yaml).unwrap()
     }
 
     fn admission_profile() -> PolicyProfile {

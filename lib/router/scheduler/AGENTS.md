@@ -8,7 +8,7 @@ plugin registry (`plugins`), `SelectionCore` / `SelectionService` / `SelectionSe
 
 ## Guardrails
 
-- Depend on the router crates (`dynamo-router-types`, `dynamo-kv-indexer`, `dynamo-slot-tracker`,
+- Depend on the router crates (`dynamo-router-protocol`, `dynamo-kv-indexer`, `dynamo-slot-tracker`,
   `dynamo-admission`, `dynamo-worker-selection`) only. Never introduce `dynamo-runtime` or
   `lib/llm` dependencies, gated or ungated: the frontend, ext-proc, and the bindings are hosts
   on top of this crate.

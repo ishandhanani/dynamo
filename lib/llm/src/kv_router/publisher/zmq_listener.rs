@@ -11,7 +11,7 @@ use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
 use dynamo_kv_indexer::zmq_wire::*;
-use dynamo_router_types::protocols::*;
+use dynamo_router_protocol::protocols::*;
 
 use crate::kv_router::metrics::kv_publisher_metrics;
 use crate::utils::zmq::{connect_sub_socket, multipart_message};

@@ -30,11 +30,13 @@ default = ["custom-policy"]
 custom-policy = ["dep:dynamo-worker-selection-policy-catalog"]
 media-ffmpeg = ["dynamo-llm/media-ffmpeg"]
 kv-indexer = ["dep:clap", "dep:tracing-subscriber", "dynamo-kv-indexer/http"]
-kv-indexer-metrics = ["kv-indexer", "dynamo-scheduler/metrics", "dynamo-kv-indexer/metrics"]
+# The indexer exports its counters whenever the standalone service is built; kept as an alias
+# so existing build invocations keep working.
+kv-indexer-metrics = ["kv-indexer"]
 # Exposes the optional Relay stats/snapshot methods to Python diagnostic builds.
 ckf-diagnostics = ["dynamo-llm/ckf-diagnostics"]
 slot-tracker = ["dep:clap", "dep:tracing-subscriber", "dynamo-slot-tracker/http"]
-select-service = ["dep:clap", "dep:tracing-subscriber", "dynamo-scheduler/http"]
+select-service = ["dep:clap", "dep:tracing-subscriber", "dynamo-kv-router/http"]
 # Replay parity benchmark builds. Deterministic replay itself is the `deterministic`
 # argument of `run_mocker_trace_replay` and needs no feature.
 replay-bench = ["dynamo-mocker/replay-bench"]
@@ -95,9 +97,10 @@ uuid = { version = "1.18.1" }
 
 # kv-indexer / slot-tracker / shared kv-router types
 dynamo-scheduler = { path = "../../router/scheduler" }
+dynamo-kv-router = { path = "../../router/kv-router" }
 dynamo-kv-indexer = { path = "../../router/kv-indexer" }
 dynamo-slot-tracker = { path = "../../router/slot-tracker" }
-dynamo-router-types = { path = "../../router/types" }
+dynamo-router-protocol = { path = "../../router/protocol" }
 dynamo-custom-policy-builtin = { path = "../../router-plugins/builtin" }
 dynamo-worker-selection-policy-catalog = { path = "../../router-plugins/catalog", optional = true }
 clap = { version = "4.5", features = ["derive"], optional = true }

@@ -4,7 +4,7 @@
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
-use dynamo_router_types::sched::KvSchedulerError;
+use dynamo_router_protocol::sched::KvSchedulerError;
 use dynamo_runtime::pipeline::{
     BuiltinRoutePicker, OccupancyReservation, PushRouter, RoutingOccupancyState,
 };

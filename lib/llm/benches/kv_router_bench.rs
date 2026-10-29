@@ -34,7 +34,7 @@ use dynamo_llm::model_card::ModelDeploymentCard;
 use dynamo_llm::preprocessor::prompt::prompt_formatter_from_mdc;
 use dynamo_mocker::loadgen::RouterSequence;
 use dynamo_renderer::{ChatTemplate, ContextMixins, OAIChatLikeRequest, PromptFormatter};
-use dynamo_router_types::protocols::{
+use dynamo_router_protocol::protocols::{
     ExternalSequenceBlockHash, KvCacheEvent, KvCacheEventData, KvCacheStoreData,
     KvCacheStoredBlockData, LocalBlockHash, RouterEvent, WorkerId, compute_block_hash,
     compute_seq_hash_for_block,

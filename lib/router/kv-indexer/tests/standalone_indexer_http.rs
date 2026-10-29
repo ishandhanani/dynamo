@@ -18,8 +18,8 @@ use std::time::Duration;
 use dynamo_kv_indexer::http::server::{AppState, create_router};
 use dynamo_kv_indexer::ingest::registry::WorkerRegistry;
 use dynamo_kv_indexer::zmq_wire::{BlockHashValue, RawKvEvent};
-use dynamo_router_types::identity::RoutingPartitionId;
-use dynamo_router_types::protocols::{
+use dynamo_router_protocol::identity::RoutingPartitionId;
+use dynamo_router_protocol::protocols::{
     BlockHashOptions, ExternalSequenceBlockHash, KvCacheEvent, KvCacheEventData, KvCacheStoreData,
     KvCacheStoredBlockData, LocalBlockHash, RouterEvent, StorageTier, compute_block_hash_for_seq,
     compute_seq_hash_for_block,
@@ -166,7 +166,7 @@ async fn spawn_indexer_http(
     (base_url, cancel, task)
 }
 
-#[cfg(feature = "metrics")]
+#[cfg(feature = "export")]
 fn make_app_state(registry: Arc<WorkerRegistry>) -> Arc<AppState> {
     Arc::new(AppState {
         registry,
@@ -175,7 +175,7 @@ fn make_app_state(registry: Arc<WorkerRegistry>) -> Arc<AppState> {
     })
 }
 
-#[cfg(not(feature = "metrics"))]
+#[cfg(not(feature = "export"))]
 fn make_app_state(registry: Arc<WorkerRegistry>) -> Arc<AppState> {
     Arc::new(AppState {
         registry,
@@ -478,7 +478,7 @@ async fn query_returns_404_for_unknown_model() {
     task.await.expect("server task join");
 }
 
-#[cfg(feature = "metrics")]
+#[cfg(feature = "export")]
 #[tokio::test]
 async fn duplicate_store_warning_is_exported() {
     const BLOCK_SIZE: u32 = 4;

@@ -1,12 +1,12 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 use dynamo_custom_policy_builtin::default_factory;
-use dynamo_router_types::config::KvRouterConfig;
-use dynamo_router_types::identity::RoutingPartitionId;
-use dynamo_router_types::protocols::RoutingConstraints;
-use dynamo_scheduler::selection::{
+use dynamo_kv_router::config::KvRouterConfig;
+use dynamo_kv_router::selection::{
     PromptRequest, SelectAndReserveRequest, SelectionCacheConfig, SelectionCore, WorkerRequest,
 };
+use dynamo_router_protocol::identity::RoutingPartitionId;
+use dynamo_router_protocol::protocols::RoutingConstraints;
 
 fn worker(worker_id: u64) -> WorkerRequest {
     WorkerRequest {
@@ -45,11 +45,12 @@ fn reserve_request(selection_id: &str) -> SelectAndReserveRequest {
 #[tokio::test]
 async fn shared_core_books_and_releases_with_the_builtin_default() {
     let core = SelectionCore::try_new_local(
-        KvRouterConfig {
+        dynamo_kv_router::config::resolve_router_config(KvRouterConfig {
             use_kv_events: false,
             router_queue_threshold: None,
             ..Default::default()
-        },
+        })
+        .unwrap(),
         1,
         Default::default(),
         SelectionCacheConfig::default(),
@@ -91,10 +92,11 @@ async fn shared_core_books_and_releases_with_the_builtin_default() {
 async fn runtime_updates_are_conditional_and_cancelled_writes_do_not_apply() {
     use dynamo_worker_selection::plugin::{RuntimePolicyError, RuntimePolicyUpdate};
     let core = SelectionCore::try_new_local(
-        KvRouterConfig {
+        dynamo_kv_router::config::resolve_router_config(KvRouterConfig {
             use_kv_events: false,
             ..Default::default()
-        },
+        })
+        .unwrap(),
         1,
         Default::default(),
         SelectionCacheConfig::default(),
@@ -139,7 +141,7 @@ async fn runtime_updates_are_conditional_and_cancelled_writes_do_not_apply() {
 
 #[tokio::test]
 async fn scoring_error_does_not_book_and_allows_retry() {
-    use dynamo_router_types::sched::WorkerSelectionPolicyError;
+    use dynamo_router_protocol::sched::WorkerSelectionPolicyError;
     use dynamo_worker_selection::plugin::{
         WorkerCandidates, WorkerInputView, WorkerPicker, WorkerScorer, WorkerSelectionContext,
         WorkerSelectionPolicy,
@@ -172,17 +174,17 @@ async fn scoring_error_does_not_book_and_allows_retry() {
         }
     }
     let core = SelectionCore::try_new_local(
-        KvRouterConfig {
+        dynamo_kv_router::config::resolve_router_config(KvRouterConfig {
             use_kv_events: false,
             router_queue_threshold: None,
             ..Default::default()
-        },
+        })
+        .unwrap(),
         1,
         Default::default(),
         SelectionCacheConfig::default(),
-        Arc::new(|config, role, _| {
+        Arc::new(|_config, role, _| {
             WorkerSelectionPolicy::new(
-                config.clone(),
                 role.default_selector_label(),
                 vec![Box::new(FailOnce(true))],
                 Box::new(First),

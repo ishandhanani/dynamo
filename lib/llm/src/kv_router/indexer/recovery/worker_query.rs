@@ -11,7 +11,7 @@ use anyhow::{Context, Result};
 use dashmap::DashMap;
 use dynamo_kv_indexer::WorkerKvQueryResponse;
 use dynamo_kv_indexer::recovery::CursorState;
-use dynamo_router_types::protocols::{ResetScope, RouterEvent};
+use dynamo_router_protocol::protocols::{ResetScope, RouterEvent};
 use dynamo_runtime::component::{Component, Instance};
 use rand::Rng;
 use tokio::sync::{Mutex, Semaphore, watch};
@@ -30,7 +30,7 @@ const RECOVERY_MAX_RETRIES: u32 = 8;
 const RECOVERY_INITIAL_BACKOFF_MS: u64 = 200;
 pub(crate) const DEFAULT_RECOVERY_ATTEMPT_TIMEOUT: Duration = Duration::from_secs(30);
 #[cfg(test)]
-const KV_EVENT_TOPIC: &str = dynamo_router_types::protocols::KV_EVENT_SUBJECT;
+const KV_EVENT_TOPIC: &str = dynamo_router_protocol::protocols::KV_EVENT_SUBJECT;
 
 #[derive(Debug, thiserror::Error)]
 #[error("{message}")]
@@ -1079,11 +1079,11 @@ mod tests {
     use super::*;
     use async_trait::async_trait;
     use dynamo_kv_indexer::{KvIndexer, KvIndexerInterface, KvIndexerMetrics, LocalKvIndexer};
-    use dynamo_router_types::identity::{
+    use dynamo_router_protocol::identity::{
         CacheOwnerId, CacheSemanticsId, DcId, IdentitySource, IndexerDomainId, PoolId,
         RoutingScopeId, StableDpSlotId,
     };
-    use dynamo_router_types::protocols::{
+    use dynamo_router_protocol::protocols::{
         DpRank, ExternalSequenceBlockHash, KvCacheEvent, KvCacheEventData, KvCacheRemoveData,
         KvCacheStoreData, KvCacheStoredBlockData, LocalBlockHash, ResidencyDomain, StorageTier,
         WorkerId, WorkerWithDpRank,
@@ -1965,7 +1965,7 @@ mod tests {
         assert_eq!(retained.len(), 1);
         assert_eq!(
             retained[0].residency_domain,
-            dynamo_router_types::protocols::WireResidencyDomain::explicit(
+            dynamo_router_protocol::protocols::WireResidencyDomain::explicit(
                 ResidencyDomain::CacheOwner
             )
         );

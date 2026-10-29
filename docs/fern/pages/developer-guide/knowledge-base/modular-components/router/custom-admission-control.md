@@ -56,7 +56,7 @@ Add the classifier's API, error, configuration, and time dependencies:
 
 ```bash
 cargo add --manifest-path "$PLUGIN_DIR/classifier/Cargo.toml" --path "$DYNAMO_DIR/lib/router/admission" dynamo-admission
-cargo add --manifest-path "$PLUGIN_DIR/classifier/Cargo.toml" --path "$DYNAMO_DIR/lib/router/types" dynamo-router-types
+cargo add --manifest-path "$PLUGIN_DIR/classifier/Cargo.toml" --path "$DYNAMO_DIR/lib/router/protocol" dynamo-router-protocol
 cargo add --manifest-path "$PLUGIN_DIR/classifier/Cargo.toml" --path "$DYNAMO_DIR/lib/runtime" dynamo-runtime
 cargo add --manifest-path "$PLUGIN_DIR/classifier/Cargo.toml" serde --features derive
 cargo add --manifest-path "$PLUGIN_DIR/classifier/Cargo.toml" tokio --features time
@@ -66,7 +66,7 @@ Add the classifier and registry API to the catalog:
 
 ```bash
 cargo add --manifest-path "$PLUGIN_DIR/catalog/Cargo.toml" --path "$PLUGIN_DIR/classifier" acme-admission
-cargo add --manifest-path "$PLUGIN_DIR/catalog/Cargo.toml" --path "$DYNAMO_DIR/lib/router/scheduler" dynamo-scheduler
+cargo add --manifest-path "$PLUGIN_DIR/catalog/Cargo.toml" --path "$DYNAMO_DIR/lib/router/kv-router" dynamo-kv-router
 cargo add --manifest-path "$PLUGIN_DIR/catalog/Cargo.toml" --path "$DYNAMO_DIR/lib/router/admission" dynamo-admission
 ```
 
@@ -78,7 +78,7 @@ Put the classifier in `classifier/src/lib.rs`. `set_due_at` tells Dynamo when to
 use std::time::Duration;
 
 use dynamo_admission::classifier::{ClassifyFuture, ClassifyRequest, RequestClassifier};
-use dynamo_router_types::sched::ClassifierError;
+use dynamo_router_protocol::sched::ClassifierError;
 use dynamo_worker_selection::plugin::WorkerCandidates;
 use dynamo_runtime::error::{DynamoError, ErrorClass};
 use tokio::time::Instant;
@@ -145,7 +145,7 @@ Each factory-created classifier owns its state. Separate frontend replicas have 
 Expose a registration function from `classifier/src/lib.rs`:
 
 ```rust
-use dynamo_scheduler::plugins::RouterPluginRegistry;
+use dynamo_kv_router::plugins::RouterPluginRegistry;
 use dynamo_admission::classifier::RequestClassifierRegistryError;
 
 pub fn register(
@@ -158,7 +158,7 @@ pub fn register(
 Call it from `catalog/src/lib.rs`:
 
 ```rust
-use dynamo_scheduler::plugins::RouterPluginRegistry;
+use dynamo_kv_router::plugins::RouterPluginRegistry;
 use dynamo_admission::classifier::RequestClassifierRegistryError;
 
 pub fn register(

@@ -4,10 +4,11 @@
 use std::sync::Arc;
 
 use dynamo_admission::classifier::{ClassifyFuture, ClassifyRequest, RequestClassifier};
-use dynamo_router_types::WorkerType;
-use dynamo_router_types::config::KvRouterConfig;
-use dynamo_router_types::identity::RoutingPartitionRef;
-use dynamo_scheduler::plugins::RouterPlugins;
+use dynamo_kv_router::config::KvRouterConfig;
+use dynamo_kv_router::plugins::RouterPlugins;
+use dynamo_router_protocol::WorkerType;
+use dynamo_router_protocol::identity::RoutingPartitionRef;
+use dynamo_worker_selection::config::SelectionConfig;
 use dynamo_worker_selection::plugin::WorkerCandidates;
 
 struct PassThrough;
@@ -86,7 +87,11 @@ worker_selection:
             WorkerType::Decode,
             WorkerType::Encode,
         ] {
-            factory(&config, role, RoutingPartitionRef::new("model", "default"));
+            factory(
+                &SelectionConfig::from(&config),
+                role,
+                RoutingPartitionRef::new("model", "default"),
+            );
         }
     }
 }
@@ -102,7 +107,7 @@ fn programmatic_factory_is_an_explicit_custom_selection() {
 #[test]
 fn registering_named_policies_does_not_replace_the_hosts_default() {
     let fallback = dynamo_custom_policy_builtin::default_factory();
-    let mut registry = dynamo_scheduler::plugins::RouterPluginRegistry::default()
+    let mut registry = dynamo_kv_router::plugins::RouterPluginRegistry::default()
         .with_default_factory(fallback.clone());
     dynamo_custom_policy_builtin::register(&mut registry).unwrap();
     let resolved = registry

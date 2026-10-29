@@ -74,12 +74,14 @@ required-features = ["media-ffmpeg"]
 dynamo-custom-policy-builtin = { workspace = true }
 # repo
 dynamo-http-server = { workspace = true }
-dynamo-scheduler = { workspace = true, features = ["metrics"] }
+dynamo-scheduler = { workspace = true }
+dynamo-kv-router = { workspace = true }
 dynamo-admission = { workspace = true }
 dynamo-worker-selection = { workspace = true }
-dynamo-kv-indexer = { workspace = true, features = ["metrics"] }
+dynamo-kv-indexer = { workspace = true, features = ["export"] }
+dynamo-metrics = { workspace = true }
 dynamo-slot-tracker = { workspace = true }
-dynamo-router-types = { workspace = true }
+dynamo-router-protocol = { workspace = true }
 dynamo-memory = { workspace = true }
 dynamo-mocker = { workspace = true, features = ["zmq-events"] }
 dynamo-rl = { workspace = true }

@@ -9,13 +9,13 @@
 
 use std::sync::Arc;
 
-use dynamo_router_types::config::KvRouterConfig;
-use dynamo_router_types::protocols::WorkerAffinityTarget;
-use dynamo_router_types::sched::WorkerSelectionPolicyError;
-use dynamo_scheduler::plugins::{
+use dynamo_kv_router::plugins::worker_selection::SelectionConfig;
+use dynamo_kv_router::plugins::{
     WorkerSelectionPolicyParameters, WorkerSelectionPolicyProviderError,
     WorkerSelectionPolicyRegistry, WorkerSelectionPolicyRegistryError,
 };
+use dynamo_router_protocol::protocols::WorkerAffinityTarget;
+use dynamo_router_protocol::sched::WorkerSelectionPolicyError;
 use dynamo_worker_selection::plugin::WorkerSelectionPolicyFactory;
 use dynamo_worker_selection::plugin::{
     ScoredWorkerCandidate, WorkerInputView, WorkerInputs, WorkerPicker, WorkerSelectionContext,
@@ -101,9 +101,8 @@ fn provider(
     let max_active_requests = parameters.max_active_requests;
 
     Ok(Arc::new(
-        move |config: &KvRouterConfig, worker_type, _partition| {
+        move |_config: &SelectionConfig, worker_type, _partition| {
             WorkerSelectionPolicy::new(
-                config.clone(),
                 worker_type.as_str(),
                 Vec::new(),
                 Box::new(SoftPinRepinPicker {
@@ -124,11 +123,13 @@ pub fn register(
 mod tests {
     use std::collections::HashMap;
 
-    use dynamo_router_types::overlap::OverlapSignals;
-    use dynamo_router_types::protocols::WorkerLoadProjection;
-    use dynamo_router_types::protocols::{RoutingConstraints, WorkerConfigLike, WorkerWithDpRank};
-    use dynamo_router_types::sched::ScheduleMode;
-    use dynamo_router_types::sched::SchedulingRequest;
+    use dynamo_router_protocol::overlap::OverlapSignals;
+    use dynamo_router_protocol::protocols::WorkerLoadProjection;
+    use dynamo_router_protocol::protocols::{
+        RoutingConstraints, WorkerConfigLike, WorkerWithDpRank,
+    };
+    use dynamo_router_protocol::sched::ScheduleMode;
+    use dynamo_router_protocol::sched::SchedulingRequest;
     use dynamo_worker_selection::selector::{WorkerSelectionInput, WorkerSelector};
 
     use super::*;
@@ -195,7 +196,6 @@ mod tests {
 
     fn policy(max_active_requests: usize) -> WorkerSelectionPolicy {
         WorkerSelectionPolicy::new(
-            KvRouterConfig::default(),
             "test",
             Vec::new(),
             Box::new(SoftPinRepinPicker {

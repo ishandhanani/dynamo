@@ -160,7 +160,7 @@ fn saturating_u32(value: usize) -> u32 {
 #[cfg(test)]
 mod tests {
     use dynamo_kv_indexer::cuckoo::{CkfConfig, DcCkfState, ProducerIdentity};
-    use dynamo_router_types::identity::{
+    use dynamo_router_protocol::identity::{
         CacheSemanticsId, DcId, IdentitySource, IndexerDomainId, PoolId, RoutingScopeId,
     };
 

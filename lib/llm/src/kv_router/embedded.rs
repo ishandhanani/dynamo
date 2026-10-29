@@ -13,24 +13,24 @@ use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
 use anyhow::{Context, Result};
-use dynamo_router_types::WorkerType;
-use dynamo_router_types::busy::RejectThresholdsProvider;
-use dynamo_router_types::config::KvRouterConfig;
-use dynamo_router_types::identity::DEFAULT_ROUTING_GROUP;
-use dynamo_router_types::identity::RoutingPartitionId;
-use dynamo_router_types::prefill_load::PrefillLoadEstimator;
-use dynamo_router_types::protocols::{QueueLimitKind, QueueRejection};
-use dynamo_router_types::protocols::{WorkerConfigLike, WorkerId, WorkerWithDpRank};
-use dynamo_router_types::sched::{
-    NonMaxOverlapSelectionObserver, OverloadedWorkerProvider, WorkerAvailabilityProvider,
-};
-use dynamo_router_types::selection_inputs::DEFAULT_MAX_BATCHED_TOKENS;
-use dynamo_scheduler::plugins::RouterPluginRegistry;
-use dynamo_scheduler::selection::{
+use dynamo_kv_router::config::KvRouterConfig;
+use dynamo_kv_router::plugins::RouterPluginRegistry;
+use dynamo_kv_router::selection::{
     CatalogReconciler, DEFAULT_MODEL_NAME, HostCache, HostEligibility, HostLoad, HostReplication,
     HostTelemetry, KvEventIngress, KvIndexSource, SelectionHost, SelectionOperation,
     SelectionOutcome, SelectionPartition, SelectionRun, SelectionScheduler, SelectionService,
     SelectionServiceBuilder, WorkerCatalogSource, WorkerRequest,
+};
+use dynamo_router_protocol::WorkerType;
+use dynamo_router_protocol::busy::RejectThresholdsProvider;
+use dynamo_router_protocol::identity::DEFAULT_ROUTING_GROUP;
+use dynamo_router_protocol::identity::RoutingPartitionId;
+use dynamo_router_protocol::load::DEFAULT_MAX_BATCHED_TOKENS;
+use dynamo_router_protocol::prefill_load::PrefillLoadEstimator;
+use dynamo_router_protocol::protocols::{QueueLimitKind, QueueRejection};
+use dynamo_router_protocol::protocols::{WorkerConfigLike, WorkerId, WorkerWithDpRank};
+use dynamo_router_protocol::sched::{
+    NonMaxOverlapSelectionObserver, OverloadedWorkerProvider, WorkerAvailabilityProvider,
 };
 use dynamo_slot_tracker::{LocalWorkerLoad, ReplicaWorkerPolicy};
 use dynamo_worker_selection::plugin::WorkerSelectionPolicyFactory;
@@ -149,7 +149,7 @@ struct SenderLoadSink {
     worker_type: &'static str,
 }
 
-impl dynamo_scheduler::selection::SchedulerLoadSink for SenderLoadSink {
+impl dynamo_kv_router::selection::SchedulerLoadSink for SenderLoadSink {
     fn publish(&self, snapshot: dynamo_slot_tracker::SchedulerLoadSnapshot) {
         self.sender.publish(snapshot);
     }
@@ -204,7 +204,7 @@ impl EmbeddedSelection {
             ),
         ));
         let slot = std::sync::Mutex::new(Some(channels));
-        let replica_sync: Option<dynamo_scheduler::selection::HostReplicaSyncFactory> =
+        let replica_sync: Option<dynamo_kv_router::selection::HostReplicaSyncFactory> =
             Some(Arc::new(move |_partition| {
                 slot.lock().ok().and_then(|mut s| s.take())
             }));
@@ -480,7 +480,7 @@ pub(crate) fn worker_request_from_runtime_config(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use dynamo_scheduler::selection::SchedulerLoadSink;
+    use dynamo_kv_router::selection::SchedulerLoadSink;
 
     #[test]
     fn worker_request_mirrors_runtime_config() {
@@ -494,15 +494,15 @@ mod tests {
         };
         config.taints.insert("gpu=h100".to_string());
         config.runtime_data.insert(
-            dynamo_router_types::kv_hints::KV_HINT_TRANSFER_CAPABILITY_KEY.to_string(),
+            dynamo_router_protocol::kv_hints::KV_HINT_TRANSFER_CAPABILITY_KEY.to_string(),
             serde_json::Value::Bool(true),
         );
         config.runtime_data.insert(
-            dynamo_router_types::kv_hints::KV_HINT_TRANSFER_WORKER_TYPE_RUNTIME_KEY.to_string(),
+            dynamo_router_protocol::kv_hints::KV_HINT_TRANSFER_WORKER_TYPE_RUNTIME_KEY.to_string(),
             serde_json::Value::String("decode".to_string()),
         );
         config.runtime_data.insert(
-            dynamo_router_types::kv_hints::KV_HINT_TRANSFER_SOURCE_CONTROL_ENDPOINTS_RUNTIME_KEY
+            dynamo_router_protocol::kv_hints::KV_HINT_TRANSFER_SOURCE_CONTROL_ENDPOINTS_RUNTIME_KEY
                 .to_string(),
             serde_json::json!({"2": "tcp://w:9002", "3": "tcp://w:9003"}),
         );

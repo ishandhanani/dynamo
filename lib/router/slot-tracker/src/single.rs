@@ -29,7 +29,7 @@ use rustc_hash::FxHashSet;
 use super::block_tracker::{BlockTracker, RequestBlockChain};
 use super::prefill_tracker::{PrefillLoadState, PrefillLoadTracker};
 use super::prompt_registry::WorkerLoadSnapshot;
-use dynamo_router_types::protocols::PrefillLoadHint;
+use dynamo_router_protocol::protocols::PrefillLoadHint;
 
 /// Shared active-request liveness duration (5 minutes).
 ///

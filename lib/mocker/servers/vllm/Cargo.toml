@@ -34,7 +34,7 @@ tracing-subscriber = { workspace = true }
 uuid = { workspace = true }
 
 [dev-dependencies]
-dynamo-router-types = { workspace = true }
+dynamo-router-protocol = { workspace = true }
 dynamo-kv-indexer = { workspace = true }
 tempfile = { workspace = true }
 serde_json = { workspace = true }

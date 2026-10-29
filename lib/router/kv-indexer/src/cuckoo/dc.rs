@@ -15,7 +15,7 @@ use std::collections::HashMap;
 use rustc_hash::{FxHashMap, FxHashSet};
 use serde::{Deserialize, Serialize};
 
-use dynamo_router_types::protocols::{
+use dynamo_router_protocol::protocols::{
     ExternalSequenceBlockHash, KvCacheEventData, KvCacheEventError, KvCacheStoreData, RouterEvent,
     WorkerId, WorkerWithDpRank,
 };
@@ -1439,7 +1439,7 @@ fn retain_first_error(slot: &mut Option<KvCacheEventError>, error: KvCacheEventE
 mod tests {
     use std::collections::HashMap;
 
-    use dynamo_router_types::protocols::{
+    use dynamo_router_protocol::protocols::{
         BlockHashOptions, KvCacheEvent, KvCacheRemoveData, KvCacheStoreData,
         KvCacheStoredBlockData, LocalBlockHash, ResidencyDomain, StorageTier, WireResidencyDomain,
         compute_block_hash_for_seq,

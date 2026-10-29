@@ -17,7 +17,7 @@ use super::RequestTraceRouterSelection;
 use super::RequestTraceSchema;
 use super::RequestTraceWorkerInfo;
 use super::publish;
-use dynamo_router_types::protocols::SelectionTrace;
+use dynamo_router_protocol::protocols::SelectionTrace;
 
 fn unix_time_ms() -> u64 {
     SystemTime::now()

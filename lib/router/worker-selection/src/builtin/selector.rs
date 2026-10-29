@@ -3,14 +3,14 @@
 
 //! Synchronous adapter for direct selection and deterministic replay.
 
+use crate::config::SelectionConfig;
 use crate::plugin::{
     RuntimePolicyConfig, RuntimePolicyError, RuntimePolicyUpdate, WorkerInputs,
     WorkerSelectionPolicy,
 };
 use crate::selector::{WorkerSelectionInput, WorkerSelector};
-use dynamo_router_types::config::KvRouterConfig;
-use dynamo_router_types::protocols::{WorkerConfigLike, WorkerSelectionResult};
-use dynamo_router_types::sched::KvSchedulerError;
+use dynamo_router_protocol::protocols::{WorkerConfigLike, WorkerSelectionResult};
+use dynamo_router_protocol::sched::KvSchedulerError;
 use parking_lot::Mutex;
 use std::sync::Arc;
 
@@ -23,18 +23,18 @@ use super::runtime_policy;
 /// [`Self::runtime_control`]. Updates apply between selections and keep the selector's random
 /// stream.
 pub struct DefaultWorkerSelector {
-    kv_router_config: KvRouterConfig,
+    kv_router_config: SelectionConfig,
     worker_type: &'static str,
     policy: Arc<Mutex<WorkerSelectionPolicy>>,
     rng: Option<Arc<Mutex<fastrand::Rng>>>,
 }
 impl DefaultWorkerSelector {
-    pub fn new(config: Option<KvRouterConfig>, worker_type: &'static str) -> Self {
+    pub fn new(config: Option<SelectionConfig>, worker_type: &'static str) -> Self {
         Self::with_rng(config.unwrap_or_default(), worker_type, None)
     }
     /// Construct a reproducible selector. Clones share its random stream.
     pub fn new_seeded(
-        config: Option<KvRouterConfig>,
+        config: Option<SelectionConfig>,
         worker_type: &'static str,
         seed: u64,
     ) -> Self {
@@ -45,7 +45,7 @@ impl DefaultWorkerSelector {
         )
     }
     fn with_rng(
-        config: KvRouterConfig,
+        config: SelectionConfig,
         worker_type: &'static str,
         rng: Option<Arc<Mutex<fastrand::Rng>>>,
     ) -> Self {

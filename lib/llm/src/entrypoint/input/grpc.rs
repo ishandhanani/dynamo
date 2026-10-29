@@ -138,7 +138,7 @@ async fn run_watcher(
     migration_max_seq_len: Option<u32>,
     namespace_filter: NamespaceFilter,
     prefill_load_estimator: Option<
-        Arc<dyn dynamo_router_types::prefill_load::PrefillLoadEstimator>,
+        Arc<dyn dynamo_router_protocol::prefill_load::PrefillLoadEstimator>,
     >,
     local_model_path: Option<PathBuf>,
     metrics_prefix: Option<String>,

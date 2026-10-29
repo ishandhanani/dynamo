@@ -12,16 +12,16 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result, anyhow};
 
-use dynamo_router_types::WorkerType;
-use dynamo_router_types::config::KvRouterConfig;
-use dynamo_router_types::identity::DEFAULT_ROUTING_GROUP;
-use dynamo_router_types::protocols::RoutingConstraints;
-use dynamo_scheduler::config::try_kv_router_config_from_dynamo_env;
-use dynamo_scheduler::plugins::WorkerSelectionPolicyRegistry;
-use dynamo_scheduler::selection::{
+use dynamo_kv_router::config::KvRouterConfig;
+use dynamo_kv_router::config::try_kv_router_config_from_dynamo_env;
+use dynamo_kv_router::plugins::WorkerSelectionPolicyRegistry;
+use dynamo_kv_router::selection::{
     PromptRequest, SelectAndReserveRequest as CoreSelectAndReserveRequest, SelectionError,
     SelectionService, SelectionServiceBuilder, warn_for_unserved_worker_selection_policies,
 };
+use dynamo_router_protocol::WorkerType;
+use dynamo_router_protocol::identity::DEFAULT_ROUTING_GROUP;
+use dynamo_router_protocol::protocols::RoutingConstraints;
 use kube::Client;
 use tokio_util::sync::CancellationToken;
 
@@ -265,9 +265,9 @@ mod tests {
     use std::sync::Mutex;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
-    use dynamo_router_types::sched::WorkerSelectionPolicyError;
-    use dynamo_scheduler::plugins::WorkerSelectionPolicyParameters;
-    use dynamo_scheduler::selection::{CatalogReconciler, WorkerRequest};
+    use dynamo_kv_router::plugins::WorkerSelectionPolicyParameters;
+    use dynamo_kv_router::selection::{CatalogReconciler, WorkerRequest};
+    use dynamo_router_protocol::sched::WorkerSelectionPolicyError;
     use dynamo_worker_selection::plugin::{
         WorkerInputView, WorkerPicker, WorkerSelectionContext, WorkerSelectionPolicy,
         WorkerSelectionPolicyFactory,
@@ -496,11 +496,10 @@ worker_selection:
                         provider_calls.fetch_add(1, Ordering::Relaxed);
                         let factory_calls = Arc::clone(&factory_calls);
                         let factory: WorkerSelectionPolicyFactory =
-                            Arc::new(move |config, worker_type, _partition| {
+                            Arc::new(move |_config, worker_type, _partition| {
                                 factory_calls.fetch_add(1, Ordering::Relaxed);
                                 assert_eq!(worker_type, WorkerType::Aggregated);
                                 WorkerSelectionPolicy::new(
-                                    config.clone(),
                                     worker_type.as_str(),
                                     Vec::new(),
                                     Box::new(FirstEligiblePicker),
@@ -788,9 +787,8 @@ worker_selection:
                     move |_parameters: &WorkerSelectionPolicyParameters| {
                         let picker = picker.clone();
                         let factory: WorkerSelectionPolicyFactory =
-                            Arc::new(move |config, worker_type, _partition| {
+                            Arc::new(move |_config, worker_type, _partition| {
                                 WorkerSelectionPolicy::new(
-                                    config.clone(),
                                     worker_type.as_str(),
                                     Vec::new(),
                                     Box::new(picker.clone()),

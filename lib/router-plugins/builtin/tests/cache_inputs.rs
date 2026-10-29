@@ -3,9 +3,8 @@
 
 mod support;
 
-use dynamo_router_types::config::KvRouterConfig;
-use dynamo_router_types::protocols::SharedCacheHits;
-use dynamo_router_types::sched::WorkerSelectionPolicyError;
+use dynamo_router_protocol::protocols::SharedCacheHits;
+use dynamo_router_protocol::sched::WorkerSelectionPolicyError;
 use dynamo_worker_selection::plugin::{
     WorkerCacheInput, WorkerCandidate, WorkerCandidates, WorkerFilter, WorkerInputView,
     WorkerInputs, WorkerPicker, WorkerScorer, WorkerSelectionContext, WorkerSelectionPolicy,
@@ -213,7 +212,6 @@ fn each_component_can_only_read_its_own_inputs() {
                             calls: calls.clone(),
                         };
                         let policy = WorkerSelectionPolicy::new_with_filters(
-                            KvRouterConfig::default(),
                             "test",
                             vec![
                                 Box::new(probe(filter_mask)),

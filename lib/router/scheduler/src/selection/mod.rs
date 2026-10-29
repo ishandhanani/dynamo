@@ -14,25 +14,12 @@ mod ingress;
 mod input;
 mod membership;
 mod pending;
-#[cfg(feature = "http")]
-mod server;
-mod service;
 mod types;
 
-#[cfg(all(test, feature = "http"))]
-mod tests;
-
-// TODO(v1.7): Remove these compatibility re-exports; use crate::plugins instead.
-pub use crate::plugins::{
-    DYN_ROUTER_DECODE_POLICY, DYN_ROUTER_PREFILL_POLICY, DYN_ROUTER_WORKER_SELECTION_POLICY,
-    RouterPluginRegistry, WorkerSelectionPolicyParameters, WorkerSelectionPolicyProvider,
-    WorkerSelectionPolicyProviderError, WorkerSelectionPolicyRegistry,
-    WorkerSelectionPolicyRegistryError,
-};
 pub use core::{
     HostCache, HostEligibility, HostLoad, HostReplication, HostTelemetry, KvIndexSource, Selected,
     SelectionAdmission, SelectionCore, SelectionHost, SelectionOperation, SelectionOutcome,
-    SelectionPartition, SelectionRun, SelectionScheduler, SelectionServiceConfig, SessionBinding,
+    SelectionPartition, SelectionRun, SelectionScheduler, SessionBinding,
 };
 pub use dynamo_slot_tracker::mesh::{
     HostReplicaChannels, HostReplicaSyncFactory, ReplicaIngressObserver, ReplicaPeerError,
@@ -41,14 +28,13 @@ pub use dynamo_slot_tracker::mesh::{
 pub use dynamo_worker_selection::plugin::WorkerSelectionPolicyFactory;
 pub use error::SelectionError;
 pub use ingress::KvEventIngress;
+#[doc(hidden)]
+pub use input::{MmRoutingInfoRequest, NormalizedPrompt, NormalizedReservation, TrackingHashInput};
 pub use input::{PromptRequest, PromptView};
 pub use membership::{CatalogObserver, CatalogReconciler, WorkerCatalogSource};
 pub use pending::SelectionCacheConfig;
-#[cfg(feature = "http")]
-pub use server::{AppState, run_server};
-pub use service::{
-    SelectionService, SelectionServiceBuilder, warn_for_unserved_worker_selection_policies,
-};
+#[doc(hidden)]
+pub use types::REQUEST_BODY_LIMIT_BYTES;
 pub use types::{
     DEFAULT_MODEL_NAME, ModelLoadResponse, OutputBlockRequest, OverlapScoresRequest,
     OverlapScoresResponse, PotentialLoadsRequest, ReadyResponse, ReservationRequest,

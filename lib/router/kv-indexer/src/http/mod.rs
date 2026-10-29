@@ -9,7 +9,7 @@
 //! a ZMQ listener that ingests its KV events into a per-(model, routing group)
 //! [`backend::Indexer`].
 //!
-//! [`RoutingPartitionId`](dynamo_router_types::identity::RoutingPartitionId) remains this service's sole registry
+//! [`RoutingPartitionId`](dynamo_router_protocol::identity::RoutingPartitionId) remains this service's sole registry
 //! authority for `(model_name, routing_group)`.
 //! Resolving it to `IndexerDomainId` is intentionally deferred until registration can carry
 //! authoritative explicit identity material; hashing local defaults here would create a second
@@ -30,7 +30,7 @@
 //! response struct in [`server`] for the exact semantics.
 
 pub mod logging;
-#[cfg(feature = "metrics")]
+#[cfg(feature = "export")]
 pub mod metrics;
 pub mod recovery;
 pub mod server;
@@ -42,10 +42,10 @@ use std::time::Duration;
 use tokio::net::TcpListener;
 use tokio_util::sync::CancellationToken;
 
+use crate::config::min_initial_workers_from_env;
 use crate::ingest::registry::WorkerRegistry;
 use crate::ingest::zmq::validate_endpoint as validate_zmq_endpoint;
 use axum::http::header::HeaderName;
-use dynamo_router_types::config::min_initial_workers_from_env;
 use logging::AccessLogSink;
 use server::{AppState, create_router};
 

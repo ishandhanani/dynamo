@@ -1222,7 +1222,7 @@ def test_router_yaml_rejects_invalid_settings(tmp_path, settings):
 
 
 def test_shared_router_settings_fixture_flows_to_binding_kwargs(pytestconfig):
-    path = pytestconfig.rootpath / "lib/router/types/tests/data/router-settings.yaml"
+    path = pytestconfig.rootpath / "lib/router/kv-router/tests/data/router-settings.yaml"
     parser = argparse.ArgumentParser()
     KvRouterArgGroup().add_arguments(parser)
     config = KvRouterConfigBase.from_cli_args(

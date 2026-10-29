@@ -16,7 +16,7 @@ use super::{
     KvRouterError, LowerTierIndexer, ThreadPoolIndexer, WorkerKvQueryResponse,
     record_unsupported_residency_event,
 };
-use dynamo_router_types::protocols::*;
+use dynamo_router_protocol::protocols::*;
 
 type LowerTierRegistry = Arc<Mutex<HashMap<StorageTier, Arc<ThreadPoolIndexer<LowerTierIndexer>>>>>;
 
@@ -494,7 +494,7 @@ impl LocalKvIndexer {
             .rposition(|event| {
                 matches!(
                     event.reset_scope(),
-                    Ok(Some(dynamo_router_types::protocols::ResetScope::All))
+                    Ok(Some(dynamo_router_protocol::protocols::ResetScope::All))
                 )
             })
             .map_or(start_idx, |idx| start_idx + idx)
@@ -792,11 +792,11 @@ mod tests {
     use crate::{
         KvIndexerInterface, KvIndexerMetrics, LowerTierContinuation, WorkerKvQueryResponse,
     };
-    use dynamo_router_types::identity::{
+    use dynamo_router_protocol::identity::{
         CacheOwnerId, CacheSemanticsId, DcId, IdentitySource, IndexerDomainId, PoolId,
         RoutingScopeId, StableDpSlotId,
     };
-    use dynamo_router_types::protocols::{
+    use dynamo_router_protocol::protocols::{
         ExternalSequenceBlockHash, KvCacheEvent, KvCacheEventData, KvCacheStoreData,
         KvCacheStoredBlockData, LocalBlockHash, ResetScope, ResidencyDomain, ResidencyProjection,
         RouterEvent, StorageTier, WorkerWithDpRank,

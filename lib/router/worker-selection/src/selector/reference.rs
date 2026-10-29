@@ -13,14 +13,14 @@ use super::{
     CandidateData, MaterializedSelectionInput, WorkerInputs, WorkerSelectionContext,
     WorkerSelectionInput, WorkerSelector, select_worker_with_policy, source_prefix_blocks,
 };
+use crate::config::SelectionConfig;
 use crate::plugin::WorkerTransferInput;
-use dynamo_router_types::config::KvRouterConfig;
-use dynamo_router_types::eligibility::RoutingEligibility;
-use dynamo_router_types::kv_hints::KvTransferScope;
-use dynamo_router_types::protocols::{
+use dynamo_router_protocol::eligibility::RoutingEligibility;
+use dynamo_router_protocol::kv_hints::KvTransferScope;
+use dynamo_router_protocol::protocols::{
     WorkerConfigLike, WorkerId, WorkerSelectionResult, WorkerWithDpRank,
 };
-use dynamo_router_types::sched::{KvSchedulerError, SchedulingRequest};
+use dynamo_router_protocol::sched::{KvSchedulerError, SchedulingRequest};
 
 #[cfg(any(test, feature = "testing", feature = "bench"))]
 fn softmax_sample_entries<T: Copy>(
@@ -102,12 +102,12 @@ struct LogitWeights {
 
 /// Default implementation matching the Python _cost_function.
 pub struct DefaultWorkerSelector {
-    pub kv_router_config: KvRouterConfig,
+    pub kv_router_config: SelectionConfig,
     pub worker_type: &'static str,
     picker: DefaultWorkerPicker,
 }
 
-pub(super) struct DefaultWorkerScorer<C = KvRouterConfig> {
+pub(super) struct DefaultWorkerScorer<C = SelectionConfig> {
     pub(super) kv_router_config: C,
     pub(super) worker_type: &'static str,
 }
@@ -156,7 +156,7 @@ impl Clone for DefaultWorkerSelector {
 }
 
 impl DefaultWorkerSelector {
-    pub fn new(kv_router_config: Option<KvRouterConfig>, worker_type: &'static str) -> Self {
+    pub fn new(kv_router_config: Option<SelectionConfig>, worker_type: &'static str) -> Self {
         Self::from_parts(
             kv_router_config.unwrap_or_default(),
             worker_type,
@@ -167,7 +167,7 @@ impl DefaultWorkerSelector {
 
     #[cfg(any(test, feature = "testing", feature = "bench"))]
     pub fn new_seeded(
-        kv_router_config: Option<KvRouterConfig>,
+        kv_router_config: Option<SelectionConfig>,
         worker_type: &'static str,
         seed: u64,
     ) -> Self {
@@ -179,7 +179,7 @@ impl DefaultWorkerSelector {
     }
 
     fn from_parts(
-        kv_router_config: KvRouterConfig,
+        kv_router_config: SelectionConfig,
         worker_type: &'static str,
         #[cfg(any(test, feature = "testing", feature = "bench"))] deterministic_rng: Option<
             Arc<Mutex<fastrand::Rng>>,
@@ -198,8 +198,8 @@ impl DefaultWorkerSelector {
 }
 
 #[cfg(test)]
-impl DefaultWorkerScorer<KvRouterConfig> {
-    pub(super) fn new(kv_router_config: KvRouterConfig, worker_type: &'static str) -> Self {
+impl DefaultWorkerScorer<SelectionConfig> {
+    pub(super) fn new(kv_router_config: SelectionConfig, worker_type: &'static str) -> Self {
         Self {
             kv_router_config,
             worker_type,
@@ -208,7 +208,7 @@ impl DefaultWorkerScorer<KvRouterConfig> {
 }
 
 fn selection_weights(
-    kv_router_config: &KvRouterConfig,
+    kv_router_config: &SelectionConfig,
     request: &SchedulingRequest,
 ) -> LogitWeights {
     LogitWeights {
@@ -229,8 +229,8 @@ fn selection_weights(
             .and_then(|config| config.shared_cache_multiplier)
             .or(kv_router_config.shared_cache_multiplier)
             .unwrap_or(match kv_router_config.shared_cache_type {
-                dynamo_router_types::config::SharedCacheType::None => 0.0,
-                dynamo_router_types::config::SharedCacheType::Hicache => 0.5,
+                crate::config::SharedCacheType::None => 0.0,
+                crate::config::SharedCacheType::Hicache => 0.5,
             }),
     }
 }
@@ -314,7 +314,7 @@ fn kv_transfer_input<C: WorkerConfigLike>(
     })
 }
 
-impl<C: Borrow<KvRouterConfig>> DefaultWorkerScorer<C> {
+impl<C: Borrow<SelectionConfig>> DefaultWorkerScorer<C> {
     fn worker_logit(
         &self,
         context: &WorkerSelectionContext<'_>,
@@ -494,7 +494,7 @@ impl DefaultWorkerPicker {
 
 #[inline(always)]
 pub(super) fn pick_default_worker<C: WorkerConfigLike>(
-    scorer: &DefaultWorkerScorer<&KvRouterConfig>,
+    scorer: &DefaultWorkerScorer<&SelectionConfig>,
     picker: &DefaultWorkerPicker,
     input: &MaterializedSelectionInput<'_>,
     workers: &HashMap<WorkerId, C>,
@@ -655,14 +655,11 @@ impl<C: WorkerConfigLike> WorkerSelector<C> for DefaultWorkerSelector {
         &self,
         input: WorkerSelectionInput<'_, C>,
     ) -> Result<WorkerSelectionResult, KvSchedulerError> {
-        let (workers, request, eligibility, block_size) = input.into_configured();
         select_worker_with_policy(
             self.worker_type,
             WorkerSelectionPolicyStateRef::Reference(&self.kv_router_config, &self.picker),
-            workers,
-            request,
-            eligibility,
-            block_size,
+            input,
+            None,
             None,
         )
         .map(|(result, _)| result)
@@ -677,10 +674,10 @@ mod tests {
 
     use super::super::test_support::*;
     use super::*;
-    use dynamo_router_types::config::RouterConfigOverride;
-    use dynamo_router_types::overlap::OverlapSignals;
-    use dynamo_router_types::protocols::SharedCacheHits;
-    use dynamo_router_types::sched::ScheduleMode;
+    use dynamo_router_protocol::config::RouterConfigOverride;
+    use dynamo_router_protocol::overlap::OverlapSignals;
+    use dynamo_router_protocol::protocols::SharedCacheHits;
+    use dynamo_router_protocol::sched::ScheduleMode;
 
     fn worker_logit(
         selector: &DefaultWorkerSelector,
@@ -717,14 +714,14 @@ mod tests {
         let mut request = base_request(64);
         request.worker_loads.insert(
             WorkerWithDpRank::from_worker_id(0),
-            dynamo_router_types::protocols::WorkerLoadProjection {
+            dynamo_router_protocol::protocols::WorkerLoadProjection {
                 active_prefill_tokens: 7,
                 ..Default::default()
             },
         );
         request.worker_loads.insert(
             WorkerWithDpRank::from_worker_id(1),
-            dynamo_router_types::protocols::WorkerLoadProjection {
+            dynamo_router_protocol::protocols::WorkerLoadProjection {
                 active_prefill_tokens: 11,
                 ..Default::default()
             },
@@ -764,7 +761,7 @@ mod tests {
 
     #[test]
     fn empty_prompt_routes_by_load() {
-        use dynamo_router_types::test_utils::SimpleWorkerConfig;
+        use dynamo_router_protocol::test_utils::SimpleWorkerConfig;
 
         // Workers 0 and 1 sit on the prefill floor with decode backlog. Worker 2 is one
         // prefill block above the floor with no decode backlog, so it must win.
@@ -774,7 +771,7 @@ mod tests {
         let mut request = base_request(0);
         request.worker_loads = (0..3)
             .map(|id| {
-                let load = dynamo_router_types::protocols::WorkerLoadProjection {
+                let load = dynamo_router_protocol::protocols::WorkerLoadProjection {
                     active_prefill_tokens: if id == 2 { 1616 } else { 1600 },
                     active_decode_blocks: if id == 2 { 0 } else { 50 },
                     ..Default::default()
@@ -785,7 +782,7 @@ mod tests {
 
         for overlap_score_credit_decay in [0.0, 1.0] {
             let selector = DefaultWorkerSelector::new(
-                Some(KvRouterConfig {
+                Some(SelectionConfig {
                     router_temperature: 0.0,
                     overlap_score_credit_decay,
                     ..Default::default()
@@ -809,9 +806,9 @@ mod tests {
 
     #[test]
     fn test_default_selector_randomizes_zero_temperature_ties() {
-        use dynamo_router_types::test_utils::SimpleWorkerConfig;
+        use dynamo_router_protocol::test_utils::SimpleWorkerConfig;
 
-        let config = KvRouterConfig {
+        let config = SelectionConfig {
             router_temperature: 0.0,
             ..Default::default()
         };
@@ -846,7 +843,7 @@ mod tests {
             affinity_target: None,
             pinned_worker: None,
             allowed_worker_ids: None,
-            routing_constraints: dynamo_router_types::protocols::RoutingConstraints::default(),
+            routing_constraints: dynamo_router_protocol::protocols::RoutingConstraints::default(),
             shared_cache_hits: None,
             resp_tx: None,
         };
@@ -878,7 +875,7 @@ mod tests {
 
     #[test]
     fn seeded_selector_is_stable_for_ties_and_temperature_sampling() {
-        use dynamo_router_types::test_utils::SimpleWorkerConfig;
+        use dynamo_router_protocol::test_utils::SimpleWorkerConfig;
 
         for (temperature, expected_prefix) in [
             (
@@ -894,12 +891,12 @@ mod tests {
                 ],
             ),
         ] {
-            let config = KvRouterConfig {
+            let config = SelectionConfig {
                 router_temperature: temperature,
                 ..Default::default()
             };
             let mut first = DefaultWorkerSelector::new_seeded(
-                Some(KvRouterConfig {
+                Some(SelectionConfig {
                     router_temperature: 0.0,
                     ..Default::default()
                 }),
@@ -961,7 +958,7 @@ mod tests {
 
     #[test]
     fn per_request_overrides_change_selection() {
-        use dynamo_router_types::test_utils::SimpleWorkerConfig;
+        use dynamo_router_protocol::test_utils::SimpleWorkerConfig;
 
         let warm_worker = WorkerWithDpRank::from_worker_id(0);
         let cold_worker = WorkerWithDpRank::from_worker_id(1);
@@ -981,7 +978,7 @@ mod tests {
             .insert(warm_worker, 2);
         request.worker_loads.insert(
             warm_worker,
-            dynamo_router_types::protocols::WorkerLoadProjection {
+            dynamo_router_protocol::protocols::WorkerLoadProjection {
                 active_decode_blocks: 1,
                 ..Default::default()
             },
@@ -990,7 +987,7 @@ mod tests {
         let shared_cache_hits = SharedCacheHits::from_ranges(vec![0..4]);
         request.shared_cache_hits = Some(shared_cache_hits);
 
-        let config = KvRouterConfig {
+        let config = SelectionConfig {
             overlap_score_credit: 1.0,
             prefill_load_scale: 1.0,
             shared_cache_multiplier: Some(0.0),
@@ -1048,10 +1045,10 @@ mod tests {
 
     #[test]
     fn test_overloaded_high_overlap_worker_is_skipped() {
-        use dynamo_router_types::test_utils::SimpleWorkerConfig;
+        use dynamo_router_protocol::test_utils::SimpleWorkerConfig;
 
         let selector = DefaultWorkerSelector::new(
-            Some(KvRouterConfig {
+            Some(SelectionConfig {
                 overlap_score_credit: 1.0,
                 router_temperature: 0.0,
                 ..Default::default()
@@ -1086,10 +1083,10 @@ mod tests {
 
     #[test]
     fn test_all_eligible_workers_overloaded_returns_overload_error() {
-        use dynamo_router_types::test_utils::SimpleWorkerConfig;
+        use dynamo_router_protocol::test_utils::SimpleWorkerConfig;
 
         let selector = DefaultWorkerSelector::new(
-            Some(KvRouterConfig {
+            Some(SelectionConfig {
                 overlap_score_credit_decay: 1.0,
                 ..Default::default()
             }),
@@ -1117,11 +1114,11 @@ mod tests {
 
     #[test]
     fn default_policy_retains_eligible_affinity_and_falls_back_when_overloaded() {
-        use dynamo_router_types::protocols::WorkerAffinityTarget;
-        use dynamo_router_types::test_utils::SimpleWorkerConfig;
+        use dynamo_router_protocol::protocols::WorkerAffinityTarget;
+        use dynamo_router_protocol::test_utils::SimpleWorkerConfig;
 
         let selector = DefaultWorkerSelector::new(
-            Some(KvRouterConfig {
+            Some(SelectionConfig {
                 router_temperature: 0.0,
                 ..Default::default()
             }),
@@ -1192,9 +1189,9 @@ mod tests {
 
     #[test]
     fn test_overloaded_pinned_worker_is_not_rerouted() {
-        use dynamo_router_types::test_utils::SimpleWorkerConfig;
+        use dynamo_router_protocol::test_utils::SimpleWorkerConfig;
 
-        let selector = DefaultWorkerSelector::new(Some(KvRouterConfig::default()), "test");
+        let selector = DefaultWorkerSelector::new(Some(SelectionConfig::default()), "test");
         let workers = HashMap::from([
             (0, SimpleWorkerConfig::default()),
             (1, SimpleWorkerConfig::default()),
@@ -1218,7 +1215,7 @@ mod tests {
 
     #[test]
     fn test_required_taints_return_no_endpoints_when_no_worker_matches() {
-        let selector = DefaultWorkerSelector::new(Some(KvRouterConfig::default()), "test");
+        let selector = DefaultWorkerSelector::new(Some(SelectionConfig::default()), "test");
         let workers = HashMap::from([(
             10,
             TaintedWorkerConfig {
@@ -1250,7 +1247,7 @@ mod tests {
             affinity_target: None,
             pinned_worker: None,
             allowed_worker_ids: None,
-            routing_constraints: dynamo_router_types::protocols::RoutingConstraints {
+            routing_constraints: dynamo_router_protocol::protocols::RoutingConstraints {
                 required_taints: HashSet::from(["mdc-b".to_string()]),
                 preferred_taints: HashMap::new(),
             },
@@ -1269,7 +1266,7 @@ mod tests {
 
     #[test]
     fn test_required_taints_filter_out_incompatible_workers() {
-        let selector = DefaultWorkerSelector::new(Some(KvRouterConfig::default()), "test");
+        let selector = DefaultWorkerSelector::new(Some(SelectionConfig::default()), "test");
         let workers = HashMap::from([
             (
                 10,
@@ -1309,7 +1306,7 @@ mod tests {
             affinity_target: None,
             pinned_worker: None,
             allowed_worker_ids: None,
-            routing_constraints: dynamo_router_types::protocols::RoutingConstraints {
+            routing_constraints: dynamo_router_protocol::protocols::RoutingConstraints {
                 required_taints: HashSet::from(["mdc-b".to_string()]),
                 preferred_taints: HashMap::new(),
             },
@@ -1330,7 +1327,7 @@ mod tests {
 
     #[test]
     fn test_required_taints_switch_matching_worker_sets_by_label() {
-        let selector = DefaultWorkerSelector::new(Some(KvRouterConfig::default()), "test");
+        let selector = DefaultWorkerSelector::new(Some(SelectionConfig::default()), "test");
         let name_a = "mdc-a".to_string();
         let name_b = "mdc-b".to_string();
         let name_c = "mdc-c".to_string();
@@ -1386,7 +1383,7 @@ mod tests {
                 affinity_target: None,
                 pinned_worker: None,
                 allowed_worker_ids: None,
-                routing_constraints: dynamo_router_types::protocols::RoutingConstraints {
+                routing_constraints: dynamo_router_protocol::protocols::RoutingConstraints {
                     required_taints: HashSet::from([required_taint.clone()]),
                     preferred_taints: HashMap::new(),
                 },
@@ -1412,7 +1409,7 @@ mod tests {
     #[test]
     fn test_preferred_taints_prefer_matching_worker() {
         let selector = DefaultWorkerSelector::new(
-            Some(KvRouterConfig {
+            Some(SelectionConfig {
                 router_temperature: 0.0,
                 ..Default::default()
             }),
@@ -1461,7 +1458,7 @@ mod tests {
             affinity_target: None,
             pinned_worker: None,
             allowed_worker_ids: None,
-            routing_constraints: dynamo_router_types::protocols::RoutingConstraints {
+            routing_constraints: dynamo_router_protocol::protocols::RoutingConstraints {
                 required_taints: HashSet::new(),
                 preferred_taints: HashMap::from([("mdc-a".to_string(), 0.85)]),
             },
@@ -1483,7 +1480,7 @@ mod tests {
     #[test]
     fn test_negative_preferred_taints_avoid_matching_worker() {
         let selector = DefaultWorkerSelector::new(
-            Some(KvRouterConfig {
+            Some(SelectionConfig {
                 router_temperature: 0.0,
                 ..Default::default()
             }),
@@ -1532,7 +1529,7 @@ mod tests {
             affinity_target: None,
             pinned_worker: None,
             allowed_worker_ids: None,
-            routing_constraints: dynamo_router_types::protocols::RoutingConstraints {
+            routing_constraints: dynamo_router_protocol::protocols::RoutingConstraints {
                 required_taints: HashSet::new(),
                 preferred_taints: HashMap::from([("mdc-a".to_string(), -0.25)]),
             },
@@ -1562,7 +1559,7 @@ mod tests {
     /// Worker 0 has lower logit (less work), so it wins.
     #[test]
     fn test_shared_cache_hits_scoring() {
-        use dynamo_router_types::test_utils::SimpleWorkerConfig;
+        use dynamo_router_protocol::test_utils::SimpleWorkerConfig;
 
         let block_size = 1u32;
         let isl = 4usize;
@@ -1575,13 +1572,13 @@ mod tests {
         let mut effective_cached_tokens = rustc_hash::FxHashMap::default();
         effective_cached_tokens.insert(worker0, 2);
 
-        let mut tier_overlap_blocks = dynamo_router_types::overlap::TierOverlapBlocks::default();
+        let mut tier_overlap_blocks = dynamo_router_protocol::overlap::TierOverlapBlocks::default();
         tier_overlap_blocks.device.insert(worker0, 2);
 
         #[allow(clippy::single_range_in_vec_init)]
         let shared_hits = SharedCacheHits::from_ranges(vec![0..4]);
 
-        let config = KvRouterConfig {
+        let config = SelectionConfig {
             overlap_score_credit: 1.0,
             shared_cache_multiplier: Some(0.5),
             router_temperature: 0.0,
@@ -1619,7 +1616,7 @@ mod tests {
             affinity_target: None,
             pinned_worker: None,
             allowed_worker_ids: None,
-            routing_constraints: dynamo_router_types::protocols::RoutingConstraints::default(),
+            routing_constraints: dynamo_router_protocol::protocols::RoutingConstraints::default(),
             shared_cache_hits: Some(shared_hits),
             resp_tx: Some(Box::new(crate::selector::OneshotResponder(tx))),
         };
@@ -1642,7 +1639,7 @@ mod tests {
 
     #[test]
     fn test_prefill_load_scale_applies_after_overlap_credits() {
-        use dynamo_router_types::test_utils::SimpleWorkerConfig;
+        use dynamo_router_protocol::test_utils::SimpleWorkerConfig;
 
         let block_size = 16u32;
         let isl = 64usize;
@@ -1652,10 +1649,10 @@ mod tests {
         let mut effective_cached_tokens = rustc_hash::FxHashMap::default();
         effective_cached_tokens.insert(worker0, 32);
 
-        let mut tier_overlap_blocks = dynamo_router_types::overlap::TierOverlapBlocks::default();
+        let mut tier_overlap_blocks = dynamo_router_protocol::overlap::TierOverlapBlocks::default();
         tier_overlap_blocks.device.insert(worker0, 2);
 
-        let config = KvRouterConfig {
+        let config = SelectionConfig {
             overlap_score_credit: 1.0,
             prefill_load_scale: 2.0,
             router_temperature: 0.0,
@@ -1697,7 +1694,7 @@ mod tests {
             affinity_target: None,
             pinned_worker: None,
             allowed_worker_ids: None,
-            routing_constraints: dynamo_router_types::protocols::RoutingConstraints::default(),
+            routing_constraints: dynamo_router_protocol::protocols::RoutingConstraints::default(),
             shared_cache_hits: None,
             resp_tx: Some(Box::new(crate::selector::OneshotResponder(tx))),
         };
@@ -1719,7 +1716,7 @@ mod tests {
 
     #[test]
     fn test_overlap_credit_above_one_can_prefer_colocated_worker() {
-        use dynamo_router_types::test_utils::SimpleWorkerConfig;
+        use dynamo_router_protocol::test_utils::SimpleWorkerConfig;
 
         let block_size = 16u32;
         let warm_worker = WorkerWithDpRank::from_worker_id(0);
@@ -1741,21 +1738,21 @@ mod tests {
             .insert(warm_worker, 64);
         request.worker_loads.insert(
             warm_worker,
-            dynamo_router_types::protocols::WorkerLoadProjection {
+            dynamo_router_protocol::protocols::WorkerLoadProjection {
                 active_decode_blocks: 5,
                 ..Default::default()
             },
         );
 
         let normal_credit = DefaultWorkerSelector::new(
-            Some(KvRouterConfig {
+            Some(SelectionConfig {
                 overlap_score_credit: 1.0,
                 ..Default::default()
             }),
             "test",
         );
         let amplified_credit = DefaultWorkerSelector::new(
-            Some(KvRouterConfig {
+            Some(SelectionConfig {
                 overlap_score_credit: 1.5,
                 ..Default::default()
             }),
@@ -1796,14 +1793,14 @@ mod tests {
         request.overlap.tier_overlap_blocks.device.insert(worker, 6);
         request.worker_loads.insert(
             worker,
-            dynamo_router_types::protocols::WorkerLoadProjection {
+            dynamo_router_protocol::protocols::WorkerLoadProjection {
                 active_prefill_tokens: 16,
                 active_decode_blocks: 2,
                 active_requests: 0,
                 additional_active_blocks: 3,
             },
         );
-        let selector = DefaultWorkerSelector::new(Some(KvRouterConfig::default()), "test");
+        let selector = DefaultWorkerSelector::new(Some(SelectionConfig::default()), "test");
         let weights = LogitWeights {
             overlap_score_credit: 1.0,
             overlap_score_credit_decay: 0.0,
@@ -1823,7 +1820,7 @@ mod tests {
         let mut request = base_request(0);
         request.worker_loads.insert(
             worker,
-            dynamo_router_types::protocols::WorkerLoadProjection {
+            dynamo_router_protocol::protocols::WorkerLoadProjection {
                 active_decode_blocks: 100,
                 active_requests: 4,
                 ..Default::default()
@@ -1835,9 +1832,9 @@ mod tests {
             prefill_load_scale: 1.0,
             shared_cache_multiplier: 0.0,
         };
-        let default = DefaultWorkerSelector::new(Some(KvRouterConfig::default()), "test");
+        let default = DefaultWorkerSelector::new(Some(SelectionConfig::default()), "test");
         let weighted = DefaultWorkerSelector::new(
-            Some(KvRouterConfig {
+            Some(SelectionConfig {
                 decode_active_request_weight: 32.0,
                 ..Default::default()
             }),
@@ -1859,12 +1856,12 @@ mod tests {
         request.overlap.tier_overlap_blocks.device.insert(worker, 3);
         request.worker_loads.insert(
             worker,
-            dynamo_router_types::protocols::WorkerLoadProjection {
+            dynamo_router_protocol::protocols::WorkerLoadProjection {
                 active_decode_blocks: 10,
                 ..Default::default()
             },
         );
-        let selector = DefaultWorkerSelector::new(Some(KvRouterConfig::default()), "decode");
+        let selector = DefaultWorkerSelector::new(Some(SelectionConfig::default()), "decode");
         let weights = LogitWeights {
             overlap_score_credit: 1.0,
             overlap_score_credit_decay: 0.0,
@@ -1877,7 +1874,7 @@ mod tests {
 
     #[test]
     fn test_overlap_credit_decay_can_prefer_less_loaded_cold_worker() {
-        use dynamo_router_types::test_utils::SimpleWorkerConfig;
+        use dynamo_router_protocol::test_utils::SimpleWorkerConfig;
 
         let block_size = 16u32;
         let warm_worker = WorkerWithDpRank::from_worker_id(0);
@@ -1899,21 +1896,21 @@ mod tests {
             .insert(warm_worker, 64);
         request.worker_loads.insert(
             warm_worker,
-            dynamo_router_types::protocols::WorkerLoadProjection {
+            dynamo_router_protocol::protocols::WorkerLoadProjection {
                 active_prefill_tokens: 48,
                 ..Default::default()
             },
         );
 
         let no_decay = DefaultWorkerSelector::new(
-            Some(KvRouterConfig {
+            Some(SelectionConfig {
                 overlap_score_credit_decay: 0.0,
                 ..Default::default()
             }),
             "test",
         );
         let with_decay = DefaultWorkerSelector::new(
-            Some(KvRouterConfig {
+            Some(SelectionConfig {
                 overlap_score_credit_decay: 1.0,
                 ..Default::default()
             }),
@@ -1948,7 +1945,7 @@ mod tests {
 
     #[test]
     fn test_effective_overlap_falls_back_when_tier_blocks_are_absent() {
-        use dynamo_router_types::test_utils::SimpleWorkerConfig;
+        use dynamo_router_protocol::test_utils::SimpleWorkerConfig;
 
         let block_size = 16u32;
         let isl = 64usize;
@@ -1958,7 +1955,7 @@ mod tests {
         let mut effective_overlap_blocks = rustc_hash::FxHashMap::default();
         effective_overlap_blocks.insert(worker0, 4.0);
 
-        let config = KvRouterConfig {
+        let config = SelectionConfig {
             overlap_score_credit: 1.0,
             router_temperature: 0.0,
             ..Default::default()
@@ -1999,7 +1996,7 @@ mod tests {
             affinity_target: None,
             pinned_worker: None,
             allowed_worker_ids: None,
-            routing_constraints: dynamo_router_types::protocols::RoutingConstraints::default(),
+            routing_constraints: dynamo_router_protocol::protocols::RoutingConstraints::default(),
             shared_cache_hits: None,
             resp_tx: Some(Box::new(crate::selector::OneshotResponder(tx))),
         };
@@ -2064,7 +2061,7 @@ mod tests {
     /// Without shared cache hits, the scoring should be unchanged.
     #[test]
     fn test_no_shared_cache_unchanged() {
-        use dynamo_router_types::test_utils::SimpleWorkerConfig;
+        use dynamo_router_protocol::test_utils::SimpleWorkerConfig;
 
         let block_size = 16u32;
         let isl = 64usize;
@@ -2073,7 +2070,7 @@ mod tests {
         let mut effective_overlap_blocks = rustc_hash::FxHashMap::default();
         effective_overlap_blocks.insert(worker0, 2.0);
 
-        let config = KvRouterConfig::default();
+        let config = SelectionConfig::default();
         let selector = DefaultWorkerSelector::new(Some(config), "test");
         let mut workers = HashMap::new();
         workers.insert(0, SimpleWorkerConfig::default());
@@ -2104,7 +2101,7 @@ mod tests {
             affinity_target: None,
             pinned_worker: None,
             allowed_worker_ids: None,
-            routing_constraints: dynamo_router_types::protocols::RoutingConstraints::default(),
+            routing_constraints: dynamo_router_protocol::protocols::RoutingConstraints::default(),
             shared_cache_hits: None,
             resp_tx: Some(Box::new(crate::selector::OneshotResponder(tx))),
         };

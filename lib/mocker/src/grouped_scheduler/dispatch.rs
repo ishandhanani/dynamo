@@ -5,7 +5,7 @@
 
 use super::*;
 use aisimulate_core::engine::PassStartEffects;
-use dynamo_router_types::protocols::StorageTier;
+use dynamo_router_protocol::protocols::StorageTier;
 
 #[derive(Clone)]
 pub(super) struct RankDispatch {

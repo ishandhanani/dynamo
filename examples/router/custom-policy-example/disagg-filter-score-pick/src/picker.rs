@@ -3,8 +3,8 @@
 
 //! Pickers for prefill and decode routing partitions.
 
-use dynamo_router_types::WorkerType;
-use dynamo_router_types::sched::WorkerSelectionPolicyError;
+use dynamo_router_protocol::WorkerType;
+use dynamo_router_protocol::sched::WorkerSelectionPolicyError;
 use dynamo_worker_selection::plugin::{WorkerInputView, WorkerPicker, WorkerSelectionContext};
 
 /// Finds the candidate row with the lowest accumulated scorer cost.

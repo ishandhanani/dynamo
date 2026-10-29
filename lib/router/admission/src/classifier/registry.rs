@@ -3,6 +3,7 @@
 
 //! Startup registration for statically linked request-classifier plugins.
 
+use super::RequestClassifierConfig;
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -10,7 +11,6 @@ use serde::de::DeserializeOwned;
 use thiserror::Error;
 
 use super::{RequestClassifier, RequestClassifierContext};
-use dynamo_router_types::config::KvRouterConfig;
 
 /// Creates one classifier per routed model during router construction, not per request.
 pub type RequestClassifierFactory =
@@ -71,7 +71,7 @@ pub enum RequestClassifierRegistryError {
     #[error("could not load request_classifier from router_policy_config: {source}")]
     Config {
         #[source]
-        source: dynamo_router_types::config::policy::RouterPolicyConfigError,
+        source: crate::policy_config::RouterPolicyConfigError,
     },
     #[error("unknown request-classifier type {name:?}; linked classifier types: {available}")]
     UnknownType { name: String, available: String },
@@ -109,12 +109,9 @@ impl RequestClassifierRegistry {
 
     pub fn resolve(
         &self,
-        config: &KvRouterConfig,
+        classifier: Option<&RequestClassifierConfig>,
     ) -> Result<Option<RequestClassifierFactory>, RequestClassifierRegistryError> {
-        let Some(classifier) = config
-            .request_classifier_config()
-            .map_err(|source| RequestClassifierRegistryError::Config { source })?
-        else {
+        let Some(classifier) = classifier else {
             return Ok(None);
         };
         let classifier_type = classifier.classifier_type();
@@ -172,42 +169,26 @@ mod tests {
         Ok(Arc::new(|_| Box::new(PassThrough)))
     }
 
-    fn config(yaml: &str) -> (tempfile::NamedTempFile, KvRouterConfig) {
-        let policy = tempfile::NamedTempFile::new().unwrap();
-        std::fs::write(policy.path(), yaml).unwrap();
-        let config = KvRouterConfig {
-            router_policy_config: Some(policy.path().display().to_string()),
-            ..Default::default()
-        };
-        (policy, config)
+    fn classifier_config(limit: u32) -> RequestClassifierConfig {
+        RequestClassifierConfig::new(
+            "test".to_string(),
+            serde_yaml::from_str(&format!("limit: {limit}")).unwrap(),
+        )
     }
-
-    const VALID_CONFIG: &str = r#"
-request_classifier:
-  type: test
-  parameters:
-    limit: 4
-"#;
 
     #[test]
     fn resolves_linked_classifier_and_validates_parameters() {
         let mut registry = RequestClassifierRegistry::default();
         registry.register("test", Arc::new(provider)).unwrap();
-        let (_policy, valid_config) = config(VALID_CONFIG);
-        let factory = registry.resolve(&valid_config).unwrap().unwrap();
+        let factory = registry
+            .resolve(Some(&classifier_config(4)))
+            .unwrap()
+            .unwrap();
         let classifier = factory(RequestClassifierContext::new(16, Vec::new));
         let _: Box<dyn RequestClassifier> = classifier;
 
-        let (_policy, invalid) = config(
-            r#"
-request_classifier:
-  type: test
-  parameters:
-    limit: 0
-"#,
-        );
         assert!(matches!(
-            registry.resolve(&invalid),
+            registry.resolve(Some(&classifier_config(0))),
             Err(RequestClassifierRegistryError::Provider {
                 classifier_type,
                 ..
@@ -233,10 +214,9 @@ request_classifier:
             Err(RequestClassifierRegistryError::Duplicate { .. })
         ));
 
-        let (_policy, config) = config(VALID_CONFIG);
         let empty = RequestClassifierRegistry::default();
         assert!(matches!(
-            empty.resolve(&config),
+            empty.resolve(Some(&classifier_config(4))),
             Err(RequestClassifierRegistryError::UnknownType { name, .. }) if name == "test"
         ));
     }

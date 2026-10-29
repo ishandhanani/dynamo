@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-//! Logically serialized publication for one actor-owned [`PoolId`](dynamo_router_types::identity::PoolId).
+//! Logically serialized publication for one actor-owned [`PoolId`](dynamo_router_protocol::identity::PoolId).
 //!
 //! The actor core emits unsequenced absolute bucket-image batches. This publisher alone owns the
 //! ordinary `last_sequence`, current consumer lease, and reliable FIFO handoff. Mutation handling
@@ -205,10 +205,10 @@ where
 
 #[cfg(test)]
 mod tests {
-    use dynamo_router_types::identity::{
+    use dynamo_router_protocol::identity::{
         CacheSemanticsId, DcId, IdentitySource, IndexerDomainId, PoolId, RoutingScopeId,
     };
-    use dynamo_router_types::protocols::{
+    use dynamo_router_protocol::protocols::{
         ExternalSequenceBlockHash, KvCacheEvent, KvCacheEventData, KvCacheStoreData,
         KvCacheStoredBlockData, LocalBlockHash, RouterEvent, WorkerWithDpRank,
     };

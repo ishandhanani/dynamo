@@ -709,7 +709,7 @@ pub fn run_mocker_trace_replay(
 fn run_loaded_dynamo_request_trace(
     args_selection: ReplayArgsSelection,
     trace: DynamoRequestTrace,
-    router_config: Option<dynamo_router_types::config::KvRouterConfig>,
+    router_config: Option<dynamo_kv_router::config::KvRouterConfig>,
     prefill_load_estimator: Option<dynamo_mocker::replay::ReplayPrefillLoadEstimator>,
     num_workers: usize,
     replay_concurrency: Option<usize>,
@@ -1579,7 +1579,7 @@ pub(super) fn materialize_mocker_config(
 fn load_replay_router_config(
     router_config: Option<KvRouterConfig>,
     model_name: Option<String>,
-) -> PyResult<Option<dynamo_router_types::config::KvRouterConfig>> {
+) -> PyResult<Option<dynamo_kv_router::config::KvRouterConfig>> {
     if model_name.as_ref().is_some_and(|name| name.is_empty()) {
         return Err(PyValueError::new_err("model_name must be non-empty"));
     }

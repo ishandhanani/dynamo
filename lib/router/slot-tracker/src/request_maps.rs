@@ -6,8 +6,8 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use super::single::RequestId;
-use dynamo_router_types::protocols::AttemptId;
-use dynamo_router_types::protocols::WorkerWithDpRank;
+use dynamo_router_protocol::protocols::AttemptId;
+use dynamo_router_protocol::protocols::WorkerWithDpRank;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) struct RequestBooking {

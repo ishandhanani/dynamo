@@ -9,7 +9,7 @@ use crate::{
     KvIndexer, KvRouterError, LowerTierIndexers, LowerTierQueryOptions, MatchDetails,
     TieredMatchDetails, query_lower_tiers_with_options,
 };
-use dynamo_router_types::protocols::{LocalBlockHash, OverlapScores};
+use dynamo_router_protocol::protocols::{LocalBlockHash, OverlapScores};
 
 use super::backend::{Indexer, RemotePrimary, SideIndexer};
 
@@ -433,7 +433,7 @@ mod tests {
         RoutingDecisionHashes, ThreadPoolIndexer,
     };
     use crate::{LowerTierIndexers, LowerTierQueryOptions};
-    use dynamo_router_types::protocols::{
+    use dynamo_router_protocol::protocols::{
         BlockHashOptions, LocalBlockHash, StorageTier, TokensWithHashes, WorkerWithDpRank,
         compute_block_hash_for_seq, compute_seq_hash_for_block,
     };

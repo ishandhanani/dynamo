@@ -5,8 +5,8 @@ use std::collections::HashMap;
 
 use parking_lot::RwLock;
 
-use dynamo_router_types::identity::RoutingPartitionId;
-use dynamo_router_types::protocols::{WorkerAffinityTarget, WorkerId, WorkerWithDpRank};
+use dynamo_router_protocol::identity::RoutingPartitionId;
+use dynamo_router_protocol::protocols::{WorkerAffinityTarget, WorkerId, WorkerWithDpRank};
 
 use super::types::{SelectionWorkerConfig, WorkerCatalogRecord, WorkerLifecycle};
 

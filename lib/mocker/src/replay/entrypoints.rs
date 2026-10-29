@@ -4,7 +4,7 @@
 use std::path::Path;
 
 use anyhow::{Result, bail};
-use dynamo_router_types::config::KvRouterConfig;
+use dynamo_kv_router::config::KvRouterConfig;
 
 use super::online;
 use super::validate::{

@@ -37,7 +37,7 @@ use dynamo_mocker::services::bootstrap::{
 };
 use dynamo_mocker::services::zmq_events::ZmqKvEventSink;
 use dynamo_protocols::types::{CompletionUsage, PromptTokensDetails};
-use dynamo_router_types::protocols::{KvCacheEvent, StorageTier};
+use dynamo_router_protocol::protocols::{KvCacheEvent, StorageTier};
 use dynamo_runtime::DistributedRuntime;
 use dynamo_runtime::error::{DynamoError, ErrorType};
 use dynamo_runtime::metrics::MetricsHierarchy;

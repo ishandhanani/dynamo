@@ -13,7 +13,7 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use dynamo_router_types::protocols::{KvCacheEventData, KvCacheEventError, RouterEvent};
+use dynamo_router_protocol::protocols::{KvCacheEventData, KvCacheEventError, RouterEvent};
 
 static IGNORED_RESIDENCY_EVENT_COUNT: AtomicU64 = AtomicU64::new(0);
 
@@ -301,6 +301,33 @@ impl IndexerCounters {
     }
 }
 
+/// A copy of every indexer counter at one instant. Indexed by the `ALL` orders of
+/// [`EventKind`], [`EventStatus`], [`EventWarningKind`], and [`CkfMutationKind`].
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct KvIndexerStats {
+    pub events_applied: [[u64; EventStatus::ALL.len()]; EventKind::ALL.len()],
+    pub event_warnings: [u64; EventWarningKind::ALL.len()],
+    pub ckf_mutations: [u64; CkfMutationKind::ALL.len()],
+}
+
+impl IndexerCounters {
+    fn snapshot(&self) -> KvIndexerStats {
+        let mut stats = KvIndexerStats::default();
+        for (kind, row) in self.events_applied.iter().enumerate() {
+            for (status, counter) in row.iter().enumerate() {
+                stats.events_applied[kind][status] = counter.load(Ordering::Relaxed);
+            }
+        }
+        for (kind, counter) in self.event_warnings.iter().enumerate() {
+            stats.event_warnings[kind] = counter.load(Ordering::Relaxed);
+        }
+        for (kind, counter) in self.ckf_mutations.iter().enumerate() {
+            stats.ckf_mutations[kind] = counter.load(Ordering::Relaxed);
+        }
+        stats
+    }
+}
+
 /// Counters for the KV indexer: events applied by kind and status, event
 /// warnings, and CKF mutation outcomes.
 ///
@@ -350,6 +377,11 @@ impl KvIndexerMetrics {
         self.counters.ckf_mutations[kind.index()].load(Ordering::Relaxed)
     }
 
+    /// Every counter at this instant, for a host that exports or inspects them.
+    pub fn snapshot(&self) -> KvIndexerStats {
+        self.counters.snapshot()
+    }
+
     /// A handle for one indexer thread's event loop.
     pub fn prebind(&self) -> PreBoundEventCounters {
         PreBoundEventCounters {
@@ -389,15 +421,14 @@ impl PreBoundEventCounters {
     }
 }
 
-#[cfg(feature = "metrics")]
+#[cfg(feature = "export")]
 pub use self::export::{IndexerCounterFamily, KvIndexerCounterCollector};
 
-#[cfg(feature = "metrics")]
+#[cfg(feature = "export")]
 mod export {
-    use std::sync::atomic::Ordering;
-    use std::sync::{Arc, Weak};
+    use std::sync::Arc;
 
-    use parking_lot::Mutex;
+    use dynamo_metrics::collect::{SourceSet, descs_of};
     use prometheus::{
         IntCounterVec, Opts,
         core::{Collector, Desc},
@@ -457,23 +488,19 @@ mod export {
         family: IndexerCounterFamily,
         opts: Opts,
         descs: Vec<Desc>,
-        sources: Arc<Mutex<Vec<Weak<IndexerCounters>>>>,
+        sources: SourceSet<IndexerCounters>,
     }
 
     impl KvIndexerCounterCollector {
         /// A collector for `family` under `opts`; the host supplies the name
         /// and any const labels.
         pub fn new(family: IndexerCounterFamily, opts: Opts) -> Result<Self, prometheus::Error> {
-            let descs = IntCounterVec::new(opts.clone(), family.labels())?
-                .desc()
-                .into_iter()
-                .cloned()
-                .collect();
+            let descs = descs_of(&IntCounterVec::new(opts.clone(), family.labels())?);
             Ok(Self {
                 family,
                 opts,
                 descs,
-                sources: Arc::new(Mutex::new(Vec::new())),
+                sources: SourceSet::new(),
             })
         }
 
@@ -488,9 +515,7 @@ mod export {
 
         /// Put `metrics` in the scrape until its last clone drops.
         pub fn attach(&self, metrics: &super::KvIndexerMetrics) {
-            let mut sources = self.sources.lock();
-            sources.retain(|source| source.strong_count() > 0);
-            sources.push(Arc::downgrade(&metrics.counters));
+            self.sources.attach(&metrics.counters);
         }
 
         /// Register every family under its default name and attach `metrics`.
@@ -516,21 +541,16 @@ mod export {
             // A fresh vector per scrape: concurrent scrapes stay independent.
             let vec = IntCounterVec::new(self.opts.clone(), self.family.labels())
                 .expect("validated indexer counter options");
-            let sources: Vec<Arc<IndexerCounters>> = {
-                let mut sources = self.sources.lock();
-                sources.retain(|source| source.strong_count() > 0);
-                sources.iter().filter_map(Weak::upgrade).collect()
-            };
+            let sources: Vec<Arc<IndexerCounters>> = self.sources.live(|_| true);
+            let snapshots: Vec<super::KvIndexerStats> =
+                sources.iter().map(|source| source.snapshot()).collect();
             match self.family {
                 IndexerCounterFamily::EventsApplied => {
                     for kind in EventKind::ALL {
                         for status in EventStatus::ALL {
                             let counter = vec.with_label_values(&[kind.label(), status.label()]);
-                            for source in &sources {
-                                counter.inc_by(
-                                    source.events_applied[kind.index()][status.index()]
-                                        .load(Ordering::Relaxed),
-                                );
+                            for stats in &snapshots {
+                                counter.inc_by(stats.events_applied[kind.index()][status.index()]);
                             }
                         }
                     }
@@ -538,19 +558,16 @@ mod export {
                 IndexerCounterFamily::EventWarnings => {
                     for kind in EventWarningKind::ALL {
                         let counter = vec.with_label_values(&[kind.label()]);
-                        for source in &sources {
-                            counter.inc_by(
-                                source.event_warnings[kind.index()].load(Ordering::Relaxed),
-                            );
+                        for stats in &snapshots {
+                            counter.inc_by(stats.event_warnings[kind.index()]);
                         }
                     }
                 }
                 IndexerCounterFamily::CkfMutations => {
                     for kind in CkfMutationKind::ALL {
                         let counter = vec.with_label_values(&[kind.label()]);
-                        for source in &sources {
-                            counter
-                                .inc_by(source.ckf_mutations[kind.index()].load(Ordering::Relaxed));
+                        for stats in &snapshots {
+                            counter.inc_by(stats.ckf_mutations[kind.index()]);
                         }
                     }
                 }
@@ -563,7 +580,7 @@ mod export {
     mod tests {
         use super::*;
         use crate::KvIndexerMetrics;
-        use dynamo_router_types::protocols::KvCacheEventError;
+        use dynamo_router_protocol::protocols::KvCacheEventError;
         use prometheus::{Registry, TextEncoder};
 
         fn output(registry: &Registry) -> String {

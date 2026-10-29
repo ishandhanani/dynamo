@@ -8,7 +8,7 @@
 //! probes linearly, so a lookup usually touches one cache line, and the batch operations
 //! prefetch slots a few keys ahead to overlap those misses.
 
-use dynamo_router_types::protocols::ExternalSequenceBlockHash;
+use dynamo_router_protocol::protocols::ExternalSequenceBlockHash;
 
 const MIN_CAPACITY: usize = 16;
 const PREFETCH_DISTANCE: usize = 8;

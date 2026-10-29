@@ -499,11 +499,14 @@ jobs:
       run: |
         cargo check --locked -p dynamo-slot-tracker --no-default-features --features http
         cargo check --locked -p dynamo-kv-indexer --no-default-features --features http
+        cargo check --locked -p dynamo-kv-router --no-default-features --features http
     - name: Run standalone slot-tracker feature tests
       if: matrix.dir == '.'
       working-directory: ${{ matrix.dir }}
       # No workspace member requests the slot tracker's http feature, so it needs an explicit run here.
-      run: cargo test --locked -p dynamo-slot-tracker --features http,testing --lib
+      run: |
+        cargo test --locked -p dynamo-slot-tracker --features http,testing --lib
+        cargo test --locked -p dynamo-kv-router --features http,testing
     - name: Run canonical replay feature tests
       if: matrix.dir == '.'
       working-directory: ${{ matrix.dir }}
@@ -585,6 +588,9 @@ jobs:
     - name: Run Clippy Checks
       working-directory: ${{ matrix.dir }}
       run: cargo clippy --no-deps --all-targets -- -D warnings
+    - name: Check router crate layering
+      if: matrix.dir == '.'
+      run: bash scripts/router_layering_check.sh
     - name: Run Python bindings AIS feature clippy
       if: matrix.dir == 'lib/bindings/python'
       working-directory: ${{ matrix.dir }}

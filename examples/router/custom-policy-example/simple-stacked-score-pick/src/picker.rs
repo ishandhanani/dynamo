@@ -3,7 +3,7 @@
 
 //! Lowest-cost picker for the `simple-stacked-score-pick` policy.
 
-use dynamo_router_types::sched::WorkerSelectionPolicyError;
+use dynamo_router_protocol::sched::WorkerSelectionPolicyError;
 use dynamo_worker_selection::plugin::{WorkerInputView, WorkerPicker, WorkerSelectionContext};
 
 pub(crate) struct LowestCostPicker;

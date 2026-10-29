@@ -19,10 +19,11 @@ path = "src/bin/dynamo-ext-proc.rs"
 dynamo-http-server = { workspace = true }
 dynamo-custom-policy-builtin = { workspace = true }
 async-trait = { workspace = true }
-dynamo-scheduler = { workspace = true, features = ["metrics"] }
+dynamo-scheduler = { workspace = true }
+dynamo-kv-router = { workspace = true }
 dynamo-kv-indexer = { workspace = true }
 dynamo-worker-selection = { workspace = true }
-dynamo-router-types = { workspace = true }
+dynamo-router-protocol = { workspace = true }
 dynamo-protocols = { workspace = true }
 dynamo-runtime = { workspace = true }
 

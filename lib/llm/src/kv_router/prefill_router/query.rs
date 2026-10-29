@@ -4,7 +4,7 @@
 use std::collections::HashSet;
 
 use anyhow::Result;
-use dynamo_router_types::protocols::{
+use dynamo_router_protocol::protocols::{
     BlockExtraInfo, RoutingConstraints, WorkerId, WorkerWithDpRank,
 };
 use dynamo_scheduler::queue::BookingHandle;
@@ -141,7 +141,7 @@ mod tests {
 
     use crate::local_model::runtime_config::ModelRuntimeConfig;
     use async_trait::async_trait;
-    use dynamo_router_types::config::KvRouterConfig;
+    use dynamo_kv_router::config::KvRouterConfig;
     use dynamo_runtime::{
         DistributedRuntime, Runtime,
         component::Instance,

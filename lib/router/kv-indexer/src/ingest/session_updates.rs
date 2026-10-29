@@ -14,7 +14,7 @@ use crate::{
     SessionPrefixIndexer, ThreadPoolIndexer,
 };
 use dashmap::{DashMap, mapref::entry::Entry};
-use dynamo_router_types::protocols::{
+use dynamo_router_protocol::protocols::{
     ExternalSequenceBlockHash, KvCacheEventData, ResidencyDomain, RouterEvent, StorageTier,
     WorkerId, WorkerWithDpRank,
 };

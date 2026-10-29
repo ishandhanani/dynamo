@@ -12,7 +12,7 @@ use dashmap::mapref::entry::Entry;
 use rustc_hash::{FxBuildHasher, FxHashMap};
 
 use super::types::SharedNode;
-use dynamo_router_types::protocols::LocalBlockHash;
+use dynamo_router_protocol::protocols::LocalBlockHash;
 
 const SMALL_CHILD_LIMIT: usize = 4;
 

@@ -6,7 +6,7 @@
 mod context;
 mod runtime;
 
-pub use dynamo_router_types::selection_inputs as inputs;
+pub mod inputs;
 
 #[doc(hidden)]
 pub use runtime::RuntimePolicyState;
@@ -23,22 +23,20 @@ pub use inputs::{
     WorkerTransferInput,
 };
 
+pub use crate::config::SelectionConfig;
+pub use crate::config::{WorkerSelectionConfig, WorkerSelectionInstance};
 pub use crate::selector::WorkerSelectionPolicy;
-pub use dynamo_router_types::config::worker_selection::{
-    WorkerSelectionConfig, WorkerSelectionInstance,
-};
-pub use dynamo_router_types::sched::{
+pub use dynamo_router_protocol::sched::{
     SessionContext, WorkerSelectionInputTrigger, WorkerSelectionPolicyError,
 };
 
-use dynamo_router_types::WorkerType;
-use dynamo_router_types::config::KvRouterConfig;
-use dynamo_router_types::identity::RoutingPartitionRef;
+use dynamo_router_protocol::WorkerType;
+use dynamo_router_protocol::identity::RoutingPartitionRef;
 use std::sync::Arc;
 
 /// Factory that creates one worker-selection policy per routing partition.
 pub type WorkerSelectionPolicyFactory = Arc<
-    dyn for<'a> Fn(&KvRouterConfig, WorkerType, RoutingPartitionRef<'a>) -> WorkerSelectionPolicy
+    dyn for<'a> Fn(&SelectionConfig, WorkerType, RoutingPartitionRef<'a>) -> WorkerSelectionPolicy
         + Send
         + Sync,
 >;

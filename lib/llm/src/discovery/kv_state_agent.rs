@@ -12,8 +12,8 @@ use std::collections::HashSet;
 use dynamo_kv_indexer::{
     KvStateAgentIdentity, KvStateAgentStatus, KvStateProtocolVersion, KvStateRecoveryReceipt,
 };
-use dynamo_router_types::identity::{CacheOwnerId, IndexerDomainId};
-use dynamo_router_types::protocols::{
+use dynamo_router_protocol::identity::{CacheOwnerId, IndexerDomainId};
+use dynamo_router_protocol::protocols::{
     ResidencyProjection, ResidencyProjectionError, RouterHintSourceMetadata, WorkerWithDpRank,
 };
 use dynamo_runtime::component::Instance;
@@ -322,7 +322,7 @@ pub fn resolve_kv_state_projection(
 #[cfg(test)]
 mod tests {
     use dynamo_kv_indexer::{KvStateAgentIdentity, KvStateAttachmentStatus};
-    use dynamo_router_types::identity::{
+    use dynamo_router_protocol::identity::{
         CacheSemanticsId, DcId, IdentitySource, IndexerDomainId, PoolId, RoutingScopeId,
         StableDpSlotId,
     };

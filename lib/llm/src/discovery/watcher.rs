@@ -10,7 +10,7 @@ use tokio::sync::{Notify, mpsc::Sender};
 
 use anyhow::Context as _;
 use async_trait::async_trait;
-use dynamo_router_types::prefill_load::PrefillLoadEstimator;
+use dynamo_router_protocol::prefill_load::PrefillLoadEstimator;
 use dynamo_runtime::{
     DistributedRuntime,
     discovery::{DiscoveryInstance, DiscoveryQuery, DiscoveryStream, ModelCardInstanceId},
@@ -2217,7 +2217,7 @@ request_classifier:
         .unwrap();
         let router_config = RouterConfig::new(
             RouterMode::KV,
-            dynamo_router_types::config::KvRouterConfig {
+            dynamo_kv_router::config::KvRouterConfig {
                 use_kv_events: false,
                 router_policy_config: Some(policy_file.path().display().to_string()),
                 ..Default::default()
@@ -2371,9 +2371,9 @@ request_classifier:
             (0..2)
                 .map(|instance| (
                     WorkerType::Aggregated,
-                    dynamo_router_types::identity::RoutingPartitionId::new(
+                    dynamo_router_protocol::identity::RoutingPartitionId::new(
                         format!("classifier-model-{instance}"),
-                        dynamo_router_types::identity::DEFAULT_ROUTING_GROUP
+                        dynamo_router_protocol::identity::DEFAULT_ROUTING_GROUP
                     ),
                 ))
                 .collect::<Vec<_>>()
@@ -2660,7 +2660,7 @@ request_classifier:
             .unwrap();
         let router_config = RouterConfig {
             router_mode: RouterMode::KV,
-            kv_router_config: dynamo_router_types::config::KvRouterConfig {
+            kv_router_config: dynamo_kv_router::config::KvRouterConfig {
                 skip_initial_worker_wait: true,
                 use_kv_events: false,
                 ..Default::default()
@@ -3197,12 +3197,12 @@ request_classifier:
     fn only_explicit_policies_require_typed_model_cards() {
         let unresolved = RouterPluginBuilder::default();
         let resolved = dynamo_custom_policy_builtin::default_registry()
-            .resolve_plugins(&dynamo_router_types::config::KvRouterConfig::default())
+            .resolve_plugins(&dynamo_kv_router::config::KvRouterConfig::default())
             .unwrap();
         assert!(resolved.worker_selection().is_some());
         let builtin = RouterPluginBuilder::new(resolved);
         let custom = RouterPluginBuilder::new(
-            dynamo_scheduler::plugins::RouterPlugins::default().with_worker_selection(Arc::new(
+            dynamo_kv_router::plugins::RouterPlugins::default().with_worker_selection(Arc::new(
                 |_, _, _| unreachable!("role validation never constructs the policy"),
             )),
         );

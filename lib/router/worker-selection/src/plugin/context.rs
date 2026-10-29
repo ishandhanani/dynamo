@@ -4,8 +4,8 @@
 //! Request metadata available to worker-selection components.
 
 use super::SessionContext;
-use dynamo_router_types::protocols::{WorkerAffinityTarget, WorkerWithDpRank};
-use dynamo_router_types::sched::SchedulingRequest;
+use dynamo_router_protocol::protocols::{WorkerAffinityTarget, WorkerWithDpRank};
+use dynamo_router_protocol::sched::SchedulingRequest;
 
 /// Request-level values available to custom filters, scorers, and pickers.
 pub struct WorkerSelectionContext<'a> {

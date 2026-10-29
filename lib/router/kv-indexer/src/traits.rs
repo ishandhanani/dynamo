@@ -9,8 +9,8 @@ use super::{
     AnchorRef, AnchorTask, KvIndexerMetrics, KvRouterError, LowerTierQueryOptions,
     TieredMatchDetails, WorkerTask,
 };
-pub use dynamo_router_types::cache::{ShardSizeSnapshot, SharedKvCache};
-use dynamo_router_types::protocols::*;
+pub use dynamo_router_protocol::cache::{ShardSizeSnapshot, SharedKvCache};
+use dynamo_router_protocol::protocols::*;
 
 #[async_trait]
 pub trait TieredMatchProvider: Send + Sync {

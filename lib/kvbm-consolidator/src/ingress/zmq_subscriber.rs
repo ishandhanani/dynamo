@@ -27,7 +27,7 @@ use crate::source::EventSource;
 use crate::tracker::{StoreInput, Tracker};
 use crate::wire::vllm_in::{KvEventBatch, RawKvEvent};
 use crate::zmq_util::{connect_sub_socket, multipart_message};
-use dynamo_router_types::protocols::StorageTier;
+use dynamo_router_protocol::protocols::StorageTier;
 use dynamo_kv_indexer::zmq_wire::{KvEventOwnership, Locality};
 
 /// Spawn the ZMQ listener. Returns immediately with a [`JoinHandle`] for the task.

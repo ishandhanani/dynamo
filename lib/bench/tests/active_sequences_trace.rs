@@ -16,7 +16,7 @@ use active_sequences_open_loop::{
 };
 use active_sequences_shared::{SequenceTrace, SequenceTraceEntry, generate_sequence_events};
 use dynamo_bench::kv_router_common::replay::{NoopSequencePublisher, process_mooncake_trace};
-use dynamo_router_types::protocols::{PrefillLoadHint, WorkerWithDpRank};
+use dynamo_router_protocol::protocols::{PrefillLoadHint, WorkerWithDpRank};
 use dynamo_slot_tracker::{ActiveSequencesMultiWorker, SequenceRequest};
 
 const BLOCK_SIZE: u32 = 128;

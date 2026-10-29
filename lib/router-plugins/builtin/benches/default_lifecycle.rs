@@ -4,8 +4,8 @@
 //! Includes load projection, selection, booking, and release in the shared core.
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use dynamo_custom_policy_builtin::default_factory;
-use dynamo_router_types::config::KvRouterConfig;
-use dynamo_scheduler::selection::{
+use dynamo_kv_router::config::KvRouterConfig;
+use dynamo_kv_router::selection::{
     PromptRequest, SelectAndReserveRequest, SelectionCacheConfig, SelectionCore, WorkerRequest,
 };
 use dynamo_worker_selection::plugin::{WorkerSelectionPolicy, WorkerSelectionPolicyFactory};
@@ -30,11 +30,12 @@ fn bench(c: &mut Criterion) {
         });
         for (label, factory) in [("reference", reference), ("plugin", default_factory())] {
             let core = SelectionCore::try_new_local(
-                KvRouterConfig {
+                dynamo_kv_router::config::resolve_router_config(KvRouterConfig {
                     use_kv_events: false,
                     router_queue_threshold: None,
                     ..Default::default()
-                },
+                })
+                .unwrap(),
                 1,
                 Default::default(),
                 SelectionCacheConfig::default(),

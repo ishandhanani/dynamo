@@ -54,7 +54,7 @@ pub fn compute_hash_v2(data: &[u8], seed: u64) -> u64 {
 }
 
 /// Canonical XXH3 seed used by every chain-step `(parent_seq, child_block_hash) → next_seq`
-/// in this codebase. Must match `dynamo_router_types::protocols::XXH3_SEED` — the router's
+/// in this codebase. Must match `dynamo_router_protocol::protocols::XXH3_SEED` — the router's
 /// `compute_seq_hash_for_block` and the `PositionalIndexer`'s chain re-computation both
 /// route through [`compute_next_sequence_hash`] (or equivalently seeded helpers in
 /// `kv-router`), so changing this constant requires all of them to flip in lockstep.
@@ -66,7 +66,7 @@ pub const CHAIN_XXH3_SEED: u64 = 1337;
 /// This is the single source of truth for the chain recurrence used by:
 /// - [`PositionalLineageHash::extend`]
 /// - `TokenBlock::from_chunk`
-/// - `dynamo_router_types::protocols::compute_next_seq_hash` (request side)
+/// - `dynamo_router_protocol::protocols::compute_next_seq_hash` (request side)
 /// - `dynamo_kv_indexer::PositionalIndexer` (chain re-validation)
 ///
 /// Salt is already mixed into `block_hash[0]` and propagates through every parent, so

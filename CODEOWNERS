@@ -266,9 +266,9 @@
 /components/src/dynamo/common/configuration/                                                            @ai-dynamo/dynamo-runtime-codeowners
 
 # === observability  (@ai-dynamo/dynamo-observability-codeowners) ===
+/lib/metrics/                                                                                           @ai-dynamo/dynamo-observability-codeowners
 /dev/observability/                                                                                     @ai-dynamo/dynamo-observability-codeowners
 /deploy/observability/                                                                                  @ai-dynamo/dynamo-observability-codeowners
-/lib/prometheus-names/                                                                                  @ai-dynamo/dynamo-observability-codeowners
 /dev/docker-observability.yml                                                                           @ai-dynamo/dynamo-observability-codeowners
 /dev/docker-observability-xpu.yml                                                                       @ai-dynamo/dynamo-observability-codeowners
 

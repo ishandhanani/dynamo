@@ -7,7 +7,7 @@ use rustc_hash::{FxBuildHasher, FxHashMap};
 
 use super::edge_index::EdgeIndex;
 use super::worker_set::WorkerSet;
-use dynamo_router_types::protocols::*;
+use dynamo_router_protocol::protocols::*;
 
 pub(super) struct RemoveOutcome {
     pub(super) stale_hashes: Vec<ExternalSequenceBlockHash>,

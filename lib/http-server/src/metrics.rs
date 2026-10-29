@@ -5,7 +5,7 @@ use crate::env::metrics as env_metrics;
 use crate::load::{
     FrontendLoadFrame, FrontendModelLoad, ModelLoadView, RequestGauges, RequestTotals,
 };
-use dynamo_prometheus_names::{
+use dynamo_metrics::names::{
     clamp_u64_to_i64, frontend_service, name_prefix, sanitize_frontend_prometheus_prefix,
 };
 use prometheus::{

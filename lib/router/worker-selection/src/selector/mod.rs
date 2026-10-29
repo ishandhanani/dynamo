@@ -27,10 +27,12 @@ use crate::plugin::{
     WorkerTransferInput,
 };
 use crate::plugin::{RuntimePolicyConfig, RuntimePolicyError, RuntimePolicyUpdate};
-use dynamo_router_types::kv_hints::{
+use dynamo_router_protocol::kv_hints::{
     KvTransferScope, KvTransferSourceChoice, KvTransferSourceSummary, KvTransferTarget,
 };
 pub use policy::WorkerSelectionPolicy;
+#[doc(hidden)]
+pub use policy::{CandidatePreparer, PreparedCandidates};
 
 /// [`SchedulingResponder`] over a tokio oneshot sender: the channel the scheduler's actor uses.
 #[doc(hidden)]
@@ -47,16 +49,19 @@ impl SchedulingResponder for OneshotResponder {
         self.0.send(result).is_ok()
     }
 }
-use policy::{ComposedPolicyState, WorkerSelectionPolicyStateRef, collect_policy_candidates};
+use policy::{
+    ComposedPolicyState, WorkerSelectionPolicyStateRef, collect_policy_candidates,
+    collect_prepared_candidates,
+};
 #[cfg(any(test, feature = "testing", feature = "bench"))]
 use reference::pick_default_worker;
 
-use dynamo_router_types::eligibility::{RoutingEligibility, WorkerEligibilityError};
-use dynamo_router_types::protocols::{
+use dynamo_router_protocol::eligibility::{RoutingEligibility, WorkerEligibilityError};
+use dynamo_router_protocol::protocols::{
     SelectionTrace, SelectionTraceRow, SelectionTraceSpec, WorkerConfigLike, WorkerId,
     WorkerSelectionResult, WorkerWithDpRank,
 };
-use dynamo_router_types::sched::{
+use dynamo_router_protocol::sched::{
     KvSchedulerError, SchedulingRequest, SchedulingResponder, SchedulingResponse,
     WorkerSelectionPolicyError,
 };
@@ -104,6 +109,26 @@ pub trait WorkerSelector<C: WorkerConfigLike> {
         _trace: Option<SelectionTraceSpec>,
     ) -> Result<(WorkerSelectionResult, Option<SelectionTrace>), KvSchedulerError> {
         self.select_worker(input).map(|result| (result, None))
+    }
+
+    /// Builds candidate rows before the request reaches the scheduler actor, for
+    /// selectors whose rows depend only on the request and worker configuration
+    /// until load inputs are filled.
+    #[doc(hidden)]
+    fn candidate_preparer(&self) -> Option<CandidatePreparer> {
+        None
+    }
+
+    /// Like [`Self::select_worker_traced`], from rows that [`Self::candidate_preparer`]
+    /// built against the same worker configuration when given. The default ignores them.
+    #[doc(hidden)]
+    fn select_worker_prepared(
+        &self,
+        input: WorkerSelectionInput<'_, C>,
+        _prepared: Option<PreparedCandidates>,
+        trace: Option<SelectionTraceSpec>,
+    ) -> Result<(WorkerSelectionResult, Option<SelectionTrace>), KvSchedulerError> {
+        self.select_worker_traced(input, trace)
     }
 }
 
@@ -238,6 +263,32 @@ impl<'a> MaterializedSelectionInput<'a> {
 
     fn max_raw_cached_tokens(&self) -> Option<usize> {
         self.max_raw_cached_tokens.get()
+    }
+
+    /// Adopt what preparation computed over the same rows, so the selected
+    /// worker's fetch source comes from the summary that scored every row.
+    fn restore_prepared(
+        &self,
+        max_raw_cached_tokens: Option<usize>,
+        kv_transfer_sources: Option<KvTransferSourceSummary>,
+    ) {
+        self.max_raw_cached_tokens.set(max_raw_cached_tokens);
+        if let Some(sources) = kv_transfer_sources {
+            let _ = self.kv_transfer_sources.set(sources);
+        }
+    }
+
+    fn into_kv_transfer_sources(self) -> Option<KvTransferSourceSummary> {
+        self.kv_transfer_sources.into_inner()
+    }
+
+    /// The load column for `worker`, read from the loads the actor projected for
+    /// this selection. Prepared rows get it filled here, after any booking.
+    #[inline(always)]
+    fn load_input(&self, worker: WorkerWithDpRank) -> WorkerLoadInput {
+        WorkerLoadInput::for_worker(&self.request.worker_loads, worker, || {
+            self.request.unobserved_worker_load()
+        })
     }
 
     /// Count a worker toward the best eligible cached prefix once every policy
@@ -579,12 +630,11 @@ fn log_selection<C: WorkerConfigLike>(
 fn select_worker_with_policy<C: WorkerConfigLike>(
     worker_type: &'static str,
     state: WorkerSelectionPolicyStateRef<'_>,
-    workers: &HashMap<WorkerId, C>,
-    request: &SchedulingRequest,
-    eligibility: RoutingEligibility<'_>,
-    block_size: u32,
+    input: WorkerSelectionInput<'_, C>,
     trace: Option<SelectionTraceSpec>,
+    prepared: Option<PreparedCandidates>,
 ) -> Result<(WorkerSelectionResult, Option<SelectionTrace>), KvSchedulerError> {
+    let (workers, request, eligibility, block_size) = input.into_configured();
     eligibility.validate_pinned_worker_allowed()?;
 
     if let Some(worker) = eligibility.pinned_worker() {
@@ -613,8 +663,14 @@ fn select_worker_with_policy<C: WorkerConfigLike>(
         }
         WorkerSelectionPolicyStateRef::Composed(state) => {
             let mut state = state.borrow_mut();
-            let has_eligible_worker =
-                collect_policy_candidates(&mut state, &input, workers, request, eligibility)?;
+            let has_eligible_worker = match prepared.filter(|prepared| prepared.matches(&state)) {
+                Some(prepared) => {
+                    collect_prepared_candidates(&mut state, &input, workers, prepared)?
+                }
+                None => {
+                    collect_policy_candidates(&mut state, &input, workers, request, eligibility)?
+                }
+            };
             let ComposedPolicyState {
                 picker,
                 picker_inputs,
@@ -770,8 +826,8 @@ mod test_support {
     use rustc_hash::FxHashMap;
 
     use super::*;
-    use dynamo_router_types::overlap::OverlapSignals;
-    use dynamo_router_types::sched::ScheduleMode;
+    use dynamo_router_protocol::overlap::OverlapSignals;
+    use dynamo_router_protocol::sched::ScheduleMode;
 
     #[derive(Clone, Default)]
     pub(super) struct TaintedWorkerConfig {
@@ -826,7 +882,7 @@ mod test_support {
             affinity_target: None,
             pinned_worker: None,
             allowed_worker_ids: None,
-            routing_constraints: dynamo_router_types::protocols::RoutingConstraints::default(),
+            routing_constraints: dynamo_router_protocol::protocols::RoutingConstraints::default(),
             shared_cache_hits: None,
             resp_tx: None,
         }
@@ -834,13 +890,13 @@ mod test_support {
 
     pub(super) fn worker_loads_with_active_decode(
         decode_blocks: FxHashMap<WorkerWithDpRank, usize>,
-    ) -> FxHashMap<WorkerWithDpRank, dynamo_router_types::protocols::WorkerLoadProjection> {
+    ) -> FxHashMap<WorkerWithDpRank, dynamo_router_protocol::protocols::WorkerLoadProjection> {
         decode_blocks
             .into_iter()
             .map(|(worker, active_decode_blocks)| {
                 (
                     worker,
-                    dynamo_router_types::protocols::WorkerLoadProjection {
+                    dynamo_router_protocol::protocols::WorkerLoadProjection {
                         active_decode_blocks,
                         ..Default::default()
                     },
@@ -854,12 +910,12 @@ mod test_support {
 mod cache_reuse_tests {
     use super::test_support::base_request;
     use super::*;
-    use dynamo_router_types::test_utils::SimpleWorkerConfig;
+    use dynamo_router_protocol::test_utils::SimpleWorkerConfig;
 
     #[test]
     fn tracked_requests_report_raw_cache_reuse() {
         let mut request = base_request(128);
-        request.mode = dynamo_router_types::sched::ScheduleMode::Tracked {
+        request.mode = dynamo_router_protocol::sched::ScheduleMode::Tracked {
             request_id: "test".into(),
         };
         let first = WorkerWithDpRank::from_worker_id(1);
@@ -889,7 +945,7 @@ mod cache_reuse_tests {
     #[test]
     fn query_only_requests_skip_cache_reuse_tracking() {
         let mut request = base_request(128);
-        request.mode = dynamo_router_types::sched::ScheduleMode::QueryOnly { request_id: None };
+        request.mode = dynamo_router_protocol::sched::ScheduleMode::QueryOnly { request_id: None };
         let worker = WorkerWithDpRank::from_worker_id(1);
         request.overlap.effective_cached_tokens.insert(worker, 96);
         let input = MaterializedSelectionInput::new(&request, 16);
@@ -934,7 +990,7 @@ mod cache_reuse_tests {
     fn cache_reuse_tracking_excludes_out_of_range_dp_rank() {
         let workers = HashMap::from([(1, SimpleWorkerConfig::default())]);
         let mut request = base_request(128);
-        request.mode = dynamo_router_types::sched::ScheduleMode::Tracked {
+        request.mode = dynamo_router_protocol::sched::ScheduleMode::Tracked {
             request_id: "test".into(),
         };
         let invalid_rank = WorkerWithDpRank::new(1, 1);

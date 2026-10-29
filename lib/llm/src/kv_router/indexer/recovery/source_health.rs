@@ -6,7 +6,7 @@ use std::{
     time::Duration,
 };
 
-use dynamo_router_types::protocols::WorkerId;
+use dynamo_router_protocol::protocols::WorkerId;
 use dynamo_runtime::protocols::EndpointId;
 use tokio::{sync::oneshot, time::Instant};
 use tokio_util::sync::CancellationToken;
@@ -419,7 +419,7 @@ pub(super) fn spawn(
 
 #[cfg(test)]
 mod tests {
-    use dynamo_router_types::protocols::WorkerWithDpRank;
+    use dynamo_router_protocol::protocols::WorkerWithDpRank;
 
     use super::*;
     use crate::discovery::{KvEventSource, KvStateEndpointResolution};

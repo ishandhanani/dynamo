@@ -3,7 +3,7 @@
 
 //! Device-cache filter shared by prefill and decode workers.
 
-use dynamo_router_types::sched::WorkerSelectionPolicyError;
+use dynamo_router_protocol::sched::WorkerSelectionPolicyError;
 use dynamo_worker_selection::plugin::{
     WorkerCandidate, WorkerFilter, WorkerInputs, WorkerSelectionContext,
 };

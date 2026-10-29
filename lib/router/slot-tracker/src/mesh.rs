@@ -22,9 +22,9 @@ use crate::{
 use dynamo_kv_indexer::ingest::zmq::{
     create_bound_pub_socket, create_sub_socket_topics, validate_endpoint,
 };
-use dynamo_router_types::affinity::{AffinityReplicaSink, AffinityTarget, AffinityVersion};
-use dynamo_router_types::identity::{RoutingPartitionId, RoutingPartitionRef};
-use dynamo_router_types::protocols::{ActiveSequenceEvent, WorkerWithDpRank};
+use dynamo_router_protocol::affinity::{AffinityReplicaSink, AffinityTarget, AffinityVersion};
+use dynamo_router_protocol::identity::{RoutingPartitionId, RoutingPartitionRef};
+use dynamo_router_protocol::protocols::{ActiveSequenceEvent, WorkerWithDpRank};
 
 #[doc(hidden)]
 pub const REPLICA_EVENT_CHANNEL_CAPACITY: usize = 100_000;
@@ -913,7 +913,7 @@ fn handle_replica_message<F, A>(
 mod tests {
     use super::*;
     use crate::registry::SlotTrackerRegistry;
-    use dynamo_router_types::protocols::{ActiveSequenceEventData, WorkerWithDpRank};
+    use dynamo_router_protocol::protocols::{ActiveSequenceEventData, WorkerWithDpRank};
 
     fn event() -> ScopedReplicaEvent {
         ScopedReplicaEvent {
@@ -1309,7 +1309,7 @@ mod tests {
         // capped, so the first sample must show the backlog.
         assert!(
             observer.max_depth.load(Relaxed)
-                >= N - dynamo_router_types::protocols::MAX_REPLICA_BATCH_EVENTS,
+                >= N - dynamo_router_protocol::protocols::MAX_REPLICA_BATCH_EVENTS,
             "depth sample reflects the queued backlog: {}",
             observer.max_depth.load(Relaxed)
         );

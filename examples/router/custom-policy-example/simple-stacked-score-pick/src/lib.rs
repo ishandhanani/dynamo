@@ -8,8 +8,8 @@ mod scorer;
 
 use std::sync::Arc;
 
-use dynamo_router_types::config::KvRouterConfig;
-use dynamo_scheduler::plugins::{
+use dynamo_kv_router::plugins::worker_selection::SelectionConfig;
+use dynamo_kv_router::plugins::{
     WorkerSelectionPolicyParameters, WorkerSelectionPolicyProviderError,
     WorkerSelectionPolicyRegistry, WorkerSelectionPolicyRegistryError,
 };
@@ -28,9 +28,8 @@ fn provider(
     let _: Parameters = parameters.deserialize()?;
 
     Ok(Arc::new(
-        |config: &KvRouterConfig, worker_type, _partition| {
+        |_config: &SelectionConfig, worker_type, _partition| {
             WorkerSelectionPolicy::new(
-                config.clone(),
                 worker_type.as_str(),
                 vec![
                     Box::new(ActiveRequestsScorer),

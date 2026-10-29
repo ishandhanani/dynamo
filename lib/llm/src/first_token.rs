@@ -239,7 +239,7 @@ mod tests {
         worker_type: WorkerType,
     ) -> (
         Option<FirstTokenSource>,
-        tokio::sync::mpsc::Receiver<dynamo_router_types::protocols::ActiveSequenceEvent>,
+        tokio::sync::mpsc::Receiver<dynamo_router_protocol::protocols::ActiveSequenceEvent>,
     ) {
         let (publisher, receiver) =
             ActiveSequenceEventPublisher::channel(4, CancellationToken::new());

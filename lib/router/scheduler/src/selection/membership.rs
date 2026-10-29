@@ -20,7 +20,7 @@ use tokio_util::sync::CancellationToken;
 use super::core::SelectionCore;
 use super::error::SelectionError;
 use super::types::{WorkerCatalogRecord, WorkerLifecycle, WorkerRequest};
-use dynamo_router_types::protocols::WorkerId;
+use dynamo_router_protocol::protocols::WorkerId;
 
 /// Delay before [`CatalogReconciler::run`] re-applies a snapshot whose pass failed.
 const RECONCILE_RETRY_DELAY: Duration = Duration::from_secs(5);
@@ -204,16 +204,24 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     use super::*;
+    use crate::config::RouterConfig;
     use crate::selection::SelectionCacheConfig;
-    use dynamo_router_types::config::KvRouterConfig;
+    use dynamo_admission::config::AdmissionConfig;
+    use dynamo_kv_indexer::config::IndexerConfig;
 
     fn core() -> Arc<SelectionCore> {
         Arc::new(
             SelectionCore::try_new_local(
-                KvRouterConfig {
-                    use_kv_events: false,
-                    router_queue_threshold: None,
-                    ..Default::default()
+                RouterConfig {
+                    indexer: IndexerConfig {
+                        use_kv_events: false,
+                        ..Default::default()
+                    },
+                    admission: AdmissionConfig {
+                        queue_threshold: None,
+                        ..Default::default()
+                    },
+                    ..RouterConfig::default()
                 },
                 1,
                 CancellationToken::new(),

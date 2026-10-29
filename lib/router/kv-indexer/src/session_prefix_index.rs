@@ -10,7 +10,7 @@ use parking_lot::RwLock;
 use rustc_hash::{FxHashMap, FxHashSet};
 use slotmap::{SlotMap, new_key_type};
 
-use dynamo_router_types::protocols::{
+use dynamo_router_protocol::protocols::{
     ExternalSequenceBlockHash, StorageTier, WorkerId, WorkerWithDpRank,
 };
 
@@ -19,7 +19,8 @@ pub type SessionId = String;
 
 const DEFAULT_MAX_SESSIONS: usize = 16_384;
 const MAX_SESSION_PREFIX_ID_BYTES: usize = 256;
-const CLEANUP_INTERVAL: Duration = Duration::from_millis(dynamo_router_types::CLEANUP_INTERVAL_MS);
+const CLEANUP_INTERVAL: Duration =
+    Duration::from_millis(dynamo_router_protocol::CLEANUP_INTERVAL_MS);
 
 new_key_type! {
     /// Generational handle to a [`LogicalNode`] in the arena.

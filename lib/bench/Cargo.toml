@@ -27,8 +27,7 @@ mooncake = ["router-bench", "dep:dynamo-mocker", "dep:indicatif", "dep:libc", "d
 multiturn = ["kv-router-stress-support", "dep:dynamo-mocker", "dep:futures-util", "dep:indicatif", "dep:rand"]
 offline-replay = ["dep:blake3", "dep:dynamo-mocker", "dep:libc"]
 router-bench = ["dynamo-kv-indexer/bench", "dynamo-slot-tracker/bench"]
-router-metrics = ["dynamo-kv-indexer/metrics"]
-router-test-support = ["router-bench", "router-metrics", "dep:dynamo-mocker", "dep:indicatif", "dep:dynamo-tokens", "dep:libc", "dep:rustc-hash", "dep:tokio-util", "dep:tracing-subscriber"]
+router-test-support = ["router-bench", "dep:dynamo-mocker", "dep:indicatif", "dep:dynamo-tokens", "dep:libc", "dep:rustc-hash", "dep:tokio-util", "dep:tracing-subscriber"]
 satf = ["dep:dynamo-data-gen"]
 request-trace-to-mooncake = ["dep:blake3", "dep:dynamo-data-gen", "dep:tempfile"]
 test-support = ["router-test-support", "dynamo-mocker/test-support", "dep:flate2", "dep:tempfile", "dep:tracing", "dep:uuid"]
@@ -136,7 +135,8 @@ dynamo-data-gen = { workspace = true, optional = true }
 dynamo-mocker = { workspace = true, optional = true }
 dynamo-kv-indexer = { workspace = true }
 dynamo-slot-tracker = { workspace = true }
-dynamo-router-types = { workspace = true }
+dynamo-router-protocol = { workspace = true }
+dynamo-kv-router = { workspace = true }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 libc = { workspace = true, optional = true }
