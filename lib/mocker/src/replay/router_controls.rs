@@ -166,6 +166,7 @@ mod tests {
     use super::*;
     use dynamo_custom_policy_builtin::DefaultWorkerSelector;
     use dynamo_router_types::config::KvRouterConfig;
+    use dynamo_worker_selection::config::SelectionConfig;
     use dynamo_worker_selection::plugin::RuntimePolicyError;
 
     fn registry_with(
@@ -175,7 +176,8 @@ mod tests {
         let selectors = controls
             .iter()
             .map(|(worker_type, config)| {
-                let selector = DefaultWorkerSelector::new(Some(config.clone()), "replay");
+                let selector =
+                    DefaultWorkerSelector::new(Some(SelectionConfig::from(config)), "replay");
                 registry.register(*worker_type, selector.runtime_control());
                 selector
             })

@@ -14,6 +14,7 @@ use dynamo_router_types::protocols::{
 use dynamo_scheduler::local::LocalScheduler;
 use dynamo_slot_tracker::{ActiveSequencesMultiWorker, SequencePublisher};
 use dynamo_slot_tracker::{LocalWorkerLoad, SchedulerLoadSnapshot};
+use dynamo_worker_selection::config::SelectionConfig;
 
 #[derive(Clone, Copy, Debug, Default)]
 pub(super) struct ReplayNoopPublisher;
@@ -127,8 +128,10 @@ pub(super) fn replay_selector_with_seed(
     }
 
     Ok(match selector_seed {
-        Some(seed) => DefaultWorkerSelector::new_seeded(Some(config.clone()), "replay", seed),
-        None => DefaultWorkerSelector::new(Some(config.clone()), "replay"),
+        Some(seed) => {
+            DefaultWorkerSelector::new_seeded(Some(SelectionConfig::from(config)), "replay", seed)
+        }
+        None => DefaultWorkerSelector::new(Some(SelectionConfig::from(config)), "replay"),
     })
 }
 

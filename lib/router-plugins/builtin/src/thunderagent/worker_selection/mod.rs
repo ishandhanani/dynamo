@@ -83,9 +83,8 @@ fn worker_selection_provider(
 ) -> Result<WorkerSelectionPolicyFactory, WorkerSelectionPolicyProviderError> {
     let _: ThunderAgentSelectionParameters = parameters.deserialize()?;
     Ok(Arc::new(
-        move |router, worker_type: WorkerType, _partition| {
+        move |_router, worker_type: WorkerType, _partition| {
             WorkerSelectionPolicy::new(
-                router.clone(),
                 worker_type.as_str(),
                 vec![Box::new(ThunderAgentScorer)],
                 Box::new(ThunderAgentPicker),
@@ -107,7 +106,6 @@ pub(crate) fn register(
 mod tests {
     use std::collections::HashMap;
 
-    use dynamo_router_types::config::KvRouterConfig;
     use dynamo_router_types::overlap::OverlapSignals;
     use dynamo_router_types::protocols::WorkerLoadProjection;
     use dynamo_router_types::protocols::{RoutingConstraints, WorkerConfigLike, WorkerWithDpRank};
@@ -167,7 +165,6 @@ mod tests {
 
     fn policy() -> WorkerSelectionPolicy {
         WorkerSelectionPolicy::new(
-            KvRouterConfig::default(),
             "test",
             vec![Box::new(ThunderAgentScorer)],
             Box::new(ThunderAgentPicker),

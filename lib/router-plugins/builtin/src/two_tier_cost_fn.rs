@@ -33,7 +33,7 @@ use dynamo_kv_router::plugins::{
     RouterPluginRegistry, WorkerSelectionPolicyParameters, WorkerSelectionPolicyProviderError,
     WorkerSelectionPolicyRegistryError,
 };
-use dynamo_router_types::config::KvRouterConfig;
+use dynamo_worker_selection::config::SelectionConfig;
 use dynamo_worker_selection::plugin::{
     WorkerCacheInputs, WorkerInputView, WorkerInputs, WorkerLoadInput, WorkerPicker,
     WorkerSelectionContext, WorkerSelectionPolicy, WorkerSelectionPolicyError,
@@ -166,9 +166,8 @@ fn provider(
     parameters.validate()?;
 
     Ok(Arc::new(
-        move |config: &KvRouterConfig, worker_type, _partition| {
+        move |_config: &SelectionConfig, worker_type, _partition| {
             WorkerSelectionPolicy::new(
-                config.clone(),
                 worker_type.as_str(),
                 Vec::new(),
                 Box::new(TwoTierCostFnPicker { parameters }),
@@ -268,7 +267,6 @@ mod tests {
         }
         let configs = HashMap::from(workers.map(|(id, _, _)| (id, TestWorker)));
         WorkerSelectionPolicy::new(
-            KvRouterConfig::default(),
             "test",
             Vec::new(),
             Box::new(TwoTierCostFnPicker { parameters }),

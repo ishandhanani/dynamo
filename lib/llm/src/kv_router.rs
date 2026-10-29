@@ -52,6 +52,7 @@ use dynamo_runtime::{
 use dynamo_scheduler::overlap::OverlapAnalysis;
 use dynamo_scheduler::overlap::cache_hit_estimates_from_tiered_matches;
 use dynamo_scheduler::queue::{BookingHandle, SchedulerBookingDescriptor};
+use dynamo_worker_selection::config::SelectionConfig;
 #[cfg(test)]
 use dynamo_worker_selection::plugin::WorkerSelectionPolicy;
 use dynamo_worker_selection::plugin::{WorkerInfo, WorkerSelectionPolicyFactory};
@@ -188,14 +189,14 @@ impl PreparedSelectionPolicy {
         model_name: Option<&str>,
     ) -> Self {
         let key = embedded::embedded_partition_key(model_name);
-        let policy = inner(config, worker_type, key.as_ref());
+        let policy = inner(&SelectionConfig::from(config), worker_type, key.as_ref());
         let inputs =
             dynamo_worker_selection::selector::WorkerSelector::<ModelRuntimeConfig>::required_worker_inputs(
                 &policy,
             );
         let slot = Arc::new(parking_lot::Mutex::new(Some(policy)));
         let factory: WorkerSelectionPolicyFactory = Arc::new(
-            move |config: &KvRouterConfig, worker_type, partition: RoutingPartitionRef<'_>| {
+            move |config: &SelectionConfig, worker_type, partition: RoutingPartitionRef<'_>| {
                 if partition == key.as_ref()
                     && let Some(policy) = slot.lock().take()
                 {
@@ -2248,9 +2249,8 @@ mod tests {
         expected_shared_blocks: Option<u32>,
         worker: WorkerWithDpRank,
     ) -> SelectionPolicySource {
-        SelectionPolicySource::Factory(Arc::new(move |config: &KvRouterConfig, _, _| {
+        SelectionPolicySource::Factory(Arc::new(move |_config: &SelectionConfig, _, _| {
             WorkerSelectionPolicy::new(
-                config.clone(),
                 "decode",
                 Vec::new(),
                 Box::new(FixedPicker {
@@ -2264,8 +2264,8 @@ mod tests {
     fn picker_policy(
         picker: impl Fn() -> Box<dyn WorkerPicker> + Send + Sync + 'static,
     ) -> SelectionPolicySource {
-        SelectionPolicySource::Factory(Arc::new(move |config: &KvRouterConfig, _, _| {
-            WorkerSelectionPolicy::new(config.clone(), "decode", Vec::new(), picker())
+        SelectionPolicySource::Factory(Arc::new(move |_config: &SelectionConfig, _, _| {
+            WorkerSelectionPolicy::new("decode", Vec::new(), picker())
         }))
     }
 
@@ -3354,7 +3354,7 @@ mod tests {
         let constructions = Arc::new(AtomicUsize::new(0));
         let counting: WorkerSelectionPolicyFactory = {
             let constructions = Arc::clone(&constructions);
-            Arc::new(move |config: &KvRouterConfig, _, _| {
+            Arc::new(move |config: &SelectionConfig, _, _| {
                 constructions.fetch_add(1, Ordering::SeqCst);
                 dynamo_custom_policy_builtin::default_policy(config.clone(), "decode")
             })
@@ -3371,7 +3371,8 @@ mod tests {
 
         // The first call for the embedded key takes the parked instance.
         let key = embedded::embedded_partition_key(Some("named-model"));
-        let _served = (prepared.factory)(&config, WorkerType::Decode, key.as_ref());
+        let selection = SelectionConfig::from(&config);
+        let _served = (prepared.factory)(&selection, WorkerType::Decode, key.as_ref());
         assert_eq!(
             constructions.load(Ordering::SeqCst),
             1,
@@ -3382,7 +3383,7 @@ mod tests {
             "other-model",
             DEFAULT_ROUTING_GROUP,
         );
-        let _other = (prepared.factory)(&config, WorkerType::Decode, other.as_ref());
+        let _other = (prepared.factory)(&selection, WorkerType::Decode, other.as_ref());
         assert_eq!(constructions.load(Ordering::SeqCst), 2);
 
         // Preparing an already prepared source is a passthrough.
@@ -3404,10 +3405,9 @@ mod tests {
         let counting = {
             let constructions = Arc::clone(&constructions);
             let picked_tag = Arc::clone(&picked_tag);
-            SelectionPolicySource::Factory(Arc::new(move |config: &KvRouterConfig, _, _| {
+            SelectionPolicySource::Factory(Arc::new(move |_config: &SelectionConfig, _, _| {
                 let tag = constructions.fetch_add(1, Ordering::SeqCst) + 1;
                 WorkerSelectionPolicy::new(
-                    config.clone(),
                     "decode",
                     Vec::new(),
                     Box::new(TaggedPicker {
@@ -3520,9 +3520,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_find_best_match_maps_filtered_workers_to_unavailable() {
-        let policy = SelectionPolicySource::Factory(Arc::new(|config: &KvRouterConfig, _, _| {
+        let policy = SelectionPolicySource::Factory(Arc::new(|_config: &SelectionConfig, _, _| {
             WorkerSelectionPolicy::new_with_filters(
-                config.clone(),
                 "decode",
                 vec![Box::new(RejectAll)],
                 Vec::new(),

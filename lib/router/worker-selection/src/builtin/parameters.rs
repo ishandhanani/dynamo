@@ -3,7 +3,7 @@
 
 //! Startup parameters and provider registration for the default policy.
 
-use dynamo_router_types::config::KvRouterConfig;
+use crate::config::SelectionConfig;
 use dynamo_router_types::config::SharedCacheType;
 
 /// YAML parameters of the `dynamo-default-cost-fn` provider; every field falls back to the router config.
@@ -33,8 +33,8 @@ pub struct PolicyParameters {
     pub router_temperature: f64,
 }
 
-impl From<&KvRouterConfig> for PolicyParameters {
-    fn from(config: &KvRouterConfig) -> Self {
+impl From<&SelectionConfig> for PolicyParameters {
+    fn from(config: &SelectionConfig) -> Self {
         DefaultCostFnParameters::default().resolve(config)
     }
 }
@@ -65,7 +65,7 @@ impl DefaultCostFnParameters {
         Ok(())
     }
 
-    pub fn resolve(&self, config: &KvRouterConfig) -> PolicyParameters {
+    pub fn resolve(&self, config: &SelectionConfig) -> PolicyParameters {
         let overlap_score_credit = self
             .overlap_score_credit
             .unwrap_or(config.overlap_score_credit);
@@ -116,7 +116,7 @@ impl PolicyParameters {
 
     pub fn from_runtime(
         values: serde_json::Map<String, serde_json::Value>,
-        config: &KvRouterConfig,
+        config: &SelectionConfig,
     ) -> Result<Self, crate::plugin::RuntimePolicyError> {
         use crate::plugin::RuntimePolicyError;
         // Runtime maps are resolved; startup parameters may be absent or null.

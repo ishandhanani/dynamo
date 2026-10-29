@@ -102,9 +102,8 @@ fn legacy_provider(
     dynamo_worker_selection::plugin::WorkerSelectionPolicyFactory,
     dynamo_kv_router::plugins::WorkerSelectionPolicyProviderError,
 > {
-    Ok(Arc::new(|config, worker_type, _partition| {
+    Ok(Arc::new(|_config, worker_type, _partition| {
         WorkerSelectionPolicy::new_with_filters(
-            config.clone(),
             worker_type.as_str(),
             vec![Box::new(LegacyPolicy)],
             vec![Box::new(LegacyPolicy)],
@@ -135,7 +134,7 @@ fn legacy_plugins_resolve_through_the_common_registry() {
     let plugins = registry.resolve_plugins(&config).unwrap();
     let factory = plugins.worker_selection().unwrap();
     let _policy: worker_selection::WorkerSelectionPolicy = factory(
-        &config,
+        &worker_selection::SelectionConfig::from(&config),
         WorkerType::Aggregated,
         RoutingPartitionRef::new("model", "default"),
     );

@@ -92,7 +92,11 @@ worker_selection:
             WorkerType::Prefill,
             WorkerType::Decode,
         ] {
-            factory(&config, worker_type, partition);
+            factory(
+                &dynamo_worker_selection::config::SelectionConfig::from(&config),
+                worker_type,
+                partition,
+            );
         }
     }
 

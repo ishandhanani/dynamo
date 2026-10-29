@@ -283,6 +283,8 @@ pub struct SelectionCore {
     listens_for_kv_events: bool,
     indexer_registry: Arc<WorkerRegistry>,
     kv_router_config: dynamo_router_types::config::KvRouterConfig,
+    /// The selection slice handed to the policy factory for every partition.
+    selection_config: dynamo_worker_selection::config::SelectionConfig,
     worker_selection_policy_factory: WorkerSelectionPolicyFactory,
     host: SelectionHost,
     worker_type: WorkerType,
@@ -426,6 +428,8 @@ impl SelectionCore {
                 .with_retained_indexers(),
         );
         let listens_for_kv_events = kv_router_config.use_kv_events;
+        let selection_config =
+            dynamo_worker_selection::config::SelectionConfig::from(&kv_router_config);
         indexer_registry.set_indexer_policy(indexer_policy);
         if signal_indexer_ready {
             indexer_registry.signal_ready();
@@ -439,6 +443,7 @@ impl SelectionCore {
             listens_for_kv_events,
             indexer_registry,
             kv_router_config,
+            selection_config,
             worker_selection_policy_factory,
             host,
             worker_type,

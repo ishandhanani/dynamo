@@ -9,13 +9,13 @@ use std::collections::{HashMap, HashSet};
 use std::time::Duration;
 
 use criterion::{BenchmarkId, Criterion, Throughput, black_box, criterion_group, criterion_main};
-use dynamo_router_types::config::KvRouterConfig;
 use dynamo_router_types::overlap::OverlapSignals;
 use dynamo_router_types::protocols::WorkerLoadProjection;
 use dynamo_router_types::protocols::{
     RoutingConstraints, WorkerConfigLike, WorkerId, WorkerWithDpRank,
 };
 use dynamo_router_types::sched::{ScheduleMode, SchedulingRequest, WorkerSelectionPolicyError};
+use dynamo_worker_selection::config::SelectionConfig;
 use dynamo_worker_selection::plugin::{
     WorkerCandidate, WorkerCandidates, WorkerFilter, WorkerInputView, WorkerInputs, WorkerPicker,
     WorkerScorer, WorkerSelectionContext, WorkerSelectionPolicy,
@@ -258,7 +258,7 @@ fn worker_selection(c: &mut Criterion) {
             for worker_count in [2, 32, 1_024, 2_048, 10_000] {
                 let (workers, request) = fixture(worker_count);
                 let selector = DefaultWorkerSelector::new(
-                    Some(KvRouterConfig {
+                    Some(SelectionConfig {
                         router_temperature: temperature,
                         overlap_score_credit_decay,
                         ..Default::default()
@@ -294,25 +294,18 @@ fn custom_worker_selection(c: &mut Criterion) {
     const WORKER_COUNT: usize = 10_000;
 
     let (workers, request) = fixture(WORKER_COUNT);
-    let config = KvRouterConfig {
-        router_temperature: 0.0,
-        ..Default::default()
-    };
     let custom_no_filter = WorkerSelectionPolicy::new(
-        config.clone(),
         "prefill",
         vec![Box::new(BenchScorer)],
         Box::new(LowestCostPicker),
     );
     let custom_keep_all_filter = WorkerSelectionPolicy::new_with_filters(
-        config.clone(),
         "prefill",
         vec![Box::new(KeepAllFilter)],
         vec![Box::new(BenchScorer)],
         Box::new(LowestCostPicker),
     );
     let custom_capacity_filter = WorkerSelectionPolicy::new_with_filters(
-        config,
         "prefill",
         vec![Box::new(CapacityFilter)],
         vec![Box::new(BenchScorer)],
@@ -371,10 +364,6 @@ fn custom_worker_selection(c: &mut Criterion) {
 
 fn unused_preferred_taint_metadata(c: &mut Criterion) {
     const WORKER_COUNT: usize = 10_000;
-    let config = KvRouterConfig {
-        router_temperature: 0.0,
-        ..Default::default()
-    };
     let mut group = c.benchmark_group("unused_preferred_taint_metadata/10_000");
     group.warm_up_time(Duration::from_secs(2));
     group.measurement_time(Duration::from_secs(5));
@@ -384,7 +373,6 @@ fn unused_preferred_taint_metadata(c: &mut Criterion) {
     for preferred_taint_count in [0, 1, 4] {
         let (workers, request) = fixture_with_preferred_taints(WORKER_COUNT, preferred_taint_count);
         let policy = WorkerSelectionPolicy::new(
-            config.clone(),
             "prefill",
             vec![Box::new(IgnoringPreferenceScorer)],
             Box::new(LowestCostPicker),
@@ -412,7 +400,7 @@ fn unused_preferred_taint_metadata(c: &mut Criterion) {
 }
 
 fn default_policy_wrapper(c: &mut Criterion) {
-    let config = KvRouterConfig {
+    let config = SelectionConfig {
         router_temperature: 0.0,
         ..Default::default()
     };

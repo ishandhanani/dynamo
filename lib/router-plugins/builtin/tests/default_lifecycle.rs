@@ -180,9 +180,8 @@ async fn scoring_error_does_not_book_and_allows_retry() {
         1,
         Default::default(),
         SelectionCacheConfig::default(),
-        Arc::new(|config, role, _| {
+        Arc::new(|_config, role, _| {
             WorkerSelectionPolicy::new(
-                config.clone(),
                 role.default_selector_label(),
                 vec![Box::new(FailOnce(true))],
                 Box::new(First),

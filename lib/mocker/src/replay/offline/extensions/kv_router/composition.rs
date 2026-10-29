@@ -666,6 +666,7 @@ mod tests {
     #[test]
     fn registered_router_controls_match_startup_policy_parameters() {
         use dynamo_custom_policy_builtin::startup_policy_parameters;
+        use dynamo_worker_selection::config::SelectionConfig;
 
         let config = retune_router_config();
         let registry = ReplayRouterControls::new();
@@ -690,7 +691,7 @@ mod tests {
             registered_parameters(&registry),
             [(
                 WorkerType::Aggregated,
-                startup_policy_parameters(&config, WorkerType::Aggregated)
+                startup_policy_parameters(&SelectionConfig::from(&config), WorkerType::Aggregated)
             )]
         );
 
@@ -721,11 +722,11 @@ mod tests {
             [
                 (
                     WorkerType::Prefill,
-                    startup_policy_parameters(&config, WorkerType::Prefill)
+                    startup_policy_parameters(&SelectionConfig::from(&config), WorkerType::Prefill)
                 ),
                 (
                     WorkerType::Decode,
-                    startup_policy_parameters(&config, WorkerType::Decode)
+                    startup_policy_parameters(&SelectionConfig::from(&config), WorkerType::Decode)
                 ),
             ]
         );

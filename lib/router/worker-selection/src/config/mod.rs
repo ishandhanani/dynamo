@@ -32,6 +32,14 @@ pub struct ConditionalDisaggConfig {
     pub decode_busy_threshold: Option<f64>,
 }
 
+impl Default for SelectionConfig {
+    /// The selection defaults are the router's defaults; the aggregate's `Default` stays the
+    /// single source until it leaves the shared crate.
+    fn default() -> Self {
+        Self::from(&KvRouterConfig::default())
+    }
+}
+
 impl From<&KvRouterConfig> for SelectionConfig {
     fn from(config: &KvRouterConfig) -> Self {
         Self {

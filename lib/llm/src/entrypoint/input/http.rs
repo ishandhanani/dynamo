@@ -25,9 +25,11 @@ use crate::{
 use dynamo_admission::classifier::RequestClassifierFactory;
 use dynamo_kv_router::plugins::RouterPlugins;
 use dynamo_router_types::WorkerType;
+#[cfg(test)]
 use dynamo_router_types::config::KvRouterConfig;
 use dynamo_router_types::identity::RoutingPartitionRef;
 use dynamo_runtime::{DistributedRuntime, metrics::MetricsHierarchy};
+use dynamo_worker_selection::config::SelectionConfig;
 use dynamo_worker_selection::plugin::WorkerSelectionPolicy;
 
 /// Dynamo's complete discovery-backed HTTP frontend.
@@ -70,7 +72,7 @@ impl HttpFrontend {
     pub fn worker_selection_policy_factory<F>(mut self, factory: F) -> Self
     where
         F: for<'a> Fn(
-                &KvRouterConfig,
+                &SelectionConfig,
                 WorkerType,
                 RoutingPartitionRef<'a>,
             ) -> WorkerSelectionPolicy

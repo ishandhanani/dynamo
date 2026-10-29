@@ -8,6 +8,7 @@ use dynamo_kv_router::plugins::RouterPlugins;
 use dynamo_router_types::WorkerType;
 use dynamo_router_types::config::KvRouterConfig;
 use dynamo_router_types::identity::RoutingPartitionRef;
+use dynamo_worker_selection::config::SelectionConfig;
 use dynamo_worker_selection::plugin::WorkerCandidates;
 
 struct PassThrough;
@@ -86,7 +87,11 @@ worker_selection:
             WorkerType::Decode,
             WorkerType::Encode,
         ] {
-            factory(&config, role, RoutingPartitionRef::new("model", "default"));
+            factory(
+                &SelectionConfig::from(&config),
+                role,
+                RoutingPartitionRef::new("model", "default"),
+            );
         }
     }
 }

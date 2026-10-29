@@ -326,6 +326,7 @@ impl RouterPluginRegistry {
 mod tests {
     use super::*;
     use dynamo_router_types::identity::RoutingPartitionRef;
+    use dynamo_worker_selection::config::SelectionConfig;
     use dynamo_worker_selection::plugin::WorkerSelectionPolicyError;
     use dynamo_worker_selection::selector::{
         WorkerInputView, WorkerPicker, WorkerSelectionContext, WorkerSelectionPolicy,
@@ -340,7 +341,7 @@ mod tests {
     }
 
     fn policy(
-        _config: &KvRouterConfig,
+        _config: &SelectionConfig,
         _worker_type: WorkerType,
         _partition: RoutingPartitionRef<'_>,
     ) -> WorkerSelectionPolicy {
@@ -379,17 +380,12 @@ mod tests {
             let parameters: Parameters = parameters.deserialize()?;
             provider_calls.fetch_add(1, Ordering::Relaxed);
             let factory_calls = factory_calls.clone();
-            Ok(Arc::new(move |config, worker_type, _partition| {
+            Ok(Arc::new(move |_config, worker_type, _partition| {
                 factory_calls
                     .lock()
                     .unwrap()
                     .push((parameters.threshold, worker_type.to_string()));
-                WorkerSelectionPolicy::new(
-                    config.clone(),
-                    worker_type.as_str(),
-                    Vec::new(),
-                    Box::new(NeverPicker),
-                )
+                WorkerSelectionPolicy::new(worker_type.as_str(), Vec::new(), Box::new(NeverPicker))
             }))
         })
     }
@@ -525,13 +521,13 @@ worker_selection:
             )
             .unwrap()
             .unwrap();
-        let router_config = KvRouterConfig::default();
+        let selection_config = dynamo_worker_selection::config::SelectionConfig::default();
         let partition = RoutingPartitionRef::new("model", "default");
 
-        factory(&router_config, WorkerType::Prefill, partition);
-        factory(&router_config, WorkerType::Decode, partition);
-        factory(&router_config, WorkerType::Aggregated, partition);
-        factory(&router_config, WorkerType::Encode, partition);
+        factory(&selection_config, WorkerType::Prefill, partition);
+        factory(&selection_config, WorkerType::Decode, partition);
+        factory(&selection_config, WorkerType::Aggregated, partition);
+        factory(&selection_config, WorkerType::Encode, partition);
 
         assert_eq!(provider_calls.load(Ordering::Relaxed), 2);
         assert_eq!(

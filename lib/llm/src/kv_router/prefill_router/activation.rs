@@ -14,6 +14,7 @@ use dynamo_runtime::{
     prelude::DistributedRuntimeProvider,
 };
 use dynamo_worker_selection::conditional_disagg::make_conditional_disagg_policy;
+use dynamo_worker_selection::config::SelectionConfig;
 
 use super::{PrefillBinding, PrefillBuildContext, PrefillLifecycleState, PrefillRouter};
 
@@ -206,7 +207,8 @@ impl PrefillRouter {
     ) -> Arc<Self> {
         let cancel_token = parent_token.child_token();
         let (target_tx, target_rx) = watch::channel(None);
-        let conditional_disagg_policy = make_conditional_disagg_policy(kv_router_config.as_ref());
+        let selection_config = kv_router_config.as_ref().map(SelectionConfig::from);
+        let conditional_disagg_policy = make_conditional_disagg_policy(selection_config.as_ref());
         let conditional_disagg_prefill_busy_threshold = kv_router_config.as_ref().and_then(|c| {
             c.conditional_disagg_prefill_busy_threshold
                 .or(c.router_queue_threshold)

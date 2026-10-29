@@ -16,7 +16,6 @@ use super::*;
 use crate::scheduling_compat::OverlapSignals;
 use crate::scheduling_compat::{RefreshedOverlap, RouterPolicyConfig};
 use crate::test_utils::{NoopSequencePublisher, SimpleWorkerConfig};
-use dynamo_router_types::config::KvRouterConfig;
 use dynamo_router_types::kv_hints::KvTransferCandidates;
 use dynamo_router_types::protocols::{
     ActiveSequenceEvent, ExternalSequenceBlockHash, WorkerSelectionResult, WorkerWithDpRank,
@@ -1678,12 +1677,7 @@ impl WorkerPicker for LeastLoaded {
 
 fn counting_policy(prepared_selections: &Arc<AtomicUsize>) -> CountingPreparedPolicy {
     CountingPreparedPolicy {
-        inner: WorkerSelectionPolicy::new(
-            KvRouterConfig::default(),
-            "test",
-            vec![],
-            Box::new(LeastLoaded),
-        ),
+        inner: WorkerSelectionPolicy::new("test", vec![], Box::new(LeastLoaded)),
         prepared_selections: Arc::clone(prepared_selections),
     }
 }

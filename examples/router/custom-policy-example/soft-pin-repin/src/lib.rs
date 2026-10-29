@@ -9,11 +9,11 @@
 
 use std::sync::Arc;
 
+use dynamo_kv_router::plugins::worker_selection::SelectionConfig;
 use dynamo_kv_router::plugins::{
     WorkerSelectionPolicyParameters, WorkerSelectionPolicyProviderError,
     WorkerSelectionPolicyRegistry, WorkerSelectionPolicyRegistryError,
 };
-use dynamo_router_types::config::KvRouterConfig;
 use dynamo_router_types::protocols::WorkerAffinityTarget;
 use dynamo_router_types::sched::WorkerSelectionPolicyError;
 use dynamo_worker_selection::plugin::WorkerSelectionPolicyFactory;
@@ -101,9 +101,8 @@ fn provider(
     let max_active_requests = parameters.max_active_requests;
 
     Ok(Arc::new(
-        move |config: &KvRouterConfig, worker_type, _partition| {
+        move |_config: &SelectionConfig, worker_type, _partition| {
             WorkerSelectionPolicy::new(
-                config.clone(),
                 worker_type.as_str(),
                 Vec::new(),
                 Box::new(SoftPinRepinPicker {
@@ -195,7 +194,6 @@ mod tests {
 
     fn policy(max_active_requests: usize) -> WorkerSelectionPolicy {
         WorkerSelectionPolicy::new(
-            KvRouterConfig::default(),
             "test",
             Vec::new(),
             Box::new(SoftPinRepinPicker {

@@ -339,7 +339,7 @@ impl SelectionCore {
                     ))
                 });
                 let selector = (self.worker_selection_policy_factory)(
-                    &self.kv_router_config,
+                    &self.selection_config,
                     self.worker_type,
                     key.as_ref(),
                 );

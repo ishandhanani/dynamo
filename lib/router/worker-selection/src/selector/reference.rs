@@ -13,8 +13,8 @@ use super::{
     CandidateData, MaterializedSelectionInput, WorkerInputs, WorkerSelectionContext,
     WorkerSelectionInput, WorkerSelector, select_worker_with_policy, source_prefix_blocks,
 };
+use crate::config::SelectionConfig;
 use crate::plugin::WorkerTransferInput;
-use dynamo_router_types::config::KvRouterConfig;
 use dynamo_router_types::eligibility::RoutingEligibility;
 use dynamo_router_types::kv_hints::KvTransferScope;
 use dynamo_router_types::protocols::{
@@ -102,12 +102,12 @@ struct LogitWeights {
 
 /// Default implementation matching the Python _cost_function.
 pub struct DefaultWorkerSelector {
-    pub kv_router_config: KvRouterConfig,
+    pub kv_router_config: SelectionConfig,
     pub worker_type: &'static str,
     picker: DefaultWorkerPicker,
 }
 
-pub(super) struct DefaultWorkerScorer<C = KvRouterConfig> {
+pub(super) struct DefaultWorkerScorer<C = SelectionConfig> {
     pub(super) kv_router_config: C,
     pub(super) worker_type: &'static str,
 }
@@ -156,7 +156,7 @@ impl Clone for DefaultWorkerSelector {
 }
 
 impl DefaultWorkerSelector {
-    pub fn new(kv_router_config: Option<KvRouterConfig>, worker_type: &'static str) -> Self {
+    pub fn new(kv_router_config: Option<SelectionConfig>, worker_type: &'static str) -> Self {
         Self::from_parts(
             kv_router_config.unwrap_or_default(),
             worker_type,
@@ -167,7 +167,7 @@ impl DefaultWorkerSelector {
 
     #[cfg(any(test, feature = "testing", feature = "bench"))]
     pub fn new_seeded(
-        kv_router_config: Option<KvRouterConfig>,
+        kv_router_config: Option<SelectionConfig>,
         worker_type: &'static str,
         seed: u64,
     ) -> Self {
@@ -179,7 +179,7 @@ impl DefaultWorkerSelector {
     }
 
     fn from_parts(
-        kv_router_config: KvRouterConfig,
+        kv_router_config: SelectionConfig,
         worker_type: &'static str,
         #[cfg(any(test, feature = "testing", feature = "bench"))] deterministic_rng: Option<
             Arc<Mutex<fastrand::Rng>>,
@@ -198,8 +198,8 @@ impl DefaultWorkerSelector {
 }
 
 #[cfg(test)]
-impl DefaultWorkerScorer<KvRouterConfig> {
-    pub(super) fn new(kv_router_config: KvRouterConfig, worker_type: &'static str) -> Self {
+impl DefaultWorkerScorer<SelectionConfig> {
+    pub(super) fn new(kv_router_config: SelectionConfig, worker_type: &'static str) -> Self {
         Self {
             kv_router_config,
             worker_type,
@@ -208,7 +208,7 @@ impl DefaultWorkerScorer<KvRouterConfig> {
 }
 
 fn selection_weights(
-    kv_router_config: &KvRouterConfig,
+    kv_router_config: &SelectionConfig,
     request: &SchedulingRequest,
 ) -> LogitWeights {
     LogitWeights {
@@ -314,7 +314,7 @@ fn kv_transfer_input<C: WorkerConfigLike>(
     })
 }
 
-impl<C: Borrow<KvRouterConfig>> DefaultWorkerScorer<C> {
+impl<C: Borrow<SelectionConfig>> DefaultWorkerScorer<C> {
     fn worker_logit(
         &self,
         context: &WorkerSelectionContext<'_>,
@@ -494,7 +494,7 @@ impl DefaultWorkerPicker {
 
 #[inline(always)]
 pub(super) fn pick_default_worker<C: WorkerConfigLike>(
-    scorer: &DefaultWorkerScorer<&KvRouterConfig>,
+    scorer: &DefaultWorkerScorer<&SelectionConfig>,
     picker: &DefaultWorkerPicker,
     input: &MaterializedSelectionInput<'_>,
     workers: &HashMap<WorkerId, C>,
@@ -782,7 +782,7 @@ mod tests {
 
         for overlap_score_credit_decay in [0.0, 1.0] {
             let selector = DefaultWorkerSelector::new(
-                Some(KvRouterConfig {
+                Some(SelectionConfig {
                     router_temperature: 0.0,
                     overlap_score_credit_decay,
                     ..Default::default()
@@ -808,7 +808,7 @@ mod tests {
     fn test_default_selector_randomizes_zero_temperature_ties() {
         use dynamo_router_types::test_utils::SimpleWorkerConfig;
 
-        let config = KvRouterConfig {
+        let config = SelectionConfig {
             router_temperature: 0.0,
             ..Default::default()
         };
@@ -891,12 +891,12 @@ mod tests {
                 ],
             ),
         ] {
-            let config = KvRouterConfig {
+            let config = SelectionConfig {
                 router_temperature: temperature,
                 ..Default::default()
             };
             let mut first = DefaultWorkerSelector::new_seeded(
-                Some(KvRouterConfig {
+                Some(SelectionConfig {
                     router_temperature: 0.0,
                     ..Default::default()
                 }),
@@ -987,7 +987,7 @@ mod tests {
         let shared_cache_hits = SharedCacheHits::from_ranges(vec![0..4]);
         request.shared_cache_hits = Some(shared_cache_hits);
 
-        let config = KvRouterConfig {
+        let config = SelectionConfig {
             overlap_score_credit: 1.0,
             prefill_load_scale: 1.0,
             shared_cache_multiplier: Some(0.0),
@@ -1048,7 +1048,7 @@ mod tests {
         use dynamo_router_types::test_utils::SimpleWorkerConfig;
 
         let selector = DefaultWorkerSelector::new(
-            Some(KvRouterConfig {
+            Some(SelectionConfig {
                 overlap_score_credit: 1.0,
                 router_temperature: 0.0,
                 ..Default::default()
@@ -1086,7 +1086,7 @@ mod tests {
         use dynamo_router_types::test_utils::SimpleWorkerConfig;
 
         let selector = DefaultWorkerSelector::new(
-            Some(KvRouterConfig {
+            Some(SelectionConfig {
                 overlap_score_credit_decay: 1.0,
                 ..Default::default()
             }),
@@ -1118,7 +1118,7 @@ mod tests {
         use dynamo_router_types::test_utils::SimpleWorkerConfig;
 
         let selector = DefaultWorkerSelector::new(
-            Some(KvRouterConfig {
+            Some(SelectionConfig {
                 router_temperature: 0.0,
                 ..Default::default()
             }),
@@ -1191,7 +1191,7 @@ mod tests {
     fn test_overloaded_pinned_worker_is_not_rerouted() {
         use dynamo_router_types::test_utils::SimpleWorkerConfig;
 
-        let selector = DefaultWorkerSelector::new(Some(KvRouterConfig::default()), "test");
+        let selector = DefaultWorkerSelector::new(Some(SelectionConfig::default()), "test");
         let workers = HashMap::from([
             (0, SimpleWorkerConfig::default()),
             (1, SimpleWorkerConfig::default()),
@@ -1215,7 +1215,7 @@ mod tests {
 
     #[test]
     fn test_required_taints_return_no_endpoints_when_no_worker_matches() {
-        let selector = DefaultWorkerSelector::new(Some(KvRouterConfig::default()), "test");
+        let selector = DefaultWorkerSelector::new(Some(SelectionConfig::default()), "test");
         let workers = HashMap::from([(
             10,
             TaintedWorkerConfig {
@@ -1266,7 +1266,7 @@ mod tests {
 
     #[test]
     fn test_required_taints_filter_out_incompatible_workers() {
-        let selector = DefaultWorkerSelector::new(Some(KvRouterConfig::default()), "test");
+        let selector = DefaultWorkerSelector::new(Some(SelectionConfig::default()), "test");
         let workers = HashMap::from([
             (
                 10,
@@ -1327,7 +1327,7 @@ mod tests {
 
     #[test]
     fn test_required_taints_switch_matching_worker_sets_by_label() {
-        let selector = DefaultWorkerSelector::new(Some(KvRouterConfig::default()), "test");
+        let selector = DefaultWorkerSelector::new(Some(SelectionConfig::default()), "test");
         let name_a = "mdc-a".to_string();
         let name_b = "mdc-b".to_string();
         let name_c = "mdc-c".to_string();
@@ -1409,7 +1409,7 @@ mod tests {
     #[test]
     fn test_preferred_taints_prefer_matching_worker() {
         let selector = DefaultWorkerSelector::new(
-            Some(KvRouterConfig {
+            Some(SelectionConfig {
                 router_temperature: 0.0,
                 ..Default::default()
             }),
@@ -1480,7 +1480,7 @@ mod tests {
     #[test]
     fn test_negative_preferred_taints_avoid_matching_worker() {
         let selector = DefaultWorkerSelector::new(
-            Some(KvRouterConfig {
+            Some(SelectionConfig {
                 router_temperature: 0.0,
                 ..Default::default()
             }),
@@ -1578,7 +1578,7 @@ mod tests {
         #[allow(clippy::single_range_in_vec_init)]
         let shared_hits = SharedCacheHits::from_ranges(vec![0..4]);
 
-        let config = KvRouterConfig {
+        let config = SelectionConfig {
             overlap_score_credit: 1.0,
             shared_cache_multiplier: Some(0.5),
             router_temperature: 0.0,
@@ -1652,7 +1652,7 @@ mod tests {
         let mut tier_overlap_blocks = dynamo_router_types::overlap::TierOverlapBlocks::default();
         tier_overlap_blocks.device.insert(worker0, 2);
 
-        let config = KvRouterConfig {
+        let config = SelectionConfig {
             overlap_score_credit: 1.0,
             prefill_load_scale: 2.0,
             router_temperature: 0.0,
@@ -1745,14 +1745,14 @@ mod tests {
         );
 
         let normal_credit = DefaultWorkerSelector::new(
-            Some(KvRouterConfig {
+            Some(SelectionConfig {
                 overlap_score_credit: 1.0,
                 ..Default::default()
             }),
             "test",
         );
         let amplified_credit = DefaultWorkerSelector::new(
-            Some(KvRouterConfig {
+            Some(SelectionConfig {
                 overlap_score_credit: 1.5,
                 ..Default::default()
             }),
@@ -1800,7 +1800,7 @@ mod tests {
                 additional_active_blocks: 3,
             },
         );
-        let selector = DefaultWorkerSelector::new(Some(KvRouterConfig::default()), "test");
+        let selector = DefaultWorkerSelector::new(Some(SelectionConfig::default()), "test");
         let weights = LogitWeights {
             overlap_score_credit: 1.0,
             overlap_score_credit_decay: 0.0,
@@ -1832,9 +1832,9 @@ mod tests {
             prefill_load_scale: 1.0,
             shared_cache_multiplier: 0.0,
         };
-        let default = DefaultWorkerSelector::new(Some(KvRouterConfig::default()), "test");
+        let default = DefaultWorkerSelector::new(Some(SelectionConfig::default()), "test");
         let weighted = DefaultWorkerSelector::new(
-            Some(KvRouterConfig {
+            Some(SelectionConfig {
                 decode_active_request_weight: 32.0,
                 ..Default::default()
             }),
@@ -1861,7 +1861,7 @@ mod tests {
                 ..Default::default()
             },
         );
-        let selector = DefaultWorkerSelector::new(Some(KvRouterConfig::default()), "decode");
+        let selector = DefaultWorkerSelector::new(Some(SelectionConfig::default()), "decode");
         let weights = LogitWeights {
             overlap_score_credit: 1.0,
             overlap_score_credit_decay: 0.0,
@@ -1903,14 +1903,14 @@ mod tests {
         );
 
         let no_decay = DefaultWorkerSelector::new(
-            Some(KvRouterConfig {
+            Some(SelectionConfig {
                 overlap_score_credit_decay: 0.0,
                 ..Default::default()
             }),
             "test",
         );
         let with_decay = DefaultWorkerSelector::new(
-            Some(KvRouterConfig {
+            Some(SelectionConfig {
                 overlap_score_credit_decay: 1.0,
                 ..Default::default()
             }),
@@ -1955,7 +1955,7 @@ mod tests {
         let mut effective_overlap_blocks = rustc_hash::FxHashMap::default();
         effective_overlap_blocks.insert(worker0, 4.0);
 
-        let config = KvRouterConfig {
+        let config = SelectionConfig {
             overlap_score_credit: 1.0,
             router_temperature: 0.0,
             ..Default::default()
@@ -2070,7 +2070,7 @@ mod tests {
         let mut effective_overlap_blocks = rustc_hash::FxHashMap::default();
         effective_overlap_blocks.insert(worker0, 2.0);
 
-        let config = KvRouterConfig::default();
+        let config = SelectionConfig::default();
         let selector = DefaultWorkerSelector::new(Some(config), "test");
         let mut workers = HashMap::new();
         workers.insert(0, SimpleWorkerConfig::default());

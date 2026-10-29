@@ -770,16 +770,16 @@ fn capturing_policy_factory() -> (
 ) {
     let observed = Arc::new(parking_lot::Mutex::new(Vec::new()));
     let factory_observed = Arc::clone(&observed);
-    let factory: WorkerSelectionPolicyFactory = Arc::new(move |config, worker_type, _partition| {
-        WorkerSelectionPolicy::new(
-            config.clone(),
-            worker_type.as_str(),
-            Vec::new(),
-            Box::new(CapturingPicker {
-                observed: Arc::clone(&factory_observed),
-            }),
-        )
-    });
+    let factory: WorkerSelectionPolicyFactory =
+        Arc::new(move |_config, worker_type, _partition| {
+            WorkerSelectionPolicy::new(
+                worker_type.as_str(),
+                Vec::new(),
+                Box::new(CapturingPicker {
+                    observed: Arc::clone(&factory_observed),
+                }),
+            )
+        });
     (factory, observed)
 }
 
