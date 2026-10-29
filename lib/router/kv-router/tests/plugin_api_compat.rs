@@ -8,17 +8,19 @@
 use std::sync::Arc;
 
 use dynamo_admission::classifier as request_classifier;
+use dynamo_kv_router::plugins::RouterPluginRegistry;
+use dynamo_kv_router::plugins::request_classifier::{
+    ClassifyFuture, ClassifyRequest, RequestClassifier,
+};
+use dynamo_kv_router::plugins::worker_selection;
+use dynamo_kv_router::plugins::worker_selection::{
+    WorkerCandidate, WorkerCandidates, WorkerFilter, WorkerInputView, WorkerInputs, WorkerPicker,
+    WorkerScorer, WorkerSelectionContext, WorkerSelectionPolicy,
+};
 use dynamo_router_types::WorkerType;
 use dynamo_router_types::config::KvRouterConfig;
 use dynamo_router_types::identity::RoutingPartitionRef;
 use dynamo_router_types::sched::WorkerSelectionPolicyError;
-use dynamo_scheduler::plugins::RouterPluginRegistry;
-use dynamo_scheduler::scheduling_compat::{ClassifyFuture, ClassifyRequest, RequestClassifier};
-use dynamo_worker_selection::plugin as worker_selection;
-use dynamo_worker_selection::plugin::{
-    WorkerCandidate, WorkerCandidates, WorkerFilter, WorkerInputView, WorkerInputs, WorkerPicker,
-    WorkerScorer, WorkerSelectionContext, WorkerSelectionPolicy,
-};
 
 struct LegacyPolicy;
 
@@ -95,10 +97,10 @@ impl RequestClassifier for LegacyClassifier {
 }
 
 fn legacy_provider(
-    _parameters: &dynamo_scheduler::plugins::WorkerSelectionPolicyParameters,
+    _parameters: &dynamo_kv_router::plugins::WorkerSelectionPolicyParameters,
 ) -> Result<
     dynamo_worker_selection::plugin::WorkerSelectionPolicyFactory,
-    dynamo_scheduler::plugins::WorkerSelectionPolicyProviderError,
+    dynamo_kv_router::plugins::WorkerSelectionPolicyProviderError,
 > {
     Ok(Arc::new(|config, worker_type, _partition| {
         WorkerSelectionPolicy::new_with_filters(
@@ -119,7 +121,7 @@ fn legacy_plugins_resolve_through_the_common_registry() {
     let _: Box<dyn worker_selection::WorkerPicker> = Box::new(LegacyPolicy);
     let _: Box<dyn request_classifier::RequestClassifier> = Box::new(LegacyClassifier);
 
-    let mut registry = dynamo_scheduler::plugins::WorkerSelectionPolicyRegistry::default();
+    let mut registry = dynamo_kv_router::plugins::WorkerSelectionPolicyRegistry::default();
     registry
         .register("legacy", Arc::new(legacy_provider))
         .unwrap();
@@ -141,7 +143,7 @@ fn legacy_plugins_resolve_through_the_common_registry() {
 
 #[test]
 fn legacy_service_catalog_registers_into_the_common_registry() {
-    use dynamo_scheduler::selection::{
+    use dynamo_kv_router::selection::{
         WorkerSelectionPolicyProvider, WorkerSelectionPolicyRegistry,
     };
 

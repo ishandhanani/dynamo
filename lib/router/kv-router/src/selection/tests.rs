@@ -13,11 +13,9 @@ use std::sync::{Condvar, Mutex};
 use std::time::Duration;
 use tower::ServiceExt;
 
-use super::input::{MmRoutingInfoRequest, PromptRequest, TrackingHashInput};
 use super::server::create_router;
 use super::*;
-use crate::overlap::build_overlap_scores_response;
-use crate::scheduling_compat::WorkerSelectionPolicyError;
+use super::{MmRoutingInfoRequest, PromptRequest, TrackingHashInput};
 use dynamo_kv_indexer::{LowerTierMatchDetails, MatchDetails, TieredMatchDetails};
 use dynamo_router_types::identity::RoutingPartitionRef;
 use dynamo_router_types::protocols::{
@@ -25,6 +23,8 @@ use dynamo_router_types::protocols::{
     WorkerWithDpRank, compute_block_hash_for_seq, compute_seq_hash_for_block,
 };
 use dynamo_router_types::tracking_hash::{TrackingHashContext, TrackingHashScope};
+use dynamo_scheduler::overlap::build_overlap_scores_response;
+use dynamo_scheduler::scheduling_compat::WorkerSelectionPolicyError;
 use dynamo_worker_selection::selector::{
     WorkerCandidate, WorkerCandidates, WorkerFilter, WorkerInputView, WorkerPicker, WorkerScorer,
     WorkerSelectionContext, WorkerSelectionPolicy,
@@ -135,7 +135,7 @@ fn normalize_with(
     request: &PromptRequest,
     context: &TrackingHashContext,
     assume_kv_reuse: bool,
-) -> Result<super::input::NormalizedPrompt, SelectionError> {
+) -> Result<super::NormalizedPrompt, SelectionError> {
     request.view().normalize_for_selection(
         4,
         false,
@@ -150,7 +150,7 @@ fn normalize_with(
     )
 }
 
-fn normalize_prompt(request: &PromptRequest) -> super::input::NormalizedPrompt {
+fn normalize_prompt(request: &PromptRequest) -> super::NormalizedPrompt {
     let config = test_config();
     let context = TrackingHashContext::from_config(&config).unwrap();
     normalize_with(request, &context, true).expect("normalize prompt")
@@ -1839,21 +1839,21 @@ async fn selector_replica_sync_propagates_request_lifecycle() {
         selection_cache: SelectionCacheConfig::default(),
     };
     let service_a = Arc::new(
-        config_a
-            .service_builder(
-                dynamo_router_types::WorkerType::Aggregated,
-                WorkerSelectionPolicyRegistry::default().with_default_factory(Arc::new(
-                    |config, role, _| {
-                        dynamo_worker_selection::plugin::WorkerSelectionPolicy::reference(
-                            config.clone(),
-                            role.default_selector_label(),
-                        )
-                    },
-                )),
-            )
-            .build()
-            .await
-            .unwrap(),
+        SelectionServiceBuilder::from_config(
+            &config_a,
+            dynamo_router_types::WorkerType::Aggregated,
+            WorkerSelectionPolicyRegistry::default().with_default_factory(Arc::new(
+                |config, role, _| {
+                    dynamo_worker_selection::plugin::WorkerSelectionPolicy::reference(
+                        config.clone(),
+                        role.default_selector_label(),
+                    )
+                },
+            )),
+        )
+        .build()
+        .await
+        .unwrap(),
     );
     let service_b = Arc::new(
         SelectionServiceBuilder::new(

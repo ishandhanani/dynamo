@@ -74,7 +74,8 @@ required-features = ["media-ffmpeg"]
 dynamo-custom-policy-builtin = { workspace = true }
 # repo
 dynamo-http-server = { workspace = true }
-dynamo-scheduler = { workspace = true, features = ["metrics"] }
+dynamo-scheduler = { workspace = true }
+dynamo-kv-router = { workspace = true, features = ["metrics"] }
 dynamo-admission = { workspace = true }
 dynamo-worker-selection = { workspace = true }
 dynamo-kv-indexer = { workspace = true, features = ["metrics"] }

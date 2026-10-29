@@ -3,12 +3,12 @@
 
 use std::sync::Arc;
 
-use dynamo_router_types::WorkerType;
-use dynamo_scheduler::plugins::RouterPluginRegistry;
-use dynamo_scheduler::plugins::{
+use dynamo_kv_router::plugins::RouterPluginRegistry;
+use dynamo_kv_router::plugins::{
     WorkerSelectionPolicyParameters, WorkerSelectionPolicyProviderError,
     WorkerSelectionPolicyRegistryError,
 };
+use dynamo_router_types::WorkerType;
 use dynamo_worker_selection::plugin::{
     WorkerCandidates, WorkerInputView, WorkerInputs, WorkerPicker, WorkerScorer,
     WorkerSelectionContext, WorkerSelectionPolicy, WorkerSelectionPolicyError,

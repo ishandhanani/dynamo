@@ -2079,6 +2079,7 @@ version = "1.7.0"
 dependencies = [
  "async-trait",
  "dynamo-admission",
+ "dynamo-kv-router",
  "dynamo-router-types",
  "dynamo-scheduler",
  "dynamo-worker-selection",
@@ -2155,6 +2156,29 @@ dependencies = [
 ]
 
 [[package]]
+name = "dynamo-kv-router"
+version = "1.7.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "axum",
+ "dynamo-admission",
+ "dynamo-kv-indexer",
+ "dynamo-router-types",
+ "dynamo-scheduler",
+ "dynamo-slot-tracker",
+ "dynamo-worker-selection",
+ "parking_lot",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "thiserror 2.0.18",
+ "tokio",
+ "tokio-util",
+ "tracing",
+]
+
+[[package]]
 name = "dynamo-llm"
 version = "1.7.0"
 dependencies = [
@@ -2185,6 +2209,7 @@ dependencies = [
  "dynamo-custom-policy-builtin",
  "dynamo-http-server",
  "dynamo-kv-indexer",
+ "dynamo-kv-router",
  "dynamo-memory",
  "dynamo-mocker",
  "dynamo-parsers",
@@ -2530,7 +2555,6 @@ version = "1.7.0"
 dependencies = [
  "anyhow",
  "async-trait",
- "axum",
  "crossbeam-queue",
  "dynamo-admission",
  "dynamo-kv-indexer",
@@ -2541,11 +2565,9 @@ dependencies = [
  "futures-util",
  "once_cell",
  "parking_lot",
- "prometheus",
  "rustc-hash 2.1.2",
  "serde",
  "serde_json",
- "serde_yaml",
  "thiserror 2.0.18",
  "tokio",
  "tokio-util",

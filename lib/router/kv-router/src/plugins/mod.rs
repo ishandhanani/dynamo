@@ -11,6 +11,16 @@
 
 mod registry;
 
+/// The worker-selection plugin API at its published path.
+pub mod worker_selection {
+    pub use dynamo_worker_selection::plugin::*;
+}
+
+/// The request-classifier plugin API at its published path.
+pub mod request_classifier {
+    pub use dynamo_admission::classifier::*;
+}
+
 pub use registry::{
     DYN_ROUTER_DECODE_POLICY, DYN_ROUTER_PREFILL_POLICY, DYN_ROUTER_WORKER_SELECTION_POLICY,
     RouterPluginRegistry, WorkerSelectionPolicyParameters, WorkerSelectionPolicyProvider,

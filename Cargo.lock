@@ -2357,6 +2357,7 @@ dependencies = [
  "async-trait",
  "criterion",
  "dynamo-admission",
+ "dynamo-kv-router",
  "dynamo-router-types",
  "dynamo-scheduler",
  "dynamo-worker-selection",
@@ -2379,15 +2380,15 @@ dependencies = [
  "dynamo-custom-policy-example-simple-filter-score-pick",
  "dynamo-custom-policy-example-simple-stacked-score-pick",
  "dynamo-custom-policy-example-soft-pin-repin",
- "dynamo-scheduler",
+ "dynamo-kv-router",
 ]
 
 [[package]]
 name = "dynamo-custom-policy-example-disagg-filter-score-pick"
 version = "1.7.0"
 dependencies = [
+ "dynamo-kv-router",
  "dynamo-router-types",
- "dynamo-scheduler",
  "dynamo-worker-selection",
  "serde",
 ]
@@ -2399,7 +2400,7 @@ dependencies = [
  "anyhow",
  "dynamo-custom-policy-example-catalog",
  "dynamo-ext-proc",
- "dynamo-scheduler",
+ "dynamo-kv-router",
  "tokio",
 ]
 
@@ -2407,8 +2408,8 @@ dependencies = [
 name = "dynamo-custom-policy-example-simple-filter-score-pick"
 version = "1.7.0"
 dependencies = [
+ "dynamo-kv-router",
  "dynamo-router-types",
- "dynamo-scheduler",
  "dynamo-worker-selection",
  "serde",
  "serde_json",
@@ -2418,8 +2419,8 @@ dependencies = [
 name = "dynamo-custom-policy-example-simple-stacked-score-pick"
 version = "1.7.0"
 dependencies = [
+ "dynamo-kv-router",
  "dynamo-router-types",
- "dynamo-scheduler",
  "dynamo-worker-selection",
  "serde",
 ]
@@ -2428,8 +2429,8 @@ dependencies = [
 name = "dynamo-custom-policy-example-soft-pin-repin"
 version = "1.7.0"
 dependencies = [
+ "dynamo-kv-router",
  "dynamo-router-types",
- "dynamo-scheduler",
  "dynamo-worker-selection",
  "serde",
 ]
@@ -2479,6 +2480,7 @@ dependencies = [
  "dynamo-custom-policy-builtin",
  "dynamo-http-server",
  "dynamo-kv-indexer",
+ "dynamo-kv-router",
  "dynamo-llm",
  "dynamo-protocols",
  "dynamo-router-types",
@@ -2587,6 +2589,31 @@ dependencies = [
 ]
 
 [[package]]
+name = "dynamo-kv-router"
+version = "1.7.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "axum 0.8.4",
+ "dynamo-admission",
+ "dynamo-kv-indexer",
+ "dynamo-router-types",
+ "dynamo-scheduler",
+ "dynamo-slot-tracker",
+ "dynamo-worker-selection",
+ "parking_lot",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tokio",
+ "tokio-util",
+ "tower 0.5.3",
+ "tracing",
+]
+
+[[package]]
 name = "dynamo-llm"
 version = "1.7.0"
 dependencies = [
@@ -2622,6 +2649,7 @@ dependencies = [
  "dynamo-custom-policy-builtin",
  "dynamo-http-server",
  "dynamo-kv-indexer",
+ "dynamo-kv-router",
  "dynamo-memory",
  "dynamo-mocker",
  "dynamo-parsers",
@@ -3025,7 +3053,6 @@ version = "1.7.0"
 dependencies = [
  "anyhow",
  "async-trait",
- "axum 0.8.4",
  "criterion",
  "crossbeam-queue",
  "dynamo-admission",
@@ -3037,18 +3064,15 @@ dependencies = [
  "futures-util",
  "once_cell",
  "parking_lot",
- "prometheus",
  "rstest 0.18.2",
  "rstest_reuse",
  "rustc-hash 2.1.2",
  "serde",
  "serde_json",
- "serde_yaml",
  "tempfile",
  "thiserror 2.0.18",
  "tokio",
  "tokio-util",
- "tower 0.5.3",
  "tracing",
  "uuid",
 ]
@@ -3386,7 +3410,7 @@ dependencies = [
 name = "dynamo-worker-selection-policy-catalog"
 version = "1.7.0"
 dependencies = [
- "dynamo-scheduler",
+ "dynamo-kv-router",
 ]
 
 [[package]]

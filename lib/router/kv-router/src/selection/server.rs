@@ -19,7 +19,7 @@ use dynamo_slot_tracker::http::envelope::{json_error, json_ok, json_rejection};
 use dynamo_slot_tracker::http::replica_sync as replica_sync_http;
 
 use super::service::SelectionService;
-use super::types::{
+use super::{
     OutputBlockRequest, OverlapScoresRequest, PotentialLoadsRequest, REQUEST_BODY_LIMIT_BYTES,
     ReservationRequest, SelectAndReserveRequest, SelectRequest, WorkerPatchRequest, WorkerRequest,
 };
@@ -44,7 +44,7 @@ async fn create_worker(
     };
     match state.service.upsert_worker(req).await {
         Ok(worker) => (StatusCode::CREATED, Json(worker)).into_response(),
-        Err(error) => error.into_response(),
+        Err(error) => super::http_error::response(error),
     }
 }
 
@@ -59,7 +59,7 @@ async fn patch_worker(
     };
     match state.service.patch_worker(worker_id, req).await {
         Ok(worker) => Json(worker).into_response(),
-        Err(error) => error.into_response(),
+        Err(error) => super::http_error::response(error),
     }
 }
 
@@ -69,7 +69,7 @@ async fn delete_worker(
 ) -> Response {
     match state.service.delete_worker(worker_id).await {
         Ok(worker) => Json(worker).into_response(),
-        Err(error) => error.into_response(),
+        Err(error) => super::http_error::response(error),
     }
 }
 
@@ -95,7 +95,7 @@ async fn select(
         .await
     {
         Ok(response) => Json(response).into_response(),
-        Err(error) => error.into_response(),
+        Err(error) => super::http_error::response(error),
     }
 }
 
@@ -110,7 +110,7 @@ async fn select_and_reserve(
         .await
     {
         Ok(response) => Json(response).into_response(),
-        Err(error) => error.into_response(),
+        Err(error) => super::http_error::response(error),
     }
 }
 
@@ -120,7 +120,7 @@ async fn create_reservation(
 ) -> Response {
     match state.service.create_reservation(req).await {
         Ok(response) => (StatusCode::CREATED, Json(response)).into_response(),
-        Err(error) => error.into_response(),
+        Err(error) => super::http_error::response(error),
     }
 }
 
@@ -130,7 +130,7 @@ async fn prefill_complete(
 ) -> Response {
     match state.service.prefill_complete(&selection_id).await {
         Ok(()) => json_ok(StatusCode::OK),
-        Err(error) => error.into_response(),
+        Err(error) => super::http_error::response(error),
     }
 }
 
@@ -140,7 +140,7 @@ async fn delete_reservation(
 ) -> Response {
     match state.service.free_reservation(&selection_id).await {
         Ok(()) => json_ok(StatusCode::OK),
-        Err(error) => error.into_response(),
+        Err(error) => super::http_error::response(error),
     }
 }
 
@@ -158,7 +158,7 @@ async fn add_output_block(
         .add_output_block(&selection_id, req.decay_fraction)
     {
         Ok(()) => json_ok(StatusCode::OK),
-        Err(error) => error.into_response(),
+        Err(error) => super::http_error::response(error),
     }
 }
 
@@ -189,7 +189,7 @@ async fn potential_loads(
 ) -> Response {
     match state.service.potential_loads(req).await {
         Ok(response) => Json(response).into_response(),
-        Err(error) => error.into_response(),
+        Err(error) => super::http_error::response(error),
     }
 }
 
@@ -199,7 +199,7 @@ async fn overlap_scores(
 ) -> Response {
     match state.service.overlap_scores(req).await {
         Ok(response) => Json(response).into_response(),
-        Err(error) => error.into_response(),
+        Err(error) => super::http_error::response(error),
     }
 }
 

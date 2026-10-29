@@ -3202,7 +3202,7 @@ request_classifier:
         assert!(resolved.worker_selection().is_some());
         let builtin = RouterPluginBuilder::new(resolved);
         let custom = RouterPluginBuilder::new(
-            dynamo_scheduler::plugins::RouterPlugins::default().with_worker_selection(Arc::new(
+            dynamo_kv_router::plugins::RouterPlugins::default().with_worker_selection(Arc::new(
                 |_, _, _| unreachable!("role validation never constructs the policy"),
             )),
         );

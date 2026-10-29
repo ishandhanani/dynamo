@@ -25,7 +25,6 @@ use crate::scheduling_compat::{
     WorkerAvailabilityProvider, effective_prefill_tokens, narrow_allowed_worker_ids_by_lora,
     prefill_load_hint_from_effective_tokens,
 };
-use dynamo_kv_indexer::http::recovery;
 use dynamo_kv_indexer::ingest::backend::{Indexer, IndexerPolicy};
 use dynamo_kv_indexer::ingest::registry::WorkerRegistry;
 use dynamo_kv_indexer::overlap::MooncakeOverlapSummary;
@@ -406,7 +405,8 @@ impl SelectionCore {
     }
 
     #[allow(clippy::too_many_arguments)]
-    pub(super) fn new_inner(
+    #[doc(hidden)]
+    pub fn new_inner(
         kv_router_config: dynamo_router_types::config::KvRouterConfig,
         indexer_threads: usize,
         cancel_token: CancellationToken,
@@ -475,19 +475,16 @@ impl SelectionCore {
         Ok(())
     }
 
+    /// The partition registry behind this core's indexers, for a host that recovers it from
+    /// peers or dumps it; the core itself never talks HTTP.
     #[doc(hidden)]
-    pub async fn recover_indexer_from_peers(&self, peers: &[String]) -> anyhow::Result<bool> {
-        recovery::recover_from_peers(peers, &self.indexer_registry).await
+    pub fn indexer_registry(&self) -> &Arc<WorkerRegistry> {
+        &self.indexer_registry
     }
 
     #[doc(hidden)]
     pub fn signal_indexer_ready(&self) {
         self.indexer_registry.signal_ready();
-    }
-
-    #[doc(hidden)]
-    pub async fn dump_indexer_events(&self) -> serde_json::Value {
-        dynamo_kv_indexer::http::server::dump_registry(&self.indexer_registry).await
     }
 
     #[doc(hidden)]

@@ -15,6 +15,7 @@ use std::time::Duration;
 
 use anyhow::Result;
 use dashmap::DashMap;
+use dynamo_kv_router::config::try_kv_router_config_from_dynamo_env;
 use dynamo_llm::discovery::{ModelManager, WORKER_TYPE_DECODE};
 use dynamo_llm::kv_router::prefill_router::PrefillReservation;
 use dynamo_llm::kv_router::{FindBestMatchOutcome, ManagedKvRouter, PrefillRouter};
@@ -31,7 +32,6 @@ use dynamo_runtime::discovery::{
 use dynamo_runtime::namespace::{NamespaceFilter, NamespacePrefixMode};
 use dynamo_runtime::pipeline::RouterMode;
 use dynamo_runtime::{DistributedRuntime, Runtime};
-use dynamo_scheduler::config::try_kv_router_config_from_dynamo_env;
 use uuid::Uuid;
 
 use crate::epp_router::{endpoint_in_subset, requested_policy_class};

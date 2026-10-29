@@ -12,8 +12,8 @@
 use std::sync::Arc;
 
 use anyhow::Result;
+use dynamo_kv_router::plugins::WorkerSelectionPolicyRegistry;
 use dynamo_runtime::namespace::{NamespaceFilter, NamespacePrefixMode};
-use dynamo_scheduler::plugins::WorkerSelectionPolicyRegistry;
 use tokio::net::TcpListener;
 use tokio::task::JoinHandle;
 use tokio_rustls::TlsAcceptor;
@@ -505,7 +505,7 @@ async fn serve<P: crate::EndpointPicker>(
 mod tests {
     use std::sync::Arc;
 
-    use dynamo_scheduler::plugins::WorkerSelectionPolicyProviderError;
+    use dynamo_kv_router::plugins::WorkerSelectionPolicyProviderError;
     use dynamo_worker_selection::plugin::WorkerSelectionPolicyFactory;
     use tokio::sync::Mutex;
 

@@ -7,11 +7,9 @@
 //! index, the slot tracker, admission, and worker selection into one service (`selection`); the
 //! selection HTTP routes behind `http`; and the nested router configuration (`config`).
 
-pub mod config;
 pub mod local;
 pub mod overlap;
 pub mod overlap_refresh;
-pub mod plugins;
 pub mod queue;
 pub mod selection;
 
@@ -41,4 +39,4 @@ pub mod scheduling_compat {
 
 pub use local::LocalScheduler;
 pub use queue::SchedulerQueue;
-pub use selection::{SelectionCore, SelectionService, SelectionServiceBuilder};
+pub use selection::SelectionCore;

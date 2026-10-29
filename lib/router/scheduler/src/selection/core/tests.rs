@@ -3450,22 +3450,7 @@ async fn catalog_updates_commit_in_order_without_exposing_candidates() {
 }
 
 #[tokio::test]
-async fn affinity_configuration_rejects_invalid_or_conflicting_config() {
-    use super::super::service::SelectionServiceBuilder;
-    for ttl in [
-        Duration::ZERO,
-        Duration::from_secs(super::super::affinity::MAX_SESSION_AFFINITY_TTL_SECS + 1),
-    ] {
-        let result = SelectionServiceBuilder::new(
-            test_config(false),
-            WorkerType::Aggregated,
-            Default::default(),
-        )
-        .session_affinity(ttl)
-        .build()
-        .await;
-        assert!(result.is_err());
-    }
+async fn affinity_configuration_rejects_conflicting_config() {
     let core = core_with_session_affinity();
     core.upsert_worker(worker(1)).await.unwrap();
     let partition = core.partition(&default_key()).unwrap();

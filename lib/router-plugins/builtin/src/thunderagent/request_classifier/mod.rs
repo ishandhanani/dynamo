@@ -16,8 +16,8 @@ use dynamo_admission::classifier::{
     RequestClassifierFactory, RequestClassifierParameters, RequestClassifierProviderError,
     RequestClassifierRegistryError, RequestProgress,
 };
+use dynamo_kv_router::plugins::RouterPluginRegistry;
 use dynamo_router_types::sched::ClassifierError;
-use dynamo_scheduler::plugins::RouterPluginRegistry;
 use dynamo_worker_selection::plugin::WorkerCandidates;
 use parking_lot::Mutex;
 use thiserror::Error;

@@ -12,7 +12,7 @@ repository.workspace = true
 description = "Soft session-affinity repin policy example for Dynamo"
 
 [dependencies]
-dynamo-scheduler = { workspace = true }
+dynamo-kv-router = { workspace = true }
 dynamo-worker-selection = { workspace = true }
 dynamo-router-types = { workspace = true }
 serde.workspace = true

@@ -9,11 +9,11 @@
 
 mod direct_zmq;
 
+use dynamo_kv_router::selection::{ModelLoadResponse, SelectionService};
 use dynamo_router_types::protocols::{
     ActiveSequenceEvent, ActiveSequenceEventBatch, MAX_REPLICA_BATCH_DURATION,
     MAX_REPLICA_BATCH_EVENTS, SchedulerGroup, SchedulerLoad, WorkerWithDpRank,
 };
-use dynamo_scheduler::selection::{ModelLoadResponse, SelectionService};
 pub use dynamo_slot_tracker::multi_worker::{
     ActiveSequencesMultiWorker, ReplicaRequestLeaseObserver, SchedulerLoadSnapshot, SequenceError,
     SequencePublishQueueError, SequencePublisher, SequenceRequest, SequenceSubscriber,
@@ -364,7 +364,7 @@ pub(crate) async fn host_replica_channels(
     publishes_outbound: bool,
     cancellation_token: CancellationToken,
 ) -> Result<(
-    dynamo_scheduler::selection::HostReplicaChannels,
+    dynamo_kv_router::selection::HostReplicaChannels,
     ReplicaIngress,
 )> {
     let transport_kind = endpoint.drt().default_event_transport_kind();
@@ -407,7 +407,7 @@ pub(crate) async fn host_replica_channels(
         cancellation_token,
     };
     Ok((
-        dynamo_scheduler::selection::HostReplicaChannels {
+        dynamo_kv_router::selection::HostReplicaChannels {
             outbound: event_sender,
             inbound_tx,
             inbound_rx,
@@ -1109,7 +1109,7 @@ mod tests {
     #[tokio::test]
     #[serial_test::serial]
     async fn scheduler_publisher_batches_live_loads_and_removes_departed_ranks() -> Result<()> {
-        use dynamo_scheduler::selection::{SelectionServiceBuilder, WorkerRequest};
+        use dynamo_kv_router::selection::{SelectionServiceBuilder, WorkerRequest};
 
         let distributed = dynamo_runtime::DistributedRuntime::new(
             dynamo_runtime::Runtime::from_current()?,

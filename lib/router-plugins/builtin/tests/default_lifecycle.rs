@@ -1,12 +1,12 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 use dynamo_custom_policy_builtin::default_factory;
+use dynamo_kv_router::selection::{
+    PromptRequest, SelectAndReserveRequest, SelectionCacheConfig, SelectionCore, WorkerRequest,
+};
 use dynamo_router_types::config::KvRouterConfig;
 use dynamo_router_types::identity::RoutingPartitionId;
 use dynamo_router_types::protocols::RoutingConstraints;
-use dynamo_scheduler::selection::{
-    PromptRequest, SelectAndReserveRequest, SelectionCacheConfig, SelectionCore, WorkerRequest,
-};
 
 fn worker(worker_id: u64) -> WorkerRequest {
     WorkerRequest {

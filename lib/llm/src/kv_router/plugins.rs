@@ -5,7 +5,7 @@
 
 use std::sync::OnceLock;
 
-use dynamo_scheduler::plugins::{RouterPluginRegistry, RouterPlugins};
+use dynamo_kv_router::plugins::{RouterPluginRegistry, RouterPlugins};
 
 use super::{KvRouter, SelectionPolicySource};
 

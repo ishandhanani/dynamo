@@ -14,6 +14,10 @@ use dynamo_kv_indexer::{
     ApproximateLruIncarnation, ApproximateLruStats, KvRouterError, RoutingDecisionHashes,
     SessionPrefixIndexer, SharedKvCache,
 };
+use dynamo_kv_router::selection::{
+    PromptView, Selected, SelectionAdmission, SelectionError, SelectionOperation, SelectionOutcome,
+    SelectionRun, SessionBinding,
+};
 use dynamo_router_types::busy::RejectThresholdsProvider;
 use dynamo_router_types::config::{
     KvRouterConfig, RouterConfigOverride, min_initial_workers_from_env,
@@ -48,10 +52,6 @@ use dynamo_runtime::{
 use dynamo_scheduler::overlap::OverlapAnalysis;
 use dynamo_scheduler::overlap::cache_hit_estimates_from_tiered_matches;
 use dynamo_scheduler::queue::{BookingHandle, SchedulerBookingDescriptor};
-use dynamo_scheduler::selection::{
-    PromptView, Selected, SelectionAdmission, SelectionError, SelectionOperation, SelectionOutcome,
-    SelectionRun, SessionBinding,
-};
 #[cfg(test)]
 use dynamo_worker_selection::plugin::WorkerSelectionPolicy;
 use dynamo_worker_selection::plugin::{WorkerInfo, WorkerSelectionPolicyFactory};
@@ -129,7 +129,7 @@ impl SelectionPolicySource {
             Self::Registry => worker_selection_policy_registry()
                 .resolve_for_worker_type(config, worker_type)?
                 .ok_or_else(|| {
-                    dynamo_scheduler::plugins::WorkerSelectionPolicyRegistryError::MissingDefault
+                    dynamo_kv_router::plugins::WorkerSelectionPolicyRegistryError::MissingDefault
                         .into()
                 }),
         }
@@ -891,7 +891,7 @@ impl KvRouter {
                 // The availability provider refreshes LoRA eligibility at admission.
                 lora_worker_filter: None,
                 ingress: Arc::clone(&ingress)
-                    as Arc<dyn dynamo_scheduler::selection::KvEventIngress>,
+                    as Arc<dyn dynamo_kv_router::selection::KvEventIngress>,
                 scheduler_load,
                 endpoint: endpoint.clone(),
                 router_id: endpoint.drt().discovery().instance_id(),

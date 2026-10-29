@@ -11,6 +11,7 @@ members = [
     "lib/router/admission",
     "lib/router/worker-selection",
     "lib/router/scheduler",
+    "lib/router/kv-router",
     "lib/llm",
     "lib/rl",
     "lib/runtime",
@@ -70,6 +71,7 @@ dynamo-slot-tracker = { path = "lib/router/slot-tracker", version = "1.7.0" }
 dynamo-admission = { path = "lib/router/admission", version = "1.7.0" }
 dynamo-worker-selection = { path = "lib/router/worker-selection", version = "1.7.0" }
 dynamo-scheduler = { path = "lib/router/scheduler", version = "1.7.0" }
+dynamo-kv-router = { path = "lib/router/kv-router", version = "1.7.0" }
 dynamo-runtime = { path = "lib/runtime", version = "1.7.0" }
 dynamo-llm = { path = "lib/llm", version = "1.7.0", default-features = false }
 dynamo-rl = { path = "lib/rl", version = "1.7.0" }

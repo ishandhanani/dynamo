@@ -175,11 +175,11 @@ mod tests {
         http::Request,
     };
     use dynamo_custom_policy_builtin::default_factory;
+    use dynamo_kv_router::selection::{SelectionCacheConfig, SelectionCore, WorkerRequest};
     use dynamo_router_types::WorkerType;
     use dynamo_router_types::config::KvRouterConfig;
     use dynamo_router_types::identity::RoutingPartitionId;
     use dynamo_runtime::protocols::EndpointId;
-    use dynamo_scheduler::selection::{SelectionCacheConfig, SelectionCore, WorkerRequest};
     use tower::ServiceExt;
 
     async fn fixture(manager: Arc<ModelManager>) -> (Router, SelectionCore, Uuid, Uuid) {

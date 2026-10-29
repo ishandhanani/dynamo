@@ -31,7 +31,7 @@ Examples:
 Typical commands:
 
 ```bash
-cargo test -p dynamo-scheduler -p dynamo-kv-indexer -p dynamo-slot-tracker -p dynamo-admission -p dynamo-worker-selection -p dynamo-router-types
+cargo test -p dynamo-kv-router -p dynamo-scheduler -p dynamo-kv-indexer -p dynamo-slot-tracker -p dynamo-admission -p dynamo-worker-selection -p dynamo-router-types
 cargo test -p dynamo-llm --no-default-features
 ```
 

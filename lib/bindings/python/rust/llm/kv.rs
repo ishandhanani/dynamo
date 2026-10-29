@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #[cfg(feature = "select-service")]
-use dynamo_scheduler::plugins::RouterPluginRegistry;
+use dynamo_kv_router::plugins::RouterPluginRegistry;
 use pythonize::{depythonize, pythonize};
 use serde::Deserialize;
 use std::collections::HashMap;
@@ -23,16 +23,16 @@ use crate::Endpoint;
 ))]
 use clap::Parser;
 #[cfg(feature = "select-service")]
-use dynamo_scheduler::config::try_kv_router_config_from_dynamo_env;
+use dynamo_kv_router::config::try_kv_router_config_from_dynamo_env;
 use dynamo_router_types::config::{KvRouterConfig, RouterConfigOverride};
-use dynamo_scheduler::plugins::RouterPlugins;
+use dynamo_kv_router::plugins::RouterPlugins;
 use dynamo_router_types::protocols::compute_block_hash_for_seq;
 use dynamo_router_types::protocols::*;
 #[cfg(feature = "kv-indexer")]
 use dynamo_kv_indexer::http::{self as indexer, IndexerConfig};
 #[cfg(feature = "select-service")]
-use dynamo_scheduler::selection;
-use dynamo_scheduler::selection::{OverlapScoresRequest, PotentialLoadsRequest, PromptRequest, ReservationRequest, SelectAndReserveRequest, SelectRequest, SelectionCacheConfig as RsSelectionCacheConfig, SelectionError, SelectionService as RustSelectionService, SelectionServiceBuilder, SelectionServiceConfig, WorkerPatchRequest, WorkerRequest, warn_for_unserved_worker_selection_policies};
+use dynamo_kv_router::selection;
+use dynamo_kv_router::selection::{OverlapScoresRequest, PotentialLoadsRequest, PromptRequest, ReservationRequest, SelectAndReserveRequest, SelectRequest, SelectionCacheConfig as RsSelectionCacheConfig, SelectionError, SelectionService as RustSelectionService, SelectionServiceBuilder, SelectionServiceConfig, WorkerPatchRequest, WorkerRequest, warn_for_unserved_worker_selection_policies};
 #[cfg(feature = "slot-tracker")]
 use dynamo_slot_tracker::http::{self as slot_tracker, SlotTrackerConfig};
 #[cfg(feature = "select-service")]
@@ -561,7 +561,7 @@ where
             cli.selection_cache_max_bytes,
         ),
     };
-    let builder = config.service_builder(WorkerType::Aggregated, policy_registry);
+    let builder = SelectionServiceBuilder::from_config(&config, WorkerType::Aggregated, policy_registry);
     let rt = tokio::runtime::Runtime::new()?;
     let service = rt.block_on(builder.build())?;
     rt.block_on(selection::run_server(config.port, service))

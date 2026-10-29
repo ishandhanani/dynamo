@@ -9,13 +9,13 @@
 
 use std::sync::Arc;
 
-use dynamo_router_types::config::KvRouterConfig;
-use dynamo_router_types::protocols::WorkerAffinityTarget;
-use dynamo_router_types::sched::WorkerSelectionPolicyError;
-use dynamo_scheduler::plugins::{
+use dynamo_kv_router::plugins::{
     WorkerSelectionPolicyParameters, WorkerSelectionPolicyProviderError,
     WorkerSelectionPolicyRegistry, WorkerSelectionPolicyRegistryError,
 };
+use dynamo_router_types::config::KvRouterConfig;
+use dynamo_router_types::protocols::WorkerAffinityTarget;
+use dynamo_router_types::sched::WorkerSelectionPolicyError;
 use dynamo_worker_selection::plugin::WorkerSelectionPolicyFactory;
 use dynamo_worker_selection::plugin::{
     ScoredWorkerCandidate, WorkerInputView, WorkerInputs, WorkerPicker, WorkerSelectionContext,

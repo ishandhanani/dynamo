@@ -6,10 +6,10 @@
 
 use std::sync::Arc;
 
-use dynamo_router_types::config::KvRouterConfig;
-use dynamo_scheduler::plugins::{
+use dynamo_kv_router::plugins::{
     RouterPluginRegistry, WorkerSelectionPolicyProviderError, WorkerSelectionPolicyRegistryError,
 };
+use dynamo_router_types::config::KvRouterConfig;
 use dynamo_worker_selection::builtin::{DefaultCostFnParameters, policy_for_role};
 pub use dynamo_worker_selection::builtin::{
     DefaultWorkerSelector, DefaultWorkerSelectorControl, default_factory, default_policy,

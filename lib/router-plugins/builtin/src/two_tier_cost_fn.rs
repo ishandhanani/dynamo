@@ -29,11 +29,11 @@
 
 use std::sync::Arc;
 
-use dynamo_router_types::config::KvRouterConfig;
-use dynamo_scheduler::plugins::{
+use dynamo_kv_router::plugins::{
     RouterPluginRegistry, WorkerSelectionPolicyParameters, WorkerSelectionPolicyProviderError,
     WorkerSelectionPolicyRegistryError,
 };
+use dynamo_router_types::config::KvRouterConfig;
 use dynamo_worker_selection::plugin::{
     WorkerCacheInputs, WorkerInputView, WorkerInputs, WorkerLoadInput, WorkerPicker,
     WorkerSelectionContext, WorkerSelectionPolicy, WorkerSelectionPolicyError,

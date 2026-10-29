@@ -13,6 +13,13 @@ use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
 use anyhow::{Context, Result};
+use dynamo_kv_router::plugins::RouterPluginRegistry;
+use dynamo_kv_router::selection::{
+    CatalogReconciler, DEFAULT_MODEL_NAME, HostCache, HostEligibility, HostLoad, HostReplication,
+    HostTelemetry, KvEventIngress, KvIndexSource, SelectionHost, SelectionOperation,
+    SelectionOutcome, SelectionPartition, SelectionRun, SelectionScheduler, SelectionService,
+    SelectionServiceBuilder, WorkerCatalogSource, WorkerRequest,
+};
 use dynamo_router_types::WorkerType;
 use dynamo_router_types::busy::RejectThresholdsProvider;
 use dynamo_router_types::config::KvRouterConfig;
@@ -25,13 +32,6 @@ use dynamo_router_types::sched::{
     NonMaxOverlapSelectionObserver, OverloadedWorkerProvider, WorkerAvailabilityProvider,
 };
 use dynamo_router_types::selection_inputs::DEFAULT_MAX_BATCHED_TOKENS;
-use dynamo_scheduler::plugins::RouterPluginRegistry;
-use dynamo_scheduler::selection::{
-    CatalogReconciler, DEFAULT_MODEL_NAME, HostCache, HostEligibility, HostLoad, HostReplication,
-    HostTelemetry, KvEventIngress, KvIndexSource, SelectionHost, SelectionOperation,
-    SelectionOutcome, SelectionPartition, SelectionRun, SelectionScheduler, SelectionService,
-    SelectionServiceBuilder, WorkerCatalogSource, WorkerRequest,
-};
 use dynamo_slot_tracker::{LocalWorkerLoad, ReplicaWorkerPolicy};
 use dynamo_worker_selection::plugin::WorkerSelectionPolicyFactory;
 use tokio_util::sync::CancellationToken;
@@ -149,7 +149,7 @@ struct SenderLoadSink {
     worker_type: &'static str,
 }
 
-impl dynamo_scheduler::selection::SchedulerLoadSink for SenderLoadSink {
+impl dynamo_kv_router::selection::SchedulerLoadSink for SenderLoadSink {
     fn publish(&self, snapshot: dynamo_slot_tracker::SchedulerLoadSnapshot) {
         self.sender.publish(snapshot);
     }
@@ -204,7 +204,7 @@ impl EmbeddedSelection {
             ),
         ));
         let slot = std::sync::Mutex::new(Some(channels));
-        let replica_sync: Option<dynamo_scheduler::selection::HostReplicaSyncFactory> =
+        let replica_sync: Option<dynamo_kv_router::selection::HostReplicaSyncFactory> =
             Some(Arc::new(move |_partition| {
                 slot.lock().ok().and_then(|mut s| s.take())
             }));
@@ -480,7 +480,7 @@ pub(crate) fn worker_request_from_runtime_config(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use dynamo_scheduler::selection::SchedulerLoadSink;
+    use dynamo_kv_router::selection::SchedulerLoadSink;
 
     #[test]
     fn worker_request_mirrors_runtime_config() {

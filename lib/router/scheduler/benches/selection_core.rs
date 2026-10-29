@@ -11,6 +11,10 @@ use std::time::Duration;
 use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use dynamo_kv_indexer::KvIndexerInterface;
 use dynamo_kv_indexer::ingest::backend::Indexer;
+use dynamo_scheduler::selection::{
+    HostLoad, PromptRequest, SelectAndReserveRequest, SelectionCacheConfig, SelectionCore,
+    SelectionHost, WorkerRequest, WorkerSelectionPolicyFactory,
+};
 use dynamo_router_types::busy::{BusyThresholds, RejectThresholdsProvider};
 use dynamo_router_types::config::KvRouterConfig;
 use dynamo_router_types::identity::RoutingPartitionId;
@@ -18,10 +22,6 @@ use dynamo_router_types::protocols::{
     BlockHashOptions, ExternalSequenceBlockHash, KvCacheEvent, KvCacheEventData, KvCacheStoreData,
     KvCacheStoredBlockData, RouterEvent, RoutingConstraints, StorageTier, WorkerWithDpRank,
     compute_block_hash_for_seq, compute_seq_hash_for_block,
-};
-use dynamo_scheduler::selection::{
-    HostLoad, PromptRequest, SelectAndReserveRequest, SelectionCacheConfig, SelectionCore,
-    SelectionHost, WorkerRequest, WorkerSelectionPolicyFactory,
 };
 use tokio_util::sync::CancellationToken;
 

@@ -6,22 +6,22 @@ use std::time::Duration;
 
 use tokio_util::sync::CancellationToken;
 
-use crate::scheduling_compat::PotentialLoad;
 use dynamo_kv_indexer::ingest::backend::IndexerPolicy;
 use dynamo_router_types::config::KvRouterConfig;
 use dynamo_router_types::protocols::WorkerId;
 use dynamo_router_types::tracking_hash::TrackingHashContext;
+use dynamo_scheduler::scheduling_compat::PotentialLoad;
 use dynamo_slot_tracker::mesh::{
     PeerManager, ReplicaPeerError, ReplicaSyncRuntime, setup_replica_sync,
 };
 use dynamo_worker_selection::plugin::WorkerSelectionPolicyFactory;
 
+use super::OverlapScoresResponse;
+use super::SelectionCacheConfig;
+use super::SelectionError;
 use super::affinity::SessionAffinityConfig;
-use super::core::{KvIndexSource, SelectionCore, SelectionHost, SelectionServiceConfig};
-use super::error::SelectionError;
-use super::pending::SelectionCacheConfig;
-use super::types::OverlapScoresResponse;
-use super::types::{
+use super::{KvIndexSource, SelectionCore, SelectionHost, SelectionServiceConfig};
+use super::{
     ModelLoadResponse, OverlapScoresRequest, PotentialLoadsRequest, ReadyResponse,
     ReservationRequest, ReservationResponse, SelectAndReserveRequest, SelectRequest,
     SelectResponse, WorkerCatalogRecord, WorkerPatchRequest, WorkerRequest,
@@ -202,7 +202,12 @@ impl SelectionServiceBuilder {
         ));
 
         if recover_from_peers {
-            match core.recover_indexer_from_peers(&self.indexer_peers).await {
+            match dynamo_kv_indexer::http::recovery::recover_from_peers(
+                &self.indexer_peers,
+                core.indexer_registry(),
+            )
+            .await
+            {
                 Ok(true) => tracing::info!("Selection indexer recovery completed"),
                 Ok(false) => {
                     tracing::warn!(
@@ -250,24 +255,25 @@ impl SelectionServiceBuilder {
     }
 }
 
-impl SelectionServiceConfig {
-    pub fn service_builder(
-        &self,
+impl SelectionServiceBuilder {
+    /// A builder preloaded from a service configuration.
+    pub fn from_config(
+        config: &SelectionServiceConfig,
         worker_type: WorkerType,
         plugin_registry: RouterPluginRegistry,
-    ) -> SelectionServiceBuilder {
-        let mut builder = SelectionServiceBuilder::new(
-            self.kv_router_config.clone(),
+    ) -> Self {
+        let mut builder = Self::new(
+            config.kv_router_config.clone(),
             worker_type,
             plugin_registry,
         )
-        .indexer_threads(self.threads)
-        .indexer_peers(self.indexer_peers.clone())
-        .selection_cache(self.selection_cache.clone());
-        if let Some(port) = self.replica_sync_port {
-            builder = builder.replica_sync(port, self.replica_sync_peers.clone());
+        .indexer_threads(config.threads)
+        .indexer_peers(config.indexer_peers.clone())
+        .selection_cache(config.selection_cache.clone());
+        if let Some(port) = config.replica_sync_port {
+            builder = builder.replica_sync(port, config.replica_sync_peers.clone());
         }
-        if let Some(ttl) = self.session_affinity_ttl {
+        if let Some(ttl) = config.session_affinity_ttl {
             builder = builder.session_affinity(ttl);
         }
         builder
@@ -489,11 +495,12 @@ impl SelectionService {
     }
 
     pub async fn indexer_snapshot(&self) -> serde_json::Value {
-        self.core.dump_indexer_events().await
+        dynamo_kv_indexer::http::server::dump_registry(self.core.indexer_registry()).await
     }
 
     pub async fn recover_indexer_from_peers(&self, peers: &[String]) -> anyhow::Result<bool> {
-        self.core.recover_indexer_from_peers(peers).await
+        dynamo_kv_indexer::http::recovery::recover_from_peers(peers, self.core.indexer_registry())
+            .await
     }
 
     pub async fn shutdown(&self) {
@@ -730,5 +737,30 @@ worker_selection:
         let service = build.await.unwrap().unwrap();
         service.shutdown().await;
         server.abort();
+    }
+
+    /// The builder validates the session-affinity TTL before any partition exists.
+    #[tokio::test]
+    async fn session_affinity_ttl_is_validated_at_build() {
+        for ttl in [
+            std::time::Duration::ZERO,
+            std::time::Duration::from_secs(
+                dynamo_worker_selection::affinity::MAX_SESSION_AFFINITY_TTL_SECS + 1,
+            ),
+        ] {
+            let result = super::SelectionServiceBuilder::new(
+                dynamo_router_types::config::KvRouterConfig {
+                    use_kv_events: false,
+                    router_queue_threshold: None,
+                    ..Default::default()
+                },
+                dynamo_router_types::WorkerType::Aggregated,
+                Default::default(),
+            )
+            .session_affinity(ttl)
+            .build()
+            .await;
+            assert!(result.is_err(), "ttl {ttl:?} must be rejected");
+        }
     }
 }
