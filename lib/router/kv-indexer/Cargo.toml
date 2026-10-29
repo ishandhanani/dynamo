@@ -13,13 +13,14 @@ description = "KV cache index for the Dynamo router: index trees, KV event wire 
 
 [features]
 default = []
-metrics = ["dep:prometheus"]
+# The Prometheus exporter of the indexer counters, for hosts that scrape them.
+export = ["dep:prometheus", "dep:dynamo-metrics"]
 bench = ["dynamo-router-types/bench"]
 profile = []
 # ZMQ event listeners and the worker registry behind them.
 ingest-zmq = ["dep:zmq"]
 # The standalone HTTP indexer service.
-http = ["ingest-zmq", "dep:axum", "dep:reqwest", "dep:chrono", "dep:tracing-appender"]
+http = ["ingest-zmq", "export", "dep:axum", "dep:reqwest", "dep:chrono", "dep:tracing-appender"]
 # Test hooks consumed by dependent crates' tests; never enable in release.
 testing = []
 
@@ -45,6 +46,7 @@ slotmap = "1"
 dynamo-tokens = { workspace = true }
 dynamo-truthy = { workspace = true }
 prometheus = { workspace = true, optional = true }
+dynamo-metrics = { workspace = true, optional = true }
 zmq = { version = "0.10", optional = true }
 axum = { version = "=0.8.4", default-features = false, features = [
   "http1",

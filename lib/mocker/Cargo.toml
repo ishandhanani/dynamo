@@ -28,7 +28,7 @@ aisimulate-core = { workspace = true }
 dynamo-scheduler = { workspace = true }
 dynamo-admission = { workspace = true }
 dynamo-worker-selection = { workspace = true }
-dynamo-kv-indexer = { workspace = true, features = ["metrics"] }
+dynamo-kv-indexer = { workspace = true }
 dynamo-slot-tracker = { workspace = true }
 dynamo-router-types = { workspace = true }
 dynamo-tokens = { workspace = true }

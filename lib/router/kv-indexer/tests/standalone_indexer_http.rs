@@ -166,7 +166,7 @@ async fn spawn_indexer_http(
     (base_url, cancel, task)
 }
 
-#[cfg(feature = "metrics")]
+#[cfg(feature = "export")]
 fn make_app_state(registry: Arc<WorkerRegistry>) -> Arc<AppState> {
     Arc::new(AppState {
         registry,
@@ -175,7 +175,7 @@ fn make_app_state(registry: Arc<WorkerRegistry>) -> Arc<AppState> {
     })
 }
 
-#[cfg(not(feature = "metrics"))]
+#[cfg(not(feature = "export"))]
 fn make_app_state(registry: Arc<WorkerRegistry>) -> Arc<AppState> {
     Arc::new(AppState {
         registry,
@@ -478,7 +478,7 @@ async fn query_returns_404_for_unknown_model() {
     task.await.expect("server task join");
 }
 
-#[cfg(feature = "metrics")]
+#[cfg(feature = "export")]
 #[tokio::test]
 async fn duplicate_store_warning_is_exported() {
     const BLOCK_SIZE: u32 = 4;

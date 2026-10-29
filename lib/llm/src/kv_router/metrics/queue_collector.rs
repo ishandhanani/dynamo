@@ -10,10 +10,10 @@
 //! [`RouterQueueSource`] and the collector reads every live source when the
 //! registry is gathered. Partitions that share labels add up.
 
-use std::sync::{Arc, Weak};
+use std::sync::Arc;
 
+use dynamo_metrics::collect::{SourceSet, descs_of};
 use dynamo_scheduler::queue::ClassQueueStats;
-use parking_lot::Mutex;
 use prometheus::{
     IntCounterVec, IntGaugeVec, Opts,
     core::{Collector, Desc},
@@ -47,7 +47,7 @@ pub(super) struct RouterQueueCollector {
     received_total: Opts,
     deadline_rejections_total: Opts,
     descs: Vec<Desc>,
-    sources: Arc<Mutex<Vec<Weak<RouterQueueSource>>>>,
+    sources: SourceSet<RouterQueueSource>,
 }
 
 impl RouterQueueCollector {
@@ -64,25 +64,16 @@ impl RouterQueueCollector {
             &pending_isl_tokens,
             &pending_cached_tokens,
         ] {
-            descs.extend(
-                IntGaugeVec::new(opts.clone(), QUEUE_LABELS)?
-                    .desc()
-                    .into_iter()
-                    .cloned(),
-            );
+            descs.extend(descs_of(&IntGaugeVec::new(opts.clone(), QUEUE_LABELS)?));
         }
-        descs.extend(
-            IntCounterVec::new(received_total.clone(), QUEUE_LABELS)?
-                .desc()
-                .into_iter()
-                .cloned(),
-        );
-        descs.extend(
-            IntCounterVec::new(deadline_rejections_total.clone(), REJECTION_LABELS)?
-                .desc()
-                .into_iter()
-                .cloned(),
-        );
+        descs.extend(descs_of(&IntCounterVec::new(
+            received_total.clone(),
+            QUEUE_LABELS,
+        )?));
+        descs.extend(descs_of(&IntCounterVec::new(
+            deadline_rejections_total.clone(),
+            REJECTION_LABELS,
+        )?));
         Ok(Self {
             pending_requests,
             pending_isl_tokens,
@@ -90,7 +81,7 @@ impl RouterQueueCollector {
             received_total,
             deadline_rejections_total,
             descs,
-            sources: Arc::new(Mutex::new(Vec::new())),
+            sources: SourceSet::new(),
         })
     }
 
@@ -106,9 +97,7 @@ impl RouterQueueCollector {
             reader,
             cancellation,
         });
-        let mut sources = self.sources.lock();
-        sources.retain(|source| source.strong_count() > 0);
-        sources.push(Arc::downgrade(&source));
+        self.sources.attach(&source);
         source
     }
 }
@@ -134,14 +123,10 @@ impl Collector for RouterQueueCollector {
             IntCounterVec::new(self.deadline_rejections_total.clone(), REJECTION_LABELS)
                 .expect("validated router queue metric options");
 
-        let mut sources = self.sources.lock();
-        sources.retain(|source| {
-            let Some(source) = source.upgrade() else {
-                return false;
-            };
-            if source.cancellation.is_cancelled() {
-                return false;
-            }
+        for source in self
+            .sources
+            .live(|source| !source.cancellation.is_cancelled())
+        {
             for (class_index, [model, worker_type, policy_class]) in
                 source.labels.iter().enumerate()
             {
@@ -172,9 +157,7 @@ impl Collector for RouterQueueCollector {
                     "predicted_miss",
                 ]);
             }
-            true
-        });
-        drop(sources);
+        }
 
         let mut families = pending_requests.collect();
         families.extend(pending_isl_tokens.collect());

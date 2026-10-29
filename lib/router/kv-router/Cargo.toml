@@ -15,8 +15,6 @@ description = "Composes a Dynamo router from the stage crates: SelectionService 
 default = []
 # The selection HTTP service (axum itself is always linked; the routes are behind this gate).
 http = ["dynamo-slot-tracker/http"]
-# Forwarded to the indexer until dynamo-metrics owns the collectors.
-metrics = ["dynamo-kv-indexer/metrics"]
 bench = ["dynamo-scheduler/bench"]
 # Test hooks consumed by dependent crates' tests; never enable in release.
 testing = ["dynamo-scheduler/testing"]

@@ -20,7 +20,6 @@ crate depends on `dynamo-runtime`.
 ## Features
 
 - `http`: the standalone selection service routes and `run_server`
-- `metrics`: forwards to the indexer's metrics until `dynamo-metrics` owns the collectors
 - `bench`, `testing`: forwarded to the kernel; never enable `testing` in release
 
 ```bash

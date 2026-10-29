@@ -9,12 +9,12 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
-#[cfg(feature = "metrics")]
+#[cfg(feature = "export")]
 use prometheus::Encoder;
 use serde::{Deserialize, Serialize};
 use tokio_util::sync::CancellationToken;
 
-#[cfg(feature = "metrics")]
+#[cfg(feature = "export")]
 use crate::KvIndexerCounterCollector;
 use crate::KvIndexerMetrics;
 use crate::TieredMatchDetails;
@@ -43,7 +43,7 @@ use super::logging::{AccessLogModel, AccessLogSink};
 pub struct AppState {
     pub registry: Arc<WorkerRegistry>,
     pub access_log_sink: Option<Arc<AccessLogSink>>,
-    #[cfg(feature = "metrics")]
+    #[cfg(feature = "export")]
     pub prom_registry: prometheus::Registry,
 }
 
@@ -57,7 +57,7 @@ impl AppState {
         root_cancel_token: CancellationToken,
     ) -> anyhow::Result<Self> {
         let indexer_metrics = Arc::new(KvIndexerMetrics::new_unregistered());
-        #[cfg(feature = "metrics")]
+        #[cfg(feature = "export")]
         let prom_registry = {
             let prom_registry = prometheus::Registry::new();
             super::metrics::register(&prom_registry)?;
@@ -71,7 +71,7 @@ impl AppState {
                 root_cancel_token,
             )),
             access_log_sink: None,
-            #[cfg(feature = "metrics")]
+            #[cfg(feature = "export")]
             prom_registry,
         })
     }
@@ -525,7 +525,7 @@ async fn reopen_logs(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     }
 }
 
-#[cfg(feature = "metrics")]
+#[cfg(feature = "export")]
 async fn handle_metrics(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     super::metrics::set_worker_state(&state.registry.stats());
     let encoder = prometheus::TextEncoder::new();
@@ -589,7 +589,7 @@ fn build_router(state: Arc<AppState>, test_endpoints: bool) -> Router {
         super::logging::access_log_middleware,
     ));
 
-    #[cfg(feature = "metrics")]
+    #[cfg(feature = "export")]
     let router = {
         let metrics_route = Router::new()
             .route("/metrics", get(handle_metrics))
@@ -632,7 +632,7 @@ mod tests {
         let app = create_router(Arc::new(AppState {
             registry: Arc::new(WorkerRegistry::new(1)),
             access_log_sink: None,
-            #[cfg(feature = "metrics")]
+            #[cfg(feature = "export")]
             prom_registry: prometheus::Registry::new(),
         }));
 
@@ -656,7 +656,7 @@ mod tests {
             Arc::new(AppState {
                 registry: Arc::new(WorkerRegistry::new(1)),
                 access_log_sink: None,
-                #[cfg(feature = "metrics")]
+                #[cfg(feature = "export")]
                 prom_registry: prometheus::Registry::new(),
             }),
             test_endpoints,
@@ -750,7 +750,7 @@ mod tests {
         let app = create_router(Arc::new(AppState {
             registry,
             access_log_sink: None,
-            #[cfg(feature = "metrics")]
+            #[cfg(feature = "export")]
             prom_registry: prometheus::Registry::new(),
         }));
 
@@ -918,7 +918,7 @@ mod tests {
         let state = Arc::new(AppState {
             registry,
             access_log_sink: Some(sink),
-            #[cfg(feature = "metrics")]
+            #[cfg(feature = "export")]
             prom_registry: prometheus::Registry::new(),
         });
         let app = create_router(state);

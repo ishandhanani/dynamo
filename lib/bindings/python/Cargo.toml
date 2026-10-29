@@ -30,7 +30,9 @@ default = ["custom-policy"]
 custom-policy = ["dep:dynamo-worker-selection-policy-catalog"]
 media-ffmpeg = ["dynamo-llm/media-ffmpeg"]
 kv-indexer = ["dep:clap", "dep:tracing-subscriber", "dynamo-kv-indexer/http"]
-kv-indexer-metrics = ["kv-indexer", "dynamo-kv-router/metrics", "dynamo-kv-indexer/metrics"]
+# The indexer exports its counters whenever the standalone service is built; kept as an alias
+# so existing build invocations keep working.
+kv-indexer-metrics = ["kv-indexer"]
 # Exposes the optional Relay stats/snapshot methods to Python diagnostic builds.
 ckf-diagnostics = ["dynamo-llm/ckf-diagnostics"]
 slot-tracker = ["dep:clap", "dep:tracing-subscriber", "dynamo-slot-tracker/http"]
