@@ -48,9 +48,18 @@ const STATS_INTERVAL: Duration = Duration::from_secs(5);
 /// Safety net while requests wait on room: recheck even if no room signal arrives.
 const BLOCKED_RECHECK: Duration = Duration::from_millis(20);
 
+/// Diagnostic switch: plan the prefill and decode legs concurrently within one
+/// admission step instead of one after the other.
+const FRONT_ADMISSION_PARALLEL_ENV: &str = "DYN_ROUTER_FRONT_ADMISSION_PARALLEL";
+
 pub(crate) fn front_admission_enabled() -> bool {
     static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *ENABLED.get_or_init(|| dynamo_runtime::config::env_is_truthy(FRONT_ADMISSION_ENV))
+}
+
+fn parallel_planning_enabled() -> bool {
+    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ENABLED.get_or_init(|| dynamo_runtime::config::env_is_truthy(FRONT_ADMISSION_PARALLEL_ENV))
 }
 
 /// Derives the decode leg's routing constraints from the prefill worker the
@@ -344,50 +353,69 @@ impl Serializer {
         self.stats.max_wait_ns.fetch_max(wait, Ordering::Relaxed);
 
         let started = Instant::now();
-        let prefill_context =
-            planning_context(prefill, &request_id, &metadata, session_affinity.as_ref());
-        let prefill_plan = self
-            .prefill_host
-            .plan_admitted_upstream(&prefill_context, RequestPhase::Prefill)
-            .await;
-        let prefill_done = Instant::now();
-        let prefill_ns = (prefill_done - started).as_nanos() as u64;
+        let (result, prefill_ns, decode_ns) = if parallel_planning_enabled() {
+            self.plan_parallel(
+                prefill,
+                decode,
+                decode_constraints,
+                &request_id,
+                &metadata,
+                session_affinity.as_ref(),
+            )
+            .await
+        } else {
+            let prefill_context =
+                planning_context(prefill, &request_id, &metadata, session_affinity.as_ref());
+            let prefill_plan = self
+                .prefill_host
+                .plan_admitted_upstream(&prefill_context, RequestPhase::Prefill)
+                .await;
+            let prefill_ns = started.elapsed().as_nanos() as u64;
+            let decode_started = Instant::now();
+            let result = match prefill_plan {
+                Err(error) => Err(error),
+                Ok(prefill_plan) => match decode_constraints(prefill_plan.worker().worker_id) {
+                    Err(error) => {
+                        prefill_plan.abort(Some(&error)).await;
+                        Err(error)
+                    }
+                    Ok(constraints) => {
+                        if let Some(constraints) = constraints {
+                            super::merge_decode_topology_constraints(&mut decode, constraints);
+                        }
+                        let decode_context = planning_context(
+                            decode,
+                            &request_id,
+                            &metadata,
+                            session_affinity.as_ref(),
+                        );
+                        match self
+                            .decode_host
+                            .plan_admitted_upstream(&decode_context, RequestPhase::Decode)
+                            .await
+                        {
+                            Ok(decode_plan) => Ok((prefill_plan, decode_plan)),
+                            Err(error) => {
+                                prefill_plan.abort(Some(&error)).await;
+                                Err(error)
+                            }
+                        }
+                    }
+                },
+            };
+            (
+                result,
+                prefill_ns,
+                decode_started.elapsed().as_nanos() as u64,
+            )
+        };
+        let finished = Instant::now();
         self.stats
             .prefill_ns
             .fetch_add(prefill_ns, Ordering::Relaxed);
         self.stats
             .max_prefill_ns
             .fetch_max(prefill_ns, Ordering::Relaxed);
-
-        let result = match prefill_plan {
-            Err(error) => Err(error),
-            Ok(prefill_plan) => match decode_constraints(prefill_plan.worker().worker_id) {
-                Err(error) => {
-                    prefill_plan.abort(Some(&error)).await;
-                    Err(error)
-                }
-                Ok(constraints) => {
-                    if let Some(constraints) = constraints {
-                        super::merge_decode_topology_constraints(&mut decode, constraints);
-                    }
-                    let decode_context =
-                        planning_context(decode, &request_id, &metadata, session_affinity.as_ref());
-                    match self
-                        .decode_host
-                        .plan_admitted_upstream(&decode_context, RequestPhase::Decode)
-                        .await
-                    {
-                        Ok(decode_plan) => Ok((prefill_plan, decode_plan)),
-                        Err(error) => {
-                            prefill_plan.abort(Some(&error)).await;
-                            Err(error)
-                        }
-                    }
-                }
-            },
-        };
-        let finished = Instant::now();
-        let decode_ns = (finished - prefill_done).as_nanos() as u64;
         self.stats.decode_ns.fetch_add(decode_ns, Ordering::Relaxed);
         self.stats
             .max_decode_ns
@@ -411,6 +439,83 @@ impl Serializer {
                 let _ = response.send(Err(error));
             }
         }
+    }
+
+    /// Diagnostic variant: plan both legs at once inside the same serialized step.
+    /// Still books both before the next pop. The decode leg is planned before the
+    /// prefill worker is known, so if that worker imposes KV-transfer constraints the
+    /// decode plan is given back and planned again under them.
+    async fn plan_parallel(
+        &self,
+        prefill: PreprocessedRequest,
+        decode: PreprocessedRequest,
+        decode_constraints: DecodeConstraintsFn,
+        request_id: &str,
+        metadata: &BTreeMap<String, String>,
+        session_affinity: Option<&SessionAffinityId>,
+    ) -> (Result<(RoutePlan, RoutePlan)>, u64, u64) {
+        let prefill_context = planning_context(prefill, request_id, metadata, session_affinity);
+        let decode_context =
+            planning_context(decode.clone(), request_id, metadata, session_affinity);
+        let timed = |phase: RequestPhase,
+                     host: Arc<RoutingHost>,
+                     context: SingleIn<PreprocessedRequest>| async move {
+            let started = Instant::now();
+            let plan = host.plan_admitted_upstream(&context, phase).await;
+            (plan, started.elapsed().as_nanos() as u64)
+        };
+        let ((prefill_plan, prefill_ns), (decode_plan, decode_ns)) = tokio::join!(
+            timed(
+                RequestPhase::Prefill,
+                Arc::clone(&self.prefill_host),
+                prefill_context
+            ),
+            timed(
+                RequestPhase::Decode,
+                Arc::clone(&self.decode_host),
+                decode_context
+            ),
+        );
+        let result = match (prefill_plan, decode_plan) {
+            (Ok(prefill_plan), Ok(decode_plan)) => {
+                match decode_constraints(prefill_plan.worker().worker_id) {
+                    Ok(None) => Ok((prefill_plan, decode_plan)),
+                    Ok(Some(constraints)) => {
+                        decode_plan.abort(None).await;
+                        let mut decode = decode;
+                        super::merge_decode_topology_constraints(&mut decode, constraints);
+                        let decode_context =
+                            planning_context(decode, request_id, metadata, session_affinity);
+                        match self
+                            .decode_host
+                            .plan_admitted_upstream(&decode_context, RequestPhase::Decode)
+                            .await
+                        {
+                            Ok(decode_plan) => Ok((prefill_plan, decode_plan)),
+                            Err(error) => {
+                                prefill_plan.abort(Some(&error)).await;
+                                Err(error)
+                            }
+                        }
+                    }
+                    Err(error) => {
+                        prefill_plan.abort(Some(&error)).await;
+                        decode_plan.abort(Some(&error)).await;
+                        Err(error)
+                    }
+                }
+            }
+            (Ok(prefill_plan), Err(error)) => {
+                prefill_plan.abort(Some(&error)).await;
+                Err(error)
+            }
+            (Err(error), Ok(decode_plan)) => {
+                decode_plan.abort(Some(&error)).await;
+                Err(error)
+            }
+            (Err(error), Err(_)) => Err(error),
+        };
+        (result, prefill_ns, decode_ns)
     }
 }
 
