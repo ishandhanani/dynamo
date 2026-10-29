@@ -57,6 +57,34 @@ pub(crate) fn front_admission_enabled() -> bool {
     *ENABLED.get_or_init(|| dynamo_runtime::config::env_is_truthy(FRONT_ADMISSION_ENV))
 }
 
+/// Without the front stage, still report how long each booked selection spends in the
+/// index lookup and in the scheduler actor round trip, for comparison.
+pub(crate) fn ensure_selection_timing_reporter() {
+    static STARTED: std::sync::OnceLock<()> = std::sync::OnceLock::new();
+    if front_admission_enabled() {
+        return;
+    }
+    STARTED.get_or_init(|| {
+        tokio::spawn(async {
+            let mut interval = tokio::time::interval(STATS_INTERVAL);
+            interval.tick().await;
+            loop {
+                interval.tick().await;
+                let (selections, prepare_ns, schedule_ns) =
+                    dynamo_kv_router::scheduling::poc_timing::take();
+                tracing::info!(
+                    target: "front_admission",
+                    selections,
+                    selections_per_s = selections as f64 / STATS_INTERVAL.as_secs_f64(),
+                    mean_select_prepare_us = prepare_ns as f64 / selections.max(1) as f64 / 1e3,
+                    mean_select_schedule_us = schedule_ns as f64 / selections.max(1) as f64 / 1e3,
+                    "selection timing"
+                );
+            }
+        });
+    });
+}
+
 fn parallel_planning_enabled() -> bool {
     static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *ENABLED.get_or_init(|| dynamo_runtime::config::env_is_truthy(FRONT_ADMISSION_PARALLEL_ENV))
@@ -557,6 +585,9 @@ async fn report_stats(stats: std::sync::Weak<FrontStats>, label: String) {
         let depth = stats.depth.load(Ordering::Relaxed);
         let planned = (admitted + failed).max(1);
         let interval_ns = STATS_INTERVAL.as_nanos() as f64;
+        // Every booked selection in the process, both pools: index lookup vs actor hop.
+        let (selections, select_prepare_ns, select_schedule_ns) =
+            dynamo_kv_router::scheduling::poc_timing::take();
         tracing::info!(
             target: "front_admission",
             stage = %label,
@@ -575,6 +606,9 @@ async fn report_stats(stats: std::sync::Weak<FrontStats>, label: String) {
             blocked_passes,
             depth,
             max_depth,
+            selections,
+            mean_select_prepare_us = select_prepare_ns as f64 / selections.max(1) as f64 / 1e3,
+            mean_select_schedule_us = select_schedule_ns as f64 / selections.max(1) as f64 / 1e3,
             "front admission stats"
         );
     }

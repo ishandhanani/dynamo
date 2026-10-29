@@ -334,6 +334,7 @@ impl SelectionCore {
                 );
             });
         }
+        let poc_prepare_started = std::time::Instant::now();
         let PreparedSelectionInputs {
             block_hashes,
             sequence_hashes,
@@ -444,6 +445,8 @@ impl SelectionCore {
         };
         // `booking` guards the booking until it is installed below: any early
         // return or drop before then frees it.
+        let poc_prepare_ns = poc_prepare_started.elapsed().as_nanos() as u64;
+        let poc_schedule_started = std::time::Instant::now();
         let scheduled = if matches!(admission, SelectionAdmission::Advisory { .. }) {
             entry
                 .scheduler
@@ -459,6 +462,12 @@ impl SelectionCore {
                 .await
                 .map(|(admitted, booking)| (admitted.response, None, booking))
         };
+        if book {
+            crate::scheduling::poc_timing::record(
+                poc_prepare_ns,
+                poc_schedule_started.elapsed().as_nanos() as u64,
+            );
+        }
         let (response, advisory_load, booking) = match scheduled {
             Ok(scheduled) => scheduled,
             Err(KvSchedulerError::QueueRejected(rejection)) => {

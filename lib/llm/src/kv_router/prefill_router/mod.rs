@@ -569,6 +569,7 @@ impl
 
         let router = &binding.router;
         let endpoint_id = &binding.endpoint_id;
+        front_admission::ensure_selection_timing_reporter();
 
         // POC front admission: one queue admits the request against both pools and one
         // serializer books the prefill and decode workers before anything is sent. The
