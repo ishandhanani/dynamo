@@ -4356,6 +4356,32 @@ policy_classes:
     }
 
     #[tokio::test]
+    async fn upstream_booking_skips_the_command_channel() {
+        let (queue, slots) = make_queue(2, 16, 64, None);
+        // Hold every slot: a booking sent through the actor could not even be sent.
+        let held = queue
+            .admission_tx
+            .reserve_many(queue.admission_tx.max_capacity())
+            .await
+            .unwrap();
+        let (request, mut rx) = make_request("upstream", 64);
+        let lease = queue.new_request_lifecycle_lease(Some("upstream"));
+        let enqueue = queue
+            .prepare_enqueue(request, None, lease, None, None, Instant::now(), true)
+            .expect("request is valid");
+        let lease = queue.book_upstream_now(enqueue).await;
+
+        // Answered and booked before returning, without an actor turn.
+        let worker = rx.try_recv().unwrap().unwrap().best_worker;
+        let booking = lease
+            .and_then(|lease| lease.commit())
+            .expect("booking is armed");
+        assert_eq!(booking.worker, worker);
+        assert!(slots.active_tokens(Instant::now())[&worker] > 0);
+        drop(held);
+    }
+
+    #[tokio::test]
     async fn prepared_rows_are_built_after_a_channel_slot() {
         let prepared_queue = make_prepared_queue();
         let queue = &prepared_queue.queue;
