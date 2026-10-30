@@ -589,7 +589,7 @@ fn log_selection<C: WorkerConfigLike>(
         .get(&worker)
         .copied()
         .unwrap_or(0);
-    let mut record = Some(SelectionLog {
+    let record = SelectionLog {
         request_id: request.mode.request_id().unwrap_or("-").to_string(),
         worker,
         worker_type,
@@ -601,15 +601,15 @@ fn log_selection<C: WorkerConfigLike>(
             .get(&worker.worker_id)
             .and_then(WorkerConfigLike::total_kv_blocks),
         pinned: request.pinned_worker == Some(worker),
-    });
+    };
     // POC: hand the record to the selection-log thread, off the booking path.
-    if let (Some(sender), Some(log)) = (selection_log_sender(), record.take())
-        && let Err(std::sync::mpsc::SendError(log)) = sender.send(log)
-    {
-        record = Some(log);
-    }
-    if let Some(record) = record {
-        record.emit();
+    match selection_log_sender() {
+        Some(sender) => {
+            if let Err(std::sync::mpsc::SendError(record)) = sender.send(record) {
+                record.emit();
+            }
+        }
+        None => record.emit(),
     }
 }
 
