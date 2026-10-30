@@ -25,7 +25,12 @@ SKIP_DIRS = {"target", ".venv", "node_modules", ".git"}
 
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--allow", nargs="*", default=["lib/kv-router"], help="path prefixes allowed to contain the pattern")
+    ap.add_argument(
+        "--allow",
+        nargs="*",
+        default=["lib/kv-router"],
+        help="path prefixes allowed to contain the pattern",
+    )
     ap.add_argument("--json", action="store_true")
     ap.add_argument("--root", default=".")
     args = ap.parse_args()
@@ -43,7 +48,10 @@ def main() -> int:
                 if not fn.endswith(".rs"):
                     continue
                 path = os.path.relpath(os.path.join(dirpath, fn), args.root)
-                if any(path.startswith(a.rstrip("/") + "/") or path == a for a in args.allow):
+                if any(
+                    path.startswith(a.rstrip("/") + "/") or path == a
+                    for a in args.allow
+                ):
                     continue
                 try:
                     with open(path, encoding="utf-8", errors="replace") as f:
@@ -51,16 +59,27 @@ def main() -> int:
                             if PATTERN.search(line):
                                 lines += 1
                                 parts = path.split("/")
-                                loc = "/".join(parts[:3]) if parts[0] in ("lib", "deploy") else "/".join(parts[:2])
+                                loc = (
+                                    "/".join(parts[:3])
+                                    if parts[0] in ("lib", "deploy")
+                                    else "/".join(parts[:2])
+                                )
                                 by_location[loc] += 1
                                 offenders.append((path, i, line.rstrip()))
                 except OSError:
                     continue
 
     if args.json:
-        print(json.dumps({"lines": lines, "by_location": by_location, "offenders": offenders}, indent=1))
+        print(
+            json.dumps(
+                {"lines": lines, "by_location": by_location, "offenders": offenders},
+                indent=1,
+            )
+        )
     else:
-        print(f"dynamo_kv_router:: import lines outside allow-list {args.allow}: {lines}")
+        print(
+            f"dynamo_kv_router:: import lines outside allow-list {args.allow}: {lines}"
+        )
         for loc, n in by_location.most_common():
             print(f"  {n:5d}  {loc}")
     return 1 if lines else 0
