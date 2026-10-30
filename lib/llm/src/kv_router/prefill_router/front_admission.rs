@@ -3,14 +3,17 @@
 
 //! Proof of concept: one admission queue in front of both disaggregated pools.
 //!
-//! A request enters one policy-class queue (DRR across classes) at once. Meanwhile, on
-//! its own task, it prepares both legs: the prefill and decode selections run their
-//! index lookups, classification, candidate rows and planning setup, and each stops at
-//! its queue-actor step, which it hands to this stage through a [`ScheduleRelay`]. The
-//! serializer pops a request when both legs are ready and a prefill worker has room
-//! under its class prefill limit and a decode worker has room under its class decode
-//! limit. It then runs the prefill booking and the decode booking, in that order, before
-//! it pops the next request, so every admission sees every earlier booking in both pools.
+//! A request first prepares both legs on its own task: the prefill and decode selections
+//! run their index lookups, classification, candidate rows and planning setup, and each
+//! stops at its queue-actor step, which it hands to this stage through a
+//! [`ScheduleRelay`]. Once both legs have handed over, the request joins one policy-class
+//! queue (DRR across classes). As on main, where a request enters a pool's queue only
+//! after its selection inputs are prepared, queue order is the order in which requests
+//! became ready, and no request waits on another's preparation. A request whose leg fails
+//! first never joins. The serializer pops a request when a prefill worker has room under
+//! its class prefill limit and a decode worker has room under its class decode limit. It
+//! then runs the prefill booking and the decode booking, in that order, before it pops
+//! the next request, so every admission sees every earlier booking in both pools.
 //! Each booking runs on the serializer's task under its pool queue actor's lock
 //! (`DYN_ROUTER_FRONT_ADMISSION_DIRECT_BOOK=0` sends it to the actor instead). The two booked [`RoutePlan`]s go back to the caller, which attaches them
 //! to the request; the prefill hop and the decode host send them without selecting or
@@ -101,7 +104,7 @@ struct SlotState {
     leg_failed: bool,
     /// The caller stopped waiting.
     abandoned: bool,
-    /// The serializer is done with this admission; a leg handed over now fails at once.
+    /// No booking will run for this admission; a leg handed over now fails at once.
     closed: bool,
 }
 
@@ -109,6 +112,8 @@ struct SlotState {
 #[derive(Default)]
 struct AdmissionSlot {
     state: Mutex<SlotState>,
+    /// Wakes the request task when a leg hands over its step or fails.
+    changed: Notify,
 }
 
 enum SlotReadiness {
@@ -129,6 +134,23 @@ impl AdmissionSlot {
         }
     }
 
+    /// Wait until both legs have handed over their steps (`true`) or a leg failed
+    /// (`false`).
+    async fn wait_ready(&self) -> bool {
+        loop {
+            match self.readiness() {
+                SlotReadiness::Ready => return true,
+                SlotReadiness::Discard => return false,
+                SlotReadiness::Waiting => self.changed.notified().await,
+            }
+        }
+    }
+
+    fn fail_leg(&self) {
+        self.state.lock().leg_failed = true;
+        self.changed.notify_one();
+    }
+
     /// Take both steps and close the slot.
     fn take(&self) -> (Option<LegStep>, Option<LegStep>) {
         let mut state = self.state.lock();
@@ -141,7 +163,6 @@ impl AdmissionSlot {
 struct LegRelay {
     slot: Arc<AdmissionSlot>,
     leg: Leg,
-    wake: Arc<Notify>,
 }
 
 impl ScheduleRelay for LegRelay {
@@ -162,7 +183,7 @@ impl ScheduleRelay for LegRelay {
                 Leg::Decode => state.decode = step,
             }
         }
-        self.wake.notify_one();
+        self.slot.changed.notify_one();
         Box::pin(async move {
             rx.await
                 .unwrap_or(Err(KvSchedulerError::SubscriberShutdown))
@@ -211,7 +232,7 @@ struct FrontStats {
     max_decode_ns: AtomicU64,
     wait_ns: AtomicU64,
     max_wait_ns: AtomicU64,
-    /// Drain passes that found the head blocked on room or on unprepared legs.
+    /// Drain passes that found the head blocked on room.
     blocked_passes: AtomicU64,
     depth: AtomicUsize,
     max_depth: AtomicUsize,
@@ -298,19 +319,6 @@ impl FrontAdmission {
         let slot = Arc::new(AdmissionSlot::default());
         let _abandon = AbandonGuard(Arc::clone(&slot), Arc::clone(&self.wake));
 
-        // Join the queue first so waiting overlaps preparation.
-        self.tx
-            .send(Pending {
-                slot: Arc::clone(&slot),
-                class_index,
-                // POC: no overlap lookup before admission, so the DRR cost is the raw ISL.
-                snapshot: QueueSnapshot::new(isl, 0),
-                decode_constraints: Arc::clone(&decode_constraints),
-                enqueued_at: Instant::now(),
-            })
-            .await
-            .map_err(|_| anyhow!("front admission serializer stopped"))?;
-
         let prefill_context =
             planning_context(prefill, &request_id, &metadata, session_affinity.as_ref());
         let decode_context = planning_context(
@@ -323,14 +331,11 @@ impl FrontAdmission {
             Arc::new(LegRelay {
                 slot: Arc::clone(&slot),
                 leg,
-                wake: Arc::clone(&self.wake),
             })
         };
-        let mark_failed = |slot: &AdmissionSlot| {
-            slot.state.lock().leg_failed = true;
-            self.wake.notify_one();
-        };
-        let (prefill_plan, decode_plan) = tokio::join!(
+        // Prepare both legs, then join the queue once both have handed over their
+        // steps, so the request waits only behind requests that were ready first.
+        let (prefill_plan, decode_plan, ()) = tokio::join!(
             async {
                 let plan = self
                     .prefill_host
@@ -341,7 +346,7 @@ impl FrontAdmission {
                     )
                     .await;
                 if plan.is_err() {
-                    mark_failed(&slot);
+                    slot.fail_leg();
                 }
                 plan
             },
@@ -351,10 +356,18 @@ impl FrontAdmission {
                     .plan_admitted_upstream(&decode_context, RequestPhase::Decode, leg(Leg::Decode))
                     .await;
                 if plan.is_err() {
-                    mark_failed(&slot);
+                    slot.fail_leg();
                 }
                 plan
             },
+            join_when_ready(
+                &self.tx,
+                Arc::clone(&slot),
+                class_index,
+                // POC: the legs' overlap is not read back, so the DRR cost is the raw ISL.
+                QueueSnapshot::new(isl, 0),
+                Arc::clone(&decode_constraints),
+            ),
         );
         match (prefill_plan, decode_plan) {
             (Ok(prefill_plan), Ok(decode_plan)) => Ok((prefill_plan, decode_plan)),
@@ -516,15 +529,12 @@ impl Serializer {
                 let decode_router = &self.decode_router;
                 self.queue
                     .pop_next(|class_index, class, pending: &Pending| {
-                        match pending.slot.readiness() {
-                            SlotReadiness::Discard => true,
-                            SlotReadiness::Waiting => false,
-                            SlotReadiness::Ready => {
-                                *class_room[class_index].get_or_insert_with(|| {
-                                    class_has_room(prefill_router, decode_router, class)
-                                })
-                            }
-                        }
+                        // A request joins only when both legs are ready, so a head
+                        // waits on room alone.
+                        matches!(pending.slot.readiness(), SlotReadiness::Discard)
+                            || *class_room[class_index].get_or_insert_with(|| {
+                                class_has_room(prefill_router, decode_router, class)
+                            })
                     })
             };
             self.stats
@@ -613,6 +623,35 @@ impl Serializer {
         // A caller that went away drops the results, and with them the bookings.
         let _ = prefill.reply.send(prefill_result);
         let _ = decode.reply.send(decode_result);
+    }
+}
+
+/// Join the front queue once both legs have handed over their steps, stamping the
+/// arrival then. A request whose leg failed first never joins: the other leg's step, if
+/// handed over, is answered with an error, and a later handover fails at once.
+async fn join_when_ready(
+    tx: &mpsc::Sender<Pending>,
+    slot: Arc<AdmissionSlot>,
+    class_index: usize,
+    snapshot: QueueSnapshot,
+    decode_constraints: DecodeConstraintsFn,
+) {
+    if !slot.wait_ready().await {
+        fail_legs(
+            &slot,
+            "front admission: a leg failed before the request joined the queue",
+        );
+        return;
+    }
+    let pending = Pending {
+        slot,
+        class_index,
+        snapshot,
+        decode_constraints,
+        enqueued_at: Instant::now(),
+    };
+    if let Err(mpsc::error::SendError(pending)) = tx.send(pending).await {
+        fail_legs(&pending.slot, "front admission serializer stopped");
     }
 }
 
@@ -737,5 +776,91 @@ async fn report_stats(stats: std::sync::Weak<FrontStats>, label: String) {
             d_other_busy_frac = d.other_total_us / (interval_ns / 1e3),
             "front admission stats"
         );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const NO_HANG: Duration = Duration::from_secs(5);
+
+    fn hand_over(slot: &Arc<AdmissionSlot>, leg: Leg) -> ScheduleSubmit {
+        let relay = LegRelay {
+            slot: Arc::clone(slot),
+            leg,
+        };
+        relay.relay(Box::pin(async {
+            Err(KvSchedulerError::BookingFailed(
+                "not run in this test".to_string(),
+            ))
+        }))
+    }
+
+    fn spawn_join(
+        tx: &mpsc::Sender<Pending>,
+        slot: &Arc<AdmissionSlot>,
+    ) -> tokio::task::JoinHandle<()> {
+        let tx = tx.clone();
+        let slot = Arc::clone(slot);
+        let decode_constraints: DecodeConstraintsFn = Arc::new(|_| Ok(None));
+        tokio::spawn(async move {
+            join_when_ready(&tx, slot, 0, QueueSnapshot::new(1, 0), decode_constraints).await;
+        })
+    }
+
+    #[tokio::test]
+    async fn requests_join_in_readiness_order() {
+        let (tx, mut rx) = mpsc::channel(4);
+        let first = Arc::new(AdmissionSlot::default());
+        let second = Arc::new(AdmissionSlot::default());
+        let first_join = spawn_join(&tx, &first);
+        let second_join = spawn_join(&tx, &second);
+        let _first_prefill = hand_over(&first, Leg::Prefill);
+        let _second_prefill = hand_over(&second, Leg::Prefill);
+        let _second_decode = hand_over(&second, Leg::Decode);
+        tokio::time::timeout(NO_HANG, second_join)
+            .await
+            .unwrap()
+            .unwrap();
+
+        // The request that arrived first is still preparing its decode leg.
+        let joined = rx.try_recv().expect("the ready request joined");
+        assert!(Arc::ptr_eq(&joined.slot, &second));
+        tokio::task::yield_now().await;
+        assert!(!first_join.is_finished());
+        assert!(rx.try_recv().is_err());
+
+        let _first_decode = hand_over(&first, Leg::Decode);
+        tokio::time::timeout(NO_HANG, first_join)
+            .await
+            .unwrap()
+            .unwrap();
+        let next = rx.try_recv().expect("the request joined once ready");
+        assert!(Arc::ptr_eq(&next.slot, &first));
+        assert!(joined.enqueued_at <= next.enqueued_at);
+    }
+
+    #[tokio::test]
+    async fn leg_failure_before_ready_never_joins() {
+        let (tx, mut rx) = mpsc::channel(4);
+        let slot = Arc::new(AdmissionSlot::default());
+        let join = spawn_join(&tx, &slot);
+        let prefill = hand_over(&slot, Leg::Prefill);
+        slot.fail_leg();
+        tokio::time::timeout(NO_HANG, join).await.unwrap().unwrap();
+        assert!(rx.try_recv().is_err());
+
+        // The leg already handed over is answered, not left waiting.
+        let answer = tokio::time::timeout(NO_HANG, prefill).await.unwrap();
+        let Err(KvSchedulerError::BookingFailed(reason)) = answer else {
+            panic!("the handed-over leg was not failed");
+        };
+        assert!(reason.contains("before the request joined"));
+        // A leg handed over afterwards fails at once.
+        let late = tokio::time::timeout(NO_HANG, hand_over(&slot, Leg::Decode))
+            .await
+            .unwrap();
+        assert!(matches!(late, Err(KvSchedulerError::BookingFailed(_))));
     }
 }
