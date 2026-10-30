@@ -9,9 +9,10 @@
 //! its queue-actor step, which it hands to this stage through a [`ScheduleRelay`]. The
 //! serializer pops a request when both legs are ready and a prefill worker has room
 //! under its class prefill limit and a decode worker has room under its class decode
-//! limit. It then runs the prefill actor step and the decode actor step, in that order,
-//! before it pops the next request, so every admission sees every earlier booking in
-//! both pools. The two booked [`RoutePlan`]s go back to the caller, which attaches them
+//! limit. It then runs the prefill booking and the decode booking, in that order, before
+//! it pops the next request, so every admission sees every earlier booking in both pools.
+//! Each booking runs on the serializer's task under its pool queue actor's lock
+//! (`DYN_ROUTER_FRONT_ADMISSION_DIRECT_BOOK=0` sends it to the actor instead). The two booked [`RoutePlan`]s go back to the caller, which attaches them
 //! to the request; the prefill hop and the decode host send them without selecting or
 //! queueing again.
 //!
@@ -60,14 +61,6 @@ const DECODE_NEEDS_CONSTRAINTS: &str =
 pub(crate) fn front_admission_enabled() -> bool {
     static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *ENABLED.get_or_init(|| dynamo_runtime::config::env_is_truthy(FRONT_ADMISSION_ENV))
-}
-
-/// Run the decode booking alongside the prefill booking instead of after it.
-const PARALLEL_SUBMIT_ENV: &str = "DYN_ROUTER_FRONT_ADMISSION_PARALLEL_SUBMIT";
-
-fn parallel_submit_enabled() -> bool {
-    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ENABLED.get_or_init(|| dynamo_runtime::config::env_is_truthy(PARALLEL_SUBMIT_ENV))
 }
 
 /// Derives the decode leg's routing constraints from the prefill worker the
@@ -572,25 +565,8 @@ impl Serializer {
             fail_legs(&slot, "front admission: legs missing");
             return;
         };
-        let LegStep {
-            submit: decode_submit,
-            reply: decode_reply,
-        } = decode;
-        let mut decode_submit = Some(decode_submit);
         let started = Instant::now();
-        // In parallel, decode is booked before the prefill worker, and with it the decode
-        // leg's KV-transfer constraints, is known. A decode booking that turns out to be
-        // constrained is dropped below, which releases it, and re-planned by the caller.
-        let (prefill_result, mut early_decode) = match decode_submit.take() {
-            Some(decode_submit) if parallel_submit_enabled() => {
-                let (prefill_result, decode_result) = tokio::join!(prefill.submit, decode_submit);
-                (prefill_result, Some(decode_result))
-            }
-            submit => {
-                decode_submit = submit;
-                ((prefill.submit).await, None)
-            }
-        };
+        let prefill_result = (prefill.submit).await;
         let prefill_ns = started.elapsed().as_nanos() as u64;
         let decode_started = Instant::now();
         let prefill_worker = prefill_result
@@ -607,21 +583,13 @@ impl Serializer {
             None => Err(KvSchedulerError::BookingFailed(
                 "front admission: prefill leg was not booked".to_string(),
             )),
-            Some(Ok(None)) => match (early_decode.take(), decode_submit.take()) {
-                (Some(result), _) => result,
-                (None, Some(submit)) => submit.await,
-                (None, None) => Err(KvSchedulerError::BookingFailed(
-                    "front admission: decode leg missing".to_string(),
-                )),
-            },
+            Some(Ok(None)) => (decode.submit).await,
             // Decode must stay in the prefill worker's KV-transfer domain, which its
             // prepared selection did not know: the caller re-plans it.
             Some(Ok(Some(_))) | Some(Err(_)) => Err(KvSchedulerError::BookingFailed(
                 DECODE_NEEDS_CONSTRAINTS.to_string(),
             )),
         };
-        // A decode booking made in parallel but not used is released here.
-        drop(early_decode);
         let finished = Instant::now();
         let decode_ns = (finished - decode_started).as_nanos() as u64;
         self.stats
@@ -644,7 +612,7 @@ impl Serializer {
         }
         // A caller that went away drops the results, and with them the bookings.
         let _ = prefill.reply.send(prefill_result);
-        let _ = decode_reply.send(decode_result);
+        let _ = decode.reply.send(decode_result);
     }
 }
 

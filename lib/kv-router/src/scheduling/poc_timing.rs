@@ -45,11 +45,12 @@ pub fn defer_selection_logs() -> bool {
 }
 
 /// Requests admitted upstream are booked on the caller's task under the queue actor's
-/// lock, not through its command channel.
+/// lock, not through its command channel. On unless
+/// `DYN_ROUTER_FRONT_ADMISSION_DIRECT_BOOK=0`.
 pub fn direct_booking() -> bool {
     static ENABLED: OnceLock<bool> = OnceLock::new();
     *ENABLED.get_or_init(|| {
-        std::env::var("DYN_ROUTER_FRONT_ADMISSION_DIRECT_BOOK").is_ok_and(|value| value == "1")
+        std::env::var("DYN_ROUTER_FRONT_ADMISSION_DIRECT_BOOK").map_or(true, |value| value != "0")
     })
 }
 
