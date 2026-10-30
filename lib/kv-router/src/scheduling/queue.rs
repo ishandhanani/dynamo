@@ -1443,6 +1443,7 @@ impl<
                     let lifecycle_transfer = lease
                         .as_ref()
                         .and_then(|lease| lease.transfer.as_ref().map(Arc::clone));
+                    let started = std::time::Instant::now();
                     let enqueue_ready = self.handle_enqueue(
                         request,
                         attempt_tx,
@@ -1452,6 +1453,7 @@ impl<
                         queue_metadata,
                         admitted_upstream,
                     );
+                    let admitted = std::time::Instant::now();
                     let cleanup_ready = drain_cleanup && self.drain_cleanup();
                     if cleanup_ready {
                         self.handle_update().await;
@@ -1460,6 +1462,12 @@ impl<
                     }
                     // A request still queued rebuilds its rows when admitted.
                     self.turn_prepared = None;
+                    if admitted_upstream {
+                        super::poc_timing::record_actor(
+                            (admitted - started).as_nanos() as u64,
+                            admitted.elapsed().as_nanos() as u64,
+                        );
+                    }
                     let _ = ack_tx.send(lease);
                 }
                 AdmissionCommand::SelectWithoutAdmission { request, resp_tx } => {

@@ -709,6 +709,11 @@ async fn report_stats(stats: std::sync::Weak<FrontStats>, label: String) {
             booking_prepares = timing.booking_prepares,
             mean_booking_prepare_us =
                 timing.booking_prepare_ns as f64 / timing.booking_prepares.max(1) as f64 / 1e3,
+            actor_steps = timing.actor_steps,
+            mean_actor_admit_us =
+                timing.actor_admit_ns as f64 / timing.actor_steps.max(1) as f64 / 1e3,
+            mean_actor_after_us =
+                timing.actor_after_ns as f64 / timing.actor_steps.max(1) as f64 / 1e3,
             "front admission stats"
         );
     }
