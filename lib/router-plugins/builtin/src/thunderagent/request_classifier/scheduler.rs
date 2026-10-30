@@ -6,8 +6,8 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use dynamo_kv_router::plugins::request_classifier::{ClassifyEvent, RequestProgress};
-use dynamo_kv_router::protocols::WorkerWithDpRank;
+use dynamo_admission::classifier::{ClassifyEvent, RequestProgress};
+use dynamo_router_protocol::protocols::WorkerWithDpRank;
 use tokio::sync::Notify;
 
 use super::super::ThunderAgentConfig;

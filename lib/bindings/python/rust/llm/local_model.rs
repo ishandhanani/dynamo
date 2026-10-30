@@ -4,7 +4,7 @@
 use std::collections::{HashMap, HashSet};
 
 use super::*;
-use dynamo_kv_router::protocols::{
+use dynamo_router_protocol::protocols::{
     KvTransferEnforcement as RsKvTransferEnforcement, RoutingConstraints as RsRoutingConstraints,
 };
 use dynamo_runtime::protocols::EndpointId;

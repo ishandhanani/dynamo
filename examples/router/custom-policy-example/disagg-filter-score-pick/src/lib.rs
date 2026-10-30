@@ -11,12 +11,14 @@ mod scorer;
 
 use std::sync::Arc;
 
-use dynamo_kv_router::services::selection::{
-    WorkerSelectionPolicyFactory, WorkerSelectionPolicyParameters,
-    WorkerSelectionPolicyProviderError, WorkerSelectionPolicyRegistry,
-    WorkerSelectionPolicyRegistryError,
+use dynamo_kv_router::plugins::worker_selection::SelectionConfig;
+use dynamo_kv_router::plugins::{
+    WorkerSelectionPolicyParameters, WorkerSelectionPolicyProviderError,
+    WorkerSelectionPolicyRegistry, WorkerSelectionPolicyRegistryError,
 };
-use dynamo_kv_router::{KvRouterConfig, WorkerFilter, WorkerSelectionPolicy, WorkerType};
+use dynamo_router_protocol::WorkerType;
+use dynamo_worker_selection::plugin::WorkerSelectionPolicyFactory;
+use dynamo_worker_selection::plugin::{WorkerFilter, WorkerSelectionPolicy};
 use filter::MinimumDeviceOverlapFilter;
 use picker::{DecodePicker, PrefillPicker, UnsupportedWorkerTypePicker};
 use scorer::{DecodeLoadScorer, PrefillLoadScorer};
@@ -40,7 +42,7 @@ fn validate_min_device_overlap_blocks(
 
 /// Builds the complete policy used by prefill routes.
 fn create_prefill_policy(
-    config: &KvRouterConfig,
+    _config: &SelectionConfig,
     min_device_overlap_blocks: f64,
 ) -> WorkerSelectionPolicy {
     let filters: Vec<Box<dyn WorkerFilter>> = vec![Box::new(MinimumDeviceOverlapFilter {
@@ -48,7 +50,6 @@ fn create_prefill_policy(
     })];
 
     WorkerSelectionPolicy::new_with_filters(
-        config.clone(),
         WorkerType::Prefill.default_selector_label(),
         filters,
         vec![Box::new(PrefillLoadScorer)],
@@ -58,7 +59,7 @@ fn create_prefill_policy(
 
 /// Builds the complete policy used by decode routes.
 fn create_decode_policy(
-    config: &KvRouterConfig,
+    _config: &SelectionConfig,
     min_device_overlap_blocks: f64,
 ) -> WorkerSelectionPolicy {
     let filters: Vec<Box<dyn WorkerFilter>> = vec![Box::new(MinimumDeviceOverlapFilter {
@@ -66,7 +67,6 @@ fn create_decode_policy(
     })];
 
     WorkerSelectionPolicy::new_with_filters(
-        config.clone(),
         WorkerType::Decode.default_selector_label(),
         filters,
         vec![Box::new(DecodeLoadScorer)],
@@ -78,7 +78,7 @@ fn create_decode_policy(
 ///
 /// Discovery has already scoped the worker pool before the factory receives this stage.
 fn create_policy(
-    config: &KvRouterConfig,
+    config: &SelectionConfig,
     worker_type: WorkerType,
     min_device_overlap_blocks: f64,
 ) -> WorkerSelectionPolicy {
@@ -86,7 +86,6 @@ fn create_policy(
         WorkerType::Prefill => create_prefill_policy(config, min_device_overlap_blocks),
         WorkerType::Decode => create_decode_policy(config, min_device_overlap_blocks),
         unsupported => WorkerSelectionPolicy::new(
-            config.clone(),
             unsupported.as_str(),
             Vec::new(),
             Box::new(UnsupportedWorkerTypePicker::new(unsupported)),
@@ -117,12 +116,13 @@ pub fn register(
 mod tests {
     use std::collections::HashMap;
 
-    use dynamo_kv_router::protocols::{RoutingConstraints, WorkerConfigLike};
-    use dynamo_kv_router::scheduling::{OverlapSignals, ScheduleMode};
-    use dynamo_kv_router::{
-        KvSchedulerError, SchedulingRequest, WorkerSelectionInput, WorkerSelectionPolicyError,
-        WorkerSelector,
+    use dynamo_router_protocol::overlap::OverlapSignals;
+    use dynamo_router_protocol::protocols::{RoutingConstraints, WorkerConfigLike};
+    use dynamo_router_protocol::sched::ScheduleMode;
+    use dynamo_router_protocol::sched::{
+        KvSchedulerError, SchedulingRequest, WorkerSelectionPolicyError,
     };
+    use dynamo_worker_selection::selector::{WorkerSelectionInput, WorkerSelector};
 
     use super::*;
 
@@ -182,7 +182,7 @@ mod tests {
 
     #[test]
     fn creates_each_supported_worker_policy() {
-        let config = KvRouterConfig::default();
+        let config = SelectionConfig::default();
         create_policy(&config, WorkerType::Prefill, 0.0);
         create_policy(&config, WorkerType::Decode, 0.0);
     }
@@ -193,7 +193,7 @@ mod tests {
         let request = request();
 
         for worker_type in [WorkerType::Aggregated, WorkerType::Encode] {
-            let policy = create_policy(&KvRouterConfig::default(), worker_type, 0.0);
+            let policy = create_policy(&SelectionConfig::default(), worker_type, 0.0);
             let error = policy
                 .select_worker(WorkerSelectionInput::configured(
                     &workers,

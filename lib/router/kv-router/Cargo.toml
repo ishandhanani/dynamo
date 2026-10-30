@@ -1,0 +1,60 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+[package]
+name = "dynamo-kv-router"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+homepage.workspace = true
+repository.workspace = true
+description = "Composes a Dynamo router from the stage crates: SelectionService and its builder, the plugin API and registry, router configuration, and the standalone selection service"
+
+[features]
+default = []
+# The selection HTTP service (axum itself is always linked; the routes are behind this gate).
+http = ["dynamo-slot-tracker/http"]
+bench = ["dynamo-scheduler/bench"]
+# Test hooks consumed by dependent crates' tests; never enable in release.
+testing = ["dynamo-scheduler/testing"]
+
+[dependencies]
+dynamo-scheduler = { workspace = true }
+dynamo-router-protocol = { workspace = true }
+dynamo-kv-indexer = { workspace = true, features = ["http"] }
+dynamo-slot-tracker = { workspace = true, features = ["replica-sync-zmq"] }
+dynamo-admission = { workspace = true }
+dynamo-worker-selection = { workspace = true }
+anyhow = { workspace = true }
+dynamo-truthy = { workspace = true }
+fastrand = "2"
+async-trait = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+serde_yaml = "0.9.34"
+thiserror = { workspace = true }
+tokio = { workspace = true }
+tokio-util = { workspace = true }
+tracing = { workspace = true }
+parking_lot = { workspace = true }
+axum = { version = "=0.8.4", default-features = false, features = [
+  "http1",
+  "json",
+  "matched-path",
+  "query",
+  "tokio",
+  "tracing",
+] }
+
+[dev-dependencies]
+rustc-hash = "2.1.1"
+uuid = { workspace = true }
+dynamo-scheduler = { workspace = true, features = ["testing"] }
+dynamo-router-protocol = { workspace = true, features = ["testing"] }
+dynamo-kv-indexer = { workspace = true, features = ["testing"] }
+dynamo-slot-tracker = { workspace = true, features = ["testing"] }
+dynamo-worker-selection = { workspace = true, features = ["testing"] }
+tokio = { workspace = true, features = ["rt", "macros", "time", "test-util"] }
+tower = { version = "0.5", features = ["util"] }
+tempfile = { workspace = true }

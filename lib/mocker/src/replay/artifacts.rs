@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright (c) 2025-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-use dynamo_kv_router::protocols::{KvCacheEvent, StorageTier};
+use dynamo_router_protocol::protocols::{KvCacheEvent, StorageTier};
 use uuid::Uuid;
 
 use crate::common::protocols::OutputSignal;

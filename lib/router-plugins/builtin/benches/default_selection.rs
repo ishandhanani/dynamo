@@ -4,8 +4,10 @@
 mod support;
 use criterion::{BenchmarkId, Criterion, black_box, criterion_group, criterion_main};
 use dynamo_custom_policy_builtin::default_policy;
-use dynamo_kv_router::protocols::SelectionTraceSpec;
-use dynamo_kv_router::{KvRouterConfig, WorkerSelector};
+use dynamo_kv_router::config::KvRouterConfig;
+use dynamo_router_protocol::protocols::SelectionTraceSpec;
+use dynamo_worker_selection::config::SelectionConfig;
+use dynamo_worker_selection::selector::WorkerSelector;
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::Duration;
@@ -62,9 +64,11 @@ fn bench(c: &mut Criterion) {
                 overlap_score_credit_decay: decay,
                 ..Default::default()
             };
-            let reference =
-                dynamo_kv_router::DefaultWorkerSelector::new(Some(config.clone()), "prefill");
-            let plugin = default_policy(config, "prefill");
+            let reference = dynamo_worker_selection::selector::DefaultWorkerSelector::new(
+                Some(SelectionConfig::from(&config)),
+                "prefill",
+            );
+            let plugin = default_policy(SelectionConfig::from(&config), "prefill");
             let reference_allocs = allocations(|| {
                 black_box(
                     reference
@@ -120,10 +124,10 @@ fn bench(c: &mut Criterion) {
         ] {
             let (workers, request) = support::fixture(count, 2048);
             let plugin = default_policy(
-                KvRouterConfig {
+                SelectionConfig::from(&KvRouterConfig {
                     router_temperature: 0.0,
                     ..Default::default()
-                },
+                }),
                 "prefill",
             );
             let allocs = allocations(|| {
@@ -157,16 +161,16 @@ fn bench(c: &mut Criterion) {
 }
 
 struct LoadScorer(f64);
-impl dynamo_kv_router::WorkerScorer for LoadScorer {
-    fn required_worker_inputs(&self) -> dynamo_kv_router::WorkerInputs {
-        dynamo_kv_router::WorkerInputs::LOAD
+impl dynamo_worker_selection::plugin::WorkerScorer for LoadScorer {
+    fn required_worker_inputs(&self) -> dynamo_worker_selection::plugin::WorkerInputs {
+        dynamo_worker_selection::plugin::WorkerInputs::LOAD
     }
     fn score(
         &mut self,
-        _: &dynamo_kv_router::WorkerSelectionContext<'_>,
-        candidates: dynamo_kv_router::WorkerCandidates<'_>,
+        _: &dynamo_worker_selection::plugin::WorkerSelectionContext<'_>,
+        candidates: dynamo_worker_selection::plugin::WorkerCandidates<'_>,
         costs: &mut [f64],
-    ) -> Result<(), dynamo_kv_router::WorkerSelectionPolicyError> {
+    ) -> Result<(), dynamo_router_protocol::sched::WorkerSelectionPolicyError> {
         for (candidate, cost) in candidates.iter().zip(costs) {
             *cost = candidate.load().unwrap().active_requests() as f64 * self.0;
         }
@@ -175,12 +179,12 @@ impl dynamo_kv_router::WorkerScorer for LoadScorer {
 }
 
 struct MinimumPicker;
-impl dynamo_kv_router::WorkerPicker for MinimumPicker {
+impl dynamo_worker_selection::plugin::WorkerPicker for MinimumPicker {
     fn pick(
         &mut self,
-        _: &dynamo_kv_router::WorkerSelectionContext<'_>,
-        input: dynamo_kv_router::WorkerInputView<'_>,
-    ) -> Result<usize, dynamo_kv_router::WorkerSelectionPolicyError> {
+        _: &dynamo_worker_selection::plugin::WorkerSelectionContext<'_>,
+        input: dynamo_worker_selection::plugin::WorkerInputView<'_>,
+    ) -> Result<usize, dynamo_router_protocol::sched::WorkerSelectionPolicyError> {
         Ok(input
             .candidates()
             .iter()
@@ -204,11 +208,10 @@ fn stacked(c: &mut Criterion) {
             let scorers = (0..scorer_count)
                 .map(|index| {
                     Box::new(LoadScorer((index + 1) as f64))
-                        as Box<dyn dynamo_kv_router::WorkerScorer>
+                        as Box<dyn dynamo_worker_selection::plugin::WorkerScorer>
                 })
                 .collect();
-            let policy = dynamo_kv_router::WorkerSelectionPolicy::new(
-                KvRouterConfig::default(),
+            let policy = dynamo_worker_selection::plugin::WorkerSelectionPolicy::new(
                 "prefill",
                 scorers,
                 Box::new(MinimumPicker),
@@ -248,16 +251,17 @@ fn shared_cache(c: &mut Criterion) {
                     if !tier_matches {
                         request.overlap.tier_overlap_blocks = Default::default();
                     }
-                    request.shared_cache_hits =
-                        Some(dynamo_kv_router::SharedCacheHits::from_ranges(
+                    request.shared_cache_hits = Some(
+                        dynamo_router_protocol::protocols::SharedCacheHits::from_ranges(
                             (0..range_count).map(|i| i * 4..i * 4 + 2).collect(),
-                        ));
+                        ),
+                    );
                     let policy = default_policy(
-                        KvRouterConfig {
+                        SelectionConfig::from(&KvRouterConfig {
                             shared_cache_multiplier: Some(credit),
                             overlap_score_credit_decay: 0.6,
                             ..Default::default()
-                        },
+                        }),
                         "prefill",
                     );
                     let mut select = || {
@@ -284,9 +288,9 @@ fn shared_cache(c: &mut Criterion) {
 /// Like the selection service's config, it caches its hashed keys.
 struct HintWorker {
     topology: std::collections::HashMap<String, String>,
-    keys: dynamo_kv_router::kv_hints::WorkerKvTransferKeysCache,
+    keys: dynamo_router_protocol::kv_hints::WorkerKvTransferKeysCache,
 }
-impl dynamo_kv_router::protocols::WorkerConfigLike for HintWorker {
+impl dynamo_router_protocol::protocols::WorkerConfigLike for HintWorker {
     fn data_parallel_start_rank(&self) -> u32 {
         0
     }
@@ -302,11 +306,13 @@ impl dynamo_kv_router::protocols::WorkerConfigLike for HintWorker {
     fn kv_hint_transfer_metadata_for_dp_rank(
         &self,
         _dp_rank: u32,
-    ) -> Option<dynamo_kv_router::protocols::KvHintTransferWorkerMetadata<'_>> {
-        Some(dynamo_kv_router::protocols::KvHintTransferWorkerMetadata {
-            worker_type: "prefill",
-            source_control_endpoint: Some("tcp://worker:23280"),
-        })
+    ) -> Option<dynamo_router_protocol::protocols::KvHintTransferWorkerMetadata<'_>> {
+        Some(
+            dynamo_router_protocol::protocols::KvHintTransferWorkerMetadata {
+                worker_type: "prefill",
+                source_control_endpoint: Some("tcp://worker:23280"),
+            },
+        )
     }
     fn topology_domains(&self) -> Option<&std::collections::HashMap<String, String>> {
         Some(&self.topology)
@@ -316,7 +322,7 @@ impl dynamo_kv_router::protocols::WorkerConfigLike for HintWorker {
     }
     fn kv_transfer_keys(
         &self,
-    ) -> std::borrow::Cow<'_, dynamo_kv_router::kv_hints::WorkerKvTransferKeys> {
+    ) -> std::borrow::Cow<'_, dynamo_router_protocol::kv_hints::WorkerKvTransferKeys> {
         std::borrow::Cow::Borrowed(self.keys.get_or_init(self))
     }
 }
@@ -368,20 +374,20 @@ fn kv_transfer(c: &mut Criterion) {
                     .collect();
                 sources.sort_unstable();
                 request.kv_transfer_candidates =
-                    Some(dynamo_kv_router::kv_hints::KvTransferCandidates {
+                    Some(dynamo_router_protocol::kv_hints::KvTransferCandidates {
                         block_hashes: (0..128)
-                            .map(dynamo_kv_router::protocols::ExternalSequenceBlockHash)
+                            .map(dynamo_router_protocol::protocols::ExternalSequenceBlockHash)
                             .collect(),
                         owner_prefix_blocks: sources,
                         routing_snapshot: None,
                     });
             }
             let policy = default_policy(
-                KvRouterConfig {
+                SelectionConfig::from(&KvRouterConfig {
                     shared_cache_multiplier: Some(credit),
                     overlap_score_credit_decay: 0.6,
                     ..Default::default()
-                },
+                }),
                 "prefill",
             );
             let mut select = || {

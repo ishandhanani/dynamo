@@ -3,9 +3,9 @@
 
 //! Active-request cost for the stacked scorer stage.
 
-use dynamo_kv_router::{
+use dynamo_router_protocol::sched::WorkerSelectionPolicyError;
+use dynamo_worker_selection::plugin::{
     WorkerCandidates, WorkerInputs, WorkerScorer, WorkerSelectionContext,
-    WorkerSelectionPolicyError,
 };
 
 pub(crate) struct ActiveRequestsScorer;

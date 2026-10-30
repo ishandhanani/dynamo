@@ -8,24 +8,22 @@
 use std::{sync::Arc, time::Duration};
 
 use anyhow::Result;
-use dynamo_kv_router::{
-    ConcurrentRadixTreeCompressed, SessionPrefixIndexer,
-    approx::PruneConfig,
-    config::{ApproximateCachePolicyKind, KvRouterConfig},
-    indexer::{
-        ApproximateRetentionConfig, KvIndexer, KvIndexerMetrics, LowerTierIndexers,
-        ThreadPoolIndexer,
-    },
+use dynamo_kv_indexer::config::ApproximateCachePolicyKind;
+use dynamo_kv_indexer::pruning::PruneConfig;
+use dynamo_kv_indexer::{
+    ApproximateRetentionConfig, ConcurrentRadixTreeCompressed, KvIndexer, KvIndexerMetrics,
+    LowerTierIndexers, SessionPrefixIndexer, ThreadPoolIndexer,
 };
+use dynamo_kv_router::config::KvRouterConfig;
 
 // Re-export tiered-match types so internal callers (`indexer::TieredMatchDetails`)
 // keep working after these types moved to `dynamo-kv-router`.
-pub(crate) use dynamo_kv_router::indexer::TieredMatchDetails;
+pub(crate) use dynamo_kv_indexer::TieredMatchDetails;
 #[allow(unused_imports)]
-pub(crate) use dynamo_kv_router::indexer::WireTieredMatchDetails;
-pub use dynamo_kv_router::services::indexer::backend::{Indexer, RemotePrimary, SideIndexer};
-pub(crate) use dynamo_kv_router::services::indexer::recording::ApproximateRequestLease;
-use dynamo_kv_router::services::indexer::session_updates::SessionUpdateSender;
+pub(crate) use dynamo_kv_indexer::WireTieredMatchDetails;
+pub use dynamo_kv_indexer::ingest::backend::{Indexer, RemotePrimary, SideIndexer};
+pub(crate) use dynamo_kv_indexer::ingest::recording::ApproximateRequestLease;
+use dynamo_kv_indexer::ingest::session_updates::SessionUpdateSender;
 use dynamo_runtime::component::Component;
 pub(crate) use ingress::{RuntimeIngress, RuntimeIngressArgs};
 use tokio_util::sync::CancellationToken;
@@ -38,6 +36,99 @@ pub mod remote;
 pub use self::embedding_cache::{
     EmbeddingCacheIndexer, preprocessed_multimodal_cache_keys, try_build_cache_indexer,
 };
+
+use dynamo_kv_indexer::{IndexerCounterFamily, KvIndexerCounterCollector};
+use dynamo_runtime::metrics::PrometheusMetric;
+
+/// Component-registered indexer metrics, memoized per process so repeated indexer construction
+/// never double-registers the counters.
+pub trait KvIndexerMetricsExt {
+    fn from_component(component: &Component) -> Arc<KvIndexerMetrics>;
+}
+
+const KV_CACHE_EVENTS_APPLIED_SUFFIX: &str = "kv_cache_events_applied";
+const KV_CACHE_EVENT_WARNINGS_SUFFIX: &str = "kv_cache_event_warnings";
+const CKF_MUTATION_SUFFIX: &str = "ckf_mutation_total";
+static KV_INDEXER_METRICS: std::sync::OnceLock<Arc<KvIndexerMetrics>> = std::sync::OnceLock::new();
+
+/// One indexer counter family as a component metric: the hierarchy names it
+/// and injects its labels, the collector reads the indexer's atomics at scrape.
+trait IndexerCounterMetric: PrometheusMetric {
+    const FAMILY: IndexerCounterFamily;
+    fn collector(&self) -> &KvIndexerCounterCollector;
+}
+
+macro_rules! indexer_counter_metric {
+    ($name:ident, $family:expr) => {
+        #[derive(Clone)]
+        struct $name(KvIndexerCounterCollector);
+
+        impl prometheus::core::Collector for $name {
+            fn desc(&self) -> Vec<&prometheus::core::Desc> {
+                self.0.desc()
+            }
+
+            fn collect(&self) -> Vec<prometheus::proto::MetricFamily> {
+                self.0.collect()
+            }
+        }
+
+        impl PrometheusMetric for $name {
+            fn with_opts(opts: prometheus::Opts) -> Result<Self, prometheus::Error> {
+                KvIndexerCounterCollector::new($family, opts).map(Self)
+            }
+        }
+
+        impl IndexerCounterMetric for $name {
+            const FAMILY: IndexerCounterFamily = $family;
+
+            fn collector(&self) -> &KvIndexerCounterCollector {
+                &self.0
+            }
+        }
+    };
+}
+
+indexer_counter_metric!(EventsAppliedMetric, IndexerCounterFamily::EventsApplied);
+indexer_counter_metric!(EventWarningsMetric, IndexerCounterFamily::EventWarnings);
+indexer_counter_metric!(CkfMutationsMetric, IndexerCounterFamily::CkfMutations);
+
+/// Register `T` on the component and put `metrics` in its scrape. On failure
+/// the counters still count; they are just not exported.
+fn expose<T: IndexerCounterMetric>(
+    component: &Component,
+    suffix: &str,
+    metrics: &KvIndexerMetrics,
+) {
+    match dynamo_runtime::metrics::create_metric::<T, _>(
+        component,
+        suffix,
+        T::FAMILY.help(),
+        &[],
+        None,
+        None,
+    ) {
+        Ok(metric) => metric.collector().attach(metrics),
+        Err(e) => tracing::warn!(
+            metric = suffix,
+            "Failed to register kv indexer counters on the component; they stay unexposed: {e}"
+        ),
+    }
+}
+
+impl KvIndexerMetricsExt for KvIndexerMetrics {
+    fn from_component(component: &Component) -> Arc<KvIndexerMetrics> {
+        KV_INDEXER_METRICS
+            .get_or_init(|| {
+                let metrics = KvIndexerMetrics::new_unregistered();
+                expose::<EventsAppliedMetric>(component, KV_CACHE_EVENTS_APPLIED_SUFFIX, &metrics);
+                expose::<EventWarningsMetric>(component, KV_CACHE_EVENT_WARNINGS_SUFFIX, &metrics);
+                expose::<CkfMutationsMetric>(component, CKF_MUTATION_SUFFIX, &metrics);
+                Arc::new(metrics)
+            })
+            .clone()
+    }
+}
 use self::remote::RemoteIndexer;
 pub use self::remote::{ServedIndexerHandle, ServedIndexerMode, ensure_served_indexer_service};
 #[cfg(feature = "ckf-diagnostics")]
@@ -269,7 +360,7 @@ fn predict_on_route_side_indexer(
 
 #[cfg(test)]
 pub(super) mod test_util {
-    use dynamo_kv_router::protocols::{
+    use dynamo_router_protocol::protocols::{
         ExternalSequenceBlockHash, KvCacheEvent, KvCacheEventData, KvCacheStoreData,
         KvCacheStoredBlockData, LocalBlockHash, RouterEvent, StorageTier,
         compute_seq_hash_for_block,

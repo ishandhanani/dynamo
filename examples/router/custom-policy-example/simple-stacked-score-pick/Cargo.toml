@@ -12,5 +12,7 @@ repository.workspace = true
 description = "Stacked scorer and picker custom worker-selection policy example for Dynamo"
 
 [dependencies]
-dynamo-kv-router = { workspace = true, features = ["standalone-selection"] }
+dynamo-router-protocol = { workspace = true }
+dynamo-kv-router = { workspace = true }
+dynamo-worker-selection = { workspace = true }
 serde.workspace = true

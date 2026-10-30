@@ -15,6 +15,8 @@ pub mod media;
 #[cfg(feature = "mm-routing")]
 pub mod mm_routing;
 pub mod prompt;
+mod request_options;
+pub(crate) use request_options::apply_request_tool_call_parsing_options;
 pub mod speculative_prefill;
 pub(crate) mod structural_tag;
 pub(crate) mod tool_choice;
@@ -54,7 +56,7 @@ use std::{
 use tokio_util::sync::CancellationToken;
 use tracing::{self, Instrument};
 
-use crate::http::service::metrics::RequestMetrics;
+use crate::http::service::metrics::RequestMetricsContextExt as _;
 #[cfg(all(feature = "mm-routing", feature = "media-ffmpeg"))]
 use crate::local_model::runtime_config::{
     ModelRuntimeConfig, SGLANG_QWEN_VIDEO_PROCESSOR_CONTRACT_RUNTIME_KEY,
@@ -73,8 +75,8 @@ use crate::preprocessor::media::{MediaDecoder, MediaLoader, max_data_url_bytes};
 use crate::protocols::common::preprocessor::{
     MultimodalData, MultimodalDataMap, MultimodalUuidMap, PreprocessedRequestBuilder, RoutingHints,
 };
-use crate::protocols::common::timing::RequestTracker;
-use crate::tokenizers::Encoding;
+use crate::{protocols::common::timing::RequestTracker, tokenizers::Encoding};
+use dynamo_http_server::metrics::RequestMetrics;
 
 use dynamo_parsers::{
     ReasoningParser, ReasoningParserType, reasoning::ParserResult,
@@ -1067,7 +1069,7 @@ fn append_mm_routing_replacement(
     image: MmImageEntry,
     num_image_tokens: usize,
 ) -> Result<()> {
-    let fill_token = dynamo_kv_router::protocols::pad_value_for_mm_hash(image.mm_hash);
+    let fill_token = dynamo_router_protocol::protocols::pad_value_for_mm_hash(image.mm_hash);
 
     append_mm_routing_replacement_with_fill(
         expanded,
@@ -1135,10 +1137,10 @@ fn apply_tracked_mm_replacements(
 ) -> Result<(
     Vec<TokenIdType>,
     usize,
-    Vec<Option<dynamo_kv_router::protocols::BlockExtraInfo>>,
+    Vec<Option<dynamo_router_protocol::protocols::BlockExtraInfo>>,
 )> {
-    use dynamo_kv_router::protocols::{BlockExtraInfo, BlockMmObjectInfo};
-    use dynamo_kv_router::zmq_wire::{normalize_mm_placeholder_runs, normalize_mm_token_runs};
+    use dynamo_kv_indexer::zmq_wire::{normalize_mm_placeholder_runs, normalize_mm_token_runs};
+    use dynamo_router_protocol::protocols::{BlockExtraInfo, BlockMmObjectInfo};
 
     anyhow::ensure!(block_size > 0, "MM routing block size must be positive");
     anyhow::ensure!(
@@ -4505,7 +4507,7 @@ impl OpenAIPreprocessor {
                         replacement_tokens,
                     } => {
                         let fill_token =
-                            dynamo_kv_router::protocols::pad_value_for_mm_hash(*mm_hash);
+                            dynamo_router_protocol::protocols::pad_value_for_mm_hash(*mm_hash);
                         TrackedMmRoutingReplacement {
                             mm_hash: *mm_hash,
                             target_tokens: target_tokens.clone(),
@@ -8594,8 +8596,7 @@ mod strip_tests {
 #[cfg(test)]
 mod extra_args_media_copy_tests {
     use super::*;
-    use crate::model_card::ModelDeploymentCard;
-    use crate::protocols::common::preprocessor::MultimodalData;
+    use crate::{model_card::ModelDeploymentCard, protocols::common::preprocessor::MultimodalData};
 
     fn test_preprocessor() -> OpenAIPreprocessor {
         let mdc = ModelDeploymentCard::load_from_disk(
@@ -8621,8 +8622,7 @@ mod extra_args_media_copy_tests {
 
     #[tokio::test]
     async fn deepseek_v41_display_name_fallback_orders_tool_media() {
-        use crate::common::checked_file::CheckedFile;
-        use crate::model_card::ModelInfoType;
+        use crate::{common::checked_file::CheckedFile, model_card::ModelInfoType};
 
         let mut mdc = ModelDeploymentCard::load_from_disk(
             "tests/data/sample-models/mock-llama-3.1-8b-instruct",
@@ -10327,8 +10327,7 @@ mod tests {
 
     #[tokio::test]
     async fn disabled_unified_reasoning_keeps_interleaved_text_order_in_stream_and_batch() {
-        use crate::protocols::openai::GuidedToolConstraint;
-        use crate::protocols::openai::chat_completions::unified_parser;
+        use crate::protocols::openai::{GuidedToolConstraint, chat_completions::unified_parser};
         for (family, input) in [
             (
                 "kimi_k3",
@@ -11465,7 +11464,7 @@ mod tests {
             width: 320,
             height: 240,
         };
-        let fill = dynamo_kv_router::protocols::pad_value_for_mm_hash(image.mm_hash);
+        let fill = dynamo_router_protocol::protocols::pad_value_for_mm_hash(image.mm_hash);
         let dimension_ids: Vec<TokenIdType> = "image 320x240"
             .bytes()
             .map(|byte| 1000 + u32::from(byte))
@@ -11494,7 +11493,7 @@ mod tests {
             width: 320,
             height: 240,
         };
-        let fill = dynamo_kv_router::protocols::pad_value_for_mm_hash(image.mm_hash);
+        let fill = dynamo_router_protocol::protocols::pad_value_for_mm_hash(image.mm_hash);
         let mut expanded = vec![7];
 
         append_mm_routing_replacement(
@@ -11529,7 +11528,7 @@ mod tests {
             width: 224,
             height: 224,
         };
-        let fill = dynamo_kv_router::protocols::pad_value_for_mm_hash(image.mm_hash);
+        let fill = dynamo_router_protocol::protocols::pad_value_for_mm_hash(image.mm_hash);
         let mut expanded = vec![7];
 
         append_mm_routing_replacement(&mut expanded, &tokenizer, layout, image, 3).unwrap();
@@ -11723,8 +11722,10 @@ mod tests {
                 height: 480,
             },
         ];
-        let first_fill = dynamo_kv_router::protocols::pad_value_for_mm_hash(images[0].mm_hash);
-        let second_fill = dynamo_kv_router::protocols::pad_value_for_mm_hash(images[1].mm_hash);
+        let first_fill =
+            dynamo_router_protocol::protocols::pad_value_for_mm_hash(images[0].mm_hash);
+        let second_fill =
+            dynamo_router_protocol::protocols::pad_value_for_mm_hash(images[1].mm_hash);
 
         let (expanded, prompt_len) = expand_mm_routing_tokens(
             &tokenizer,
@@ -13809,10 +13810,10 @@ mod tests {
             "model": "test-model", "input": [[1, 2, 3], [4, 5]],
         }))
         .unwrap();
-        let metrics = Arc::new(crate::http::service::metrics::Metrics::new());
+        let metrics = Arc::new(dynamo_http_server::metrics::Metrics::new());
         let inflight = metrics.clone().create_inflight_guard(
             "test-model",
-            crate::http::service::metrics::Endpoint::Embeddings,
+            dynamo_http_server::metrics::Endpoint::Embeddings,
             false,
             "",
         );
@@ -13830,8 +13831,8 @@ mod tests {
         assert_eq!(awaiting_first_token_input_tokens(&metrics), 0);
     }
 
-    fn awaiting_first_token_input_tokens(metrics: &crate::http::service::metrics::Metrics) -> u64 {
-        let view = crate::discovery::CommittedModelView {
+    fn awaiting_first_token_input_tokens(metrics: &dynamo_http_server::metrics::Metrics) -> u64 {
+        let view = dynamo_http_server::load::ModelLoadView {
             name: "test-model".to_string(),
             is_ready: true,
             aliases: Vec::new(),
@@ -13858,10 +13859,10 @@ mod tests {
             "messages": [{"role": "user", "content": "What is the weather?"}],
         }))
         .unwrap();
-        let metrics = Arc::new(crate::http::service::metrics::Metrics::new());
+        let metrics = Arc::new(dynamo_http_server::metrics::Metrics::new());
         let inflight = metrics.clone().create_inflight_guard(
             "test-model",
-            crate::http::service::metrics::Endpoint::ChatCompletions,
+            dynamo_http_server::metrics::Endpoint::ChatCompletions,
             false,
             "",
         );
@@ -16920,7 +16921,7 @@ mod tests {
     #[cfg(feature = "mm-routing")]
     #[test]
     fn tracked_video_boundary_uses_native_metadata_only_when_needed() {
-        use dynamo_kv_router::protocols::pad_value_for_mm_hash;
+        use dynamo_router_protocol::protocols::pad_value_for_mm_hash;
 
         let video_token_id = 100;
         let mm_hash = 41;
@@ -16953,7 +16954,7 @@ mod tests {
     #[cfg(feature = "mm-routing")]
     #[test]
     fn tracked_video_boundary_matches_token_only_worker_contract() {
-        use dynamo_kv_router::protocols::pad_value_for_mm_hash;
+        use dynamo_router_protocol::protocols::pad_value_for_mm_hash;
 
         let video_token_id = 100;
         let mm_hash = 41;
@@ -17014,7 +17015,7 @@ mod tests {
     #[cfg(feature = "mm-routing")]
     #[test]
     fn tracked_mixed_boundary_preserves_worker_hash_fallback() {
-        use dynamo_kv_router::protocols::pad_value_for_mm_hash;
+        use dynamo_router_protocol::protocols::pad_value_for_mm_hash;
 
         let image_token_id = 99;
         let video_token_id = 100;
@@ -17082,7 +17083,7 @@ mod tests {
     #[cfg(feature = "mm-routing")]
     #[test]
     fn tracked_mixed_token_only_boundary_preserves_canonical_pads() {
-        use dynamo_kv_router::protocols::pad_value_for_mm_hash;
+        use dynamo_router_protocol::protocols::pad_value_for_mm_hash;
 
         let image_token_id = 99;
         let video_token_id = 100;
@@ -17126,7 +17127,7 @@ mod tests {
     #[cfg(feature = "mm-routing")]
     #[test]
     fn tracked_replacements_preserve_image_video_image_order() {
-        use dynamo_kv_router::protocols::pad_value_for_mm_hash;
+        use dynamo_router_protocol::protocols::pad_value_for_mm_hash;
 
         let image_token_id = 99;
         let video_token_id = 100;
@@ -17206,7 +17207,7 @@ mod tests {
     #[cfg(feature = "mm-routing")]
     #[test]
     fn shared_placeholder_video_matches_legacy_worker_normalization() {
-        use dynamo_kv_router::protocols::pad_value_for_mm_hash;
+        use dynamo_router_protocol::protocols::pad_value_for_mm_hash;
 
         let mm_hash = 41;
         let pad = pad_value_for_mm_hash(mm_hash);

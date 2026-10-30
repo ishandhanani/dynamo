@@ -1,0 +1,44 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+[package]
+name = "dynamo-router-protocol"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+homepage.workspace = true
+repository.workspace = true
+description = "Protocol vocabulary of the Dynamo router: wire protocols and KV events, identities, hashing, the per-request override, and the types that cross stage boundaries"
+
+[features]
+default = []
+bench = []
+# Test helpers for dependents' tests; never enable in release.
+testing = []
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+rmp-serde = { workspace = true }
+thiserror = { workspace = true }
+anyhow = { workspace = true }
+blake3 = { workspace = true }
+tracing = { workspace = true }
+dynamo-kv-hashing = { workspace = true }
+zeroize = { workspace = true }
+dynamo-tokens = { workspace = true }
+rustc-hash = "2.1.1"
+fastrand = "2"
+xxhash-rust = { workspace = true }
+derive_builder = { workspace = true }
+async-trait = { workspace = true }
+
+[dev-dependencies]
+criterion = "0.5"
+rstest = "0.18.2"
+tempfile = { workspace = true }
+
+[[bench]]
+name = "tracking_hash"
+harness = false

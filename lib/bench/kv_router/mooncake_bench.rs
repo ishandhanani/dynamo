@@ -11,8 +11,8 @@ use dynamo_bench::kv_router_common::args::CommonArgs;
 use dynamo_bench::kv_router_common::issuer::pin_current_thread_to_cpus;
 use dynamo_bench::kv_router_common::replay::generate_replay_artifacts;
 use dynamo_bench::kv_router_common::sweep::compute_sweep_durations;
-use dynamo_kv_router::indexer::KvIndexerMetrics;
-use dynamo_kv_router::{ConcurrentRadixTreeCompressed, PositionalIndexer, ThreadPoolIndexer};
+use dynamo_kv_indexer::KvIndexerMetrics;
+use dynamo_kv_indexer::{ConcurrentRadixTreeCompressed, PositionalIndexer, ThreadPoolIndexer};
 use mooncake_open_loop::{
     OpenLoopConfig, OpenLoopResult, RunProvenance, parse_cpu_list, prepare_mooncake_corpus,
     prepare_open_loop_trial, run_open_loop, validate_cpu_partition,
@@ -312,7 +312,7 @@ fn quiesce_prepared_heap() {
 #[cfg(not(target_os = "linux"))]
 fn quiesce_prepared_heap() {}
 
-async fn run_backend<T: dynamo_kv_router::indexer::SyncIndexer>(
+async fn run_backend<T: dynamo_kv_indexer::SyncIndexer>(
     backend_name: &str,
     indexer: Arc<ThreadPoolIndexer<T>>,
     trial: mooncake_open_loop::PreparedOpenLoopTrial,

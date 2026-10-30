@@ -13,18 +13,18 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Instant;
 
 #[cfg(test)]
-use dynamo_kv_router::indexer::cuckoo::CkfConfig;
+use dynamo_kv_indexer::cuckoo::CkfConfig;
 #[cfg(any(test, feature = "ckf-diagnostics"))]
-use dynamo_kv_router::indexer::cuckoo::DcCkfStats;
+use dynamo_kv_indexer::cuckoo::DcCkfStats;
 #[cfg(feature = "ckf-diagnostics")]
-use dynamo_kv_router::indexer::cuckoo::PublisherEmitOutcome;
-use dynamo_kv_router::indexer::cuckoo::{
+use dynamo_kv_indexer::cuckoo::PublisherEmitOutcome;
+use dynamo_kv_indexer::cuckoo::{
     CkfFailureAction, CkfFailureDisposition, CkfFailurePoint, DcCkfDelta, DcCkfDeltaSink,
     DcCkfPublisher, DcCkfRankReplacement, DcCkfSnapshot, DcCkfState, LaneLease, ProducerIdentity,
 };
 #[cfg(test)]
-use dynamo_kv_router::protocols::ExternalSequenceBlockHash;
-use dynamo_kv_router::protocols::{
+use dynamo_router_protocol::protocols::ExternalSequenceBlockHash;
+use dynamo_router_protocol::protocols::{
     DpRank, KvCacheEventData, KvCacheEventError, RouterEvent, WorkerId, WorkerWithDpRank,
 };
 #[cfg(feature = "ckf-diagnostics")]
@@ -270,7 +270,7 @@ async fn send_actor_fault(
 pub(super) struct StreamScope {
     pub(super) relay_incarnation: u64,
     pub(super) layout_generation: u64,
-    pub(super) pool_id: dynamo_kv_router::identity::PoolId,
+    pub(super) pool_id: dynamo_router_protocol::identity::PoolId,
 }
 
 #[derive(Debug, Clone)]
@@ -662,10 +662,8 @@ impl KvDcRelayRecoveryTarget {
         if states.try_reserve(pending.len()).is_err() || waiters.try_reserve(pending.len()).is_err()
         {
             batch_error = Some(
-                KvDcRelayError::Build(
-                    dynamo_kv_router::indexer::cuckoo::CkfBuildError::AllocationFailed,
-                )
-                .to_string(),
+                KvDcRelayError::Build(dynamo_kv_indexer::cuckoo::CkfBuildError::AllocationFailed)
+                    .to_string(),
             );
         }
         for item in pending.by_ref() {
@@ -1395,9 +1393,9 @@ fn replacement_state(
             });
         }
         replacement.push_event(event).map_err(|error| match error {
-            KvCacheEventError::AllocationFailed => KvDcRelayError::Build(
-                dynamo_kv_router::indexer::cuckoo::CkfBuildError::AllocationFailed,
-            ),
+            KvCacheEventError::AllocationFailed => {
+                KvDcRelayError::Build(dynamo_kv_indexer::cuckoo::CkfBuildError::AllocationFailed)
+            }
             _ => KvDcRelayError::InvalidTreeDump {
                 worker_id,
                 dp_rank,
@@ -1409,7 +1407,7 @@ fn replacement_state(
 }
 
 fn publish_batch(
-    batch: dynamo_kv_router::indexer::cuckoo::DcCkfPublicationBatch,
+    batch: dynamo_kv_indexer::cuckoo::DcCkfPublicationBatch,
     publisher: &mut DcCkfPublisher<BroadcastDeltaSink>,
     diagnostics: &ActorDiagnosticsHandle,
 ) -> Result<(), KvDcRelayError> {
@@ -1464,14 +1462,14 @@ mod tests {
 
     use anyhow::Result;
     use async_trait::async_trait;
-    use dynamo_kv_router::identity::{
-        CacheSemanticsId, DcId, IdentitySource, IndexerDomainId, PoolId, RoutingScopeId,
-    };
-    use dynamo_kv_router::indexer::{
+    use dynamo_kv_indexer::{
         KvIndexerMetrics, LocalKvIndexer, WorkerKvQueryResponse,
         cuckoo::{CkfCommitState, CkfFailureDomain, ConsumerInstanceId},
     };
-    use dynamo_kv_router::protocols::{
+    use dynamo_router_protocol::identity::{
+        CacheSemanticsId, DcId, IdentitySource, IndexerDomainId, PoolId, RoutingScopeId,
+    };
+    use dynamo_router_protocol::protocols::{
         KvCacheEvent, KvCacheRemoveData, KvCacheStoreData, KvCacheStoredBlockData, LocalBlockHash,
     };
     use dynamo_runtime::{component::Instance, protocols::EndpointId};

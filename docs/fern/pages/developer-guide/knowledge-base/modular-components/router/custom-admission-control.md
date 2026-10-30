@@ -55,7 +55,8 @@ cargo init --lib --name acme-admission-catalog "$PLUGIN_DIR/catalog"
 Add the classifier's API, error, configuration, and time dependencies:
 
 ```bash
-cargo add --manifest-path "$PLUGIN_DIR/classifier/Cargo.toml" --path "$DYNAMO_DIR/lib/kv-router" dynamo-kv-router
+cargo add --manifest-path "$PLUGIN_DIR/classifier/Cargo.toml" --path "$DYNAMO_DIR/lib/router/admission" dynamo-admission
+cargo add --manifest-path "$PLUGIN_DIR/classifier/Cargo.toml" --path "$DYNAMO_DIR/lib/router/protocol" dynamo-router-protocol
 cargo add --manifest-path "$PLUGIN_DIR/classifier/Cargo.toml" --path "$DYNAMO_DIR/lib/runtime" dynamo-runtime
 cargo add --manifest-path "$PLUGIN_DIR/classifier/Cargo.toml" serde --features derive
 cargo add --manifest-path "$PLUGIN_DIR/classifier/Cargo.toml" tokio --features time
@@ -65,7 +66,8 @@ Add the classifier and registry API to the catalog:
 
 ```bash
 cargo add --manifest-path "$PLUGIN_DIR/catalog/Cargo.toml" --path "$PLUGIN_DIR/classifier" acme-admission
-cargo add --manifest-path "$PLUGIN_DIR/catalog/Cargo.toml" --path "$DYNAMO_DIR/lib/kv-router" dynamo-kv-router
+cargo add --manifest-path "$PLUGIN_DIR/catalog/Cargo.toml" --path "$DYNAMO_DIR/lib/router/kv-router" dynamo-kv-router
+cargo add --manifest-path "$PLUGIN_DIR/catalog/Cargo.toml" --path "$DYNAMO_DIR/lib/router/admission" dynamo-admission
 ```
 
 ### Classify Requests
@@ -75,10 +77,9 @@ Put the classifier in `classifier/src/lib.rs`. `set_due_at` tells Dynamo when to
 ```rust
 use std::time::Duration;
 
-use dynamo_kv_router::plugins::request_classifier::{
-    ClassifierError, ClassifyFuture, ClassifyRequest, RequestClassifier,
-};
-use dynamo_kv_router::plugins::worker_selection::WorkerCandidates;
+use dynamo_admission::classifier::{ClassifyFuture, ClassifyRequest, RequestClassifier};
+use dynamo_router_protocol::sched::ClassifierError;
+use dynamo_worker_selection::plugin::WorkerCandidates;
 use dynamo_runtime::error::{DynamoError, ErrorClass};
 use tokio::time::Instant;
 
@@ -115,9 +116,7 @@ Add the provider below the classifier in `classifier/src/lib.rs`. Dynamo calls i
 ```rust
 use std::sync::Arc;
 
-use dynamo_kv_router::plugins::request_classifier::{
-    RequestClassifierFactory, RequestClassifierParameters, RequestClassifierProviderError,
-};
+use dynamo_admission::classifier::{RequestClassifierFactory, RequestClassifierParameters, RequestClassifierProviderError};
 
 #[derive(serde::Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -147,7 +146,7 @@ Expose a registration function from `classifier/src/lib.rs`:
 
 ```rust
 use dynamo_kv_router::plugins::RouterPluginRegistry;
-use dynamo_kv_router::plugins::request_classifier::RequestClassifierRegistryError;
+use dynamo_admission::classifier::RequestClassifierRegistryError;
 
 pub fn register(
     registry: &mut RouterPluginRegistry,
@@ -160,7 +159,7 @@ Call it from `catalog/src/lib.rs`:
 
 ```rust
 use dynamo_kv_router::plugins::RouterPluginRegistry;
-use dynamo_kv_router::plugins::request_classifier::RequestClassifierRegistryError;
+use dynamo_admission::classifier::RequestClassifierRegistryError;
 
 pub fn register(
     registry: &mut RouterPluginRegistry,
@@ -240,10 +239,8 @@ Each entry returned by `workers()` is the same `WorkerInfo` that [worker-selecti
 A classifier can read the per-worker cache and load data that [worker-selection plugins](custom-worker-selection.mdx) receive. Declare the groups in `required_worker_inputs`; `classify` receives them as `workers`:
 
 ```rust
-use dynamo_kv_router::plugins::request_classifier::{
-    ClassifyFuture, ClassifyRequest, RequestClassifier,
-};
-use dynamo_kv_router::plugins::worker_selection::{WorkerCandidates, WorkerInputs};
+use dynamo_admission::classifier::{ClassifyFuture, ClassifyRequest, RequestClassifier};
+use dynamo_worker_selection::plugin::{WorkerCandidates, WorkerInputs};
 
 struct LoadAwareClass {
     max_active_requests: usize,

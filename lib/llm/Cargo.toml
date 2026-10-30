@@ -28,7 +28,7 @@ block-manager-bench = ["block-manager", "testing-full", "dep:clap", "dep:indicat
 cuda = ["dep:cudarc"]
 integration = ["dynamo-runtime/integration"]
 media-ffmpeg = ["dep:video-rs", "dep:ffmpeg-next", "dep:memfile"]
-bench = ["dynamo-kv-router/bench"]
+bench = ["dynamo-scheduler/bench", "dynamo-kv-indexer/bench", "dynamo-slot-tracker/bench"]
 # Pull-only CKF Relay stats and snapshots. Keep this separate from `metrics`, which
 # is enabled by normal `dynamo-llm` builds and must not retain diagnostic hot-path work.
 ckf-diagnostics = []
@@ -73,7 +73,15 @@ required-features = ["media-ffmpeg"]
 [dependencies]
 dynamo-custom-policy-builtin = { workspace = true }
 # repo
-dynamo-kv-router = { workspace = true, features = ["metrics", "runtime-protocols", "standalone-selection"] }
+dynamo-http-server = { workspace = true }
+dynamo-scheduler = { workspace = true }
+dynamo-kv-router = { workspace = true }
+dynamo-admission = { workspace = true }
+dynamo-worker-selection = { workspace = true }
+dynamo-kv-indexer = { workspace = true, features = ["export"] }
+dynamo-metrics = { workspace = true }
+dynamo-slot-tracker = { workspace = true }
+dynamo-router-protocol = { workspace = true }
 dynamo-memory = { workspace = true }
 dynamo-mocker = { workspace = true, features = ["zmq-events"] }
 dynamo-rl = { workspace = true }
@@ -149,7 +157,7 @@ object_store = { version = "0.12.4", features = ["aws", "gcp", "azure", "http"] 
 # input/text
 dialoguer = { version = "0.11", default-features = false, features = [
   "editor",
-  "history",
+  "history"
 ] }
 
 # block_manager
@@ -167,8 +175,6 @@ indicatif = { version = "0.18.0", optional = true }
 
 # http-service
 axum = { workspace = true }
-hyper-util = { version = "0.1.17", features = ["server-auto", "service", "tokio"] }
-tokio-rustls = { workspace = true }
 tower-http = { workspace = true }
 tower = { workspace = true }
 utoipa = { version = "5.3", features = ["axum_extras", "rc_schema"] }
@@ -188,7 +194,7 @@ prost = { version = "0.13.5" }
 tokenizers = { version = "0.21.4", default-features = false, features = [
   "onig",
   "esaxx_fast",
-  "rustls-tls",
+  "rustls-tls"
 ] }
 
 # backend
@@ -238,7 +244,8 @@ llm-tokenizer = { version = "=1.6.0", optional = true }
 sysinfo = { workspace = true }
 
 [dev-dependencies]
-dynamo-kv-router = { workspace = true, features = ["testing"] }
+tokio-rustls = { workspace = true }
+dynamo-worker-selection = { workspace = true, features = ["testing"] }
 dynamo-runtime = { workspace = true, features = ["testing"] }
 tokio = { workspace = true, features = ["test-util"] }
 approx = "0.5"
@@ -259,14 +266,14 @@ insta = { version = "1.41", features = [
   "glob",
   "json",
   "redactions",
-  "filters",
+  "filters"
 ] }
 proptest = "1.5"
 
 lazy_static = "1.4"
 mockito = "1.7.0"
 dynamo-bench = { path = "../bench", default-features = false, features = [
-  "kv-router-stress-support",
+  "kv-router-stress-support"
 ] }
 tokio-tungstenite = "0.26"
 

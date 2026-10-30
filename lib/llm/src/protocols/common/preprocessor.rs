@@ -5,14 +5,13 @@ use std::collections::HashSet;
 use std::sync::{Arc, Mutex, OnceLock};
 
 use derive_builder::Builder;
-pub use dynamo_kv_router::kv_hints::{
+use dynamo_admission::classifier::AbortCause;
+use dynamo_admission::runtime::RequestLifecycle;
+use dynamo_router_protocol::config::RouterConfigOverride;
+pub use dynamo_router_protocol::kv_hints::{
     KV_HINT_TRANSFER_CAPABILITY_KEY, KvHint, KvHintAction, KvSourceLocationsPayload,
 };
-use dynamo_kv_router::{
-    config::RouterConfigOverride,
-    protocols::{BlockExtraInfo, RoutingConstraints, WorkerId},
-    scheduling::{AbortCause, RequestLifecycle},
-};
+use dynamo_router_protocol::protocols::{BlockExtraInfo, RoutingConstraints, WorkerId};
 use dynamo_runtime::error::{DynamoError, ErrorType, match_error_chain};
 use serde::{Deserialize, Serialize};
 

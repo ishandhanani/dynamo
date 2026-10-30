@@ -13,11 +13,9 @@ use std::{
 };
 
 use anyhow::{Context, Result};
-use dynamo_kv_router::{
-    identity::{CacheOwnerId, IndexerDomainId},
-    indexer::KvStateProtocolVersion,
-    protocols::{RouterHintSourceMetadata, WorkerId, WorkerWithDpRank},
-};
+use dynamo_kv_indexer::KvStateProtocolVersion;
+use dynamo_router_protocol::identity::{CacheOwnerId, IndexerDomainId};
+use dynamo_router_protocol::protocols::{RouterHintSourceMetadata, WorkerId, WorkerWithDpRank};
 use dynamo_runtime::{
     component::{Endpoint, Instance, build_transport_type},
     config::environment_names::llm::DYN_KV_STATE_AGENT_HOST_DISCOVERY_TIMEOUT_SECS as HOST_DISCOVERY_TIMEOUT_ENV,
@@ -504,7 +502,7 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     use async_trait::async_trait;
-    use dynamo_kv_router::identity::{
+    use dynamo_router_protocol::identity::{
         CacheSemanticsId, DcId, IdentitySource, PoolId, RoutingScopeId, StableDpSlotId,
     };
     use dynamo_runtime::{

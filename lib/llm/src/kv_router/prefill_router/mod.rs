@@ -11,10 +11,9 @@ use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
-use dynamo_kv_router::{
-    PrefillLoadEstimator, conditional_disagg::ConditionalDisaggPolicy,
-    config::RouterConfigOverride, protocols::RoutingConstraints,
-};
+use dynamo_router_protocol::config::RouterConfigOverride;
+use dynamo_router_protocol::prefill_load::PrefillLoadEstimator;
+use dynamo_router_protocol::protocols::RoutingConstraints;
 use dynamo_runtime::{
     error::{DynamoError, ErrorClass, ErrorType, match_error_chain},
     pipeline::{
@@ -23,6 +22,7 @@ use dynamo_runtime::{
     },
     protocols::{EndpointId, annotated::Annotated},
 };
+use dynamo_worker_selection::conditional_disagg::ConditionalDisaggPolicy;
 use futures::stream::{self, StreamExt};
 
 use crate::{
@@ -441,7 +441,10 @@ impl
                 .await
             {
                 Ok(Some(decision)) => {
-                    let signals = decision.plan.signals;
+                    let signals = decision
+                        .plan
+                        .kv_signals()
+                        .expect("conditional disaggregation plans a KV route");
                     tracing::info!(
                         request_id = %request_id,
                         worker_id = signals.worker.worker_id,
@@ -467,8 +470,8 @@ impl
                         .decode_routing_host
                         .get()
                         .expect("conditional plan requires a decode RoutingHost");
-                    let response_stream = decode_host
-                        .dispatch_kv_plan(conditional_request, decision.plan)
+                    let (_, response_stream) = decode_host
+                        .dispatch_plan(conditional_request, decision.plan, |_, _| Ok(()))
                         .await?;
                     let ctx = response_stream.context();
                     let annotation = Annotated::<LLMEngineOutput>::from_annotation(
@@ -853,7 +856,8 @@ fn merge_decode_topology_constraints(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use dynamo_kv_router::config::{KvRouterConfig, RouterConfigOverride};
+    use dynamo_kv_router::config::KvRouterConfig;
+    use dynamo_router_protocol::config::RouterConfigOverride;
     use dynamo_runtime::{engine::AsyncEngine, pipeline::Error};
     use futures::StreamExt;
     use std::{
@@ -1256,7 +1260,8 @@ mod tests {
             .unwrap()
             .endpoint("generate");
         let client = endpoint.client().await.unwrap();
-        let (_workers_tx, workers) = watch::channel(HashMap::<u64, ModelRuntimeConfig>::new());
+        let (_workers_tx, workers) =
+            crate::discovery::topology::topology_channel(HashMap::<u64, ModelRuntimeConfig>::new());
         let config = KvRouterConfig {
             skip_initial_worker_wait: true,
             use_kv_events: false,

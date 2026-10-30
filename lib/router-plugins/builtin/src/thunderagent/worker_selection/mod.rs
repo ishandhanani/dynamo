@@ -3,13 +3,16 @@
 
 use std::sync::Arc;
 
-use dynamo_kv_router::WorkerType;
 use dynamo_kv_router::plugins::RouterPluginRegistry;
-use dynamo_kv_router::plugins::worker_selection::{
+use dynamo_kv_router::plugins::{
+    WorkerSelectionPolicyParameters, WorkerSelectionPolicyProviderError,
+    WorkerSelectionPolicyRegistryError,
+};
+use dynamo_router_protocol::WorkerType;
+use dynamo_worker_selection::plugin::{
     WorkerCandidates, WorkerInputView, WorkerInputs, WorkerPicker, WorkerScorer,
     WorkerSelectionContext, WorkerSelectionPolicy, WorkerSelectionPolicyError,
-    WorkerSelectionPolicyFactory, WorkerSelectionPolicyParameters,
-    WorkerSelectionPolicyProviderError, WorkerSelectionPolicyRegistryError,
+    WorkerSelectionPolicyFactory,
 };
 
 use super::THUNDERAGENT_CLASSIFIER_TYPE;
@@ -80,9 +83,8 @@ fn worker_selection_provider(
 ) -> Result<WorkerSelectionPolicyFactory, WorkerSelectionPolicyProviderError> {
     let _: ThunderAgentSelectionParameters = parameters.deserialize()?;
     Ok(Arc::new(
-        move |router, worker_type: WorkerType, _partition| {
+        move |_router, worker_type: WorkerType, _partition| {
             WorkerSelectionPolicy::new(
-                router.clone(),
                 worker_type.as_str(),
                 vec![Box::new(ThunderAgentScorer)],
                 Box::new(ThunderAgentPicker),
@@ -104,12 +106,14 @@ pub(crate) fn register(
 mod tests {
     use std::collections::HashMap;
 
-    use dynamo_kv_router::protocols::{RoutingConstraints, WorkerConfigLike, WorkerWithDpRank};
-    use dynamo_kv_router::scheduling::{OverlapSignals, ScheduleMode, SchedulingRequest};
-    use dynamo_kv_router::{
-        KvRouterConfig, WorkerLoadProjection, WorkerSelectionInput, WorkerSelectionPolicy,
-        WorkerSelector,
+    use dynamo_router_protocol::overlap::OverlapSignals;
+    use dynamo_router_protocol::protocols::WorkerLoadProjection;
+    use dynamo_router_protocol::protocols::{
+        RoutingConstraints, WorkerConfigLike, WorkerWithDpRank,
     };
+    use dynamo_router_protocol::sched::{ScheduleMode, SchedulingRequest};
+    use dynamo_worker_selection::plugin::WorkerSelectionPolicy;
+    use dynamo_worker_selection::selector::{WorkerSelectionInput, WorkerSelector};
 
     use super::*;
 
@@ -163,7 +167,6 @@ mod tests {
 
     fn policy() -> WorkerSelectionPolicy {
         WorkerSelectionPolicy::new(
-            KvRouterConfig::default(),
             "test",
             vec![Box::new(ThunderAgentScorer)],
             Box::new(ThunderAgentPicker),

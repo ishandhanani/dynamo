@@ -3,7 +3,7 @@
 
 //! Active-request scorer for the `simple-filter-score-pick` policy.
 
-use dynamo_kv_router::plugins::worker_selection::{
+use dynamo_worker_selection::plugin::{
     WorkerCandidates, WorkerInputs, WorkerScorer, WorkerSelectionContext,
     WorkerSelectionPolicyError,
 };

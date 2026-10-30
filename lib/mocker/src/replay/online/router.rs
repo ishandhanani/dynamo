@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: Copyright (c) 2025-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
+use dynamo_router_protocol::config::TrackingHashConfig;
 use std::sync::Arc;
 use std::sync::Mutex;
 #[cfg(test)]
@@ -8,21 +9,21 @@ use std::sync::atomic::AtomicBool;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use anyhow::{Context, Result, anyhow};
-use dynamo_kv_router::config::KvRouterConfig;
-use dynamo_kv_router::indexer::{
+use dynamo_kv_indexer::ConcurrentRadixTreeCompressed;
+use dynamo_kv_indexer::{
     KvIndexer, KvIndexerInterface, KvIndexerMetrics, LowerTierIndexers, LowerTierQueryOptions,
     MatchDetails, ThreadPoolIndexer, TieredMatchDetails, query_lower_tiers_with_options,
 };
-use dynamo_kv_router::protocols::{
+use dynamo_kv_router::config::KvRouterConfig;
+use dynamo_router_protocol::identity::RoutingPartitionRef;
+use dynamo_router_protocol::protocols::{
     BlockHashOptions, RouterEvent, RoutingConstraints, StorageTier, WorkerId,
     compute_block_hash_for_seq,
 };
-use dynamo_kv_router::scheduling::{
-    OverlapAnalysis, ScheduleMode, ScheduleRequest, SessionContext,
-};
-use dynamo_kv_router::{
-    ConcurrentRadixTreeCompressed, RoutingPartitionRef, TrackingHashContext, TrackingHashScope,
-};
+use dynamo_router_protocol::sched::{ScheduleMode, ScheduleRequest, SessionContext};
+use dynamo_router_protocol::tracking_hash::{TrackingHashContext, TrackingHashScope};
+use dynamo_scheduler::overlap::OverlapAnalysis;
+use dynamo_worker_selection::config::SelectionConfig;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
@@ -167,7 +168,10 @@ impl KvCacheEventSink for ReplayKvEventSink {
         Ok(())
     }
 
-    fn publish(&self, event: dynamo_kv_router::protocols::KvCacheEvent) -> anyhow::Result<()> {
+    fn publish(
+        &self,
+        event: dynamo_router_protocol::protocols::KvCacheEvent,
+    ) -> anyhow::Result<()> {
         self.event_tx
             .send(RouterEvent::new(self.worker_id, event))
             .map_err(|_| anyhow!("replay router event channel closed"))
@@ -175,7 +179,7 @@ impl KvCacheEventSink for ReplayKvEventSink {
 
     fn publish_with_storage_tier(
         &self,
-        event: dynamo_kv_router::protocols::KvCacheEvent,
+        event: dynamo_router_protocol::protocols::KvCacheEvent,
         storage_tier: StorageTier,
     ) -> anyhow::Result<()> {
         self.event_tx
@@ -261,7 +265,7 @@ impl KvReplayRouter {
         num_workers: usize,
     ) -> Result<Self> {
         let config = replay_router_config(args, router_config);
-        let tracking_hash = TrackingHashContext::from_config(&config)?;
+        let tracking_hash = TrackingHashContext::from_config(&TrackingHashConfig::from(&config))?;
         let indexer =
             create_replay_indexer(args.block_size as u32, config.router_event_threads as usize);
         let workers_with_configs = replay_workers_with_configs(args, num_workers);
@@ -273,7 +277,7 @@ impl KvReplayRouter {
             .configured_policy_profile()
             .map_err(anyhow::Error::from)?;
         let scheduler_cancel = CancellationToken::new();
-        let scheduler = Arc::new(dynamo_kv_router::LocalScheduler::new(
+        let scheduler = Arc::new(dynamo_scheduler::local::LocalScheduler::new(
             slots,
             worker_config_rx,
             profile,
@@ -337,7 +341,12 @@ impl KvReplayRouter {
             .indexer
             .find_matches_for_request(&request.tokens, None)
             .await?;
-        let overlap = OverlapAnalysis::new(&self.config, self.block_size, &tiered).signals();
+        let overlap = OverlapAnalysis::new(
+            &SelectionConfig::from(&self.config),
+            self.block_size,
+            &tiered,
+        )
+        .signals();
         let token_seq = self.config.compute_seq_hashes_for_tracking_with_context(
             &self.tracking_hash,
             TrackingHashScope {
@@ -430,7 +439,7 @@ impl KvReplayRouter {
         &self,
         isl_tokens: usize,
         track_prefill_tokens: bool,
-    ) -> Vec<dynamo_kv_router::PotentialLoad> {
+    ) -> Vec<dynamo_router_protocol::protocols::PotentialLoad> {
         self.scheduler.get_potential_loads(
             None,
             isl_tokens,
@@ -544,7 +553,7 @@ impl ReplayRouter {
         &self,
         isl_tokens: usize,
         track_prefill_tokens: bool,
-    ) -> Vec<dynamo_kv_router::PotentialLoad> {
+    ) -> Vec<dynamo_router_protocol::protocols::PotentialLoad> {
         match self {
             Self::RoundRobin(_) => Vec::new(),
             Self::Kv(router) => router.debug_potential_loads(isl_tokens, track_prefill_tokens),
@@ -571,8 +580,8 @@ mod tests {
     use std::sync::Arc;
     use std::time::Duration;
 
-    use dynamo_kv_router::config::RouterQueuePolicy;
-    use dynamo_kv_router::protocols::{
+    use dynamo_admission::config::RouterQueuePolicy;
+    use dynamo_router_protocol::protocols::{
         ExternalSequenceBlockHash, KvCacheEvent, KvCacheEventData, KvCacheStoreData,
         KvCacheStoredBlockData, LocalBlockHash, StorageTier, WorkerWithDpRank,
         compute_block_hash_for_seq,

@@ -15,16 +15,13 @@ use std::{
 
 use anyhow::{Context, Result};
 use dashmap::DashMap;
-use dynamo_kv_router::{
-    identity::CacheOwnerId,
-    indexer::{
-        KvStateAgentIdentity, KvStateAgentStatus, KvStateProtocolVersion, WorkerKvQueryResponse,
-    },
-    protocols::{
-        KvCacheEvent, KvCacheEventData, ResetScope, ResidencyDomain, ResidencyProjection,
-        ResidencyRoutingSnapshot, RouterEvent, RouterHintSourceMetadata, StorageTier,
-        WorkerWithDpRank,
-    },
+use dynamo_kv_indexer::{
+    KvStateAgentIdentity, KvStateAgentStatus, KvStateProtocolVersion, WorkerKvQueryResponse,
+};
+use dynamo_router_protocol::identity::CacheOwnerId;
+use dynamo_router_protocol::protocols::{
+    KvCacheEvent, KvCacheEventData, ResetScope, ResidencyDomain, ResidencyProjection,
+    ResidencyRoutingSnapshot, RouterEvent, RouterHintSourceMetadata, StorageTier, WorkerWithDpRank,
 };
 use dynamo_runtime::{
     component::Component,
@@ -2398,17 +2395,17 @@ async fn clear_cache_owner(indexer: &Indexer, owner: CacheOwnerId, event_id: u64
 mod tests {
     use std::{collections::HashMap, sync::Arc};
 
-    use dynamo_kv_router::identity::{
-        CacheSemanticsId, DcId, IdentitySource, IndexerDomainId, PoolId, RoutingScopeId,
-        StableDpSlotId,
-    };
-    use dynamo_kv_router::indexer::{
+    use dynamo_kv_indexer::{
         KvIndexer, KvIndexerInterface, KvIndexerMetrics, KvStateAttachmentStatus,
         KvStateRecoveryReceipt, LowerTierIndexers, LowerTierQueryOptions, MatchDetails,
         query_lower_tiers_with_options,
     };
-    use dynamo_kv_router::kv_hints::KvTransferCandidateSource;
-    use dynamo_kv_router::protocols::{
+    use dynamo_router_protocol::identity::{
+        CacheSemanticsId, DcId, IdentitySource, IndexerDomainId, PoolId, RoutingScopeId,
+        StableDpSlotId,
+    };
+    use dynamo_router_protocol::kv_hints::KvTransferCandidateSource;
+    use dynamo_router_protocol::protocols::{
         ExternalSequenceBlockHash, KvCacheRemoveData, KvCacheStoreData, KvCacheStoredBlockData,
         LocalBlockHash, ResidencyOwner, RouterHintSourceMetadata, WorkerWithDpRank,
     };

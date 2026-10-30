@@ -45,17 +45,14 @@ worker_selection:
 "#,
         )
         .unwrap();
-        let config = dynamo_kv_router::KvRouterConfig {
+        let config = dynamo_kv_router::config::KvRouterConfig {
             router_policy_config: Some(policy.path().display().to_string()),
             ..Default::default()
         };
         let plugins = registry.resolve_plugins(&config).unwrap();
         assert!(plugins.worker_selection().is_some());
         let factory = plugins.request_classifier().unwrap();
-        let context = dynamo_kv_router::plugins::request_classifier::RequestClassifierContext::new(
-            16,
-            Vec::new,
-        );
+        let context = dynamo_admission::classifier::RequestClassifierContext::new(16, Vec::new);
         let _classifier = factory(context);
     }
 }

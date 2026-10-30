@@ -11,14 +11,12 @@ use std::{
 };
 
 use crate::kv_router::SelectionPolicySource;
-use dynamo_kv_router::plugins::worker_selection::WorkerCandidates;
-use dynamo_kv_router::{
-    config::KvRouterConfig,
-    protocols::RoutingConstraints,
-    scheduling::{
-        ClassifierError, ClassifyEvent, ClassifyFuture, ClassifyRequest, RequestClassifier,
-    },
+use dynamo_admission::classifier::{
+    ClassifyEvent, ClassifyFuture, ClassifyRequest, RequestClassifier,
 };
+use dynamo_kv_router::config::KvRouterConfig;
+use dynamo_router_protocol::protocols::RoutingConstraints;
+use dynamo_router_protocol::sched::ClassifierError;
 use dynamo_runtime::{
     DistributedRuntime, Runtime,
     component::{Client, Instance},
@@ -32,11 +30,13 @@ use dynamo_runtime::{
     storage::kv::Selector,
     traits::DistributedRuntimeProvider,
 };
-use tokio::sync::{Notify, mpsc, watch};
+use dynamo_worker_selection::plugin::WorkerCandidates;
+use tokio::sync::{Notify, mpsc};
 
+use super::builtin::{builtin_inputs, builtin_picker};
 use super::*;
+use crate::discovery::topology::topology_channel;
 use crate::{
-    http::service::metrics::Metrics,
     kv_router::{RoutingLoadContext, routing_host::request_guard::RouteObservation},
     local_model::runtime_config::ModelRuntimeConfig,
     lora::{LoraReplicaConfig, LoraRoutingTable, LoraStateTracker},
@@ -47,6 +47,7 @@ use crate::{
         timing::RequestTracker,
     },
 };
+use dynamo_http_server::metrics::Metrics;
 
 fn request() -> PreprocessedRequest {
     PreprocessedRequest::builder()
@@ -106,12 +107,19 @@ fn selector_state_remains_owned_by_the_scheduler_actor() {
 #[test]
 fn builtin_policies_declare_capabilities() {
     for mode in [RouterMode::RoundRobin, RouterMode::Random] {
-        let selector = BuiltinWorkerSelector::new(mode).unwrap();
-        assert_eq!(selector.required_worker_inputs(), WorkerInputs::NONE);
+        assert!(builtin_picker(mode).is_some());
+        assert_eq!(builtin_inputs(mode), WorkerInputs::NONE);
     }
     for mode in [RouterMode::PowerOfTwoChoices, RouterMode::LeastLoaded] {
-        let selector = BuiltinWorkerSelector::new(mode).unwrap();
-        assert_eq!(selector.required_worker_inputs(), WorkerInputs::OCCUPANCY);
+        assert!(builtin_picker(mode).is_some());
+        assert_eq!(builtin_inputs(mode), WorkerInputs::OCCUPANCY);
+    }
+    for mode in [
+        RouterMode::KV,
+        RouterMode::Direct,
+        RouterMode::DeviceAwareWeighted,
+    ] {
+        assert!(builtin_picker(mode).is_none());
     }
 }
 
@@ -129,10 +137,11 @@ async fn builtin_host_constructs_only_declared_capabilities() {
         .endpoint("generate".to_string());
     let client = endpoint.client().await.unwrap();
     let load_context = test_load_context(&client).await;
-    let inner = PushRouter::from_client(client.clone(), RouterMode::RoundRobin)
+    let host = RoutingHost::builder(client.clone(), RouterMode::RoundRobin)
+        .load_context(load_context.clone())
+        .build()
         .await
         .unwrap();
-    let host = RoutingHost::new_builtin(inner, load_context.clone()).unwrap();
 
     assert_eq!(host.required_worker_inputs(), WorkerInputs::NONE);
     assert!(host.hosted_occupancy.is_none());
@@ -141,11 +150,12 @@ async fn builtin_host_constructs_only_declared_capabilities() {
 
     client.override_discovered_instances(vec![1, 2]);
     client.override_instance_avail(vec![1, 2]);
-    let inner = PushRouter::from_client(client, RouterMode::PowerOfTwoChoices)
+    let host = RoutingHost::builder(client, RouterMode::PowerOfTwoChoices)
+        .load_context(load_context)
+        .build()
         .await
         .unwrap();
-    let host = RoutingHost::new_builtin(inner, load_context).unwrap();
-    let RoutingPolicy::Builtin(selector) = &host.policy else {
+    let RoutingPolicy::Builtin(picker) = &host.policy else {
         unreachable!()
     };
     assert_eq!(host.required_worker_inputs(), WorkerInputs::OCCUPANCY);
@@ -154,7 +164,7 @@ async fn builtin_host_constructs_only_declared_capabilities() {
         .hosted_occupancy
         .as_ref()
         .unwrap()
-        .select_and_reserve(&host.inner, selector, Some(1))
+        .select_and_reserve(&host.inner, picker, Some(1))
         .unwrap();
     assert_eq!(selection.worker_id, 1);
     assert_eq!(selection.occupancy, 1);
@@ -188,21 +198,22 @@ async fn builtin_occupancy_selection_uses_all_selectable_workers() {
         .endpoint("generate".to_string());
     let client = endpoint.client().await.unwrap();
     let load_context = test_load_context(&client).await;
-    let inner = PushRouter::from_client(client.clone(), RouterMode::LeastLoaded)
-        .await
-        .unwrap();
     client.override_discovered_instances(vec![1, 2]);
     client.override_instance_avail(vec![1, 2]);
-    let host = RoutingHost::new_builtin(inner, load_context).unwrap();
-    let RoutingPolicy::Builtin(selector) = &host.policy else {
+    let host = RoutingHost::builder(client, RouterMode::LeastLoaded)
+        .load_context(load_context)
+        .build()
+        .await
+        .unwrap();
+    let RoutingPolicy::Builtin(picker) = &host.policy else {
         unreachable!()
     };
     let occupancy = host.hosted_occupancy.as_ref().unwrap();
     let first = occupancy
-        .select_and_reserve(&host.inner, selector, Some(1))
+        .select_and_reserve(&host.inner, picker, Some(1))
         .unwrap();
     let second = occupancy
-        .select_and_reserve(&host.inner, selector, None)
+        .select_and_reserve(&host.inner, picker, None)
         .unwrap();
 
     assert_eq!(first.worker_id, 1);
@@ -428,13 +439,11 @@ async fn builtin_lora_keeps_separate_selection_and_cleanup() {
     );
     let filter = Arc::new(LoraFilter::new(routing_table, LoraStateTracker::new()));
     let estimator = Arc::new(LoadEstimator::new());
-    let host = RoutingHost::new_builtin_with_capabilities(
-        inner,
-        load_context,
-        None,
-        Some((filter, Arc::clone(&estimator))),
-    )
-    .unwrap();
+    let host = RoutingHostBuilder::from_transport(inner)
+        .load_context(load_context)
+        .lora((filter, Arc::clone(&estimator)))
+        .build_sync()
+        .unwrap();
 
     let mut base_stream = host.generate(Context::new(request())).await.unwrap();
     while base_stream.next().await.is_some() {}
@@ -558,10 +567,11 @@ async fn builtin_hard_affinity_ignores_overload_while_soft_affinity_falls_back()
     client.override_instance_avail(vec![worker_id, fallback_worker_id]);
     client.set_overloaded_instances(&[worker_id]);
     let load_context = test_load_context(&client).await;
-    let inner = PushRouter::from_client(client, RouterMode::RoundRobin)
+    let host = RoutingHost::builder(client, RouterMode::RoundRobin)
+        .load_context(load_context)
+        .build()
         .await
         .unwrap();
-    let host = RoutingHost::new_builtin(inner, load_context).unwrap();
     let request = Context::new(request());
 
     let hard = host
@@ -1212,7 +1222,6 @@ async fn shutdown_cancellation_without_trailing_error_still_aborts() {
             &cancelled_request,
             &mut selection,
             RequestPhase::Aggregated,
-            false,
             &CleanupBudget::default(),
         )
         .await
@@ -1261,7 +1270,6 @@ async fn shutdown_cancellation_without_trailing_error_still_aborts() {
             &retry_request,
             &mut retry_selection,
             RequestPhase::Aggregated,
-            false,
             &CleanupBudget::default(),
         )
         .await
@@ -1294,7 +1302,6 @@ async fn stream_failure_releases_booking_before_error_is_observable() {
             &failed_request,
             &mut failed_selection,
             RequestPhase::Aggregated,
-            false,
             &CleanupBudget::default(),
         )
         .await
@@ -1341,7 +1348,6 @@ async fn stream_failure_releases_booking_before_error_is_observable() {
             &retry_request,
             &mut retry_selection,
             RequestPhase::Aggregated,
-            false,
             &CleanupBudget::default(),
         )
         .await
@@ -1394,7 +1400,6 @@ async fn output_block_accounting_tracks_grouped_chunks() {
                 &input,
                 &mut selection,
                 RequestPhase::Aggregated,
-                false,
                 &CleanupBudget::default(),
             )
             .await
@@ -1562,7 +1567,7 @@ async fn router_with_config_and_classifier(
     let endpoint = component.endpoint("generate");
     let client = endpoint.client().await.unwrap();
     let worker_ids = workers.keys().copied().collect::<Vec<_>>();
-    let (_tx, workers) = watch::channel(workers);
+    let (_tx, workers) = topology_channel(workers);
     let mut chooser = KvRouter::new(
         endpoint,
         client.clone(),
@@ -1665,7 +1670,7 @@ async fn router_with_recorded_dispatch_and_affinity(
     endpoint.register_endpoint_instance().await.unwrap();
     let worker_id = client.wait_for_instances().await.unwrap()[0].id();
     let workers = HashMap::from([(worker_id, ModelRuntimeConfig::default())]);
-    let (_workers_tx, workers) = watch::channel(workers);
+    let (_workers_tx, workers) = topology_channel(workers);
     let config = KvRouterConfig {
         skip_initial_worker_wait: true,
         use_kv_events: false,
@@ -1721,13 +1726,7 @@ async fn admitted_request_stopped_before_dispatch(
         .await
         .unwrap();
     let guard = router
-        .track_selection(
-            &request,
-            &mut selection,
-            phase,
-            false,
-            &CleanupBudget::default(),
-        )
+        .track_selection(&request, &mut selection, phase, &CleanupBudget::default())
         .await
         .unwrap();
 
@@ -1755,7 +1754,13 @@ async fn kv_cancellation_after_admission_still_stops_the_aggregated_dispatch() {
     .await;
 
     let error = router
-        .dispatch_selection(request, selection, guard, &CleanupBudget::default())
+        .dispatch_selection(
+            request,
+            selection,
+            guard,
+            &CleanupBudget::default(),
+            &mut None,
+        )
         .await
         .expect_err("aggregated dispatch must still be cancelled before it is issued");
     assert!(match_error_chain(
@@ -2093,7 +2098,7 @@ async fn planned_route_admission_classifies_and_carries_lifecycle() {
         .unwrap();
     assert_eq!(calls.load(Ordering::Relaxed), 1);
 
-    let mut lifecycle = plan.selection.request_lifecycle.take().unwrap();
+    let mut lifecycle = plan.take_request_lifecycle().unwrap();
     lifecycle.observe_context_tokens(1);
     lifecycle.complete();
     assert_eq!(
@@ -2226,7 +2231,7 @@ async fn tracked_admission_without_lifecycle_bypasses_classifier() {
 }
 
 struct TokenContractClassifier {
-    classified: mpsc::UnboundedSender<(usize, dynamo_kv_router::scheduling::RequestProgress)>,
+    classified: mpsc::UnboundedSender<(usize, dynamo_admission::classifier::RequestProgress)>,
     completed: mpsc::UnboundedSender<usize>,
 }
 
@@ -2295,12 +2300,11 @@ async fn classifier_uses_scheduler_token_basis() {
             &request,
             &mut selection,
             RequestPhase::Aggregated,
-            false,
             &CleanupBudget::default(),
         )
         .await
         .unwrap();
-    guard.mark_dispatched();
+    guard.on_dispatched();
     let output = LLMEngineOutput {
         completion_usage: Some(dynamo_protocols::types::CompletionUsage {
             prompt_tokens: 5,
@@ -2323,14 +2327,13 @@ async fn classifier_uses_scheduler_token_basis() {
 
 async fn track_request(
     router: &RoutingHost,
-    is_query_only: bool,
 ) -> (SingleIn<PreprocessedRequest>, WorkerSelection, RequestGuard) {
     let request = Context::new(request());
     let (mut selection, _) = router
         .select_with_affinity(
             &request,
             RequestPhase::Aggregated,
-            is_query_only,
+            false,
             &CleanupBudget::default(),
         )
         .await
@@ -2340,7 +2343,6 @@ async fn track_request(
             &request,
             &mut selection,
             RequestPhase::Aggregated,
-            is_query_only,
             &CleanupBudget::default(),
         )
         .await
@@ -2349,7 +2351,9 @@ async fn track_request(
 }
 
 /// Scheduler-reported loads with no prompt, the way the reservation tests read them.
-async fn potential_loads(router: &RoutingHost) -> Vec<dynamo_kv_router::protocols::PotentialLoad> {
+async fn potential_loads(
+    router: &RoutingHost,
+) -> Vec<dynamo_router_protocol::protocols::PotentialLoad> {
     router
         .kv_router()
         .get_potential_loads(&[], None, None, None, None)
@@ -2358,7 +2362,7 @@ async fn potential_loads(router: &RoutingHost) -> Vec<dynamo_kv_router::protocol
 }
 
 fn active_requests_for(
-    loads: &[dynamo_kv_router::protocols::PotentialLoad],
+    loads: &[dynamo_router_protocol::protocols::PotentialLoad],
     worker_id: u64,
     dp_rank: u32,
 ) -> usize {
@@ -2391,7 +2395,7 @@ async fn route_plan_from_preview_holds_and_releases_the_decode_reservation() {
     let request = Context::new(request());
 
     let plan = plan_decode_route(&router, &request).await;
-    assert_eq!(plan.signals.worker.worker_id, 7);
+    assert_eq!(plan.kv_signals().unwrap().worker.worker_id, 7);
     assert_eq!(
         router.request_metrics.requests_started_total.get(),
         0,
@@ -2450,7 +2454,7 @@ async fn route_plan_from_preview_admits_the_previewed_worker() {
         .plan_kv_route_from_preview(&request, preview)
         .await
         .unwrap();
-    assert_eq!(plan.signals.worker, previewed_worker);
+    assert_eq!(plan.kv_signals().unwrap().worker, previewed_worker);
     let loads = potential_loads(&router).await;
     assert_eq!(
         active_requests_for(&loads, previewed_worker.worker_id, previewed_worker.dp_rank),
@@ -2500,7 +2504,12 @@ async fn planned_dispatch_transfers_the_reservation_to_request_cleanup() {
     let request = Context::new(request());
     let plan = plan_decode_route(&router, &request).await;
 
-    assert!(router.dispatch_kv_plan(request, plan).await.is_err());
+    assert!(
+        router
+            .dispatch_plan(request, plan, |_, _| Ok(()))
+            .await
+            .is_err()
+    );
     assert_eq!(router.request_metrics.requests_started_total.get(), 1);
     let loads = potential_loads(&router).await;
     assert!(loads.iter().all(|load| load.active_requests == 0));
@@ -2588,12 +2597,7 @@ async fn router_request_counters_follow_admission_and_completion_lifecycle() {
     );
     assert_eq!(metrics.requests_started_total.get(), 0);
 
-    let (_, _, mut query_guard) = track_request(&router, true).await;
-    query_guard.abort().await;
-    drop(query_guard);
-    assert_eq!(metrics.requests_started_total.get(), 0);
-
-    let (_, selection, mut cancelled_guard) = track_request(&router, false).await;
+    let (_, selection, mut cancelled_guard) = track_request(&router).await;
 
     assert_eq!(metrics.requests_started_total.get(), 1);
     assert_eq!(metrics.requests_total.get(), 0);
@@ -2639,7 +2643,6 @@ async fn router_request_counters_follow_admission_and_completion_lifecycle() {
             &failed_request,
             &mut failed_selection,
             RequestPhase::Aggregated,
-            false,
             &CleanupBudget::default(),
         )
         .await
@@ -2650,7 +2653,8 @@ async fn router_request_counters_follow_admission_and_completion_lifecycle() {
                 failed_request,
                 failed_selection,
                 failed_dispatch_guard,
-                &CleanupBudget::default()
+                &CleanupBudget::default(),
+                &mut None,
             )
             .await
             .is_err()
@@ -2659,9 +2663,9 @@ async fn router_request_counters_follow_admission_and_completion_lifecycle() {
     assert_eq!(metrics.requests_started_total.get(), 2);
     assert_eq!(metrics.requests_total.get(), 0);
 
-    let (_, _, mut completed_guard) = track_request(&router, false).await;
+    let (_, _, mut completed_guard) = track_request(&router).await;
     completed_guard.start_dispatch("aggregated");
-    completed_guard.mark_dispatched();
+    completed_guard.on_dispatched();
     completed_guard.finish().await;
     drop(completed_guard);
     assert_eq!(metrics.requests_started_total.get(), 3);
@@ -2675,9 +2679,9 @@ async fn router_request_counters_follow_admission_and_completion_lifecycle() {
     assert_eq!(metrics.requests_total.get(), 1);
 
     let (other_router, other_runtime) = router_with_workers(None, &[8]).await;
-    let (_, _, mut other_guard) = track_request(&other_router, false).await;
+    let (_, _, mut other_guard) = track_request(&other_router).await;
     other_guard.start_dispatch("aggregated");
-    other_guard.mark_dispatched();
+    other_guard.on_dispatched();
     other_guard.finish().await;
     drop(other_guard);
     assert_eq!(metrics.requests_started_total.get(), 4);
@@ -2805,9 +2809,11 @@ fn builtin_host_with_affinity(
     mode: crate::session_affinity::SessionAffinityMode,
 ) -> (RoutingHost, AffinityCoordinator) {
     let affinity = AffinityCoordinator::new(Duration::from_secs(10), mode).unwrap();
-    let host =
-        RoutingHost::new_builtin_with_coordinator(inner, load_context, Some(affinity.clone()))
-            .unwrap();
+    let host = RoutingHostBuilder::from_transport(inner)
+        .load_context(load_context)
+        .affinity_coordinator(affinity.clone())
+        .build_sync()
+        .unwrap();
     (host, affinity)
 }
 
@@ -3290,7 +3296,7 @@ async fn two_worker_migration_harness(
         .copied()
         .map(|worker_id| (worker_id, ModelRuntimeConfig::default()))
         .collect::<HashMap<_, _>>();
-    let (_workers_tx, workers) = watch::channel(workers);
+    let (_workers_tx, workers) = topology_channel(workers);
     let config = KvRouterConfig {
         skip_initial_worker_wait: true,
         use_kv_events: false,
@@ -3485,12 +3491,11 @@ async fn prefill_retry_preserves_parked_decode_classifier_lifecycle() {
             &request,
             &mut selected,
             RequestPhase::Decode,
-            false,
             &CleanupBudget::default(),
         )
         .await
         .unwrap();
-    guard.mark_dispatched();
+    guard.on_dispatched();
     assert!(guard.release_for_retry().await);
     assert!(
         potential_loads(&decode)
@@ -3517,12 +3522,11 @@ async fn prefill_retry_preserves_parked_decode_classifier_lifecycle() {
             &request,
             &mut selected,
             RequestPhase::Prefill,
-            false,
             &CleanupBudget::default(),
         )
         .await
         .unwrap();
-    guard.mark_dispatched();
+    guard.on_dispatched();
     guard.finish().await;
 
     let (mut selected, _) = decode
@@ -3539,12 +3543,11 @@ async fn prefill_retry_preserves_parked_decode_classifier_lifecycle() {
             &request,
             &mut selected,
             RequestPhase::Decode,
-            false,
             &CleanupBudget::default(),
         )
         .await
         .unwrap();
-    guard.mark_dispatched();
+    guard.on_dispatched();
     guard.finish().await;
     let observation = tokio::time::timeout(Duration::from_secs(1), observations_rx.recv())
         .await
@@ -3857,14 +3860,12 @@ async fn builtin_host_with_recorded_dispatch(
     let worker_id = client.wait_for_instances().await.unwrap()[0].id();
     let load_context = test_load_context(&client).await;
     let dispatch = Arc::new(PendingThenCompletedDispatch::default());
-    let inner = PushRouter::from_client_with_dispatch(
-        client,
-        mode,
-        Arc::clone(&dispatch) as Arc<dyn StreamingDispatch<_, _>>,
-    )
-    .await
-    .unwrap();
-    let host = RoutingHost::new_builtin(inner, load_context).unwrap();
+    let host = RoutingHost::builder(client, mode)
+        .load_context(load_context)
+        .dispatch(Arc::clone(&dispatch) as Arc<dyn StreamingDispatch<_, _>>)
+        .build()
+        .await
+        .unwrap();
     (host, dispatch, worker_id, runtime)
 }
 
@@ -3896,7 +3897,7 @@ async fn stopped_request_in_phase(
 
 /// The builtin plane, which is what the failing vLLM cancellation test uses
 /// (`tests/fault_tolerance/cancellation/utils.py` sets `router_mode="round-robin"`).
-/// Covers all four dispatch arms of `select_and_dispatch_builtin`.
+/// Covers every first-party dispatch arm of `dispatch_hosted_plan`.
 #[tokio::test]
 #[serial_test::serial]
 async fn builtin_stopped_decode_request_reaches_the_worker_on_every_dispatch_path() {
@@ -4163,14 +4164,12 @@ async fn unknown_explicit_workers_are_rejected_before_builtin_dispatch() {
     endpoint.register_endpoint_instance().await.unwrap();
     let live_worker = client.wait_for_instances().await.unwrap()[0].id();
     let dispatch = Arc::new(CompletedBuiltinDispatch::default());
-    let inner = PushRouter::from_client_with_dispatch(
-        client,
-        RouterMode::RoundRobin,
-        Arc::clone(&dispatch) as Arc<dyn StreamingDispatch<_, _>>,
-    )
-    .await
-    .unwrap();
-    let host = RoutingHost::new_builtin(inner, load_context).unwrap();
+    let host = RoutingHost::builder(client, RouterMode::RoundRobin)
+        .load_context(load_context)
+        .dispatch(Arc::clone(&dispatch) as Arc<dyn StreamingDispatch<_, _>>)
+        .build()
+        .await
+        .unwrap();
     let worker_id = live_worker.wrapping_add(1);
     for (field, phase) in [
         ("backend_instance_id", RequestPhase::Aggregated),
@@ -4181,9 +4180,10 @@ async fn unknown_explicit_workers_are_rejected_before_builtin_dispatch() {
         content.routing =
             Some(serde_json::from_value(serde_json::json!({field: worker_id})).unwrap());
         let error = host
-            .select_and_dispatch_builtin(Context::new(content), phase, |_, _| Ok(()))
+            .plan_route(&Context::new(content), phase, CleanupBudget::default())
             .await
-            .unwrap_err();
+            .err()
+            .expect("an unknown explicit worker is rejected at planning");
         assert!(match_error_chain(
             error.as_ref(),
             &[ErrorType::InvalidArgument],
@@ -4331,7 +4331,10 @@ async fn explicit_worker_disappearing_after_preview_is_not_revalidated() {
     host.inner.client.override_discovered_instances(vec![]);
     // A failure after successful selection must keep its service-error classification.
     let error = match host.plan_kv_route_from_preview(&request, preview).await {
-        Ok(plan) => host.dispatch_kv_plan(request, plan).await.unwrap_err(),
+        Ok(plan) => host
+            .dispatch_plan(request, plan, |_, _| Ok(()))
+            .await
+            .expect_err("dispatch to a vanished worker fails"),
         Err(error) => error,
     };
     assert!(!match_error_chain(
@@ -4383,16 +4386,17 @@ async fn affinity_mode_host(namespace: &str) -> (Runtime, RoutingHost) {
     endpoint.register_endpoint_instance().await.unwrap();
     client.wait_for_instances().await.unwrap();
     let load_context = test_load_context(&client).await;
-    let inner = PushRouter::from_client(client, RouterMode::RoundRobin)
-        .await
-        .unwrap();
     let coordinator = AffinityCoordinator::new(
         Duration::from_secs(60),
         crate::session_affinity::SessionAffinityMode::Hard,
     )
     .unwrap();
-    let host =
-        RoutingHost::new_builtin_with_coordinator(inner, load_context, Some(coordinator)).unwrap();
+    let host = RoutingHost::builder(client, RouterMode::RoundRobin)
+        .load_context(load_context)
+        .affinity_coordinator(coordinator)
+        .build()
+        .await
+        .unwrap();
     (runtime, host)
 }
 
@@ -4451,19 +4455,16 @@ async fn parent_group_binding_offers_siblings_the_committed_worker() {
     let first = subagent_request("child-1", Some("parent-1"));
     let (offered_first, hold) = offered(&first).await;
     assert_eq!(offered_first, None, "a new group starts unbound");
-    let mut stream = router
-        .bind_affinity(
-            hold,
-            AffinityTarget::new(7, Some(0)),
-            ResponseStream::new(
-                Box::pin(stream::iter([Annotated::from_data(
-                    LLMEngineOutput::default(),
-                )])),
-                first.context(),
-            ),
-        )
-        .unwrap();
-    while stream.next().await.is_some() {}
+    // Commit the group binding and let the request's lease go, as a finished
+    // response stream would.
+    drop(
+        router
+            .commit_affinity(
+                hold.expect("a new session holds"),
+                AffinityTarget::new(7, Some(0)),
+            )
+            .unwrap(),
+    );
 
     let sibling = subagent_request("child-2", Some("parent-1"));
     let (offered_sibling, _) = offered(&sibling).await;
@@ -4500,19 +4501,14 @@ async fn child_prefill_uses_parent_worker_while_decode_keeps_group_binding() {
         )
         .await
         .unwrap();
-    let mut stream = router
-        .bind_affinity(
-            hold,
-            AffinityTarget::new(7, Some(0)),
-            ResponseStream::new(
-                Box::pin(stream::iter([Annotated::from_data(
-                    LLMEngineOutput::default(),
-                )])),
-                parent.context(),
-            ),
-        )
-        .unwrap();
-    while stream.next().await.is_some() {}
+    drop(
+        router
+            .commit_affinity(
+                hold.expect("a new session holds"),
+                AffinityTarget::new(7, Some(0)),
+            )
+            .unwrap(),
+    );
 
     let child = subagent_request("child-1", Some("parent-1"));
     let (selected, hold) = router

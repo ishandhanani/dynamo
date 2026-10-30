@@ -2,15 +2,11 @@
 // SPDX-License-Identifier: Apache-2.0
 
 mod occupancy;
-mod picker;
-mod types;
 
+pub(crate) use dynamo_worker_selection::builtin::route::{
+    AdmissionKind, CandidateView, RouteCandidate, RouteContext, RouteDecision, RouteDevice,
+    RoutePicker, RoutePolicy,
+};
+pub use dynamo_worker_selection::builtin::route::{BuiltinRoutePicker, RouteTarget};
 pub(crate) use occupancy::get_or_create_routing_occupancy_state;
 pub use occupancy::{OccupancyReservation, OccupancySelection, RoutingOccupancyState};
-pub use picker::BuiltinRoutePicker;
-pub(crate) use picker::RoutePicker;
-pub use types::RouteTarget;
-pub(crate) use types::{
-    AdmissionKind, CandidateView, RouteCandidate, RouteContext, RouteDecision, RouteDevice,
-    RoutePolicy,
-};

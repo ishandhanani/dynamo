@@ -48,11 +48,10 @@
 use std::sync::{Arc, LazyLock, OnceLock};
 use std::time::Duration;
 
-use dynamo_runtime::component::Component;
-use dynamo_runtime::metrics::MetricsHierarchy;
 use dynamo_runtime::metrics::prometheus_names::{
     frontend_service, kv_publisher, labels, name_prefix, router, router_request, routing_overhead,
 };
+use dynamo_runtime::{component::Component, metrics::MetricsHierarchy};
 
 /// Build a router metric name: `"router_" + frontend_service_suffix`.
 fn router_metric(suffix: &str) -> String {
@@ -63,13 +62,16 @@ use prometheus::{
     HistogramOpts, HistogramVec, IntCounter, IntCounterVec, IntGauge, IntGaugeVec, Opts,
 };
 
-use crate::http::service::metrics::generate_log_buckets;
 use crate::protocols::common::timing::RequestPhase;
+use dynamo_http_server::metrics::generate_log_buckets;
 
+mod queue_collector;
 mod worker_registered;
 use crate::protocols::common::timing::WORKER_TYPE_PREFILL;
-use dynamo_kv_router::indexer::ApproximateLruStats;
-use dynamo_kv_router::sequences::LocalWorkerLoad;
+use dynamo_kv_indexer::ApproximateLruStats;
+use dynamo_slot_tracker::LocalWorkerLoad;
+use queue_collector::RouterQueueCollector;
+pub(crate) use queue_collector::{QueueStatsReader, RouterQueueSource};
 use worker_registered::RouterWorkerRegistered;
 pub(crate) use worker_registered::{RegistrationAvailabilityProvider, RouterWorkerRegistration};
 
@@ -496,9 +498,7 @@ impl ActiveSequenceIngressMetrics {
     }
 }
 
-impl dynamo_kv_router::services::selection::ReplicaIngressObserver
-    for ActiveSequenceIngressMetricHandles
-{
+impl dynamo_kv_router::selection::ReplicaIngressObserver for ActiveSequenceIngressMetricHandles {
     fn observe_drain(&self, queue_depth: usize, applied: usize) {
         self.queue_depth.set(queue_depth as i64);
         self.events_applied_total.inc_by(applied as u64);
@@ -562,7 +562,7 @@ impl RouterWorkerStatusMetrics {
 
     pub fn watch_workers(
         &self,
-        workers: crate::discovery::RuntimeConfigWatch,
+        workers: crate::discovery::TopologyWatch,
         worker_type: &'static str,
         cancellation: tokio_util::sync::CancellationToken,
         available_workers: Option<RegistrationAvailabilityProvider>,
@@ -697,33 +697,40 @@ pub static WORKER_LOAD_METRICS: LazyLock<WorkerLoadMetrics> = LazyLock::new(Work
 // ---------------------------------------------------------------------------
 
 /// Queue gauges and cumulative admission counters by model, worker type, and policy class.
+/// The router queue's Prometheus surface: the backpressure counters the
+/// router increments as it rejects, and the gauges and admission totals the
+/// [`RouterQueueCollector`] reads from the scheduler's per-class counters at
+/// scrape time.
 pub struct RouterQueueMetrics {
-    pub pending_requests: IntGaugeVec,
-    pub pending_isl_tokens: IntGaugeVec,
-    pub pending_cached_tokens: IntGaugeVec,
     pub backpressure_total: IntCounterVec,
-    pub received_total: IntCounterVec,
-    pub deadline_rejections_total: IntCounterVec,
+    queue: RouterQueueCollector,
 }
 
+/// The per-class backpressure counters one router partition increments.
 #[derive(Clone)]
 pub struct RouterQueueMetricHandles {
-    pub pending_requests: IntGauge,
-    pub pending_isl_tokens: IntGauge,
-    pub pending_cached_tokens: IntGauge,
     pub request_limit_rejections: IntCounter,
     pub raw_isl_limit_rejections: IntCounter,
     pub cached_token_limit_rejections: IntCounter,
-    pub received_total: IntCounter,
-    pub rejected_due_time_passed_total: IntCounter,
-    // Shared by clones for one scheduler; separate schedulers may share Prometheus labels.
-    reported_received: Arc<std::sync::atomic::AtomicU64>,
-    reported_due_time_passed: Arc<std::sync::atomic::AtomicU64>,
 }
 
-pub static ROUTER_QUEUE_METRICS: LazyLock<RouterQueueMetrics> = LazyLock::new(|| {
-    RouterQueueMetrics {
-        pending_requests: IntGaugeVec::new(
+pub static ROUTER_QUEUE_METRICS: LazyLock<RouterQueueMetrics> =
+    LazyLock::new(RouterQueueMetrics::new);
+
+impl RouterQueueMetrics {
+    /// The metric families under today's names; one instance per process.
+    fn new() -> Self {
+        let queue_labels = [labels::MODEL, labels::WORKER_TYPE, "policy_class"];
+        RouterQueueMetrics {
+        backpressure_total: IntCounterVec::new(
+            Opts::new(
+                format!("{}_router_queue_backpressure_total", name_prefix::FRONTEND),
+                "Total number of router scheduler queue backpressure rejections",
+            ),
+            &[queue_labels[0], queue_labels[1], queue_labels[2], "reason"],
+        )
+        .expect("Failed to create router_queue_backpressure_total counter"),
+        queue: RouterQueueCollector::new(
             Opts::new(
                 format!(
                     "{}_{}",
@@ -732,18 +739,10 @@ pub static ROUTER_QUEUE_METRICS: LazyLock<RouterQueueMetrics> = LazyLock::new(||
                 ),
                 "Number of requests pending in the router scheduler queue",
             ),
-            &[labels::MODEL, labels::WORKER_TYPE, "policy_class"],
-        )
-        .expect("Failed to create router_queue_pending_requests gauge"),
-        pending_isl_tokens: IntGaugeVec::new(
             Opts::new(
                 format!("{}_router_queue_pending_isl_tokens", name_prefix::FRONTEND),
                 "Sum of isl_tokens for requests pending in the router scheduler queue",
             ),
-            &[labels::MODEL, labels::WORKER_TYPE, "policy_class"],
-        )
-        .expect("Failed to create router_queue_pending_isl_tokens gauge"),
-        pending_cached_tokens: IntGaugeVec::new(
             Opts::new(
                 format!(
                     "{}_router_queue_pending_cached_tokens",
@@ -751,102 +750,57 @@ pub static ROUTER_QUEUE_METRICS: LazyLock<RouterQueueMetrics> = LazyLock::new(||
                 ),
                 "Estimated cached tokens for requests pending in the router scheduler queue",
             ),
-            &[labels::MODEL, labels::WORKER_TYPE, "policy_class"],
-        )
-        .expect("Failed to create router_queue_pending_cached_tokens gauge"),
-        received_total: IntCounterVec::new(
             Opts::new(
                 format!("{}_router_admission_received_total", name_prefix::FRONTEND),
                 "Total attempts received by router admission; includes retries and excludes advisory probes",
             ),
-            &[labels::MODEL, labels::WORKER_TYPE, "policy_class"],
-        ).expect("valid router admission received metric"),
-        deadline_rejections_total: IntCounterVec::new(
             Opts::new(
                 format!("{}_router_admission_rejected_total", name_prefix::FRONTEND),
                 "Total router admission rejections by deadline reason",
             ),
-            &[labels::MODEL, labels::WORKER_TYPE, "policy_class", "reason"],
-        ).expect("valid router admission rejection metric"),
-        backpressure_total: IntCounterVec::new(
-            Opts::new(
-                format!("{}_router_queue_backpressure_total", name_prefix::FRONTEND),
-                "Total number of router scheduler queue backpressure rejections",
-            ),
-            &[labels::MODEL, labels::WORKER_TYPE, "policy_class", "reason"],
         )
-        .expect("Failed to create router_queue_backpressure_total counter"),
+        .expect("valid router queue metric options"),
     }
-});
+    }
 
-impl RouterQueueMetrics {
+    /// The backpressure counters for one policy class of one partition.
     pub fn handles(
         &self,
         model: &str,
         worker_type: &str,
         policy_class: &str,
     ) -> RouterQueueMetricHandles {
-        let queue_labels = [model, worker_type, policy_class];
         let rejection = |reason| {
             self.backpressure_total
                 .with_label_values(&[model, worker_type, policy_class, reason])
         };
-        // Reserved by DEP #13891; no predicted-miss admission policy exists yet.
-        self.deadline_rejections_total.with_label_values(&[
-            model,
-            worker_type,
-            policy_class,
-            "predicted_miss",
-        ]);
         RouterQueueMetricHandles {
-            pending_requests: self.pending_requests.with_label_values(&queue_labels),
-            pending_isl_tokens: self.pending_isl_tokens.with_label_values(&queue_labels),
-            pending_cached_tokens: self.pending_cached_tokens.with_label_values(&queue_labels),
             request_limit_rejections: rejection("request_limit"),
             raw_isl_limit_rejections: rejection("raw_isl_token_limit"),
             cached_token_limit_rejections: rejection("cached_token_limit"),
-            received_total: self.received_total.with_label_values(&queue_labels),
-            rejected_due_time_passed_total: self.deadline_rejections_total.with_label_values(&[
-                model,
-                worker_type,
-                policy_class,
-                "due_time_passed",
-            ]),
-            reported_received: Arc::default(),
-            reported_due_time_passed: Arc::default(),
         }
     }
-}
 
-impl RouterQueueMetricHandles {
-    /// Export only unseen increments, including when concurrent updates carry older snapshots.
-    pub(super) fn update_admission(&self, received: u64, due_time_passed: u64) {
-        use std::sync::atomic::Ordering;
-        let previous = self
-            .reported_received
-            .fetch_max(received, Ordering::Relaxed);
-        self.received_total
-            .inc_by(received.saturating_sub(previous));
-        let previous = self
-            .reported_due_time_passed
-            .fetch_max(due_time_passed, Ordering::Relaxed);
-        self.rejected_due_time_passed_total
-            .inc_by(due_time_passed.saturating_sub(previous));
+    /// Put one partition's queue in the scrape: `labels` per policy class,
+    /// index-aligned with the scheduler's class indices, and `reader` over its
+    /// counters. The partition leaves the scrape when the returned handle drops
+    /// or `cancellation` fires.
+    pub(crate) fn watch_queue(
+        &self,
+        labels: Vec<[String; 3]>,
+        reader: QueueStatsReader,
+        cancellation: tokio_util::sync::CancellationToken,
+    ) -> Arc<RouterQueueSource> {
+        self.queue.watch(labels, reader, cancellation)
     }
 }
 
-/// Register router queue gauges and admission counters with the Prometheus registry.
-/// Called during frontend HTTP service setup (`service_v2.rs`), served on port 8000.
 pub fn register_router_queue_metrics(
     registry: &prometheus::Registry,
 ) -> Result<(), prometheus::Error> {
     let m = &*ROUTER_QUEUE_METRICS;
-    registry.register(Box::new(m.pending_requests.clone()))?;
-    registry.register(Box::new(m.pending_isl_tokens.clone()))?;
-    registry.register(Box::new(m.pending_cached_tokens.clone()))?;
     registry.register(Box::new(m.backpressure_total.clone()))?;
-    registry.register(Box::new(m.received_total.clone()))?;
-    registry.register(Box::new(m.deadline_rejections_total.clone()))?;
+    registry.register(Box::new(m.queue.clone()))?;
     Ok(())
 }
 
@@ -1681,7 +1635,7 @@ dynamo_frontend_worker_active_requests{dp_rank=\"0\",request_phase=\"prefill\",w
             .unwrap();
 
         let (workers_tx, workers_rx) =
-            tokio::sync::watch::channel(std::collections::HashMap::from([(
+            crate::discovery::topology::topology_channel(std::collections::HashMap::from([(
                 123,
                 crate::local_model::runtime_config::ModelRuntimeConfig::default(),
             )]));
@@ -1729,91 +1683,44 @@ dynamo_frontend_worker_active_requests{dp_rank=\"0\",request_phase=\"prefill\",w
     #[test]
     fn test_router_queue_metrics_pef() {
         let registry = prometheus::Registry::new();
-        let metrics = RouterQueueMetrics {
-            pending_requests: IntGaugeVec::new(
-                Opts::new(
-                    format!(
-                        "{}_{}",
-                        name_prefix::FRONTEND,
-                        frontend_service::ROUTER_QUEUE_PENDING_REQUESTS
-                    ),
-                    "Number of requests pending in the router scheduler queue",
-                ),
-                &[labels::MODEL, labels::WORKER_TYPE, "policy_class"],
-            )
-            .unwrap(),
-            pending_isl_tokens: IntGaugeVec::new(
-                Opts::new(
-                    format!("{}_router_queue_pending_isl_tokens", name_prefix::FRONTEND),
-                    "Sum of isl_tokens for requests pending in the router scheduler queue",
-                ),
-                &[labels::MODEL, labels::WORKER_TYPE, "policy_class"],
-            )
-            .unwrap(),
-            pending_cached_tokens: IntGaugeVec::new(
-                Opts::new(
-                    format!(
-                        "{}_router_queue_pending_cached_tokens",
-                        name_prefix::FRONTEND
-                    ),
-                    "Estimated cached tokens for requests pending in the router scheduler queue",
-                ),
-                &[labels::MODEL, labels::WORKER_TYPE, "policy_class"],
-            )
-            .unwrap(),
-            received_total: IntCounterVec::new(
-            Opts::new(
-                format!("{}_router_admission_received_total", name_prefix::FRONTEND),
-                "Total attempts received by router admission; includes retries and excludes advisory probes",
-            ),
-            &[labels::MODEL, labels::WORKER_TYPE, "policy_class"],
-        ).expect("valid router admission received metric"),
-        deadline_rejections_total: IntCounterVec::new(
-            Opts::new(
-                format!("{}_router_admission_rejected_total", name_prefix::FRONTEND),
-                "Total router admission rejections by deadline reason",
-            ),
-            &[labels::MODEL, labels::WORKER_TYPE, "policy_class", "reason"],
-        ).expect("valid router admission rejection metric"),
-        backpressure_total: IntCounterVec::new(
-                Opts::new(
-                    format!("{}_router_queue_backpressure_total", name_prefix::FRONTEND),
-                    "Total number of router scheduler queue backpressure rejections",
-                ),
-                &[labels::MODEL, labels::WORKER_TYPE, "policy_class", "reason"],
-            )
-            .unwrap(),
-        };
-        registry
-            .register(Box::new(metrics.pending_requests.clone()))
-            .unwrap();
-        registry
-            .register(Box::new(metrics.pending_isl_tokens.clone()))
-            .unwrap();
-        registry
-            .register(Box::new(metrics.pending_cached_tokens.clone()))
-            .unwrap();
+        let metrics = RouterQueueMetrics::new();
         registry
             .register(Box::new(metrics.backpressure_total.clone()))
             .unwrap();
-
-        registry
-            .register(Box::new(metrics.received_total.clone()))
-            .unwrap();
-        registry
-            .register(Box::new(metrics.deadline_rejections_total.clone()))
-            .unwrap();
-        let handles = metrics.handles("model", "decode", "default");
-        handles.update_admission(10, 1);
-        handles.clone().update_admission(10, 1);
-        handles.update_admission(9, 0);
+        registry.register(Box::new(metrics.queue.clone())).unwrap();
+        let _handles = metrics.handles("model", "decode", "default");
+        let labels = vec![[
+            "model".to_string(),
+            "decode".to_string(),
+            "default".to_string(),
+        ]];
+        let _scheduler = metrics.watch_queue(
+            labels.clone(),
+            Arc::new(|_| {
+                Some(dynamo_scheduler::queue::ClassQueueStats {
+                    received_total: 10,
+                    rejected_due_time_passed_total: 1,
+                    pending_count: 5,
+                    pending_isl_tokens: 1024,
+                    pending_cached_tokens: 512,
+                })
+            }),
+            tokio_util::sync::CancellationToken::new(),
+        );
         // A replacement scheduler with the same labels adds its own counts.
-        metrics
-            .handles("model", "decode", "default")
-            .update_admission(2, 1);
-        handles.pending_requests.set(5);
-        handles.pending_isl_tokens.set(1024);
-        handles.pending_cached_tokens.set(512);
+        let _replacement = metrics.watch_queue(
+            labels,
+            Arc::new(|_| {
+                Some(dynamo_scheduler::queue::ClassQueueStats {
+                    received_total: 2,
+                    rejected_due_time_passed_total: 1,
+                    pending_count: 0,
+                    pending_isl_tokens: 0,
+                    pending_cached_tokens: 0,
+                })
+            }),
+            tokio_util::sync::CancellationToken::new(),
+        );
 
         let output = gather_pef(&registry);
         let expected = "\

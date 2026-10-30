@@ -1,11 +1,12 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 use dynamo_custom_policy_builtin::default_factory;
-use dynamo_kv_router::protocols::RoutingConstraints;
-use dynamo_kv_router::services::selection::{
+use dynamo_kv_router::config::KvRouterConfig;
+use dynamo_kv_router::selection::{
     PromptRequest, SelectAndReserveRequest, SelectionCacheConfig, SelectionCore, WorkerRequest,
 };
-use dynamo_kv_router::{KvRouterConfig, RoutingPartitionId};
+use dynamo_router_protocol::identity::RoutingPartitionId;
+use dynamo_router_protocol::protocols::RoutingConstraints;
 
 fn worker(worker_id: u64) -> WorkerRequest {
     WorkerRequest {
@@ -44,11 +45,12 @@ fn reserve_request(selection_id: &str) -> SelectAndReserveRequest {
 #[tokio::test]
 async fn shared_core_books_and_releases_with_the_builtin_default() {
     let core = SelectionCore::try_new_local(
-        KvRouterConfig {
+        dynamo_kv_router::config::resolve_router_config(KvRouterConfig {
             use_kv_events: false,
             router_queue_threshold: None,
             ..Default::default()
-        },
+        })
+        .unwrap(),
         1,
         Default::default(),
         SelectionCacheConfig::default(),
@@ -65,7 +67,7 @@ async fn shared_core_books_and_releases_with_the_builtin_default() {
         .unwrap();
     assert!(partition.scheduler().has_request("request"));
     // Replacing scorer/picker state must leave active reservations intact.
-    use dynamo_kv_router::plugins::worker_selection::RuntimePolicyUpdate;
+    use dynamo_worker_selection::plugin::RuntimePolicyUpdate;
     let control = partition.scheduler().policy_control();
     let initial = control.get().await.unwrap();
     control
@@ -88,12 +90,13 @@ async fn shared_core_books_and_releases_with_the_builtin_default() {
 
 #[tokio::test]
 async fn runtime_updates_are_conditional_and_cancelled_writes_do_not_apply() {
-    use dynamo_kv_router::plugins::worker_selection::{RuntimePolicyError, RuntimePolicyUpdate};
+    use dynamo_worker_selection::plugin::{RuntimePolicyError, RuntimePolicyUpdate};
     let core = SelectionCore::try_new_local(
-        KvRouterConfig {
+        dynamo_kv_router::config::resolve_router_config(KvRouterConfig {
             use_kv_events: false,
             ..Default::default()
-        },
+        })
+        .unwrap(),
         1,
         Default::default(),
         SelectionCacheConfig::default(),
@@ -138,9 +141,10 @@ async fn runtime_updates_are_conditional_and_cancelled_writes_do_not_apply() {
 
 #[tokio::test]
 async fn scoring_error_does_not_book_and_allows_retry() {
-    use dynamo_kv_router::{
+    use dynamo_router_protocol::sched::WorkerSelectionPolicyError;
+    use dynamo_worker_selection::plugin::{
         WorkerCandidates, WorkerInputView, WorkerPicker, WorkerScorer, WorkerSelectionContext,
-        WorkerSelectionPolicy, WorkerSelectionPolicyError,
+        WorkerSelectionPolicy,
     };
     use std::sync::Arc;
 
@@ -170,17 +174,17 @@ async fn scoring_error_does_not_book_and_allows_retry() {
         }
     }
     let core = SelectionCore::try_new_local(
-        KvRouterConfig {
+        dynamo_kv_router::config::resolve_router_config(KvRouterConfig {
             use_kv_events: false,
             router_queue_threshold: None,
             ..Default::default()
-        },
+        })
+        .unwrap(),
         1,
         Default::default(),
         SelectionCacheConfig::default(),
-        Arc::new(|config, role, _| {
+        Arc::new(|_config, role, _| {
             WorkerSelectionPolicy::new(
-                config.clone(),
                 role.default_selector_label(),
                 vec![Box::new(FailOnce(true))],
                 Box::new(First),
@@ -194,7 +198,7 @@ async fn scoring_error_does_not_book_and_allows_retry() {
         .unwrap();
     assert!(matches!(
         partition.scheduler().policy_control().get().await,
-        Err(dynamo_kv_router::plugins::worker_selection::RuntimePolicyError::Unsupported)
+        Err(dynamo_worker_selection::plugin::RuntimePolicyError::Unsupported)
     ));
     let error = core
         .select_and_reserve(reserve_request("request"))

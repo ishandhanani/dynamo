@@ -17,7 +17,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use dynamo_kv_router::protocols::{StorageTier as RouterStorageTier, XXH3_SEED};
+use dynamo_router_protocol::protocols::{StorageTier as RouterStorageTier, XXH3_SEED};
 
 /// LocalBlockHash type (content hash from tokens only)
 type LocalBlockHash = u64;

@@ -11,18 +11,18 @@ use std::{
 
 use arc_swap::ArcSwap;
 use dashmap::{DashMap, mapref::entry::Entry};
-use dynamo_kv_router::{
-    PrefillLoadEstimator,
-    config::KvRouterConfig,
-    protocols::{KvTransferEnforcement, RoutingConstraints, WorkerId, WorkerWithDpRank},
-    selector::WorkerInputs,
+use dynamo_kv_router::config::KvRouterConfig;
+use dynamo_router_protocol::prefill_load::PrefillLoadEstimator;
+use dynamo_router_protocol::protocols::{
+    KvTransferEnforcement, RoutingConstraints, WorkerId, WorkerWithDpRank,
 };
+use dynamo_worker_selection::selector::WorkerInputs;
 use tokio_util::sync::CancellationToken;
 
 use super::worker_monitor::LoadThresholdConfig;
 use super::{
-    GenerateEngineSelection, KvSourceMembershipWatch, Model, RuntimeConfigWatch, WorkerSet,
-    kv_source_watch::KvSourceMembershipCoordinator, runtime_config_watch,
+    GenerateEngineSelection, KvSourceMembershipWatch, Model, RuntimeConfigWatch, TopologyWatch,
+    WorkerSet, kv_source_watch::KvSourceMembershipCoordinator, topology_watch,
 };
 
 use dynamo_runtime::{
@@ -156,6 +156,16 @@ pub(crate) struct CommittedModelView {
     pub(crate) aliases: Vec<String>,
 }
 
+impl From<CommittedModelView> for dynamo_http_server::load::ModelLoadView {
+    fn from(view: CommittedModelView) -> Self {
+        Self {
+            name: view.name,
+            is_ready: view.is_ready,
+            aliases: view.aliases,
+        }
+    }
+}
+
 /// Central manager for model engines, routing, and configuration.
 ///
 /// Models are stored hierarchically: ModelManager → Model → WorkerSet.
@@ -185,6 +195,9 @@ pub struct ModelManager {
     /// endpoint therefore leaves the previous watcher cached; safe eviction requires shared
     /// ownership tracking because multiple routers may consume the same endpoint watch.
     runtime_configs: DashMap<EndpointId, RuntimeConfigWatch>,
+
+    /// Per-endpoint worker topology; the runtime-config map above is derived from it.
+    topologies: DashMap<EndpointId, TopologyWatch>,
 
     /// Per-endpoint HiCache state and its one Mooncake event subscriber.
     hicache_caches: DashMap<EndpointId, HicacheSharedKvCache>,
@@ -288,6 +301,7 @@ impl ModelManager {
             discovery_groups: DashMap::new(),
             worker_inventory: Default::default(),
             runtime_configs: DashMap::new(),
+            topologies: DashMap::new(),
             hicache_caches: DashMap::new(),
             kv_source_memberships: DashMap::new(),
             lora_domains: DashMap::new(),
@@ -2362,8 +2376,8 @@ impl ModelManager {
         let endpoint = client.endpoint.clone();
         let lora_domain = self.lora_domain(&endpoint.id());
 
-        // Get of create runtime config watcher for this endpoint
-        let workers_with_configs = self.get_or_create_runtime_config_watcher(&endpoint).await?;
+        // One topology per endpoint; the shared cache below still reads it as a map.
+        let topology = self.get_or_create_topology_watch(&endpoint).await?;
 
         let effective_kv_router_config = kv_router_config.clone().unwrap_or_default();
         let worker_type = worker_role.unwrap_or(WorkerType::Aggregated);
@@ -2378,22 +2392,23 @@ impl ModelManager {
         // A policy that does not consume cache input must not create a shared-cache client or
         // subscribe to its updates.
         let wants_cache = policy.inputs().contains(WorkerInputs::CACHE);
-        let shared_cache: Option<Arc<dyn dynamo_kv_router::SharedKvCache>> = if wants_cache {
+        let shared_cache: Option<Arc<dyn dynamo_kv_indexer::SharedKvCache>> = if wants_cache {
             match kv_router_config
                 .as_ref()
                 .map(|c| c.shared_cache_type)
                 .unwrap_or_default()
             {
-                dynamo_kv_router::SharedCacheType::None => None,
-                dynamo_kv_router::SharedCacheType::Hicache => {
+                dynamo_worker_selection::config::SharedCacheType::None => None,
+                dynamo_worker_selection::config::SharedCacheType::Hicache => {
                     let worker_component_name = &endpoint.id().component;
                     tracing::info!(
                         worker_component = worker_component_name,
                         "Using HiCache shared KV cache"
                     );
-                    Some(Arc::new(
-                        self.hicache_cache_for(&endpoint, workers_with_configs.clone()),
-                    ))
+                    Some(Arc::new(self.hicache_cache_for(
+                        &endpoint,
+                        self.get_or_create_runtime_config_watcher(&endpoint).await?,
+                    )))
                 }
             }
         } else {
@@ -2418,7 +2433,7 @@ impl ModelManager {
         let chooser = KvRouter::new_with_worker_role_and_scheduler_load(
             endpoint.clone(),
             client,
-            workers_with_configs,
+            topology,
             kv_source_membership,
             kv_cache_block_size,
             SelectionPolicySource::Prepared(policy),
@@ -2692,34 +2707,52 @@ impl ModelManager {
 
     // -- Runtime configs --
 
-    /// Get or create a runtime config watcher for an endpoint.
-    /// Spawns a background task that joins instance availability and config discovery.
-    /// Returns a `watch::Receiver` with the latest `HashMap<WorkerId, ModelRuntimeConfig>`.
-    pub async fn get_or_create_runtime_config_watcher(
+    /// Get or create the worker topology watch for an endpoint.
+    ///
+    /// Spawns the join of instance availability and config discovery once per
+    /// endpoint. If another caller raced us, the entry() below picks up the
+    /// winner; the loser's task stops once its receivers are dropped. This
+    /// registry is keyed by endpoint and outlives any one WorkerSet, so the
+    /// watch is scoped to the process, not to a caller's own lifecycle.
+    pub async fn get_or_create_topology_watch(
         &self,
         endpoint: &Endpoint,
-    ) -> anyhow::Result<RuntimeConfigWatch> {
+    ) -> anyhow::Result<TopologyWatch> {
         let endpoint_id = endpoint.id();
-
-        if let Some(existing) = self.runtime_configs.get(&endpoint_id) {
+        if let Some(existing) = self.topologies.get(&endpoint_id) {
             return Ok(existing.clone());
         }
-
-        // Slow path: create the watch (spawns a background task).
-        // If another caller raced us, the entry() below picks up the winner;
-        // the loser's background task stops once its receivers are dropped.
-        // This registry is keyed by endpoint and outlives any one WorkerSet, so
-        // the watch is scoped to the process, not to a caller's own lifecycle.
-        let rx = runtime_config_watch(endpoint, endpoint.drt().primary_token()).await?;
-        let result = match self.runtime_configs.entry(endpoint_id) {
+        let rx = topology_watch(endpoint, endpoint.drt().primary_token()).await?;
+        Ok(match self.topologies.entry(endpoint_id) {
             Entry::Occupied(e) => e.get().clone(),
             Entry::Vacant(e) => {
                 e.insert(rx.clone());
                 rx
             }
-        };
+        })
+    }
 
-        Ok(result)
+    /// Get or create the runtime config map for an endpoint: the topology
+    /// projected to `HashMap<WorkerId, ModelRuntimeConfig>`, one projection per
+    /// endpoint, for the readers that still consume membership as a map.
+    pub async fn get_or_create_runtime_config_watcher(
+        &self,
+        endpoint: &Endpoint,
+    ) -> anyhow::Result<RuntimeConfigWatch> {
+        let endpoint_id = endpoint.id();
+        if let Some(existing) = self.runtime_configs.get(&endpoint_id) {
+            return Ok(existing.clone());
+        }
+        let topology = self.get_or_create_topology_watch(endpoint).await?;
+        let rx =
+            super::topology::runtime_config_watch_from(topology, endpoint.drt().primary_token());
+        Ok(match self.runtime_configs.entry(endpoint_id) {
+            Entry::Occupied(e) => e.get().clone(),
+            Entry::Vacant(e) => {
+                e.insert(rx.clone());
+                rx
+            }
+        })
     }
 
     /// Get or create the reusable KV-source membership watch for one exact serving endpoint.
@@ -2892,7 +2925,7 @@ mod tests {
     use super::*;
     use std::collections::HashMap;
 
-    use dynamo_kv_router::protocols::{KV_EVENT_SUBJECT, WorkerWithDpRank};
+    use dynamo_router_protocol::protocols::{KV_EVENT_SUBJECT, WorkerWithDpRank};
     use dynamo_runtime::{
         DistributedRuntime, Runtime,
         discovery::{Discovery, DiscoverySpec, MockDiscovery, SharedMockRegistry},
@@ -3182,8 +3215,7 @@ mod tests {
 
     #[test]
     fn lora_state_and_load_are_isolated_by_endpoint() {
-        use crate::kv_router::protocols::WorkerWithDpRank;
-        use crate::model_card::LoraInfo;
+        use crate::{kv_router::protocols::WorkerWithDpRank, model_card::LoraInfo};
 
         let manager = ModelManager::new();
         let endpoint_a = EndpointId::from("test.worker-a.generate");
@@ -3456,7 +3488,7 @@ mod tests {
 
     #[test]
     fn alias_requests_publish_frontend_load_under_the_primary_model() {
-        use crate::http::service::metrics::{Endpoint, Metrics};
+        use dynamo_http_server::metrics::{Endpoint, Metrics};
 
         let mm = ModelManager::new();
         let worker_set = Arc::new(make_worker_set("ns1", "abc"));
@@ -3477,7 +3509,14 @@ mod tests {
             metrics
                 .clone()
                 .create_inflight_guard("llama", Endpoint::Embeddings, false, "");
-        let frame = metrics.frontend_load(0, true, mm.committed_model_views());
+        let frame = metrics.frontend_load(
+            0,
+            true,
+            mm.committed_model_views()
+                .into_iter()
+                .map(Into::into)
+                .collect(),
+        );
         assert_eq!(frame.models.len(), 1);
         assert_eq!(frame.models[0].model, "llama");
         assert_eq!(frame.models[0].totals.requests_started, 2);

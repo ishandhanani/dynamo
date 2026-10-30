@@ -24,24 +24,21 @@ use crate::Endpoint;
 use clap::Parser;
 #[cfg(feature = "select-service")]
 use dynamo_kv_router::config::try_kv_router_config_from_dynamo_env;
-use dynamo_kv_router::config::{KvRouterConfig, RouterConfigOverride};
+use dynamo_kv_router::config::KvRouterConfig;
+use dynamo_router_protocol::config::RouterConfigOverride;
 use dynamo_kv_router::plugins::RouterPlugins;
-use dynamo_kv_router::protocols::compute_block_hash_for_seq;
-use dynamo_kv_router::protocols::*;
+use dynamo_router_protocol::protocols::compute_block_hash_for_seq;
+use dynamo_router_protocol::protocols::*;
 #[cfg(feature = "kv-indexer")]
-use dynamo_kv_router::services::indexer::{self, IndexerConfig};
+use dynamo_kv_indexer::http::{self as indexer, IndexerConfig};
 #[cfg(feature = "select-service")]
-use dynamo_kv_router::services::selection::{
-    self, OverlapScoresRequest, PotentialLoadsRequest, PromptRequest, ReservationRequest,
-    SelectAndReserveRequest, SelectRequest, SelectionCacheConfig as RsSelectionCacheConfig,
-    SelectionError, SelectionService as RustSelectionService, SelectionServiceBuilder,
-    SelectionServiceConfig, WorkerPatchRequest, WorkerRequest,
-    warn_for_unserved_worker_selection_policies,
-};
+use dynamo_kv_router::selection;
+use dynamo_kv_router::selection::{OverlapScoresRequest, PotentialLoadsRequest, PromptRequest, ReservationRequest, SelectAndReserveRequest, SelectRequest, SelectionCacheConfig as RsSelectionCacheConfig, SelectionError, SelectionService as RustSelectionService, SelectionServiceBuilder, SelectionServiceConfig, WorkerPatchRequest, WorkerRequest, warn_for_unserved_worker_selection_policies};
 #[cfg(feature = "slot-tracker")]
-use dynamo_kv_router::services::slot_tracker::{self, SlotTrackerConfig};
+use dynamo_slot_tracker::http::{self as slot_tracker, SlotTrackerConfig};
 #[cfg(feature = "select-service")]
-use dynamo_kv_router::{TrackingHashAlgorithm, WorkerType};
+use dynamo_router_protocol::WorkerType;
+use dynamo_router_protocol::tracking_hash::TrackingHashAlgorithm;
 use rs::pipeline::{AsyncEngine, SingleIn};
 use rs::protocols::annotated::Annotated as RsAnnotated;
 use tracing::Instrument;
@@ -49,7 +46,6 @@ use tracing::Instrument;
 use llm_rs::discovery::LoadThresholdConfig as RsLoadThresholdConfig;
 use llm_rs::kv_router::RoutingHost;
 type RsRoutingHost = RoutingHost;
-type RsManagedKvRouter = llm_rs::kv_router::ManagedKvRouter;
 use llm_rs::kv_router::publisher::{KvEventSourceConfig, create_stored_blocks};
 use llm_rs::protocols::common::timing::RequestTracker;
 use llm_rs::protocols::common::{OutputOptions, SamplingOptions, StopConditions};
@@ -238,7 +234,7 @@ where
         )?;
 
         let trace_id_header =
-            dynamo_kv_router::services::indexer::logging::parse_header_name(&cli.trace_id_header)
+            dynamo_kv_indexer::http::logging::parse_header_name(&cli.trace_id_header)
                 .map_err(|e| {
                 anyhow::anyhow!("invalid --trace-id-header '{}': {e}", cli.trace_id_header)
             })?;
@@ -566,7 +562,7 @@ where
             cli.selection_cache_max_bytes,
         ),
     };
-    let builder = config.service_builder(WorkerType::Aggregated, policy_registry);
+    let builder = SelectionServiceBuilder::from_config(&config, WorkerType::Aggregated, policy_registry);
     let rt = tokio::runtime::Runtime::new()?;
     let service = rt.block_on(builder.build())?;
     rt.block_on(selection::run_server(config.port, service))
@@ -1503,7 +1499,7 @@ impl KvEventPublisher {
 #[pyclass]
 #[derive(Clone)]
 pub(crate) struct OverlapScores {
-    inner: dynamo_kv_router::protocols::OverlapScores,
+    inner: dynamo_router_protocol::protocols::OverlapScores,
 }
 
 #[pymethods]
@@ -1529,7 +1525,7 @@ enum RadixTreeRequest {
     FindMatches {
         local_block_hashes: Vec<LocalBlockHash>,
         early_exit: bool,
-        response_tx: mpsc::SyncSender<dynamo_kv_router::protocols::OverlapScores>,
+        response_tx: mpsc::SyncSender<dynamo_router_protocol::protocols::OverlapScores>,
     },
     ApplyEvent {
         worker_id: WorkerId,
@@ -1564,7 +1560,7 @@ impl RadixTree {
 
         // Spawn dedicated thread with simplified sync processing
         std::thread::spawn(move || {
-            let mut radix_tree = dynamo_kv_router::indexer::RadixTree::new();
+            let mut radix_tree = dynamo_kv_indexer::RadixTree::new();
 
             loop {
                 match request_rx.recv() {
@@ -1729,7 +1725,7 @@ impl RadixTree {
 
 impl RadixTree {
     fn handle_request(
-        radix_tree: &mut dynamo_kv_router::indexer::RadixTree,
+        radix_tree: &mut dynamo_kv_indexer::RadixTree,
         request: RadixTreeRequest,
     ) {
         match request {
@@ -1831,7 +1827,7 @@ mod metric_worker_type_tests {
     async fn standalone_encode_router(
         namespace: &str,
         load_threshold_config: RsLoadThresholdConfig,
-    ) -> (RsManagedKvRouter, rs::Runtime) {
+    ) -> (RsRoutingHost, rs::Runtime) {
         let runtime = rs::Runtime::from_current().unwrap();
         let distributed = rs::DistributedRuntime::new(
             runtime.clone(),
@@ -1869,6 +1865,9 @@ mod metric_worker_type_tests {
             None,
             RouterPlugins::default(),
         )
+        .await
+        .unwrap()
+        .build()
         .await
         .unwrap();
         (router, runtime)
@@ -1910,13 +1909,13 @@ mod metric_worker_type_tests {
                 .await;
 
         assert_eq!(
-            router.load_context().source(),
+            router.load_context().unwrap().source(),
             llm_rs::kv_router::RouterLoadSource::Encode
         );
-        assert!(router.load_context().monitor().is_none());
-        assert!(!router.load_context().scheduler_load_sender().is_enabled());
+        assert!(router.load_context().unwrap().monitor().is_none());
+        assert!(!router.load_context().unwrap().scheduler_load_sender().is_enabled());
         assert_eq!(
-            router.load_context().load_thresholds().get(),
+            router.load_context().unwrap().load_thresholds().get(),
             RsLoadThresholdConfig::default()
         );
         runtime.shutdown();
@@ -1935,7 +1934,7 @@ mod metric_worker_type_tests {
         )
         .await;
 
-        assert_eq!(router.load_context().load_thresholds().get(), thresholds);
+        assert_eq!(router.load_context().unwrap().load_thresholds().get(), thresholds);
         runtime.shutdown();
     }
 }
@@ -1980,10 +1979,12 @@ async fn create_kv_router_from_endpoint(
     block_size: usize,
     kv_router_config: Option<KvRouterConfig>,
     load_threshold_config: RsLoadThresholdConfig,
-    prefill_load_estimator: Option<Arc<dyn dynamo_kv_router::PrefillLoadEstimator>>,
+    prefill_load_estimator: Option<Arc<dyn dynamo_router_protocol::prefill_load::PrefillLoadEstimator>>,
     plugins: RouterPlugins,
-) -> anyhow::Result<RsManagedKvRouter> {
-    // Create ModelManager and use it to create KvRouter (ensures registration)
+) -> anyhow::Result<llm_rs::kv_router::RoutingHostBuilder> {
+    // The model manager owns the per-endpoint topology, shared caches and
+    // KV-source membership the router joins; the host builder constructs the
+    // router on it.
     let model_manager = Arc::new(llm_rs::discovery::ModelManager::new());
     let endpoint_id = endpoint.id();
     let track_active_blocks = kv_router_config
@@ -2092,15 +2093,6 @@ async fn create_kv_router_from_endpoint(
         }
     };
 
-    let load_context = llm_rs::kv_router::RoutingLoadContext::start(
-        client.clone(),
-        load_source,
-        llm_rs::discovery::LoadThresholdHandle::new(load_threshold_config),
-        &endpoint.component().drt().child_token(),
-        None,
-    )
-    .await?;
-
     // Preserve the model card's role and display name, which can differ
     // from the metric role and the routing partition name.
     let plugins = if let Some(factory) = plugins
@@ -2115,9 +2107,9 @@ async fn create_kv_router_from_endpoint(
             factory(
                 config,
                 policy_worker_role,
-                dynamo_kv_router::RoutingPartitionRef::new(
+                dynamo_router_protocol::identity::RoutingPartitionRef::new(
                     &policy_model_name,
-                    dynamo_kv_router::DEFAULT_ROUTING_GROUP,
+                    dynamo_router_protocol::identity::DEFAULT_ROUTING_GROUP,
                 ),
             )
         }))
@@ -2125,26 +2117,28 @@ async fn create_kv_router_from_endpoint(
         plugins
     };
     let plugins = llm_rs::kv_router::plugins::RouterPluginBuilder::new(plugins);
-    let kv_router = model_manager
-        .kv_chooser_for_with_plugins_and_client(
-            client,
-            block_size as u32,
-            &plugins,
+    // The host starts the load context and constructs the router on it; the
+    // standalone router has no admitted-set controller, so the plain client is
+    // both its discovery view and its transport.
+    Ok(RsRoutingHost::builder(client, rs::pipeline::RouterMode::KV)
+        .load(llm_rs::kv_router::LoadContextSpec {
+            source: load_source,
+            thresholds: llm_rs::discovery::LoadThresholdHandle::new(load_threshold_config),
+            parent_token: endpoint.component().drt().child_token(),
+            task_guard: None,
+        })
+        .kv(llm_rs::kv_router::KvRouterSpec {
+            model_manager,
+            block_size: block_size as u32,
+            policy: llm_rs::kv_router::KvPolicy::Plugins(plugins),
             kv_router_config,
             prefill_load_estimator,
             worker_role,
             metric_worker_type,
             model_name,
-            enable_eagle,
-            load_context.scheduler_load_sender(),
-            load_context.cancellation_token(),
-        )
-        .await?;
-
-    Ok(llm_rs::kv_router::ManagedKvRouter::new(
-        load_context,
-        kv_router,
-    ))
+            is_eagle: enable_eagle,
+            teardown_task_guard: None,
+        }))
 }
 
 #[pyclass]
@@ -2329,8 +2323,10 @@ impl KvRouter {
             runtime.block_on(async move {
                 let client = endpoint.inner.client().await.map_err(to_pyerr)?;
 
-                // Create KvRouter using helper function (ensures etcd registration)
-                let managed_router = create_kv_router_from_endpoint(
+                // One builder chain: load context, KV router, transport, and
+                // the session table bound to this router alone (no replica sync,
+                // as before: the standalone router has no peers on the event plane).
+                let routing_host = create_kv_router_from_endpoint(
                     &endpoint.inner,
                     client,
                     block_size,
@@ -2340,27 +2336,14 @@ impl KvRouter {
                     plugins,
                 )
                 .await
-                .map_err(to_pyerr)?;
-
-                let push_router = rs::pipeline::PushRouter::<
-                    llm_rs::protocols::common::preprocessor::PreprocessedRequest,
-                    rs::protocols::annotated::Annotated<
-                        llm_rs::protocols::common::llm_backend::LLMEngineOutput,
-                    >,
-                >::from_client(
-                    managed_router.load_context().client().clone(),
-                    rs::pipeline::network::egress::push_router::RouterMode::KV,
-                )
-                .await
-                .map_err(to_pyerr)?;
-
-                let routing_host = RsRoutingHost::new_with_load_context(
-                    push_router,
-                    managed_router.router().clone(),
-                    managed_router.load_context().clone(),
+                .map_err(to_pyerr)?
+                .session_affinity(
                     session_affinity_ttl_secs.map(Duration::from_secs),
                     session_affinity_mode,
                 )
+                .session_affinity_replication(false)
+                .build()
+                .await
                 .map_err(to_pyerr)?;
 
                 Ok(Self {

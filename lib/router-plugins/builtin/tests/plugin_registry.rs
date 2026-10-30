@@ -3,12 +3,13 @@
 
 use std::sync::Arc;
 
+use dynamo_admission::classifier::{ClassifyFuture, ClassifyRequest, RequestClassifier};
+use dynamo_kv_router::config::KvRouterConfig;
 use dynamo_kv_router::plugins::RouterPlugins;
-use dynamo_kv_router::plugins::request_classifier::{
-    ClassifyFuture, ClassifyRequest, RequestClassifier,
-};
-use dynamo_kv_router::plugins::worker_selection::WorkerCandidates;
-use dynamo_kv_router::{KvRouterConfig, RoutingPartitionRef, WorkerType};
+use dynamo_router_protocol::WorkerType;
+use dynamo_router_protocol::identity::RoutingPartitionRef;
+use dynamo_worker_selection::config::SelectionConfig;
+use dynamo_worker_selection::plugin::WorkerCandidates;
 
 struct PassThrough;
 
@@ -86,7 +87,11 @@ worker_selection:
             WorkerType::Decode,
             WorkerType::Encode,
         ] {
-            factory(&config, role, RoutingPartitionRef::new("model", "default"));
+            factory(
+                &SelectionConfig::from(&config),
+                role,
+                RoutingPartitionRef::new("model", "default"),
+            );
         }
     }
 }

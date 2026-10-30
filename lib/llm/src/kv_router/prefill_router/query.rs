@@ -4,10 +4,10 @@
 use std::collections::HashSet;
 
 use anyhow::Result;
-use dynamo_kv_router::{
-    protocols::{BlockExtraInfo, RoutingConstraints, WorkerId, WorkerWithDpRank},
-    scheduling::queue::BookingHandle,
+use dynamo_router_protocol::protocols::{
+    BlockExtraInfo, RoutingConstraints, WorkerId, WorkerWithDpRank,
 };
+use dynamo_scheduler::queue::BookingHandle;
 
 use super::{PrefillError, PrefillLifecycleState, PrefillRouter};
 
@@ -156,7 +156,6 @@ mod tests {
         traits::DistributedRuntimeProvider,
     };
     use futures::StreamExt;
-    use tokio::sync::watch;
 
     use super::*;
     use crate::{
@@ -338,11 +337,13 @@ mod tests {
         )
         .await
         .unwrap();
-        let push_router = PushRouter::from_client_with_dispatch(client, mode, dispatch)
-            .await
-            .unwrap();
         let shared = Arc::new(
-            RoutingHost::new_builtin_with_coordinator(push_router, load_context, None).unwrap(),
+            RoutingHost::builder(client, mode)
+                .load_context(load_context)
+                .dispatch(dispatch as crate::kv_router::LlmDispatch)
+                .build()
+                .await
+                .unwrap(),
         );
         let prefill = PrefillRouter::disabled(Arc::new(ModelManager::new()), mode, None);
         prefill.binding.store(Some(Arc::new(
@@ -387,10 +388,11 @@ mod tests {
         let endpoint = component.endpoint("generate");
         let endpoint_id = endpoint.id();
         let client = endpoint.client().await.unwrap();
-        let (_workers_tx, workers_rx) = watch::channel(HashMap::from([
-            (7, ModelRuntimeConfig::default()),
-            (8, ModelRuntimeConfig::default()),
-        ]));
+        let (_workers_tx, workers_rx) =
+            crate::discovery::topology::topology_channel(HashMap::from([
+                (7, ModelRuntimeConfig::default()),
+                (8, ModelRuntimeConfig::default()),
+            ]));
         let config = KvRouterConfig {
             overlap_score_credit: 0.0,
             router_temperature: 0.0,

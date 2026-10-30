@@ -1,0 +1,76 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+[package]
+name = "dynamo-kv-indexer"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+homepage.workspace = true
+repository.workspace = true
+description = "KV cache index for the Dynamo router: index trees, KV event wire format, ingest, and the standalone indexer service"
+
+[features]
+default = []
+# The Prometheus exporter of the indexer counters, for hosts that scrape them.
+export = ["dep:prometheus", "dep:dynamo-metrics"]
+bench = ["dynamo-router-protocol/bench"]
+profile = []
+# ZMQ event listeners and the worker registry behind them.
+ingest-zmq = ["dep:zmq"]
+# The standalone HTTP indexer service.
+http = ["ingest-zmq", "export", "dep:axum", "dep:reqwest", "dep:chrono", "dep:tracing-appender"]
+# Test hooks consumed by dependent crates' tests; never enable in release.
+testing = []
+
+[dependencies]
+dynamo-router-protocol = { workspace = true }
+anyhow = { workspace = true }
+arc-swap = "1.9.1"
+async-trait = { workspace = true }
+dashmap = { workspace = true }
+fastrand = "2"
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+tokio-util = { workspace = true }
+tracing = { workspace = true }
+xxhash-rust = { workspace = true }
+flume = "0.12.0"
+parking_lot = { workspace = true }
+rmp-serde = { workspace = true }
+rustc-hash = "2.1.1"
+slotmap = "1"
+dynamo-tokens = { workspace = true }
+dynamo-truthy = { workspace = true }
+prometheus = { workspace = true, optional = true }
+dynamo-metrics = { workspace = true, optional = true }
+zmq = { version = "0.10", optional = true }
+axum = { version = "=0.8.4", default-features = false, features = [
+  "http1",
+  "json",
+  "matched-path",
+  "query",
+  "tokio",
+  "tracing",
+], optional = true }
+chrono = { workspace = true, optional = true }
+reqwest = { version = "0.12.24", default-features = false, features = ["json", "rustls-tls"], optional = true }
+tracing-appender = { version = "0.2", optional = true }
+
+
+[dev-dependencies]
+dynamo-router-protocol = { workspace = true, features = ["testing"] }
+criterion = "0.5"
+rstest = "0.18.2"
+rstest_reuse = "0.7.0"
+tempfile = { workspace = true }
+tokio = { workspace = true, features = ["rt", "macros", "time", "test-util"] }
+serde_json = { workspace = true }
+tower = { version = "0.5", features = ["util"] }
+
+[[bench]]
+name = "indexer_delegate"
+harness = false

@@ -1,15 +1,13 @@
 // SPDX-FileCopyrightText: Copyright (c) 2024-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-use std::path::PathBuf;
-use std::sync::Arc;
+use std::{path::PathBuf, sync::Arc};
 
 use crate::{
     discovery::{ModelManager, ModelWatcher},
     engines::StreamingEngineAdapter,
     entrypoint::{EngineConfig, RouterConfig, input::common},
     grpc::service::kserve,
-    http::service::metrics::Metrics,
     local_model::runtime_config::TokenizerBackend,
     namespace::NamespaceFilter,
     types::openai::{
@@ -17,6 +15,7 @@ use crate::{
         completions::{NvCreateCompletionRequest, NvCreateCompletionResponse},
     },
 };
+use dynamo_http_server::metrics::Metrics;
 use dynamo_runtime::DistributedRuntime;
 
 /// Build and run an KServe gRPC service
@@ -138,7 +137,9 @@ async fn run_watcher(
     migration_limit: u32,
     migration_max_seq_len: Option<u32>,
     namespace_filter: NamespaceFilter,
-    prefill_load_estimator: Option<Arc<dyn dynamo_kv_router::PrefillLoadEstimator>>,
+    prefill_load_estimator: Option<
+        Arc<dyn dynamo_router_protocol::prefill_load::PrefillLoadEstimator>,
+    >,
     local_model_path: Option<PathBuf>,
     metrics_prefix: Option<String>,
     tokenizer_backend: Option<TokenizerBackend>,

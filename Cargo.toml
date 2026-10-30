@@ -3,6 +3,15 @@
 
 [workspace]
 members = [
+    "lib/http-server",
+    "lib/metrics",
+    "lib/router/protocol",
+    "lib/router/kv-indexer",
+    "lib/router/slot-tracker",
+    "lib/router/admission",
+    "lib/router/worker-selection",
+    "lib/router/scheduler",
+    "lib/router/kv-router",
     "lib/llm",
     "lib/rl",
     "lib/runtime",
@@ -11,7 +20,6 @@ members = [
     "lib/data-gen",
     "lib/kv-hashing",
     "lib/mocker",
-    "lib/kv-router",
     "lib/router-plugins/catalog",
     "lib/router-plugins/builtin",
     "examples/router/custom-policy-example/soft-pin-repin",
@@ -55,6 +63,15 @@ dynamo-custom-policy-builtin = { path = "lib/router-plugins/builtin", version = 
 aisimulate-core = { version = "=0.13.0-dev.202610240000000082" }
 
 # Local crates
+dynamo-http-server = { path = "lib/http-server", version = "1.7.0" }
+dynamo-metrics = { path = "lib/metrics", version = "1.7.0" }
+dynamo-router-protocol = { path = "lib/router/protocol", version = "1.7.0" }
+dynamo-kv-indexer = { path = "lib/router/kv-indexer", version = "1.7.0" }
+dynamo-slot-tracker = { path = "lib/router/slot-tracker", version = "1.7.0" }
+dynamo-admission = { path = "lib/router/admission", version = "1.7.0" }
+dynamo-worker-selection = { path = "lib/router/worker-selection", version = "1.7.0" }
+dynamo-scheduler = { path = "lib/router/scheduler", version = "1.7.0" }
+dynamo-kv-router = { path = "lib/router/kv-router", version = "1.7.0" }
 dynamo-runtime = { path = "lib/runtime", version = "1.7.0" }
 dynamo-llm = { path = "lib/llm", version = "1.7.0", default-features = false }
 dynamo-rl = { path = "lib/rl", version = "1.7.0" }
@@ -66,7 +83,6 @@ dynamo-data-gen = { path = "lib/data-gen", version = "1.7.0" }
 dynamo-kv-hashing = { path = "lib/kv-hashing", version = "1.7.0" }
 dynamo-memory = { path = "lib/memory", version = "1.7.0" }
 dynamo-mocker = { path = "lib/mocker", version = "1.7.0" }
-dynamo-kv-router = { path = "lib/kv-router", version = "1.7.0" }
 dynamo-protocols = { version = "=8.2.0" }
 dynamo-parsers = { version = "=10.0.7" }
 

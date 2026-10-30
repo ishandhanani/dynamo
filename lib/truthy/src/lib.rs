@@ -10,7 +10,7 @@
 //!
 //! `dynamo_runtime::config` re-exports these helpers and is the canonical
 //! import path for crates that already depend on `dynamo-runtime`. Crates that
-//! cannot (e.g. `dynamo-memory`, `dynamo-kv-router`, `dynamo-mocker`) depend on
+//! cannot (e.g. `dynamo-memory`, `dynamo-scheduler`, `dynamo-mocker`) depend on
 //! this crate directly. Do not hand-roll new bool parsers — a divergent
 //! accepted set means `SOMEFLAG=on` works for one flag and silently not
 //! another. `tests/no_bool_parse_forks.rs` greps the workspace for forks.

@@ -7,17 +7,14 @@ use std::sync::atomic::Ordering;
 use anyhow::{Context as _, Result};
 use tokio::sync::{oneshot, watch};
 
-use dynamo_kv_router::{
-    PrefillLoadEstimator, conditional_disagg::make_conditional_disagg_policy,
-    config::KvRouterConfig,
-};
+use dynamo_kv_router::config::KvRouterConfig;
+use dynamo_router_protocol::prefill_load::PrefillLoadEstimator;
 use dynamo_runtime::{
-    component::Endpoint,
-    discovery::DiscoveryQuery,
-    pipeline::{PushRouter, RouterMode},
+    component::Endpoint, discovery::DiscoveryQuery, pipeline::RouterMode,
     prelude::DistributedRuntimeProvider,
-    protocols::annotated::Annotated,
 };
+use dynamo_worker_selection::conditional_disagg::make_conditional_disagg_policy;
+use dynamo_worker_selection::config::SelectionConfig;
 
 use super::{PrefillBinding, PrefillBuildContext, PrefillLifecycleState, PrefillRouter};
 
@@ -31,12 +28,12 @@ pub(super) enum ActivationSnapshot {
 }
 use crate::{
     discovery::{LoadThresholdHandle, ModelManager, WorkerSetTarget},
-    kv_router::{RouterLoadSource, RoutingHost, RoutingLoadContext, SelectionPolicySource},
-    model_card::ModelDeploymentCard,
-    protocols::common::{
-        llm_backend::{LLMEngineOutput, PreprocessedRequest},
-        timing::WORKER_TYPE_PREFILL,
+    kv_router::{
+        KvPolicy, KvRouterSpec, LoadContextSpec, RouterLoadSource, RoutingHost,
+        SelectionPolicySource,
     },
+    model_card::ModelDeploymentCard,
+    protocols::common::timing::WORKER_TYPE_PREFILL,
     session_affinity::{SessionAffinityMode, create_affinity_coordinator},
 };
 
@@ -210,7 +207,8 @@ impl PrefillRouter {
     ) -> Arc<Self> {
         let cancel_token = parent_token.child_token();
         let (target_tx, target_rx) = watch::channel(None);
-        let conditional_disagg_policy = make_conditional_disagg_policy(kv_router_config.as_ref());
+        let selection_config = kv_router_config.as_ref().map(SelectionConfig::from);
+        let conditional_disagg_policy = make_conditional_disagg_policy(selection_config.as_ref());
         let conditional_disagg_prefill_busy_threshold = kv_router_config.as_ref().and_then(|c| {
             c.conditional_disagg_prefill_busy_threshold
                 .or(c.router_queue_threshold)
@@ -327,14 +325,12 @@ impl PrefillRouter {
         let prefill_session_affinity_ttl = advertisement
             .session_affinity_ttl
             .unwrap_or(context.session_affinity_ttl);
-        let load_context = RoutingLoadContext::start(
-            client.clone(),
-            RouterLoadSource::Prefill,
-            context.load_thresholds.clone(),
-            &context.parent_token,
-            context.task_guard.clone(),
-        )
-        .await?;
+        let load = LoadContextSpec {
+            source: RouterLoadSource::Prefill,
+            thresholds: context.load_thresholds.clone(),
+            parent_token: context.parent_token.clone(),
+            task_guard: context.task_guard.clone(),
+        };
 
         // A prefill card that declares a mode may declare KV tuning alongside it;
         // honoring only half of its `RouterConfig` would be a trap. Whichever
@@ -365,70 +361,33 @@ impl PrefillRouter {
             "Activating prefill router"
         );
 
-        let router = if prefill_router_mode.is_kv_routing() {
-            // Create KV chooser using the endpoint (this is a prefill router)
-            let kv_chooser = context
-                .model_manager
-                .kv_chooser_for_with_policy_and_client(
-                    client.clone(),
-                    prefill_block_size,
-                    context.selection_policy.clone(),
-                    prefill_kv_config,
-                    context.prefill_load_estimator.clone(),
-                    Some(crate::worker_type::WorkerType::Prefill),
-                    WORKER_TYPE_PREFILL,
-                    Some(context.model_name.clone()),
-                    advertisement.is_eagle,
-                    load_context.scheduler_load_sender(),
-                    load_context.cancellation_token(),
-                )
-                .await?;
-
-            let affinity = create_affinity_coordinator(
-                prefill_session_affinity_ttl,
-                context.session_affinity_mode,
-                client.clone(),
-            )
-            .await?;
-
-            // Build the PushRouter for prefill with KV mode using the shared client
-            let push_router = PushRouter::<PreprocessedRequest, Annotated<LLMEngineOutput>>::from_client_with_monitor(
-                client,
-                RouterMode::KV,
-                None, // worker_monitor
-            )
-            .await?;
-
-            Arc::new(RoutingHost::new_with_load_context_and_coordinator(
-                push_router,
-                kv_chooser,
-                load_context.clone(),
-                affinity,
-            ))
-        } else {
-            let affinity = create_affinity_coordinator(
-                prefill_session_affinity_ttl,
-                context.session_affinity_mode,
-                client.clone(),
-            )
-            .await?;
-
-            // Create the transport and discovery layer for the builtin policy.
-            // Note: Per-worker metrics (active_prefill_tokens, active_decode_blocks) are only
-            // available in KV routing mode where the router has actual bookkeeping.
-            let push_router = PushRouter::<PreprocessedRequest, Annotated<LLMEngineOutput>>::from_client_with_monitor(
-                client,
-                prefill_router_mode,
-                None, // worker_monitor
-            )
-            .await?;
-
-            Arc::new(RoutingHost::new_builtin_with_coordinator(
-                push_router,
-                load_context.clone(),
-                affinity,
-            )?)
-        };
+        // Prefill affinity is a standalone coordinator on the prefill client in
+        // every mode, not the KV router's.
+        let affinity = create_affinity_coordinator(
+            prefill_session_affinity_ttl,
+            context.session_affinity_mode,
+            client.clone(),
+        )
+        .await?;
+        let kv = prefill_router_mode.is_kv_routing().then(|| KvRouterSpec {
+            model_manager: context.model_manager.clone(),
+            block_size: prefill_block_size,
+            policy: KvPolicy::Source(context.selection_policy.clone()),
+            kv_router_config: prefill_kv_config,
+            prefill_load_estimator: context.prefill_load_estimator.clone(),
+            worker_role: Some(crate::worker_type::WorkerType::Prefill),
+            metric_worker_type: WORKER_TYPE_PREFILL,
+            model_name: Some(context.model_name.clone()),
+            is_eagle: advertisement.is_eagle,
+            teardown_task_guard: None,
+        });
+        let mut host = RoutingHost::builder(client, prefill_router_mode)
+            .load(load)
+            .affinity_coordinator(affinity);
+        if let Some(kv) = kv {
+            host = host.kv(kv);
+        }
+        let router = Arc::new(host.build().await?);
 
         Ok(PrefillBinding {
             target_id,
@@ -680,8 +639,10 @@ mod tests {
     use crate::discovery::CommittedWorkerSetTarget;
     use crate::entrypoint::RouterConfig;
     use crate::kv_router::prefill_router::PrefillRouterLifecycle;
+    use crate::protocols::common::llm_backend::{LLMEngineOutput, PreprocessedRequest};
     use dynamo_kv_router::config::KvRouterConfig;
-    use dynamo_kv_router::protocols::RoutingConstraints;
+    use dynamo_router_protocol::protocols::RoutingConstraints;
+    use dynamo_runtime::protocols::annotated::Annotated;
     use dynamo_runtime::{
         DistributedRuntime, Runtime,
         discovery::{DiscoverySpec, EventTransportKind},

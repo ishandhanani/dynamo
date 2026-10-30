@@ -9,6 +9,7 @@ use futures::{Stream, StreamExt, stream};
 use std::sync::Arc;
 
 use crate::grpc::service::dispatch_error_status;
+use crate::http::service::metrics::RequestMetricsContextExt as _;
 // Re-exported so the old per-module path keeps resolving for outside users.
 pub use crate::grpc::service::grpc_monitor_for_disconnects;
 use crate::http::service::metadata::extract_metadata_from_grpc;
@@ -18,14 +19,13 @@ use crate::protocols::openai::completions::{
 };
 use crate::types::Annotated;
 
-use super::kserve;
-use super::kserve::inference;
+use super::kserve::{self, inference};
 
 // [gluo NOTE] These are common utilities that should be shared between frontends
-use crate::http::service::{
-    disconnect::create_connection_monitor,
-    metrics::{CancellationLabels, Endpoint, process_response_and_observe_metrics},
-};
+use crate::http::service::metrics::process_response_and_observe_metrics;
+use dynamo_http_server::disconnect::create_connection_monitor;
+use dynamo_http_server::metrics::CancellationLabels;
+use dynamo_http_server::metrics::Endpoint;
 use dynamo_protocols::types::{CompletionFinishReason, CreateCompletionRequest, Prompt};
 
 use tonic::{Status, metadata::MetadataMap};
@@ -127,7 +127,7 @@ pub async fn completion_response_stream(
         if crate::http::service::metrics::request_was_rejected(e.as_ref()) {
             state.metrics_clone().inc_rejection(
                 &model_name,
-                crate::http::service::metrics::Endpoint::Completions,
+                dynamo_http_server::metrics::Endpoint::Completions,
             );
             return Status::resource_exhausted(e.to_string());
         }

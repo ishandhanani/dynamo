@@ -26,7 +26,8 @@ use std::time::Duration;
 use anyhow::Result;
 use tokio::sync::Semaphore;
 
-use dynamo_kv_router::services::selection::{SelectionError, WorkerSelectionPolicyRegistry};
+use dynamo_kv_router::plugins::WorkerSelectionPolicyRegistry;
+use dynamo_kv_router::selection::SelectionError;
 use dynamo_llm::http::service::metadata::extract_metadata_from_header_pairs;
 use dynamo_llm::protocols::agents::HEADER_DYNAMO_SESSION_ID;
 use dynamo_llm::protocols::common::extensions::{

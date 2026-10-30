@@ -19,6 +19,7 @@ areas:
   - lib/llm/src/grpc/protos/
   - lib/llm/src/grpc/service.rs
   - lib/llm/src/grpc/service/
+  - lib/http-server/
   - lib/llm/src/http.rs
   - lib/llm/src/http/
   - lib/llm/src/http/service.rs
@@ -51,13 +52,12 @@ areas:
   - components/src/dynamo/global_router/tests/
   - components/src/dynamo/router/
   - components/src/dynamo/thunderagent_router/
-  - lib/kv-router/
-  - lib/kv-router/src/indexer/
-  - lib/kv-router/src/recovery/
-  - lib/kv-router/src/scheduling/
-  - lib/kv-router/src/sequences/
-  - lib/kv-router/src/zmq_wire/
-  - lib/kv-router/tests/
+  - lib/router/
+  - lib/router/kv-indexer/src/
+  - lib/router/kv-indexer/src/recovery/
+  - lib/router/scheduler/src/
+  - lib/router/slot-tracker/src/
+  - lib/router/kv-indexer/src/zmq_wire/
   - lib/llm/src/kv_router.rs
   - lib/llm/src/kv_router/
   - lib/llm/src/kv_router/indexer/
@@ -324,6 +324,7 @@ areas:
   - lib/llm/src/telemetry/
   - lib/runtime/src/metrics.rs
   - lib/runtime/src/metrics/
+  - lib/metrics/
 - label: fault-tolerance
   github_team: '@ai-dynamo/dynamo-fault-tolerance-codeowners'
   path_globs:
@@ -1037,11 +1038,7 @@ shared:
   - performance
   - router
   - global-router
-- glob: lib/kv-router/src/services/shared_cache/
-  owners:
-  - router
-  - kv-memory
-- glob: lib/kv-router/src/zmq_wire/extra_keys.rs
+- glob: lib/router/kv-indexer/src/zmq_wire/extra_keys.rs
   owners:
   - router
   - multimodal
@@ -1074,6 +1071,10 @@ shared:
   - frontend
   - kv-memory
 - glob: lib/llm/src/http/service/metrics.rs
+  owners:
+  - frontend
+  - observability
+- glob: lib/http-server/src/metrics.rs
   owners:
   - frontend
   - observability

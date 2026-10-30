@@ -25,7 +25,7 @@ use crate::model_type::{ModelInput, ModelType};
 use crate::protocols::tensor::TensorModelConfig;
 use anyhow::{Context, Result};
 use derive_builder::Builder;
-use dynamo_kv_router::identity::{ExplicitIdentityMap, IndexerIdentitySpec};
+use dynamo_router_protocol::identity::{ExplicitIdentityMap, IndexerIdentitySpec};
 use dynamo_runtime::{slug::Slug, storage::kv};
 use serde::{Deserialize, Serialize};
 use tokenizers::Tokenizer as HfTokenizer;
@@ -3503,8 +3503,8 @@ mod ownership_tests {
     #[test]
     fn prefill_load_model_wire_aliases_preserve_card_and_mdcsum() {
         use crate::entrypoint::RouterConfig;
-        use dynamo_kv_router::scheduling::config::RouterPrefillLoadModel;
         use dynamo_runtime::pipeline::RouterMode;
+        use dynamo_slot_tracker::config::RouterPrefillLoadModel;
 
         for mode in [RouterMode::KV, RouterMode::RoundRobin] {
             let mut card = ModelDeploymentCard::with_name_only("wire-compat-model");

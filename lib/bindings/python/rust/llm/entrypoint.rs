@@ -14,13 +14,12 @@ use pyo3::{
 };
 use pyo3_async_runtimes::TaskLocals;
 
-use dynamo_kv_router::TrackingHashAlgorithm as RsTrackingHashAlgorithm;
-use dynamo_kv_router::config::{
-    ApproximateCachePolicyKind as RsApproximateCachePolicyKind,
-    ConditionalDisaggPolicyKind as RsConditionalDisaggPolicyKind,
-    KvRouterConfig as RsKvRouterConfig, RouterPrefillLoadModel as RsRouterPrefillLoadModel,
-    apply_deprecated_overlap_score_weight_override,
-};
+use dynamo_router_protocol::tracking_hash::TrackingHashAlgorithm as RsTrackingHashAlgorithm;
+use dynamo_kv_router::config::ApproximateCachePolicyKind as RsApproximateCachePolicyKind;
+use dynamo_kv_router::config::ConditionalDisaggPolicyKind as RsConditionalDisaggPolicyKind;
+use dynamo_kv_router::config::KvRouterConfig as RsKvRouterConfig;
+use dynamo_kv_router::config::RouterPrefillLoadModel as RsRouterPrefillLoadModel;
+use dynamo_router_protocol::config::apply_deprecated_overlap_score_weight_override;
 use dynamo_llm::admission_gate::WorkerAdmissionGate;
 use dynamo_llm::discovery::LoadThresholdConfig as RsLoadThresholdConfig;
 use dynamo_llm::entrypoint::EngineConfig as RsEngineConfig;
@@ -285,7 +284,10 @@ impl KvRouterConfig {
                  selects worker-selection policy instance {instance:?} for {worker_type}"
             )));
         }
-        dynamo_custom_policy_builtin::startup_policy_parameters(&self.inner, role)
+        dynamo_custom_policy_builtin::startup_policy_parameters(
+            &dynamo_kv_router::plugins::worker_selection::SelectionConfig::from(&self.inner),
+            role,
+        )
             .into_iter()
             .map(|(name, value)| match value.as_f64() {
                 Some(value) => Ok((name, value)),

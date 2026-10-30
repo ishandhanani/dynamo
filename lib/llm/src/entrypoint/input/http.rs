@@ -22,12 +22,15 @@ use crate::{
         completions::{NvCreateCompletionRequest, NvCreateCompletionResponse},
     },
 };
-use dynamo_kv_router::{
-    KvRouterConfig, RoutingPartitionRef, WorkerSelectionPolicy, WorkerType,
-    plugins::{RouterPlugins, request_classifier::RequestClassifierFactory},
-};
-use dynamo_runtime::DistributedRuntime;
-use dynamo_runtime::metrics::MetricsHierarchy;
+use dynamo_admission::classifier::RequestClassifierFactory;
+#[cfg(test)]
+use dynamo_kv_router::config::KvRouterConfig;
+use dynamo_kv_router::plugins::RouterPlugins;
+use dynamo_router_protocol::WorkerType;
+use dynamo_router_protocol::identity::RoutingPartitionRef;
+use dynamo_runtime::{DistributedRuntime, metrics::MetricsHierarchy};
+use dynamo_worker_selection::config::SelectionConfig;
+use dynamo_worker_selection::plugin::WorkerSelectionPolicy;
 
 /// Dynamo's complete discovery-backed HTTP frontend.
 ///
@@ -69,7 +72,7 @@ impl HttpFrontend {
     pub fn worker_selection_policy_factory<F>(mut self, factory: F) -> Self
     where
         F: for<'a> Fn(
-                &KvRouterConfig,
+                &SelectionConfig,
                 WorkerType,
                 RoutingPartitionRef<'a>,
             ) -> WorkerSelectionPolicy
@@ -350,9 +353,11 @@ async fn run_watcher(
     migration_max_seq_len: Option<u32>,
     namespace_filter: NamespaceFilter,
     http_service: Arc<HttpService>,
-    metrics: Arc<crate::http::service::metrics::Metrics>,
+    metrics: Arc<dynamo_http_server::metrics::Metrics>,
     chat_engine_factory: Option<ChatEngineFactoryCallback>,
-    prefill_load_estimator: Option<Arc<dyn dynamo_kv_router::PrefillLoadEstimator>>,
+    prefill_load_estimator: Option<
+        Arc<dyn dynamo_router_protocol::prefill_load::PrefillLoadEstimator>,
+    >,
     local_model_path: Option<PathBuf>,
     tokenizer_backend: Option<TokenizerBackend>,
     tokenizer_fallback_enabled: Option<bool>,
@@ -453,12 +458,14 @@ fn update_http_endpoints(service: Arc<HttpService>, model_type: ModelUpdate) -> 
 /// Updates metrics for model type changes
 fn update_model_metrics(
     model_type: ModelUpdate,
-    metrics: Arc<crate::http::service::metrics::Metrics>,
+    metrics: Arc<dynamo_http_server::metrics::Metrics>,
 ) {
     match model_type {
         ModelUpdate::Added(card) => {
             tracing::debug!("Updating metrics for added model: {}", card.display_name);
-            if let Err(err) = metrics.update_metrics_from_mdc(&card) {
+            if let Err(err) =
+                crate::http::service::metrics::update_metrics_from_mdc(&metrics, &card)
+            {
                 tracing::warn!(%err, model_name=card.display_name, "update_metrics_from_mdc failed");
             }
         }

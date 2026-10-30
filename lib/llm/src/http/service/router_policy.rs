@@ -15,7 +15,7 @@ use axum::{
     response::{IntoResponse, Response},
     routing::get,
 };
-use dynamo_kv_router::plugins::worker_selection::{
+use dynamo_worker_selection::plugin::{
     RuntimePolicyConfig, RuntimePolicyError, RuntimePolicyUpdate,
 };
 use serde::{Deserialize, Serialize};
@@ -175,19 +175,20 @@ mod tests {
         http::Request,
     };
     use dynamo_custom_policy_builtin::default_factory;
-    use dynamo_kv_router::services::selection::{
-        SelectionCacheConfig, SelectionCore, WorkerRequest,
-    };
-    use dynamo_kv_router::{KvRouterConfig, RoutingPartitionId, WorkerType};
+    use dynamo_kv_router::config::KvRouterConfig;
+    use dynamo_kv_router::selection::{SelectionCacheConfig, SelectionCore, WorkerRequest};
+    use dynamo_router_protocol::WorkerType;
+    use dynamo_router_protocol::identity::RoutingPartitionId;
     use dynamo_runtime::protocols::EndpointId;
     use tower::ServiceExt;
 
     async fn fixture(manager: Arc<ModelManager>) -> (Router, SelectionCore, Uuid, Uuid) {
         let core = SelectionCore::try_new_local(
-            KvRouterConfig {
+            dynamo_kv_router::config::resolve_router_config(KvRouterConfig {
                 use_kv_events: false,
                 ..Default::default()
-            },
+            })
+            .unwrap(),
             1,
             Default::default(),
             SelectionCacheConfig::default(),

@@ -15,78 +15,22 @@ description = "Lightweight HTTP benchmarks for Dynamo endpoints"
 # Preserve the package's default tests; benchmark entrypoints use the
 # documented `--no-default-features` feature sets below.
 default = ["claude-trace-export", "codex-trace-export", "test-support"]
-active-sequences = [
-  "router-bench",
-  "dep:dynamo-mocker",
-  "dep:indicatif",
-  "dep:dynamo-tokens",
-  "dep:libc",
-  "dep:rustc-hash",
-  "dep:tracing-subscriber",
-]
+active-sequences = ["router-bench", "dep:dynamo-mocker", "dep:indicatif", "dep:dynamo-tokens", "dep:libc", "dep:rustc-hash", "dep:tracing-subscriber"]
 approximate-lru = ["active-sequences"]
-coding-trace-export = [
-  "dep:chrono",
-  "dep:dynamo-data-gen",
-  "dep:rustc-hash",
-  "dep:sha2",
-]
-claude-trace-export = [
-  "coding-trace-export",
-  "dep:crossbeam-channel",
-  "dep:hf-hub",
-  "dep:tokenizers",
-]
+coding-trace-export = ["dep:chrono", "dep:dynamo-data-gen", "dep:rustc-hash", "dep:sha2"]
+claude-trace-export = ["coding-trace-export", "dep:crossbeam-channel", "dep:hf-hub", "dep:tokenizers"]
 codex-trace-export = ["coding-trace-export"]
 dc-ckf-consumer = []
-dc-ckf-relay = [
-  "dep:crossbeam-channel",
-  "dep:dynamo-mocker",
-  "dep:indicatif",
-  "dep:libc",
-  "dep:rustc-hash",
-  "dep:sha2",
-]
+dc-ckf-relay = ["dep:crossbeam-channel", "dep:dynamo-mocker", "dep:indicatif", "dep:libc", "dep:rustc-hash", "dep:sha2"]
 kv-router-stress-support = ["dep:reqwest"]
-mooncake = [
-  "router-bench",
-  "dep:dynamo-mocker",
-  "dep:indicatif",
-  "dep:libc",
-  "dep:sha2",
-  "dep:tokio-util",
-]
-multiturn = [
-  "kv-router-stress-support",
-  "dep:dynamo-mocker",
-  "dep:futures-util",
-  "dep:indicatif",
-  "dep:rand",
-]
+mooncake = ["router-bench", "dep:dynamo-mocker", "dep:indicatif", "dep:libc", "dep:sha2", "dep:tokio-util"]
+multiturn = ["kv-router-stress-support", "dep:dynamo-mocker", "dep:futures-util", "dep:indicatif", "dep:rand"]
 offline-replay = ["dep:blake3", "dep:dynamo-mocker", "dep:libc"]
-router-bench = ["dynamo-kv-router/bench"]
-router-metrics = ["dynamo-kv-router/metrics"]
-router-test-support = [
-  "router-bench",
-  "router-metrics",
-  "dep:dynamo-mocker",
-  "dep:indicatif",
-  "dep:dynamo-tokens",
-  "dep:libc",
-  "dep:rustc-hash",
-  "dep:tokio-util",
-  "dep:tracing-subscriber",
-]
+router-bench = ["dynamo-kv-indexer/bench", "dynamo-slot-tracker/bench"]
+router-test-support = ["router-bench", "dep:dynamo-mocker", "dep:indicatif", "dep:dynamo-tokens", "dep:libc", "dep:rustc-hash", "dep:tokio-util", "dep:tracing-subscriber"]
 satf = ["dep:dynamo-data-gen"]
 request-trace-to-mooncake = ["dep:blake3", "dep:dynamo-data-gen", "dep:tempfile"]
-test-support = [
-  "router-test-support",
-  "dynamo-mocker/test-support",
-  "dep:flate2",
-  "dep:tempfile",
-  "dep:tracing",
-  "dep:uuid",
-]
+test-support = ["router-test-support", "dynamo-mocker/test-support", "dep:flate2", "dep:tempfile", "dep:tracing", "dep:uuid"]
 profile = ["offline-replay", "dynamo-mocker/profile"]
 replay-bench = ["offline-replay", "dynamo-mocker/replay-bench"]
 
@@ -181,7 +125,7 @@ tempfile = { workspace = true, optional = true }
 tokio = { workspace = true }
 tokio-util = { workspace = true, optional = true }
 tokenizers = { version = "0.21.4", default-features = false, features = [
-  "onig",
+  "onig"
 ], optional = true }
 tracing = { workspace = true, optional = true }
 tracing-subscriber = { workspace = true, optional = true }
@@ -189,6 +133,9 @@ uuid = { workspace = true, optional = true }
 dynamo-tokens = { workspace = true, optional = true }
 dynamo-data-gen = { workspace = true, optional = true }
 dynamo-mocker = { workspace = true, optional = true }
+dynamo-kv-indexer = { workspace = true }
+dynamo-slot-tracker = { workspace = true }
+dynamo-router-protocol = { workspace = true }
 dynamo-kv-router = { workspace = true }
 
 [target.'cfg(target_os = "linux")'.dependencies]

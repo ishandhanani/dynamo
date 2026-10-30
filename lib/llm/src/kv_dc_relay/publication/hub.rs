@@ -6,10 +6,10 @@ use std::panic::AssertUnwindSafe;
 use std::sync::atomic::{AtomicU8, AtomicUsize, Ordering};
 use std::sync::{Arc, Weak};
 
-use dynamo_kv_router::identity::PoolId;
-use dynamo_kv_router::indexer::cuckoo::{
+use dynamo_kv_indexer::cuckoo::{
     ConsumerInstanceId, DcCkfDelta, DcCkfSnapshot, LaneLease, ProducerIdentity,
 };
+use dynamo_router_protocol::identity::PoolId;
 use futures_util::FutureExt as _;
 use parking_lot::Mutex;
 use tokio::sync::{Semaphore, mpsc, oneshot};
@@ -936,13 +936,11 @@ mod tests {
     use std::thread::sleep;
     use std::time::Duration;
 
-    use dynamo_kv_router::identity::{
+    use dynamo_kv_indexer::cuckoo::{CkfConfig, DcCkfBucketImage, DcCkfState, ProducerIdentity};
+    use dynamo_router_protocol::identity::{
         CacheSemanticsId, DcId, IdentitySource, IndexerDomainId, PoolId, RoutingScopeId,
     };
-    use dynamo_kv_router::indexer::cuckoo::{
-        CkfConfig, DcCkfBucketImage, DcCkfState, ProducerIdentity,
-    };
-    use dynamo_kv_router::protocols::{
+    use dynamo_router_protocol::protocols::{
         ExternalSequenceBlockHash, KvCacheEvent, KvCacheEventData, KvCacheStoreData,
         KvCacheStoredBlockData, LocalBlockHash, RouterEvent,
     };

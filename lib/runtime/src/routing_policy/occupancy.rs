@@ -10,6 +10,7 @@ use std::{
 };
 
 use dashmap::{DashMap, mapref::entry::Entry};
+use dynamo_router_protocol::slots::{LoadTracker, SlotEvent, SlotId};
 
 use super::{CandidateView, RouteContext, RouteDecision, RoutePicker, RoutePolicy};
 use crate::{component::Endpoint, traits::DistributedRuntimeProvider};
@@ -41,7 +42,16 @@ impl OccupancySelection {
     }
 }
 
-/// Shared O(1) per-worker request occupancy.
+/// One reserved unit of load: the worker it is charged to and the counter it
+/// incremented, kept so a retarget or release can balance exactly that counter
+/// even after the worker left discovery and a same-id re-add made a new one.
+struct Slot {
+    worker_id: u64,
+    counter: Arc<AtomicU64>,
+}
+
+/// Shared O(1) per-worker request occupancy, written through [`LoadTracker`]
+/// slots.
 ///
 /// Discovery controls eligibility separately from accounting. Removing a worker
 /// marks it absent immediately, but a counter with live reservations remains until
@@ -50,8 +60,19 @@ impl OccupancySelection {
 #[derive(Debug, Default)]
 pub struct RoutingOccupancyState {
     counts: DashMap<u64, Arc<AtomicU64>>,
+    slots: DashMap<u64, Slot>,
+    next_slot: AtomicU64,
     discovered: parking_lot::RwLock<HashSet<u64>>,
     admission_lock: parking_lot::Mutex<()>,
+}
+
+impl std::fmt::Debug for Slot {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Slot")
+            .field("worker_id", &self.worker_id)
+            .field("load", &self.counter.load(Ordering::Relaxed))
+            .finish()
+    }
 }
 
 impl RoutingOccupancyState {
@@ -65,9 +86,12 @@ impl RoutingOccupancyState {
         count
     }
 
-    pub(crate) fn increment(&self, worker_id: u64) -> Arc<AtomicU64> {
-        let _admission = self.admission_lock.lock();
-        self.increment_locked(worker_id)
+    /// Charge `worker_id` and record the slot; the admission lock must be held.
+    fn reserve_locked(&self, worker_id: u64) -> SlotId {
+        let counter = self.increment_locked(worker_id);
+        let slot = SlotId::new(self.next_slot.fetch_add(1, Ordering::Relaxed));
+        self.slots.insert(slot.raw(), Slot { worker_id, counter });
+        slot
     }
 
     pub(crate) async fn select_exact_min_and_increment(&self, worker_ids: &[u64]) -> Option<u64> {
@@ -89,21 +113,21 @@ impl RoutingOccupancyState {
         picker.peek(candidates, context, |id| self.load(id))
     }
 
+    /// Run `picker` against the live load view and, when the decision asks for
+    /// occupancy admission, reserve its worker in the same critical section.
     pub(crate) fn select_and_admit(
         &self,
         picker: &RoutePicker,
         candidates: CandidateView<'_>,
         context: RouteContext,
-    ) -> Option<(RouteDecision, Option<Arc<AtomicU64>>)> {
+    ) -> Option<(RouteDecision, Option<SlotId>)> {
         let _admission = self.admission_lock.lock();
         let decision = picker.select(candidates, context, |id| self.load(id))?;
-        let counter = match decision.admission {
+        let slot = match decision.admission {
             super::AdmissionKind::None => None,
-            super::AdmissionKind::Occupancy => {
-                Some(self.increment_locked(decision.target.worker_id))
-            }
+            super::AdmissionKind::Occupancy => Some(self.reserve_locked(decision.target.worker_id)),
         };
-        Some((decision, counter))
+        Some((decision, slot))
     }
 
     /// Atomically run host-owned selection against the live load view and reserve its result.
@@ -115,20 +139,25 @@ impl RoutingOccupancyState {
         let _admission = self.admission_lock.lock();
         let worker_id = select(&|worker_id| self.load(worker_id))?;
         debug_assert!(candidates.contains(&worker_id));
-        let counter = self.increment_locked(worker_id);
-        let load = counter.load(Ordering::Relaxed);
+        let slot = self.reserve_locked(worker_id);
+        let load = self.load(worker_id);
         Ok(OccupancySelection {
             worker_id,
             candidate_count: candidates.len(),
             load,
-            reservation: OccupancyReservation::from_counter(Arc::clone(self), worker_id, counter),
+            reservation: OccupancyReservation::from_slot(Arc::clone(self), worker_id, slot),
         })
     }
 
     /// Reserve an explicitly selected worker.
     pub fn reserve(self: &Arc<Self>, worker_id: u64) -> OccupancyReservation {
-        let counter = self.increment(worker_id);
-        OccupancyReservation::from_counter(Arc::clone(self), worker_id, counter)
+        let slot = LoadTracker::reserve(&**self, worker_id);
+        OccupancyReservation::from_slot(Arc::clone(self), worker_id, slot)
+    }
+
+    /// Wrap a slot this tracker issued in a guard that releases it on drop.
+    pub fn reservation(self: &Arc<Self>, worker_id: u64, slot: SlotId) -> OccupancyReservation {
+        OccupancyReservation::from_slot(Arc::clone(self), worker_id, slot)
     }
 
     fn decrement_locked(&self, worker_id: u64, counter: &Arc<AtomicU64>) {
@@ -148,24 +177,26 @@ impl RoutingOccupancyState {
         }
     }
 
-    pub(crate) fn release(&self, worker_id: u64, counter: &Arc<AtomicU64>) {
-        let _admission = self.admission_lock.lock();
-        self.decrement_locked(worker_id, counter);
+    /// The load currently charged to `worker_id`.
+    pub fn load(&self, worker_id: u64) -> u64 {
+        self.counts
+            .get(&worker_id)
+            .map(|count| count.load(Ordering::Relaxed))
+            .unwrap_or(0)
     }
 
+    #[cfg(test)]
+    pub(crate) fn increment(&self, worker_id: u64) -> SlotId {
+        LoadTracker::reserve(self, worker_id)
+    }
+
+    #[cfg(test)]
     pub(crate) fn decrement(&self, worker_id: u64) {
         let _admission = self.admission_lock.lock();
         let counter = self.counts.get(&worker_id).map(|entry| entry.clone());
         if let Some(counter) = counter {
             self.decrement_locked(worker_id, &counter);
         }
-    }
-
-    pub fn load(&self, worker_id: u64) -> u64 {
-        self.counts
-            .get(&worker_id)
-            .map(|count| count.load(Ordering::Relaxed))
-            .unwrap_or(0)
     }
 
     /// Reconcile discovery eligibility without discarding guard-owned accounting.
@@ -185,23 +216,56 @@ impl RoutingOccupancyState {
     }
 }
 
-/// One guard-owned occupancy booking.
+impl LoadTracker for RoutingOccupancyState {
+    fn reserve(&self, worker: u64) -> SlotId {
+        let _admission = self.admission_lock.lock();
+        self.reserve_locked(worker)
+    }
+
+    fn apply(&self, event: SlotEvent) -> bool {
+        let _admission = self.admission_lock.lock();
+        match event {
+            SlotEvent::Retarget { slot, to } => {
+                let Some(mut entry) = self.slots.get_mut(&slot.raw()) else {
+                    return false;
+                };
+                if entry.worker_id == to {
+                    return true;
+                }
+                let next = self.increment_locked(to);
+                self.decrement_locked(entry.worker_id, &entry.counter);
+                entry.worker_id = to;
+                entry.counter = next;
+                true
+            }
+            SlotEvent::Release { slot } => {
+                let Some((_, released)) = self.slots.remove(&slot.raw()) else {
+                    return false;
+                };
+                self.decrement_locked(released.worker_id, &released.counter);
+                true
+            }
+        }
+    }
+
+    fn load(&self, worker: u64) -> u64 {
+        RoutingOccupancyState::load(self, worker)
+    }
+}
+
+/// One guard-owned occupancy booking: a [`SlotId`] released when the guard drops.
 pub struct OccupancyReservation {
     state: Arc<RoutingOccupancyState>,
     worker_id: u64,
-    counter: Arc<AtomicU64>,
+    slot: SlotId,
 }
 
 impl OccupancyReservation {
-    pub(crate) fn from_counter(
-        state: Arc<RoutingOccupancyState>,
-        worker_id: u64,
-        counter: Arc<AtomicU64>,
-    ) -> Self {
+    fn from_slot(state: Arc<RoutingOccupancyState>, worker_id: u64, slot: SlotId) -> Self {
         Self {
             state,
             worker_id,
-            counter,
+            slot,
         }
     }
 
@@ -209,28 +273,31 @@ impl OccupancyReservation {
         self.worker_id
     }
 
+    pub fn slot(&self) -> SlotId {
+        self.slot
+    }
+
+    /// Load on this booking's worker, including the booking itself.
     pub fn load(&self) -> u64 {
-        self.counter.load(Ordering::Relaxed)
+        self.state.load(self.worker_id)
     }
 
     /// Move this booking to the worker selected by transport fallback.
     pub fn retarget(&mut self, worker_id: u64) -> u64 {
-        if self.worker_id == worker_id {
-            return self.load();
+        if self.worker_id != worker_id {
+            self.state.apply(SlotEvent::Retarget {
+                slot: self.slot,
+                to: worker_id,
+            });
+            self.worker_id = worker_id;
         }
-
-        let _admission = self.state.admission_lock.lock();
-        let next = self.state.increment_locked(worker_id);
-        self.state.decrement_locked(self.worker_id, &self.counter);
-        self.worker_id = worker_id;
-        self.counter = next;
         self.load()
     }
 }
 
 impl Drop for OccupancyReservation {
     fn drop(&mut self) {
-        self.state.release(self.worker_id, &self.counter);
+        self.state.apply(SlotEvent::Release { slot: self.slot });
     }
 }
 
@@ -336,5 +403,22 @@ mod tests {
         assert_eq!([state.load(1), state.load(2), state.load(3)], [30, 30, 30]);
         drop(reservations);
         assert_eq!([state.load(1), state.load(2), state.load(3)], [0, 0, 0]);
+    }
+
+    #[test]
+    fn tracker_events_balance_the_slot_they_name() {
+        let state = Arc::new(RoutingOccupancyState::default());
+        state.retain(&[1, 2]);
+        let slot = LoadTracker::reserve(&*state, 1);
+        assert_eq!(state.load(1), 1);
+
+        assert!(state.apply(SlotEvent::Retarget { slot, to: 2 }));
+        assert_eq!([state.load(1), state.load(2)], [0, 1]);
+
+        assert!(state.apply(SlotEvent::Release { slot }));
+        assert_eq!([state.load(1), state.load(2)], [0, 0]);
+        assert!(!state.apply(SlotEvent::Release { slot }));
+        assert!(!state.apply(SlotEvent::Retarget { slot, to: 1 }));
+        assert_eq!([state.load(1), state.load(2)], [0, 0]);
     }
 }

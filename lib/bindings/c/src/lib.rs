@@ -8,8 +8,8 @@ use std::borrow::Cow;
 use std::ffi::CStr;
 use std::sync::atomic::{AtomicU32, Ordering};
 
-use dynamo_kv_router::protocols::*;
 use dynamo_llm::kv_router::publisher::KvEventPublisher;
+use dynamo_router_protocol::protocols::*;
 use dynamo_runtime::discovery::DiscoveryQuery;
 use dynamo_runtime::{DistributedRuntime, Worker};
 

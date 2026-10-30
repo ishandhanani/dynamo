@@ -10,7 +10,7 @@ use tokio::sync::{Notify, mpsc::Sender};
 
 use anyhow::Context as _;
 use async_trait::async_trait;
-use dynamo_kv_router::PrefillLoadEstimator;
+use dynamo_router_protocol::prefill_load::PrefillLoadEstimator;
 use dynamo_runtime::{
     DistributedRuntime,
     discovery::{DiscoveryInstance, DiscoveryQuery, DiscoveryStream, ModelCardInstanceId},
@@ -27,9 +27,10 @@ use crate::{
     backend::Backend,
     discovery::{LoadThresholdHandle, WORKER_TYPE_DECODE, WorkerSet},
     entrypoint::{self, ChatEngineFactoryCallback, RouterConfig},
-    http::service::metrics::Metrics,
-    kv_router::plugins::RouterPluginBuilder,
-    kv_router::{EncoderRouter, PrefillRouter, RouterLoadSource, RoutingLoadContext},
+    kv_router::{
+        EncoderRouter, KvPolicy, KvRouterSpec, LoadContextSpec, PrefillRouter, RouterLoadSource,
+        RoutingLoadContext, plugins::RouterPluginBuilder,
+    },
     local_model::runtime_config::{
         SGLANG_QWEN_VIDEO_PROCESSOR_CONTRACT_RUNTIME_KEY, TokenizerBackend,
         VLLM_INFERENCE_V1_GENERATE_CAPABILITY, VLLM_QWEN_VIDEO_PROCESSOR_CONTRACT_RUNTIME_KEY,
@@ -59,6 +60,7 @@ use crate::{
     types::generic::realtime::{DynamoRealtimeClientEvent, RealtimeServerEvent},
     worker_type::WorkerType,
 };
+use dynamo_http_server::metrics::Metrics;
 
 use super::readiness::normalize_legacy_prefill_topology;
 use super::{
@@ -561,63 +563,30 @@ impl ModelWatcher {
 
             let load_thresholds =
                 LoadThresholdHandle::new(router_config.load_threshold_config.clone());
-            let load_context = if needs_preprocessed_routing {
-                let source = RouterLoadSource::from_worker_type(effective_worker_type(
+            // The host starts the load context and, under KV routing, constructs
+            // the router whenever any routed pipeline will be built. Python chat
+            // factories receive a Rust-routed engine, so they also need it.
+            let load = LoadContextSpec {
+                source: RouterLoadSource::from_worker_type(effective_worker_type(
                     card.worker_type,
                     card.model_type,
-                ));
-                Some(
-                    RoutingLoadContext::start(
-                        client.clone(),
-                        source,
-                        load_thresholds.clone(),
-                        &cancellation,
-                        Some(allocator_trim.clone()),
-                    )
-                    .await?,
-                )
-            } else {
-                None
+                )),
+                thresholds: load_thresholds.clone(),
+                parent_token: cancellation.clone(),
+                task_guard: Some(allocator_trim.clone()),
             };
-
-            // Create the KV router whenever any routed pipeline will be built.
-            // Python chat factories receive a Rust-routed engine, so they also
-            // need the shared chooser in KV mode.
-            let kv_chooser =
-                if router_config.router_mode == RouterMode::KV && needs_preprocessed_routing {
-                    let mut chooser = self
-                        .manager
-                        .kv_chooser_for_with_plugins_and_client(
-                            load_context
-                                .as_ref()
-                                .expect("routing load context must exist")
-                                .client()
-                                .clone(),
-                            card.kv_cache_block_size,
-                            &self.plugins,
-                            Some(router_config.kv_router_config.clone()),
-                            self.prefill_load_estimator.clone(),
-                            card.worker_type,
-                            WORKER_TYPE_DECODE, // This is the decode router
-                            Some(card.display_name.clone()),
-                            card.runtime_config.enable_eagle,
-                            load_context
-                                .as_ref()
-                                .expect("routing load context must exist")
-                                .scheduler_load_sender(),
-                            load_context
-                                .as_ref()
-                                .expect("routing load context must exist")
-                                .cancellation_token(),
-                        )
-                        .await?;
-                    Arc::get_mut(&mut chooser)
-                        .expect("new KV chooser must have one owner")
-                        .set_teardown_task_guard(allocator_trim.clone());
-                    Some(chooser)
-                } else {
-                    None
-                };
+            let kv = (router_config.router_mode == RouterMode::KV).then(|| KvRouterSpec {
+                model_manager: self.manager.clone(),
+                block_size: card.kv_cache_block_size,
+                policy: KvPolicy::Plugins(self.plugins.clone()),
+                kv_router_config: Some(router_config.kv_router_config.clone()),
+                prefill_load_estimator: self.prefill_load_estimator.clone(),
+                worker_role: card.worker_type,
+                metric_worker_type: WORKER_TYPE_DECODE, // This is the decode router
+                model_name: Some(card.display_name.clone()),
+                is_eagle: card.runtime_config.enable_eagle,
+                teardown_task_guard: Some(allocator_trim.clone()),
+            });
 
             // Only a typed Decode endpoint participates in the namespace-level
             // P/D rendezvous. Aggregated and Encode endpoints are independent
@@ -670,14 +639,12 @@ impl ModelWatcher {
 
             let preprocessed_routing = if needs_preprocessed_routing {
                 Some(
-                    entrypoint::input::build_preprocessed_routing_with_session_affinity_mode(
+                    entrypoint::input::build_preprocessed_routing(
                         &client,
                         self.manager.clone(),
                         router_config.router_mode,
-                        load_context
-                            .clone()
-                            .expect("routing load context must exist"),
-                        kv_chooser.clone(),
+                        load,
+                        kv,
                         prefill_chooser.clone(),
                         encoder_chooser.clone(),
                         uses_multimodal_cache_routing(card),
@@ -2200,10 +2167,10 @@ mod tests {
             crate::test_utils::assert_isolated_success(&output);
             return;
         }
-        use dynamo_kv_router::plugins::worker_selection::WorkerCandidates;
-        use dynamo_kv_router::scheduling::{
+        use dynamo_admission::classifier::{
             ClassifyEvent, ClassifyFuture, ClassifyRequest, RequestClassifier,
         };
+        use dynamo_worker_selection::plugin::WorkerCandidates;
         use std::sync::atomic::{AtomicUsize, Ordering};
 
         struct RejectingClassifier {
@@ -2250,7 +2217,7 @@ request_classifier:
         .unwrap();
         let router_config = RouterConfig::new(
             RouterMode::KV,
-            dynamo_kv_router::KvRouterConfig {
+            dynamo_kv_router::config::KvRouterConfig {
                 use_kv_events: false,
                 router_policy_config: Some(policy_file.path().display().to_string()),
                 ..Default::default()
@@ -2258,7 +2225,7 @@ request_classifier:
         );
         let instances = Arc::new(AtomicUsize::new(0));
         let (events, mut received) = tokio::sync::mpsc::unbounded_channel();
-        let factory: dynamo_kv_router::scheduling::RequestClassifierFactory = Arc::new({
+        let factory: dynamo_admission::classifier::RequestClassifierFactory = Arc::new({
             let instances = instances.clone();
             move |context| {
                 assert_eq!(context.block_size(), 16);
@@ -2404,9 +2371,9 @@ request_classifier:
             (0..2)
                 .map(|instance| (
                     WorkerType::Aggregated,
-                    dynamo_kv_router::RoutingPartitionId::new(
+                    dynamo_router_protocol::identity::RoutingPartitionId::new(
                         format!("classifier-model-{instance}"),
-                        dynamo_kv_router::DEFAULT_ROUTING_GROUP
+                        dynamo_router_protocol::identity::DEFAULT_ROUTING_GROUP
                     ),
                 ))
                 .collect::<Vec<_>>()
@@ -3230,7 +3197,7 @@ request_classifier:
     fn only_explicit_policies_require_typed_model_cards() {
         let unresolved = RouterPluginBuilder::default();
         let resolved = dynamo_custom_policy_builtin::default_registry()
-            .resolve_plugins(&dynamo_kv_router::KvRouterConfig::default())
+            .resolve_plugins(&dynamo_kv_router::config::KvRouterConfig::default())
             .unwrap();
         assert!(resolved.worker_selection().is_some());
         let builtin = RouterPluginBuilder::new(resolved);

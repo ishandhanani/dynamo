@@ -12,14 +12,16 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result, anyhow};
 
-use dynamo_kv_router::config::{KvRouterConfig, try_kv_router_config_from_dynamo_env};
-use dynamo_kv_router::protocols::RoutingConstraints;
-use dynamo_kv_router::services::selection::{
+use dynamo_kv_router::config::KvRouterConfig;
+use dynamo_kv_router::config::try_kv_router_config_from_dynamo_env;
+use dynamo_kv_router::plugins::WorkerSelectionPolicyRegistry;
+use dynamo_kv_router::selection::{
     PromptRequest, SelectAndReserveRequest as CoreSelectAndReserveRequest, SelectionError,
-    SelectionService, SelectionServiceBuilder, WorkerSelectionPolicyRegistry,
-    warn_for_unserved_worker_selection_policies,
+    SelectionService, SelectionServiceBuilder, warn_for_unserved_worker_selection_policies,
 };
-use dynamo_kv_router::{DEFAULT_ROUTING_GROUP, WorkerType};
+use dynamo_router_protocol::WorkerType;
+use dynamo_router_protocol::identity::DEFAULT_ROUTING_GROUP;
+use dynamo_router_protocol::protocols::RoutingConstraints;
 use kube::Client;
 use tokio_util::sync::CancellationToken;
 
@@ -258,17 +260,17 @@ impl Drop for Selector {
 
 #[cfg(test)]
 mod tests {
-    use dynamo_kv_router::services::selection::affinity::MAX_SESSION_AFFINITY_ID_BYTES;
+    use dynamo_worker_selection::affinity::MAX_SESSION_AFFINITY_ID_BYTES;
     use std::collections::HashMap;
     use std::sync::Mutex;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
-    use dynamo_kv_router::services::selection::{
-        CatalogReconciler, WorkerRequest, WorkerSelectionPolicyParameters,
-    };
-    use dynamo_kv_router::{
+    use dynamo_kv_router::plugins::WorkerSelectionPolicyParameters;
+    use dynamo_kv_router::selection::{CatalogReconciler, WorkerRequest};
+    use dynamo_router_protocol::sched::WorkerSelectionPolicyError;
+    use dynamo_worker_selection::plugin::{
         WorkerInputView, WorkerPicker, WorkerSelectionContext, WorkerSelectionPolicy,
-        WorkerSelectionPolicyError, WorkerSelectionPolicyFactory,
+        WorkerSelectionPolicyFactory,
     };
 
     use super::*;
@@ -381,7 +383,7 @@ models:
     /// non-zero `block_size`, and a well-formed KV-event endpoint per dp_rank.
     /// The KV-event endpoint is only a `tcp://` address string — the core's ZMQ
     /// SUB listener connects lazily and never needs a live publisher (see the
-    /// `WorkerRegistry` register tests in `lib/kv-router`), so no network infra is
+    /// `WorkerRegistry` register tests in `lib/router/kv-indexer`), so no network infra is
     /// required. Queueing is disabled under the default router policy, so
     /// `max_num_batched_tokens` is not required here.
     fn schedulable_registration(worker_id: u64) -> WorkerRequest {
@@ -494,11 +496,10 @@ worker_selection:
                         provider_calls.fetch_add(1, Ordering::Relaxed);
                         let factory_calls = Arc::clone(&factory_calls);
                         let factory: WorkerSelectionPolicyFactory =
-                            Arc::new(move |config, worker_type, _partition| {
+                            Arc::new(move |_config, worker_type, _partition| {
                                 factory_calls.fetch_add(1, Ordering::Relaxed);
                                 assert_eq!(worker_type, WorkerType::Aggregated);
                                 WorkerSelectionPolicy::new(
-                                    config.clone(),
                                     worker_type.as_str(),
                                     Vec::new(),
                                     Box::new(FirstEligiblePicker),
@@ -786,9 +787,8 @@ worker_selection:
                     move |_parameters: &WorkerSelectionPolicyParameters| {
                         let picker = picker.clone();
                         let factory: WorkerSelectionPolicyFactory =
-                            Arc::new(move |config, worker_type, _partition| {
+                            Arc::new(move |_config, worker_type, _partition| {
                                 WorkerSelectionPolicy::new(
-                                    config.clone(),
                                     worker_type.as_str(),
                                     Vec::new(),
                                     Box::new(picker.clone()),

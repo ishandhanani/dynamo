@@ -13,30 +13,33 @@ use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
 use anyhow::{Context, Result};
-use dynamo_kv_router::WorkerType;
 use dynamo_kv_router::config::KvRouterConfig;
-use dynamo_kv_router::identity::RoutingPartitionId;
 use dynamo_kv_router::plugins::RouterPluginRegistry;
-use dynamo_kv_router::protocols::{WorkerConfigLike, WorkerId, WorkerWithDpRank};
-use dynamo_kv_router::scheduling::queue::DEFAULT_MAX_BATCHED_TOKENS;
-use dynamo_kv_router::scheduling::{
-    NonMaxOverlapSelectionObserver, OverloadedWorkerProvider, QueueLimitKind, QueueRejection,
-    RejectThresholdsProvider, WorkerAvailabilityProvider,
-};
-use dynamo_kv_router::sequences::{LocalWorkerLoad, ReplicaWorkerPolicy};
-use dynamo_kv_router::services::selection::{
+use dynamo_kv_router::selection::{
     CatalogReconciler, DEFAULT_MODEL_NAME, HostCache, HostEligibility, HostLoad, HostReplication,
     HostTelemetry, KvEventIngress, KvIndexSource, SelectionHost, SelectionOperation,
     SelectionOutcome, SelectionPartition, SelectionRun, SelectionScheduler, SelectionService,
     SelectionServiceBuilder, WorkerCatalogSource, WorkerRequest,
 };
-use dynamo_kv_router::{DEFAULT_ROUTING_GROUP, PrefillLoadEstimator, WorkerSelectionPolicyFactory};
+use dynamo_router_protocol::WorkerType;
+use dynamo_router_protocol::busy::RejectThresholdsProvider;
+use dynamo_router_protocol::identity::DEFAULT_ROUTING_GROUP;
+use dynamo_router_protocol::identity::RoutingPartitionId;
+use dynamo_router_protocol::load::DEFAULT_MAX_BATCHED_TOKENS;
+use dynamo_router_protocol::prefill_load::PrefillLoadEstimator;
+use dynamo_router_protocol::protocols::{QueueLimitKind, QueueRejection};
+use dynamo_router_protocol::protocols::{WorkerConfigLike, WorkerId, WorkerWithDpRank};
+use dynamo_router_protocol::sched::{
+    NonMaxOverlapSelectionObserver, OverloadedWorkerProvider, WorkerAvailabilityProvider,
+};
+use dynamo_slot_tracker::{LocalWorkerLoad, ReplicaWorkerPolicy};
+use dynamo_worker_selection::plugin::WorkerSelectionPolicyFactory;
 use tokio_util::sync::CancellationToken;
 
-use crate::discovery::RuntimeConfigWatch;
+use crate::discovery::TopologyWatch;
 use crate::kv_router::metrics::{
     ActiveSequenceIngressMetrics, ROUTER_QUEUE_METRICS, RegistrationAvailabilityProvider,
-    RouterQueueMetricHandles, RouterRequestMetrics, WORKER_LOAD_METRICS,
+    RouterQueueMetricHandles, RouterQueueSource, RouterRequestMetrics, WORKER_LOAD_METRICS,
 };
 use crate::local_model::runtime_config::ModelRuntimeConfig;
 
@@ -54,8 +57,8 @@ pub(crate) struct EmbeddedSelectionArgs {
     pub reject_thresholds: Option<RejectThresholdsProvider>,
     pub available_worker_provider: WorkerAvailabilityProvider,
     pub registration_availability_provider: RegistrationAvailabilityProvider,
-    pub shared_cache: Option<Arc<dyn dynamo_kv_router::SharedKvCache>>,
-    pub lora_worker_filter: Option<Arc<dyn dynamo_kv_router::scheduling::LoraWorkerFilter>>,
+    pub shared_cache: Option<Arc<dyn dynamo_kv_indexer::SharedKvCache>>,
+    pub lora_worker_filter: Option<Arc<dyn dynamo_worker_selection::lora::LoraWorkerFilter>>,
     /// Builds and feeds the router's index from the runtime; the partition
     /// takes its index from it.
     pub ingress: Arc<dyn KvEventIngress>,
@@ -88,56 +91,6 @@ fn record_queue_rejection(
         QueueLimitKind::RawIslTokens => handles.raw_isl_limit_rejections.inc(),
         QueueLimitKind::CachedTokens => handles.cached_token_limit_rejections.inc(),
     }
-}
-
-fn update_queue_metrics(
-    per_class: &[RouterQueueMetricHandles],
-    mut stats_for: impl FnMut(usize) -> Option<dynamo_kv_router::queue::ClassQueueStats>,
-) {
-    for (class_index, handles) in per_class.iter().enumerate() {
-        let Some(stats) = stats_for(class_index) else {
-            debug_assert!(
-                false,
-                "missing queue counters for policy class {class_index}"
-            );
-            continue;
-        };
-        handles.update_admission(stats.received_total, stats.rejected_due_time_passed_total);
-        handles.pending_requests.set(stats.pending_count as i64);
-        handles
-            .pending_isl_tokens
-            .set(stats.pending_isl_tokens as i64);
-        handles
-            .pending_cached_tokens
-            .set(stats.pending_cached_tokens as i64);
-    }
-}
-
-/// Refresh queue gauges on worker-config changes and at least once a minute.
-fn spawn_queue_metrics_updater(
-    partition: SelectionPartition,
-    handles: Vec<RouterQueueMetricHandles>,
-    cancellation_token: CancellationToken,
-) {
-    let mut queue_updates = partition.scheduler().subscribe_queue_updates();
-    tokio::spawn(async move {
-        let period = Duration::from_secs(60);
-        let mut recheck = tokio::time::interval_at(tokio::time::Instant::now() + period, period);
-        loop {
-            update_queue_metrics(&handles, |index| {
-                partition.scheduler().class_queue_stats(index)
-            });
-            tokio::select! {
-                _ = cancellation_token.cancelled() => break,
-                changed = queue_updates.changed() => {
-                    if changed.is_err() {
-                        break;
-                    }
-                }
-                _ = recheck.tick() => {}
-            }
-        }
-    });
 }
 
 fn non_max_overlap_observer(worker_type: &'static str) -> NonMaxOverlapSelectionObserver {
@@ -180,10 +133,12 @@ pub(crate) struct EmbeddedSelection {
     partition: SelectionPartition,
     affinity: OnceLock<crate::session_affinity::AffinityCoordinator>,
     worker_type: &'static str,
-    /// Queue gauges and rejection counters per policy class, index-aligned with
-    /// the scheduler's `class_queue_stats`.
+    /// Backpressure counters per policy class, index-aligned with the
+    /// scheduler's class indices.
     queue_metrics: Vec<RouterQueueMetricHandles>,
     queue_metric_indices: HashMap<String, usize>,
+    /// Keeps this partition's queue gauges and admission totals in the scrape.
+    _queue_source: Arc<RouterQueueSource>,
 }
 
 /// Bridges the partition's scheduler load snapshots to the router's
@@ -194,12 +149,12 @@ struct SenderLoadSink {
     worker_type: &'static str,
 }
 
-impl dynamo_kv_router::services::selection::SchedulerLoadSink for SenderLoadSink {
-    fn publish(&self, snapshot: dynamo_kv_router::sequences::SchedulerLoadSnapshot) {
+impl dynamo_kv_router::selection::SchedulerLoadSink for SenderLoadSink {
+    fn publish(&self, snapshot: dynamo_slot_tracker::SchedulerLoadSnapshot) {
         self.sender.publish(snapshot);
     }
 
-    fn publish_batch(&self, snapshots: Vec<dynamo_kv_router::sequences::SchedulerLoadSnapshot>) {
+    fn publish_batch(&self, snapshots: Vec<dynamo_slot_tracker::SchedulerLoadSnapshot>) {
         self.sender.publish_batch(snapshots);
     }
 
@@ -215,14 +170,14 @@ impl EmbeddedSelection {
     /// the manager before it can release the booking.
     pub(crate) async fn start(
         args: EmbeddedSelectionArgs,
-        workers_with_configs: RuntimeConfigWatch,
-        request_leases: Option<Arc<dyn dynamo_kv_router::sequences::ReplicaRequestLeaseObserver>>,
+        topology: TopologyWatch,
+        request_leases: Option<Arc<dyn dynamo_slot_tracker::ReplicaRequestLeaseObserver>>,
         cancellation_token: CancellationToken,
     ) -> Result<(Self, crate::kv_router::sequence::ReplicaIngress)> {
         let worker_registration =
             super::metrics::RouterWorkerStatusMetrics::from_component(args.endpoint.component())
                 .watch_workers(
-                    workers_with_configs.clone(),
+                    topology.clone(),
                     args.metric_worker_type,
                     cancellation_token.clone(),
                     Some(args.registration_availability_provider),
@@ -249,7 +204,7 @@ impl EmbeddedSelection {
             ),
         ));
         let slot = std::sync::Mutex::new(Some(channels));
-        let replica_sync: Option<dynamo_kv_router::services::selection::HostReplicaSyncFactory> =
+        let replica_sync: Option<dynamo_kv_router::selection::HostReplicaSyncFactory> =
             Some(Arc::new(move |_partition| {
                 slot.lock().ok().and_then(|mut s| s.take())
             }));
@@ -322,9 +277,22 @@ impl EmbeddedSelection {
             .enumerate()
             .map(|(index, class)| (class.name.clone(), index))
             .collect();
-        spawn_queue_metrics_updater(
-            partition.clone(),
-            queue_metrics.clone(),
+        let queue_source = ROUTER_QUEUE_METRICS.watch_queue(
+            profile
+                .classes()
+                .iter()
+                .map(|class| {
+                    [
+                        key.model_name.clone(),
+                        args.metric_worker_type.to_string(),
+                        class.name.clone(),
+                    ]
+                })
+                .collect(),
+            {
+                let partition = partition.clone();
+                Arc::new(move |index| partition.scheduler().class_queue_stats(index))
+            },
             cancellation_token.child_token(),
         );
         if worker_type == WorkerType::Prefill
@@ -338,7 +306,7 @@ impl EmbeddedSelection {
         }
 
         let mut source = RuntimeDiscoverySource {
-            watch: workers_with_configs,
+            watch: topology,
             key,
             block_size: args.block_size,
             is_eagle: args.is_eagle,
@@ -372,6 +340,7 @@ impl EmbeddedSelection {
                 worker_type: args.metric_worker_type,
                 queue_metrics,
                 queue_metric_indices,
+                _queue_source: queue_source,
             },
             replica_ingress,
         ))
@@ -381,9 +350,6 @@ impl EmbeddedSelection {
         if let Some(rejection) = rejection {
             record_queue_rejection(&self.queue_metrics, &self.queue_metric_indices, rejection);
         }
-        update_queue_metrics(&self.queue_metrics, |index| {
-            self.partition.scheduler().class_queue_stats(index)
-        });
     }
 
     pub(crate) fn affinity_coordinator(
@@ -392,8 +358,7 @@ impl EmbeddedSelection {
         mode: crate::session_affinity::SessionAffinityMode,
     ) -> Result<crate::session_affinity::AffinityCoordinator> {
         let table = self.partition.session_affinity(
-            dynamo_kv_router::services::selection::affinity::SessionAffinityConfig::new(ttl)
-                .with_mode(mode),
+            dynamo_worker_selection::affinity::SessionAffinityConfig::new(ttl).with_mode(mode),
         )?;
         Ok(self
             .affinity
@@ -428,7 +393,7 @@ impl EmbeddedSelection {
 
 /// The runtime-config watch as worker membership for the partition.
 struct RuntimeDiscoverySource {
-    watch: RuntimeConfigWatch,
+    watch: TopologyWatch,
     key: RoutingPartitionId,
     block_size: u32,
     is_eagle: bool,
@@ -448,7 +413,7 @@ impl WorkerCatalogSource for RuntimeDiscoverySource {
             .iter()
             .map(|(worker_id, config)| {
                 worker_request_from_runtime_config(
-                    *worker_id,
+                    worker_id,
                     config,
                     &self.key,
                     self.block_size,
@@ -515,48 +480,7 @@ pub(crate) fn worker_request_from_runtime_config(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use dynamo_kv_router::services::selection::SchedulerLoadSink;
-
-    #[test]
-    fn queue_metrics_are_updated_by_class_index() {
-        let handles = ["latency", "bulk"]
-            .map(|class| ROUTER_QUEUE_METRICS.handles("index-test", "decode", class));
-        let stats = [
-            dynamo_kv_router::queue::ClassQueueStats {
-                received_total: 10,
-                rejected_due_time_passed_total: 1,
-                pending_count: 2,
-                pending_isl_tokens: 128,
-                pending_cached_tokens: 64,
-            },
-            dynamo_kv_router::queue::ClassQueueStats {
-                received_total: 20,
-                rejected_due_time_passed_total: 3,
-                pending_count: 3,
-                pending_isl_tokens: 384,
-                pending_cached_tokens: 192,
-            },
-        ];
-
-        update_queue_metrics(&handles, |index| stats.get(index).copied());
-        update_queue_metrics(&handles, |index| stats.get(index).copied());
-        for (handles, stats) in handles.iter().zip(stats) {
-            assert_eq!(handles.received_total.get(), stats.received_total);
-            assert_eq!(
-                handles.rejected_due_time_passed_total.get(),
-                stats.rejected_due_time_passed_total
-            );
-            assert_eq!(handles.pending_requests.get(), stats.pending_count as i64);
-            assert_eq!(
-                handles.pending_isl_tokens.get(),
-                stats.pending_isl_tokens as i64
-            );
-            assert_eq!(
-                handles.pending_cached_tokens.get(),
-                stats.pending_cached_tokens as i64
-            );
-        }
-    }
+    use dynamo_kv_router::selection::SchedulerLoadSink;
 
     #[test]
     fn worker_request_mirrors_runtime_config() {
@@ -570,15 +494,15 @@ mod tests {
         };
         config.taints.insert("gpu=h100".to_string());
         config.runtime_data.insert(
-            dynamo_kv_router::kv_hints::KV_HINT_TRANSFER_CAPABILITY_KEY.to_string(),
+            dynamo_router_protocol::kv_hints::KV_HINT_TRANSFER_CAPABILITY_KEY.to_string(),
             serde_json::Value::Bool(true),
         );
         config.runtime_data.insert(
-            dynamo_kv_router::kv_hints::KV_HINT_TRANSFER_WORKER_TYPE_RUNTIME_KEY.to_string(),
+            dynamo_router_protocol::kv_hints::KV_HINT_TRANSFER_WORKER_TYPE_RUNTIME_KEY.to_string(),
             serde_json::Value::String("decode".to_string()),
         );
         config.runtime_data.insert(
-            dynamo_kv_router::kv_hints::KV_HINT_TRANSFER_SOURCE_CONTROL_ENDPOINTS_RUNTIME_KEY
+            dynamo_router_protocol::kv_hints::KV_HINT_TRANSFER_SOURCE_CONTROL_ENDPOINTS_RUNTIME_KEY
                 .to_string(),
             serde_json::json!({"2": "tcp://w:9002", "3": "tcp://w:9003"}),
         );

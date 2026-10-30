@@ -6,7 +6,7 @@ use std::time::Duration;
 
 use anyhow::Result;
 
-use dynamo_kv_router::protocols::{ActiveLoad, DpRank};
+use dynamo_router_protocol::protocols::{ActiveLoad, DpRank};
 use dynamo_runtime::component::Endpoint;
 use dynamo_runtime::traits::DistributedRuntimeProvider;
 use dynamo_runtime::transports::event_plane::EventPublisher;

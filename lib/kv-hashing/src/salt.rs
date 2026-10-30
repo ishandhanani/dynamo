@@ -10,7 +10,7 @@
 //! # Router parity
 //!
 //! This function is the shared seed derivation used by
-//! `dynamo_kv_router::protocols::compute_block_hash_for_seq` and canonical
+//! `dynamo_router_protocol::protocols::compute_block_hash_for_seq` and canonical
 //! pre-hashed producers:
 //!
 //! ```text
@@ -37,7 +37,7 @@ use crate::error::KvHashingError;
 ///
 /// Empty strings (`Some("")`) are normalized to `None` for both `salt` and `lora_name`
 /// before hashing. This matches the router's existing behavior at
-/// `lib/kv-router/src/protocols.rs:79` (`options.lora_name.filter(|n| !n.is_empty())`)
+/// `lib/router/protocol/src/protocols.rs` (`options.lora_name.filter(|n| !n.is_empty())`)
 /// so a client that sends `lora_name = ""` shares the cache with a client that sends
 /// `lora_name = None`.
 ///

@@ -1,14 +1,11 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-use std::{
-    collections::HashSet,
-    sync::{Arc, Weak},
-};
+use std::{collections::HashSet, sync::Arc};
 
-use dynamo_kv_router::protocols::WorkerId;
+use dynamo_metrics::collect::SourceSet;
+use dynamo_router_protocol::protocols::WorkerId;
 use dynamo_runtime::metrics::PrometheusMetric;
-use parking_lot::Mutex;
 use prometheus::{
     IntGaugeVec, Opts,
     core::{Collector, Desc},
@@ -17,7 +14,7 @@ use prometheus::{
 use tokio_util::sync::CancellationToken;
 
 use super::{ROUTER_WORKER_ID_LABEL, labels};
-use crate::discovery::RuntimeConfigWatch;
+use crate::discovery::TopologyWatch;
 
 const LABELS: &[&str] = &[ROUTER_WORKER_ID_LABEL, labels::DP_RANK, labels::WORKER_TYPE];
 
@@ -26,7 +23,7 @@ pub(crate) type RegistrationAvailabilityProvider =
 
 /// Owned by an embedded router, independently of its request/replica slot state.
 pub(crate) struct RouterWorkerRegistration {
-    workers: RuntimeConfigWatch,
+    workers: TopologyWatch,
     worker_type: &'static str,
     cancellation: CancellationToken,
     available_workers: Option<RegistrationAvailabilityProvider>,
@@ -37,7 +34,7 @@ pub(crate) struct RouterWorkerRegistration {
 pub(super) struct RouterWorkerRegistered {
     opts: Opts,
     descriptor: IntGaugeVec,
-    sources: Arc<Mutex<Vec<Weak<RouterWorkerRegistration>>>>,
+    sources: SourceSet<RouterWorkerRegistration>,
 }
 
 impl PrometheusMetric for RouterWorkerRegistered {
@@ -45,7 +42,7 @@ impl PrometheusMetric for RouterWorkerRegistered {
         Ok(Self {
             descriptor: IntGaugeVec::new(opts.clone(), LABELS)?,
             opts,
-            sources: Arc::new(Mutex::new(Vec::new())),
+            sources: SourceSet::new(),
         })
     }
 }
@@ -53,7 +50,7 @@ impl PrometheusMetric for RouterWorkerRegistered {
 impl RouterWorkerRegistered {
     pub(super) fn watch(
         &self,
-        workers: RuntimeConfigWatch,
+        workers: TopologyWatch,
         worker_type: &'static str,
         cancellation: CancellationToken,
         available_workers: Option<RegistrationAvailabilityProvider>,
@@ -64,9 +61,7 @@ impl RouterWorkerRegistered {
             cancellation,
             available_workers,
         });
-        let mut sources = self.sources.lock();
-        sources.retain(|source| source.strong_count() > 0);
-        sources.push(Arc::downgrade(&source));
+        self.sources.attach(&source);
         source
     }
 }
@@ -81,14 +76,9 @@ impl Collector for RouterWorkerRegistered {
         // across router owners without deleting another live owner's registration.
         let gauge = IntGaugeVec::new(self.opts.clone(), LABELS)
             .expect("validated router worker metric options");
-        let mut sources = self.sources.lock();
-        sources.retain(|source| {
-            let Some(source) = source.upgrade() else {
-                return false;
-            };
-            if source.cancellation.is_cancelled() || source.workers.has_changed().is_err() {
-                return false;
-            }
+        for source in self.sources.live(|source| {
+            !source.cancellation.is_cancelled() && source.workers.has_changed().is_ok()
+        }) {
             // Registration is request-independent: apply the client's hard availability,
             // before request-specific LoRA eligibility, and never its overload signal.
             let available = source.available_workers.as_ref().map(|provider| provider());
@@ -96,7 +86,7 @@ impl Collector for RouterWorkerRegistered {
                 if let Some(available) = &available
                     && available
                         .as_ref()
-                        .is_none_or(|ids| !ids.contains(worker_id))
+                        .is_none_or(|ids| !ids.contains(&worker_id))
                 {
                     continue;
                 }
@@ -110,8 +100,7 @@ impl Collector for RouterWorkerRegistered {
                         .set(1);
                 }
             }
-            true
-        });
+        }
         gauge.collect()
     }
 }
@@ -119,6 +108,7 @@ impl Collector for RouterWorkerRegistered {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::discovery::topology::topology_channel;
     use crate::local_model::runtime_config::ModelRuntimeConfig;
     use prometheus::{Registry, TextEncoder};
     use std::collections::HashMap;
@@ -147,7 +137,7 @@ mod tests {
     #[test]
     fn removed_worker_stays_absent_after_discovery_removal() {
         let (metric, registry) = setup();
-        let (tx, rx) = watch::channel(HashMap::from([
+        let (tx, rx) = topology_channel(HashMap::from([
             (1, ModelRuntimeConfig::default()),
             (2, ModelRuntimeConfig::default()),
         ]));
@@ -170,7 +160,7 @@ mod tests {
         use std::collections::HashSet;
 
         let (metric, registry) = setup();
-        let (_discovery_tx, discovery_rx) = watch::channel(HashMap::from([
+        let (_discovery_tx, discovery_rx) = topology_channel(HashMap::from([
             (1, ModelRuntimeConfig::default()),
             (2, ModelRuntimeConfig::default()),
         ]));
@@ -210,7 +200,7 @@ mod tests {
     #[test]
     fn shared_owners_deduplicate_and_cleanup_independently() {
         let (metric, registry) = setup();
-        let (_tx, rx) = watch::channel(HashMap::from([(
+        let (_tx, rx) = topology_channel(HashMap::from([(
             7,
             ModelRuntimeConfig {
                 data_parallel_start_rank: 2,
@@ -242,7 +232,7 @@ mod tests {
     #[test]
     fn rank_updates_invalid_configs_and_closed_watch_do_not_retain_series() {
         let (metric, registry) = setup();
-        let (tx, rx) = watch::channel(HashMap::from([(
+        let (tx, rx) = topology_channel(HashMap::from([(
             3,
             ModelRuntimeConfig {
                 data_parallel_size: 2,

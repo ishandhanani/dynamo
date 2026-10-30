@@ -26,15 +26,12 @@ use futures::StreamExt;
 use serde::Serialize;
 use tracing::Instrument;
 
-use super::disconnect::create_connection_monitor;
 use super::error::{SanitizedError, find_canonical_error_in_chain};
-use super::metrics::{
-    CancellationLabels, ErrorType, HttpQueueGuard, InflightGuard, ResponseMetricCollector,
-};
-use super::openai::{
-    check_model_serving_ready, check_ready, get_body_limit, get_or_create_request_id,
-    preprocessed_context_from_headers, smart_json_error_middleware,
-};
+use super::openai::check_model_serving_ready;
+use super::openai::check_ready;
+use super::openai::get_or_create_request_id;
+use super::openai::preprocessed_context_from_headers;
+use super::openai::smart_json_error_middleware;
 use super::{RouteDoc, service_v2};
 use crate::local_model::runtime_config::VLLM_INFERENCE_V1_GENERATE_CAPABILITY;
 use crate::protocols::common::preprocessed_mm_identifier;
@@ -44,6 +41,13 @@ use crate::protocols::openai::generate::{
     GenerateRequest, GenerateResponse, GenerateResponseOptions, SamplingParams, StreamOptions,
 };
 use crate::protocols::{Annotated, common::llm_backend::LLMEngineOutput};
+use dynamo_http_server::disconnect::create_connection_monitor;
+use dynamo_http_server::metrics::CancellationLabels;
+use dynamo_http_server::metrics::ErrorType;
+use dynamo_http_server::metrics::HttpQueueGuard;
+use dynamo_http_server::metrics::InflightGuard;
+use dynamo_http_server::metrics::ResponseMetricCollector;
+use dynamo_http_server::request::get_body_limit;
 
 const X_REQUEST_ID_HEADER: &str = "x-request-id";
 const X_DATA_PARALLEL_RANK_HEADER: &str = "x-data-parallel-rank";
@@ -197,7 +201,7 @@ fn generate_deadline_exceeded_response() -> Response {
     generate_error_response(
         StatusCode::TOO_MANY_REQUESTS,
         "deadline_exceeded",
-        super::metrics::REQUEST_DEADLINE_EXCEEDED_MESSAGE.to_string(),
+        crate::http::service::metrics::REQUEST_DEADLINE_EXCEEDED_MESSAGE.to_string(),
     )
 }
 
@@ -414,7 +418,7 @@ fn generate_mm_routing_info(
             )
             .map_err(|_| "multimodal kwargs_data must contain valid base64")?;
         let identifier = preprocessed_mm_identifier("image", &raw_kwargs);
-        let hash = dynamo_kv_router::protocols::hash_mm_identifier(&identifier)
+        let hash = dynamo_router_protocol::protocols::hash_mm_identifier(&identifier)
             .ok_or("content-derived multimodal identifier must not be empty")?;
         let placeholder = placeholder
             .as_object()
@@ -553,12 +557,12 @@ fn generate_mm_routing_info(
                     .is_none_or(|mask| mask[global_position - *offset]);
                 if should_embed {
                     expected_tokens[global_position - block_start] =
-                        dynamo_kv_router::protocols::pad_value_for_mm_hash(*hash);
+                        dynamo_router_protocol::protocols::pad_value_for_mm_hash(*hash);
                 }
             }
         }
 
-        let normalized_tokens = dynamo_kv_router::zmq_wire::normalize_mm_token_runs(
+        let normalized_tokens = dynamo_kv_indexer::zmq_wire::normalize_mm_token_runs(
             block_tokens,
             image_token_id,
             &worker_objects,
@@ -588,7 +592,7 @@ fn generate_mm_routing_info(
         },
         marked_image_hashes: ranges
             .iter()
-            .map(|(_, _, hash, _)| dynamo_kv_router::zmq_wire::mark_mm_hash_for_extra_key(*hash))
+            .map(|(_, _, hash, _)| dynamo_kv_indexer::zmq_wire::mark_mm_hash_for_extra_key(*hash))
             .collect(),
     }))
 }
@@ -747,7 +751,7 @@ impl GenerateMetricLifecycle {
         let metrics = state.metrics_clone();
         let inflight = metrics.clone().create_inflight_guard(
             &metric_model,
-            super::metrics::Endpoint::Generate,
+            dynamo_http_server::metrics::Endpoint::Generate,
             false,
             request_id,
         );
@@ -1008,7 +1012,7 @@ async fn handler_generate(
     let engine_context = context.context();
     let cancellation_labels = CancellationLabels {
         model: metric_lifecycle.metric_model.clone(),
-        endpoint: super::metrics::Endpoint::Generate.to_string(),
+        endpoint: dynamo_http_server::metrics::Endpoint::Generate.to_string(),
         request_type: "unary".to_string(),
     };
     let (mut connection_handle, _stream_handle) = create_connection_monitor(
@@ -1076,11 +1080,13 @@ async fn generate_dispatch(
         Err(error) => {
             // Deadline is checked before overload so a chain carrying both
             // markers keeps the deadline outcome, matching the OpenAI surface.
-            let deadline_exceeded = super::metrics::request_deadline_exceeded(error.as_ref());
+            let deadline_exceeded =
+                crate::http::service::metrics::request_deadline_exceeded(error.as_ref());
             let was_cancelled = request_context.is_killed()
-                || super::metrics::request_was_cancelled(error.as_ref());
-            let was_rejected = super::metrics::request_was_rejected(error.as_ref());
-            let was_unavailable = super::metrics::request_was_unavailable(error.as_ref());
+                || crate::http::service::metrics::request_was_cancelled(error.as_ref());
+            let was_rejected = crate::http::service::metrics::request_was_rejected(error.as_ref());
+            let was_unavailable =
+                crate::http::service::metrics::request_was_unavailable(error.as_ref());
             let invalid_request = generate_invalid_request_response(error.as_ref());
             inflight_guard.mark_error(if deadline_exceeded || was_cancelled {
                 ErrorType::Cancelled
@@ -1099,9 +1105,10 @@ async fn generate_dispatch(
             }
             if was_rejected {
                 tracing::warn!(%request_id, error = %format!("{error:#}"), "engine rejected generate request");
-                state
-                    .metrics_clone()
-                    .inc_rejection(&metric_model, super::metrics::Endpoint::Generate);
+                state.metrics_clone().inc_rejection(
+                    &metric_model,
+                    dynamo_http_server::metrics::Endpoint::Generate,
+                );
                 return generate_error_response(
                     StatusCode::SERVICE_UNAVAILABLE,
                     "service_unavailable",
@@ -1163,12 +1170,12 @@ async fn generate_dispatch(
         Err(error) => {
             if request_context.is_killed()
                 || engine_context.is_killed()
-                || super::metrics::request_was_cancelled(error.as_ref())
+                || crate::http::service::metrics::request_was_cancelled(error.as_ref())
             {
                 inflight_guard.mark_error(ErrorType::Cancelled);
                 return generate_cancelled_response();
             }
-            if super::metrics::request_was_unavailable(error.as_ref()) {
+            if crate::http::service::metrics::request_was_unavailable(error.as_ref()) {
                 inflight_guard.mark_error(ErrorType::Unavailable);
                 tracing::warn!(%request_id, %error, "generate stream failed: no worker available");
                 return generate_unavailable_response();
@@ -1200,8 +1207,10 @@ pub(crate) mod tests {
 
     use super::service_v2::{HttpService, VLLM_ENABLE_INFERENCE_V1_GENERATE_ENV};
     use super::*;
-    use crate::http::service::metrics::{Endpoint, RequestType, Status};
     use crate::protocols::{Annotated, common::llm_backend::LLMEngineOutput};
+    use dynamo_http_server::metrics::Endpoint;
+    use dynamo_http_server::metrics::RequestType;
+    use dynamo_http_server::metrics::Status;
     use dynamo_runtime::{
         engine::{AsyncEngine, ResponseStream},
         pipeline::{Error, ManyOut, Operator, ServerStreamingEngine, SingleIn},
@@ -2014,18 +2023,16 @@ pub(crate) mod tests {
         )
         .expect("build request");
 
-        let hash_a = dynamo_kv_router::protocols::hash_mm_identifier(&preprocessed_mm_identifier(
-            "image",
-            b"opaque-a",
-        ))
+        let hash_a = dynamo_router_protocol::protocols::hash_mm_identifier(
+            &preprocessed_mm_identifier("image", b"opaque-a"),
+        )
         .expect("content-derived hash");
-        let hash_b = dynamo_kv_router::protocols::hash_mm_identifier(&preprocessed_mm_identifier(
-            "image",
-            b"opaque-b",
-        ))
+        let hash_b = dynamo_router_protocol::protocols::hash_mm_identifier(
+            &preprocessed_mm_identifier("image", b"opaque-b"),
+        )
         .expect("content-derived hash");
-        let pad_a = dynamo_kv_router::protocols::pad_value_for_mm_hash(hash_a);
-        let pad_b = dynamo_kv_router::protocols::pad_value_for_mm_hash(hash_b);
+        let pad_a = dynamo_router_protocol::protocols::pad_value_for_mm_hash(hash_a);
+        let pad_b = dynamo_router_protocol::protocols::pad_value_for_mm_hash(hash_b);
         let mm = preprocessed
             .mm_routing_info
             .as_ref()
@@ -2083,10 +2090,10 @@ pub(crate) mod tests {
             .mm_routing_info
             .as_ref()
             .expect("base request keeps exact MM routing");
-        let request_hashes = dynamo_kv_router::protocols::compute_block_hash_for_seq(
+        let request_hashes = dynamo_router_protocol::protocols::compute_block_hash_for_seq(
             &routing.routing_token_ids,
             4,
-            dynamo_kv_router::protocols::BlockHashOptions::default(),
+            dynamo_router_protocol::protocols::BlockHashOptions::default(),
         );
         let marked_identifier = preprocessed
             .extra_args
@@ -2098,8 +2105,8 @@ pub(crate) mod tests {
             .expect("frontend-approved marked MM hash")
             .to_string();
         let event_mm_info =
-            dynamo_kv_router::zmq_wire::extra_keys_to_block_mm_infos(Some(vec![Some(vec![
-                dynamo_kv_router::zmq_wire::ExtraKeyItem::HashWithUnsignedOffset((
+            dynamo_kv_indexer::zmq_wire::extra_keys_to_block_mm_infos(Some(vec![Some(vec![
+                dynamo_kv_indexer::zmq_wire::ExtraKeyItem::HashWithUnsignedOffset((
                     marked_identifier,
                     1,
                 )),
@@ -2109,11 +2116,11 @@ pub(crate) mod tests {
             .next()
             .flatten()
             .expect("block MM metadata");
-        let event_block = dynamo_kv_router::zmq_wire::create_stored_block_from_parts(
+        let event_block = dynamo_kv_indexer::zmq_wire::create_stored_block_from_parts(
             4,
             7,
             &[10, 99, 99, 20],
-            dynamo_kv_router::zmq_wire::StoredBlockOptions {
+            dynamo_kv_indexer::zmq_wire::StoredBlockOptions {
                 mm_extra_info: Some(event_mm_info),
                 image_token_id: Some(99),
                 ..Default::default()
@@ -2143,11 +2150,11 @@ pub(crate) mod tests {
         let routing = generate_mm_routing_info(&request, 5)
             .expect("valid sparse MM routing metadata")
             .expect("MM routing projection");
-        let mm_hash = dynamo_kv_router::protocols::hash_mm_identifier(&preprocessed_mm_identifier(
-            "image", b"sparse",
-        ))
+        let mm_hash = dynamo_router_protocol::protocols::hash_mm_identifier(
+            &preprocessed_mm_identifier("image", b"sparse"),
+        )
         .expect("content-derived identifier");
-        let pad = dynamo_kv_router::protocols::pad_value_for_mm_hash(mm_hash);
+        let pad = dynamo_router_protocol::protocols::pad_value_for_mm_hash(mm_hash);
         assert_eq!(routing.info.routing_token_ids, vec![10, pad, 42, pad, 20]);
 
         for (name, token_ids, features, expected_error) in [
@@ -3143,19 +3150,19 @@ pub(crate) mod tests {
 
         let worker_labels = [WORKER_ID, DP_RANK, crate::discovery::WORKER_TYPE_DECODE];
         assert_eq!(
-            crate::http::service::metrics::WORKER_LAST_INPUT_SEQUENCE_TOKENS_GAUGE
+            dynamo_http_server::metrics::WORKER_LAST_INPUT_SEQUENCE_TOKENS_GAUGE
                 .with_label_values(&worker_labels)
                 .get(),
             3
         );
         assert!(
-            crate::http::service::metrics::WORKER_LAST_TIME_TO_FIRST_TOKEN_GAUGE
+            dynamo_http_server::metrics::WORKER_LAST_TIME_TO_FIRST_TOKEN_GAUGE
                 .with_label_values(&worker_labels)
                 .get()
                 > 0.0
         );
         assert!(
-            crate::http::service::metrics::WORKER_LAST_INTER_TOKEN_LATENCY_GAUGE
+            dynamo_http_server::metrics::WORKER_LAST_INTER_TOKEN_LATENCY_GAUGE
                 .with_label_values(&worker_labels)
                 .get()
                 > 0.0
@@ -3216,20 +3223,20 @@ pub(crate) mod tests {
             crate::discovery::WORKER_TYPE_PREFILL,
         ];
         assert_eq!(
-            crate::http::service::metrics::WORKER_LAST_INPUT_SEQUENCE_TOKENS_GAUGE
+            dynamo_http_server::metrics::WORKER_LAST_INPUT_SEQUENCE_TOKENS_GAUGE
                 .with_label_values(&prefill_labels)
                 .get(),
             3
         );
         assert!(
-            crate::http::service::metrics::WORKER_LAST_TIME_TO_FIRST_TOKEN_GAUGE
+            dynamo_http_server::metrics::WORKER_LAST_TIME_TO_FIRST_TOKEN_GAUGE
                 .with_label_values(&prefill_labels)
                 .get()
                 > 0.0
         );
         let decode_labels = [DECODE_WORKER_ID, "5", crate::discovery::WORKER_TYPE_DECODE];
         assert!(
-            crate::http::service::metrics::WORKER_LAST_INTER_TOKEN_LATENCY_GAUGE
+            dynamo_http_server::metrics::WORKER_LAST_INTER_TOKEN_LATENCY_GAUGE
                 .with_label_values(&decode_labels)
                 .get()
                 > 0.0

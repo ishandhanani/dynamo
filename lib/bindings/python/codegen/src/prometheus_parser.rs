@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright (c) 2025-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-//! Parser for prometheus_names.rs to extract constants and modules
+//! Parser for the Prometheus names source (lib/metrics/src/names.rs) to extract constants and modules
 
 use anyhow::{Context, Result};
 use std::collections::HashMap;

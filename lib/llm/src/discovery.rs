@@ -21,7 +21,6 @@ pub mod kv_state_agent;
 
 mod model_manager;
 pub(crate) mod router_policy;
-pub(crate) use model_manager::CommittedModelView;
 pub use model_manager::{ModelManager, ModelManagerError, UNKNOWN_METRIC_MODEL};
 
 mod controller;
@@ -35,6 +34,8 @@ pub(crate) use worker_set::{CommittedWorkerSetTarget, WorkerSetTarget, WorkerSet
 
 pub(crate) mod runtime_configs;
 pub use runtime_configs::{RuntimeConfigWatch, runtime_config_watch};
+pub(crate) mod topology;
+pub use topology::{EndpointTopology, TopologyWatch, topology_from_configs, topology_watch};
 
 mod endpoint_card;
 pub use endpoint_card::wait_for_endpoint_model_card;

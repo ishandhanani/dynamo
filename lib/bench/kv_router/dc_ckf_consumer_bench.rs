@@ -21,16 +21,16 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, ensure};
 use clap::{Parser, ValueEnum};
 use dynamo_bench::kv_router_common::dc_ckf_metadata::DcCkfCorpusMetadata;
-use dynamo_kv_router::identity::{
-    CacheSemanticsId, DcId, IdentitySource, IndexerDomainId, PoolId, RoutingScopeId,
-};
-use dynamo_kv_router::indexer::cuckoo::{
+use dynamo_kv_indexer::cuckoo::{
     CkfConfig, ConsumerDrainMarker, ConsumerInstanceId, DcCkfDelta, DcCkfDeltaSink, DcCkfPublisher,
     DcCkfSnapshot, DcCkfState, GlobalCkfIndexer, GlobalCkfIngestOutcome, GlobalCkfIngestionPool,
     GlobalCkfIngestionPoolConfig, GlobalCkfManifest, LaneLease, PrefixSearchConfig,
     ProducerIdentity,
 };
-use dynamo_kv_router::protocols::{
+use dynamo_router_protocol::identity::{
+    CacheSemanticsId, DcId, IdentitySource, IndexerDomainId, PoolId, RoutingScopeId,
+};
+use dynamo_router_protocol::protocols::{
     ExternalSequenceBlockHash, KvCacheEvent, KvCacheEventData, KvCacheRemoveData, KvCacheStoreData,
     KvCacheStoredBlockData, LocalBlockHash, RouterEvent, WorkerWithDpRank,
     compute_seq_hash_for_block,
