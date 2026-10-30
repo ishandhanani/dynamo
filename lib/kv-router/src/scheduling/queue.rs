@@ -208,6 +208,14 @@ pub(crate) struct PreparedEnqueue {
     admitted_upstream: bool,
 }
 
+impl PreparedEnqueue {
+    /// POC timing leg, for a request admitted upstream.
+    pub(crate) fn poc_leg(&self) -> Option<usize> {
+        self.admitted_upstream
+            .then(|| super::poc_timing::leg_of(self.request.track_prefill_tokens))
+    }
+}
+
 enum AdmissionCommand {
     PolicyConfig {
         update: Option<RuntimePolicyUpdate>,
@@ -1023,6 +1031,9 @@ impl<
             self.prepare_candidates(&request)
         };
         let (ack_tx, ack_rx) = oneshot::channel();
+        if admitted_upstream {
+            super::poc_timing::mark_sent(super::poc_timing::leg_of(request.track_prefill_tokens));
+        }
         slot.send(AdmissionCommand::Enqueue {
             request,
             attempt_tx,
@@ -1443,6 +1454,8 @@ impl<
                     let lifecycle_transfer = lease
                         .as_ref()
                         .and_then(|lease| lease.transfer.as_ref().map(Arc::clone));
+                    let poc_leg = super::poc_timing::leg_of(request.track_prefill_tokens);
+                    let started_ns = super::poc_timing::now_ns();
                     let started = std::time::Instant::now();
                     let enqueue_ready = self.handle_enqueue(
                         request,
@@ -1464,6 +1477,8 @@ impl<
                     self.turn_prepared = None;
                     if admitted_upstream {
                         super::poc_timing::record_actor(
+                            poc_leg,
+                            started_ns,
                             (admitted - started).as_nanos() as u64,
                             admitted.elapsed().as_nanos() as u64,
                         );

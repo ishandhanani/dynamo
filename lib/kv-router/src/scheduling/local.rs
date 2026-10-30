@@ -1014,6 +1014,8 @@ where
     pub(crate) async fn submit(
         self,
     ) -> Result<(AdmittedSchedulingResponse, Option<BookingHandle>), KvSchedulerError> {
+        let poc_leg = self.enqueue.as_ref().and_then(PreparedEnqueue::poc_leg);
+        let started = std::time::Instant::now();
         let lifecycle_lease = match self.enqueue {
             Some(enqueue) => self.queue.send_enqueue(enqueue).await,
             // Rejected while preparing: the response carries the error.
@@ -1037,6 +1039,9 @@ where
         let booking = lifecycle_lease
             .and_then(|lease| lease.commit())
             .map(|booking| self.queue.booking_handle(booking));
+        if let Some(leg) = poc_leg {
+            super::poc_timing::record_submit(leg, started.elapsed().as_nanos() as u64);
+        }
         Ok((AdmittedSchedulingResponse { response, attempt }, booking))
     }
 }

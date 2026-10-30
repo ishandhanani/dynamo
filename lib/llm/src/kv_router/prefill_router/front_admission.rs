@@ -62,6 +62,14 @@ pub(crate) fn front_admission_enabled() -> bool {
     *ENABLED.get_or_init(|| dynamo_runtime::config::env_is_truthy(FRONT_ADMISSION_ENV))
 }
 
+/// Run the decode booking alongside the prefill booking instead of after it.
+const PARALLEL_SUBMIT_ENV: &str = "DYN_ROUTER_FRONT_ADMISSION_PARALLEL_SUBMIT";
+
+fn parallel_submit_enabled() -> bool {
+    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ENABLED.get_or_init(|| dynamo_runtime::config::env_is_truthy(PARALLEL_SUBMIT_ENV))
+}
+
 /// Derives the decode leg's routing constraints from the prefill worker the
 /// serializer booked (its KV-transfer domain).
 pub(crate) type DecodeConstraintsFn =
@@ -564,26 +572,56 @@ impl Serializer {
             fail_legs(&slot, "front admission: legs missing");
             return;
         };
+        let LegStep {
+            submit: decode_submit,
+            reply: decode_reply,
+        } = decode;
+        let mut decode_submit = Some(decode_submit);
         let started = Instant::now();
-        let prefill_result = (prefill.submit).await;
+        // In parallel, decode is booked before the prefill worker, and with it the decode
+        // leg's KV-transfer constraints, is known. A decode booking that turns out to be
+        // constrained is dropped below, which releases it, and re-planned by the caller.
+        let (prefill_result, mut early_decode) = match decode_submit.take() {
+            Some(decode_submit) if parallel_submit_enabled() => {
+                let (prefill_result, decode_result) = tokio::join!(prefill.submit, decode_submit);
+                (prefill_result, Some(decode_result))
+            }
+            submit => {
+                decode_submit = submit;
+                ((prefill.submit).await, None)
+            }
+        };
         let prefill_ns = started.elapsed().as_nanos() as u64;
         let decode_started = Instant::now();
         let prefill_worker = prefill_result
             .as_ref()
             .ok()
             .map(|(admitted, _)| admitted.response.best_worker.worker_id);
-        let decode_result = match prefill_worker.map(|worker| decode_constraints(worker)) {
+        let constraints_started = Instant::now();
+        let constraints = prefill_worker.map(|worker| decode_constraints(worker));
+        dynamo_kv_router::scheduling::poc_timing::record_constraints(
+            constraints_started.elapsed().as_nanos() as u64,
+        );
+        let decode_result = match constraints {
             // The prefill booking failed: do not book decode.
             None => Err(KvSchedulerError::BookingFailed(
                 "front admission: prefill leg was not booked".to_string(),
             )),
-            Some(Ok(None)) => (decode.submit).await,
+            Some(Ok(None)) => match (early_decode.take(), decode_submit.take()) {
+                (Some(result), _) => result,
+                (None, Some(submit)) => submit.await,
+                (None, None) => Err(KvSchedulerError::BookingFailed(
+                    "front admission: decode leg missing".to_string(),
+                )),
+            },
             // Decode must stay in the prefill worker's KV-transfer domain, which its
             // prepared selection did not know: the caller re-plans it.
             Some(Ok(Some(_))) | Some(Err(_)) => Err(KvSchedulerError::BookingFailed(
                 DECODE_NEEDS_CONSTRAINTS.to_string(),
             )),
         };
+        // A decode booking made in parallel but not used is released here.
+        drop(early_decode);
         let finished = Instant::now();
         let decode_ns = (finished - decode_started).as_nanos() as u64;
         self.stats
@@ -606,7 +644,7 @@ impl Serializer {
         }
         // A caller that went away drops the results, and with them the bookings.
         let _ = prefill.reply.send(prefill_result);
-        let _ = decode.reply.send(decode_result);
+        let _ = decode_reply.send(decode_result);
     }
 }
 
@@ -686,6 +724,7 @@ async fn report_stats(stats: std::sync::Weak<FrontStats>, label: String) {
         let planned = (admitted + failed).max(1);
         let interval_ns = STATS_INTERVAL.as_nanos() as f64;
         let timing = dynamo_kv_router::scheduling::poc_timing::take();
+        let [p, d] = timing.legs;
         tracing::info!(
             target: "front_admission",
             stage = %label,
@@ -709,11 +748,17 @@ async fn report_stats(stats: std::sync::Weak<FrontStats>, label: String) {
             booking_prepares = timing.booking_prepares,
             mean_booking_prepare_us =
                 timing.booking_prepare_ns as f64 / timing.booking_prepares.max(1) as f64 / 1e3,
-            actor_steps = timing.actor_steps,
-            mean_actor_admit_us =
-                timing.actor_admit_ns as f64 / timing.actor_steps.max(1) as f64 / 1e3,
-            mean_actor_after_us =
-                timing.actor_after_ns as f64 / timing.actor_steps.max(1) as f64 / 1e3,
+            mean_actor_admit_us = (p.admit_us + d.admit_us) / 2.0,
+            mean_actor_after_us = (p.after_us + d.after_us) / 2.0,
+            p_pickup_us = p.pickup_us,
+            p_admit_us = p.admit_us,
+            p_after_us = p.after_us,
+            p_submit_us = p.submit_us,
+            d_pickup_us = d.pickup_us,
+            d_admit_us = d.admit_us,
+            d_after_us = d.after_us,
+            d_submit_us = d.submit_us,
+            constraints_us = timing.constraints_us,
             "front admission stats"
         );
     }
