@@ -422,6 +422,10 @@ pub struct ScheduleRequest {
     pub kv_transfer_candidates: Option<KvTransferCandidates>,
     pub retain_kv_transfer_chain: bool,
     pub shared_cache_hits: Option<SharedCacheHits>,
+    /// An admission stage in front of this scheduler already admitted the request (the
+    /// POC front queue). The queue books it directly without waiting on its class limits
+    /// or deadline; selection still applies the host's reject thresholds.
+    pub admitted_upstream: bool,
 }
 
 /// Actor-owned admission request.

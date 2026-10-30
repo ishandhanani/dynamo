@@ -104,6 +104,8 @@ impl SelectionCore {
                 track_active_blocks: true,
                 return_routing_hashes: false,
                 replay_id: req.selection_id.clone(),
+                admitted_upstream: false,
+                schedule_relay: None,
             })
             .await?;
         Ok(self.select_response(selected, endpoint, req.selection_id))
@@ -148,6 +150,8 @@ impl SelectionCore {
                 track_active_blocks: true,
                 return_routing_hashes: false,
                 replay_id: None,
+                admitted_upstream: false,
+                schedule_relay: None,
             })
             .await?;
         Ok(self.select_response(selected, endpoint, Some(selection_id)))
@@ -281,6 +285,8 @@ impl SelectionCore {
             track_active_blocks,
             return_routing_hashes,
             replay_id,
+            admitted_upstream,
+            schedule_relay,
         } = operation;
         let entry = self.ready_entry(&key)?;
         let book = admission.is_booking();
@@ -331,6 +337,7 @@ impl SelectionCore {
                 );
             });
         }
+        let poc_inputs_started = std::time::Instant::now();
         let PreparedSelectionInputs {
             block_hashes,
             sequence_hashes,
@@ -437,7 +444,10 @@ impl SelectionCore {
             allowed_worker_ids,
             routing_constraints,
             shared_cache_hits,
+            admitted_upstream,
         };
+        let poc_inputs_ns = poc_inputs_started.elapsed().as_nanos() as u64;
+        let poc_schedule_started = std::time::Instant::now();
         // `booking` guards the booking until it is installed below: any early
         // return or drop before then frees it.
         let scheduled = if matches!(admission, SelectionAdmission::Advisory { .. }) {
@@ -447,6 +457,23 @@ impl SelectionCore {
                 .instrument(tracing::info_span!("kv_router.select_without_admission"))
                 .await
                 .map(|advisory| (advisory.response, Some(advisory.selected_worker_load), None))
+        } else if let Some(relay) = schedule_relay.as_ref() {
+            // Prepared here, on the caller's task; only the actor step is relayed.
+            let poc_prepare_started = std::time::Instant::now();
+            match entry
+                .scheduler
+                .prepare_booking(schedule_request, tokio::time::Instant::now())
+                .await
+            {
+                Ok(prepared) => {
+                    crate::scheduling::poc_timing::record_prepare(
+                        poc_prepare_started.elapsed().as_nanos() as u64,
+                    );
+                    relay.relay(Box::pin(prepared.submit())).await
+                }
+                Err(error) => Err(error),
+            }
+            .map(|(admitted, booking)| (admitted.response, None, booking))
         } else {
             entry
                 .scheduler
@@ -455,6 +482,12 @@ impl SelectionCore {
                 .await
                 .map(|(admitted, booking)| (admitted.response, None, booking))
         };
+        if book {
+            crate::scheduling::poc_timing::record(
+                poc_inputs_ns,
+                poc_schedule_started.elapsed().as_nanos() as u64,
+            );
+        }
         let (response, advisory_load, booking) = match scheduled {
             Ok(scheduled) => scheduled,
             Err(KvSchedulerError::QueueRejected(rejection)) => {

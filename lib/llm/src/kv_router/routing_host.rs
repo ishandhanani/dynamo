@@ -395,6 +395,39 @@ impl RoutePlan {
     }
 }
 
+/// Context key under which the POC front admission stage attaches the prefill leg's
+/// booked route. The prefill hop sends that plan instead of selecting a worker.
+pub(crate) const PREFILL_ROUTE_PLAN_KEY: &str = "dynamo.front_admission.prefill_plan";
+/// Context key for the decode leg's booked route. The decode host sends that plan
+/// instead of selecting a worker.
+pub(crate) const DECODE_ROUTE_PLAN_KEY: &str = "dynamo.front_admission.decode_plan";
+
+/// A booked [`RoutePlan`] attached to a request's context. The mutex only makes it
+/// `Sync` for the context registry; it is taken once. Dropping an untaken plan releases
+/// its booking.
+pub(crate) struct AttachedRoutePlan(std::sync::Mutex<Option<RoutePlan>>);
+
+impl AttachedRoutePlan {
+    pub(crate) fn new(plan: RoutePlan) -> Self {
+        Self(std::sync::Mutex::new(Some(plan)))
+    }
+
+    fn into_plan(self) -> Option<RoutePlan> {
+        self.0.into_inner().ok().flatten()
+    }
+}
+
+/// Take the booked route attached under `key`, if any.
+pub(crate) fn take_attached_plan(
+    request: &mut SingleIn<PreprocessedRequest>,
+    key: &str,
+) -> Option<RoutePlan> {
+    request
+        .take_unique::<AttachedRoutePlan>(key)
+        .ok()
+        .and_then(AttachedRoutePlan::into_plan)
+}
+
 /// Compatibility name for the KV-only host used by existing callers.
 ///
 /// This alias remains supported through the Dynamo 1.x series. It may be
@@ -807,6 +840,12 @@ impl AsyncEngine<SingleIn<PreprocessedRequest>, ManyOut<Annotated<LLMEngineOutpu
             return Ok(ResponseStream::new(Box::pin(stream), stream_context));
         }
 
+        // The front admission stage may already have admitted and booked this leg; send
+        // its plan without selecting or queueing again.
+        let mut request = request;
+        if let Some(plan) = take_attached_plan(&mut request, DECODE_ROUTE_PLAN_KEY) {
+            return self.dispatch_kv_plan(request, plan).await;
+        }
         let plan = self.plan_kv_route(&request, phase, None, budget).await?;
         self.dispatch_kv_plan(request, plan).await
     }

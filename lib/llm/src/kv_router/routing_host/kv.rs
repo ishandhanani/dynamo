@@ -6,6 +6,7 @@ use crate::kv_router::{
     FindBestMatchAdmission,
     routing_host::{kv_selection::SelectionOutcome, request_guard::RouteObservation},
 };
+use dynamo_kv_router::services::selection::ScheduleRelay;
 
 impl RoutingHost {
     #[allow(clippy::too_many_arguments)]
@@ -17,6 +18,7 @@ impl RoutingHost {
         affinity_target: Option<AffinityTarget>,
         planned_worker: Option<WorkerWithDpRank>,
         admission: FindBestMatchAdmission,
+        schedule_relay: Option<Arc<dyn ScheduleRelay>>,
         budget: &CleanupBudget,
     ) -> Result<SelectionOutcome, Error> {
         let context_id = request.context().id().to_string();
@@ -48,6 +50,7 @@ impl RoutingHost {
                     policy_class,
                     session_context,
                     admission,
+                    schedule_relay,
                 },
             )
             .instrument(tracing::info_span!("kv_router.select_worker"));
@@ -78,6 +81,7 @@ impl RoutingHost {
             affinity_target,
             None,
             FindBestMatchAdmission::WithAdmission,
+            None,
             budget,
         )
         .await?
@@ -221,6 +225,7 @@ impl RoutingHost {
                     target,
                     None,
                     FindBestMatchAdmission::WithoutAdmission,
+                    None,
                     &budget,
                 )
             })
@@ -251,6 +256,48 @@ impl RoutingHost {
         planned_worker: Option<WorkerWithDpRank>,
         budget: CleanupBudget,
     ) -> Result<RoutePlan, Error> {
+        self.plan_kv_route_with_admission(
+            request,
+            phase,
+            planned_worker,
+            budget,
+            FindBestMatchAdmission::WithAdmission,
+            None,
+        )
+        .await
+    }
+
+    /// POC front admission: select and book a worker for `request` in `phase` without
+    /// waiting in this host's policy-class queue, because the front stage already
+    /// admitted the request against both pools. Everything except the queue-actor step
+    /// runs on the caller's task; `schedule_relay` orders that step. Reject thresholds
+    /// still apply at selection.
+    pub(crate) async fn plan_admitted_upstream(
+        &self,
+        request: &SingleIn<PreprocessedRequest>,
+        phase: RequestPhase,
+        schedule_relay: Arc<dyn ScheduleRelay>,
+    ) -> Result<RoutePlan, Error> {
+        self.plan_kv_route_with_admission(
+            request,
+            phase,
+            None,
+            CleanupBudget::default(),
+            FindBestMatchAdmission::AdmittedUpstream,
+            Some(schedule_relay),
+        )
+        .await
+    }
+
+    async fn plan_kv_route_with_admission(
+        &self,
+        request: &SingleIn<PreprocessedRequest>,
+        phase: RequestPhase,
+        planned_worker: Option<WorkerWithDpRank>,
+        budget: CleanupBudget,
+        admission: FindBestMatchAdmission,
+        schedule_relay: Option<Arc<dyn ScheduleRelay>>,
+    ) -> Result<RoutePlan, Error> {
         if self.kv_router_if_enabled().is_none() {
             return Err(anyhow::anyhow!("KV route plans require KV routing"));
         }
@@ -263,6 +310,7 @@ impl RoutingHost {
         let select = || {
             self.select_with_session_affinity(request, phase, false, &budget, |target| {
                 let budget = &budget;
+                let schedule_relay = schedule_relay.clone();
                 async move {
                     self.select_request_outcome(
                         request,
@@ -270,7 +318,8 @@ impl RoutingHost {
                         false,
                         target,
                         planned_worker,
-                        FindBestMatchAdmission::WithAdmission,
+                        admission,
+                        schedule_relay,
                         budget,
                     )
                     .await?
@@ -361,6 +410,7 @@ impl RoutingHost {
                     target,
                     None,
                     FindBestMatchAdmission::WithoutAdmission,
+                    None,
                     &budget,
                 )
             })
@@ -649,14 +699,20 @@ impl RoutingHost {
     where
         F: FnOnce(&mut PreprocessedRequest, AffinityTarget) -> Result<M, Error>,
     {
-        let plan = self
-            .plan_kv_route(
-                &request,
-                RequestPhase::Prefill,
-                None,
-                CleanupBudget::default(),
-            )
-            .await?;
+        // The front admission stage may already have admitted and booked the prefill
+        // leg; send its plan instead of selecting again.
+        let plan = match take_attached_plan(&mut request, PREFILL_ROUTE_PLAN_KEY) {
+            Some(plan) => plan,
+            None => {
+                self.plan_kv_route(
+                    &request,
+                    RequestPhase::Prefill,
+                    None,
+                    CleanupBudget::default(),
+                )
+                .await?
+            }
+        };
         let metadata = match prepare(&mut request, route_target(plan.worker())) {
             Ok(metadata) => metadata,
             Err(error) => {

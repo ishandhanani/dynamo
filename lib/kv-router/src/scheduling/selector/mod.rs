@@ -572,7 +572,9 @@ fn log_selection<C: WorkerConfigLike>(
     cost: f64,
     effective_overlap_blocks: f64,
 ) {
-    let request_id = request.mode.request_id().unwrap_or("-");
+    if !tracing::enabled!(tracing::Level::INFO) {
+        return;
+    }
     let host_pinned_blocks = request
         .overlap
         .tier_overlap_blocks
@@ -587,46 +589,107 @@ fn log_selection<C: WorkerConfigLike>(
         .get(&worker)
         .copied()
         .unwrap_or(0);
-
-    if request.pinned_worker == Some(worker) {
-        tracing::info!(
-            request_id,
-            "Selected pinned worker: worker_type={}, worker_id={} dp_rank={:?}, logit: {:.3}, effective cached blocks: {:.2}",
-            worker_type,
-            worker.worker_id,
-            worker.dp_rank,
-            cost,
-            effective_overlap_blocks,
-        );
-    } else if worker_type == "decode" {
-        tracing::info!(
-            router_mode = "kv",
-            request_id,
-            worker_id = worker.worker_id,
-            worker_type = %worker_type,
-            dp_rank = ?worker.dp_rank,
-            logit = cost,
-            host_pinned_blocks,
-            disk_blocks,
-            "Selected worker"
-        );
-    } else {
-        let total_kv_blocks = workers
+    let record = SelectionLog {
+        request_id: request.mode.request_id().unwrap_or("-").to_string(),
+        worker,
+        worker_type,
+        cost,
+        effective_overlap_blocks,
+        host_pinned_blocks,
+        disk_blocks,
+        total_kv_blocks: workers
             .get(&worker.worker_id)
-            .and_then(WorkerConfigLike::total_kv_blocks);
-        tracing::info!(
-            router_mode = "kv",
-            request_id,
-            worker_id = worker.worker_id,
-            worker_type = %worker_type,
-            dp_rank = ?worker.dp_rank,
-            logit = cost,
-            effective_cached_blocks = effective_overlap_blocks,
-            host_pinned_blocks,
-            disk_blocks,
-            total_kv_blocks = ?total_kv_blocks,
-            "Selected worker"
-        );
+            .and_then(WorkerConfigLike::total_kv_blocks),
+        pinned: request.pinned_worker == Some(worker),
+    };
+    // POC: hand the record to the selection-log thread, off the booking path.
+    match selection_log_sender() {
+        Some(sender) => {
+            if let Err(std::sync::mpsc::SendError(record)) = sender.send(record) {
+                record.emit();
+            }
+        }
+        None => record.emit(),
+    }
+}
+
+/// The selection-log thread's sender, when `DYN_ROUTER_POC_DEFER_SELECTION_LOG=1`.
+fn selection_log_sender() -> Option<&'static std::sync::mpsc::Sender<SelectionLog>> {
+    static SENDER: std::sync::OnceLock<Option<std::sync::mpsc::Sender<SelectionLog>>> =
+        std::sync::OnceLock::new();
+    SENDER
+        .get_or_init(|| {
+            if !crate::scheduling::poc_timing::defer_selection_logs() {
+                return None;
+            }
+            let (tx, rx) = std::sync::mpsc::channel::<SelectionLog>();
+            std::thread::Builder::new()
+                .name("selection-log".to_string())
+                .spawn(move || {
+                    for log in rx {
+                        log.emit();
+                    }
+                })
+                .ok()?;
+            Some(tx)
+        })
+        .as_ref()
+}
+
+/// One "Selected worker" log record.
+struct SelectionLog {
+    request_id: String,
+    worker: WorkerWithDpRank,
+    worker_type: &'static str,
+    cost: f64,
+    effective_overlap_blocks: f64,
+    host_pinned_blocks: usize,
+    disk_blocks: usize,
+    total_kv_blocks: Option<u64>,
+    pinned: bool,
+}
+
+impl SelectionLog {
+    fn emit(self) {
+        let request_id = self.request_id.as_str();
+        let worker = self.worker;
+        if self.pinned {
+            tracing::info!(
+                request_id,
+                "Selected pinned worker: worker_type={}, worker_id={} dp_rank={:?}, logit: {:.3}, effective cached blocks: {:.2}",
+                self.worker_type,
+                worker.worker_id,
+                worker.dp_rank,
+                self.cost,
+                self.effective_overlap_blocks,
+            );
+        } else if self.worker_type == "decode" {
+            tracing::info!(
+                router_mode = "kv",
+                request_id,
+                worker_id = worker.worker_id,
+                worker_type = %self.worker_type,
+                dp_rank = ?worker.dp_rank,
+                logit = self.cost,
+                host_pinned_blocks = self.host_pinned_blocks,
+                disk_blocks = self.disk_blocks,
+                "Selected worker"
+            );
+        } else {
+            tracing::info!(
+                router_mode = "kv",
+                request_id,
+                worker_id = worker.worker_id,
+                worker_type = %self.worker_type,
+                dp_rank = ?worker.dp_rank,
+                logit = self.cost,
+                effective_cached_blocks = self.effective_overlap_blocks,
+                host_pinned_blocks = self.host_pinned_blocks,
+                disk_blocks = self.disk_blocks,
+                total_kv_blocks = ?self.total_kv_blocks,
+                "Selected worker"
+            );
+        }
     }
 }
 

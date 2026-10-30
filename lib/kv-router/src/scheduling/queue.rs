@@ -14,13 +14,14 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use tokio::sync::{mpsc, oneshot, watch};
 use tokio::time::Instant;
 
-use self::capacity::CapacityUpdates;
+use self::capacity::{CapacityUpdates, RoomChanged};
 #[cfg(test)]
 use super::config::RouterQueuePolicy;
 use super::filter::{RoutingEligibility, worker_config_for_rank};
 use super::overlap::SelectedWorkerTierSnapshot;
 use super::overlap_refresh::{
-    NoopOverlapScoresRefresh, OverlapScoresRefresh, read_overlap_refresh_after, refresh_overlap,
+    NoopOverlapScoresRefresh, OverlapScoresRefresh, RefreshedOverlap, read_overlap_refresh_after,
+    refresh_overlap,
 };
 use super::policy_config::{
     BusyThresholds, FullRankCounts, PolicyClassConfig, PolicyProfile, RejectThresholdsProvider,
@@ -197,6 +198,27 @@ fn non_max_overlap_selection<C: WorkerConfigLike>(
 }
 
 #[allow(clippy::large_enum_variant)]
+/// A request prepared for the queue actor by [`SchedulerQueue::prepare_enqueue`].
+pub(crate) struct PreparedEnqueue {
+    request: SchedulingRequest,
+    attempt_tx: Option<oneshot::Sender<AttemptId>>,
+    block_hashes: Option<Vec<LocalBlockHash>>,
+    prepared: Option<Box<PreparedAdmission>>,
+    queue_metadata: QueueMetadata,
+    lease: Option<Box<RequestLifecycleLease>>,
+    admitted_upstream: bool,
+    /// The caller's ingress; for a request admitted upstream, after its overlap was gathered.
+    ingress_at: Instant,
+}
+
+impl PreparedEnqueue {
+    /// POC timing leg, for a request admitted upstream.
+    pub(crate) fn poc_leg(&self) -> Option<usize> {
+        self.admitted_upstream
+            .then(|| super::poc_timing::leg_of(self.request.track_prefill_tokens))
+    }
+}
+
 enum AdmissionCommand {
     PolicyConfig {
         update: Option<RuntimePolicyUpdate>,
@@ -209,6 +231,9 @@ enum AdmissionCommand {
         prepared: Option<Box<PreparedAdmission>>,
         queue_metadata: QueueMetadata,
         lease: Option<Box<RequestLifecycleLease>>,
+        /// An admission stage in front of this queue already admitted the request; book
+        /// it directly. Carries the request's ingress, after its overlap was gathered.
+        admitted_upstream: Option<Instant>,
         ack_tx: oneshot::Sender<Option<Box<RequestLifecycleLease>>>,
     },
     SelectWithoutAdmission {
@@ -602,6 +627,8 @@ struct SchedulerQueueActor<
     /// Per-candidate cost capture for admitted selections, installed once by the host.
     selection_trace: Arc<OnceLock<SelectionTraceSpec>>,
     reject_thresholds: Option<RejectThresholdsProvider>,
+    /// Hints this scheduler's own frees to a front admission stage watching it.
+    room_changed: Arc<RoomChanged>,
 }
 
 /// Queue that gates scheduling requests behind a capacity check.
@@ -640,6 +667,9 @@ pub struct SchedulerQueue<
     /// Per-candidate cost capture for admitted selections, installed once by the host.
     selection_trace: Arc<OnceLock<SelectionTraceSpec>>,
     reject_thresholds: Option<RejectThresholdsProvider>,
+    room_changed: Arc<RoomChanged>,
+    /// The actor's state, for [`Self::book_upstream_now`].
+    shared_actor: Arc<tokio::sync::Mutex<SchedulerQueueActor<P, C, Sel, RF>>>,
     #[allow(clippy::type_complexity)]
     // Covariant type markers, without ownership or auto-trait bounds.
     _marker: PhantomData<fn() -> (P, C, Sel, RF)>,
@@ -749,9 +779,11 @@ impl<
         let selection_trace = Arc::new(OnceLock::new());
         let start_time = Instant::now();
         let capacity_updates = queueing_enabled.then(|| Arc::new(CapacityUpdates::new()));
+        let room_changed = Arc::new(RoomChanged::new());
         let direct_release: DirectBookingRelease = {
             let slots = Arc::clone(&slots);
             let capacity_updates = capacity_updates.clone();
+            let room_changed = Arc::clone(&room_changed);
             Arc::new(move |booking| {
                 let outcome = slots.free_if_booking(
                     &booking.request_id,
@@ -759,10 +791,11 @@ impl<
                     booking.attempt_id,
                     Instant::now(),
                 )?;
-                if outcome.is_applied()
-                    && let Some(updates) = &capacity_updates
-                {
-                    updates.record(Some(booking.worker));
+                if outcome.is_applied() {
+                    if let Some(updates) = &capacity_updates {
+                        updates.record(Some(booking.worker));
+                    }
+                    room_changed.notify();
                 }
                 Ok(())
             })
@@ -799,8 +832,13 @@ impl<
             non_max_overlap_selection_observer: Arc::clone(&non_max_overlap_selection_observer),
             selection_trace: Arc::clone(&selection_trace),
             reject_thresholds: reject_thresholds.clone(),
+            room_changed: Arc::clone(&room_changed),
         };
-        tokio::spawn(actor.run(admission_rx));
+        let shared_actor = Arc::new(tokio::sync::Mutex::new(actor));
+        tokio::spawn(SchedulerQueueActor::run(
+            Arc::clone(&shared_actor),
+            admission_rx,
+        ));
         Self {
             admission_tx,
             runtime_policy,
@@ -823,6 +861,8 @@ impl<
             non_max_overlap_selection_observer,
             selection_trace,
             reject_thresholds,
+            room_changed,
+            shared_actor,
             _marker: PhantomData,
         }
     }
@@ -896,13 +936,40 @@ impl<
 
     pub(crate) async fn enqueue_admitted_with_block_hashes_and_lease(
         &self,
-        mut request: SchedulingRequest,
+        request: SchedulingRequest,
         block_hashes: Option<Vec<LocalBlockHash>>,
         lease: Option<Box<RequestLifecycleLease>>,
         attempt_tx: Option<oneshot::Sender<AttemptId>>,
         classified_request: Option<ClassifyRequest>,
         ingress_at: Instant,
     ) -> Option<Box<RequestLifecycleLease>> {
+        let enqueue = self.prepare_enqueue(
+            request,
+            block_hashes,
+            lease,
+            attempt_tx,
+            classified_request,
+            ingress_at,
+            false,
+        )?;
+        self.send_enqueue(enqueue).await
+    }
+
+    /// The caller-side half of an enqueue: validate the request and resolve its queue
+    /// metadata. A request admitted upstream also gets its candidate rows here, so the
+    /// upstream stage's ordered step does not build them. Returns `None` after answering
+    /// the request with an error.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn prepare_enqueue(
+        &self,
+        mut request: SchedulingRequest,
+        block_hashes: Option<Vec<LocalBlockHash>>,
+        lease: Option<Box<RequestLifecycleLease>>,
+        attempt_tx: Option<oneshot::Sender<AttemptId>>,
+        classified_request: Option<ClassifyRequest>,
+        ingress_at: Instant,
+        admitted_upstream: bool,
+    ) -> Option<PreparedEnqueue> {
         if self.capacity_updates.is_some()
             && lease.is_none()
             && request.mode.lifecycle_request_id().is_some()
@@ -932,19 +999,61 @@ impl<
             return None;
         }
 
+        let prepared = if admitted_upstream {
+            self.prepare_candidates(&request)
+        } else {
+            None
+        };
+        Some(PreparedEnqueue {
+            block_hashes: self.prepare_block_hashes_for_refresh(block_hashes),
+            request,
+            attempt_tx,
+            prepared,
+            queue_metadata,
+            lease,
+            admitted_upstream,
+            ingress_at,
+        })
+    }
+
+    /// The ordered half of an enqueue: hand a prepared request to the actor and wait for
+    /// its acknowledgement.
+    pub(crate) async fn send_enqueue(
+        &self,
+        enqueue: PreparedEnqueue,
+    ) -> Option<Box<RequestLifecycleLease>> {
+        let PreparedEnqueue {
+            mut request,
+            attempt_tx,
+            block_hashes,
+            prepared,
+            queue_metadata,
+            lease,
+            admitted_upstream,
+            ingress_at,
+        } = enqueue;
         let Ok(slot) = self.admission_tx.reserve().await else {
             request.respond(Err(KvSchedulerError::SubscriberShutdown));
             return None;
         };
-        let prepared = self.prepare_candidates(&request);
+        // Rows built after the wait for a slot see the workers available now.
+        let prepared = if admitted_upstream {
+            prepared
+        } else {
+            self.prepare_candidates(&request)
+        };
         let (ack_tx, ack_rx) = oneshot::channel();
+        if admitted_upstream {
+            super::poc_timing::mark_sent(super::poc_timing::leg_of(request.track_prefill_tokens));
+        }
         slot.send(AdmissionCommand::Enqueue {
             request,
             attempt_tx,
-            block_hashes: self.prepare_block_hashes_for_refresh(block_hashes),
+            block_hashes,
             prepared,
             queue_metadata,
             lease,
+            admitted_upstream: admitted_upstream.then_some(ingress_at),
             ack_tx,
         });
 
@@ -955,6 +1064,61 @@ impl<
                 None
             }
         }
+    }
+
+    /// Book a request admitted upstream now, on the caller's task, under the actor's
+    /// lock instead of through its command channel. The caller's response and attempt
+    /// receivers are answered before this returns. Same booking as the actor's
+    /// `Enqueue` with `admitted_upstream`, without the actor's cleanup drain or queue
+    /// drain, which it still runs on its own commands and wakeups. An overlap refresh,
+    /// when due, is awaited under the lock, as the actor awaits one in its own drain.
+    pub(crate) async fn book_upstream_now(
+        &self,
+        enqueue: PreparedEnqueue,
+    ) -> Option<Box<RequestLifecycleLease>> {
+        let PreparedEnqueue {
+            request,
+            attempt_tx,
+            block_hashes,
+            prepared,
+            queue_metadata,
+            lease,
+            admitted_upstream,
+            ingress_at,
+        } = enqueue;
+        debug_assert!(admitted_upstream);
+        let poc_leg = super::poc_timing::leg_of(request.track_prefill_tokens);
+        super::poc_timing::mark_sent(poc_leg);
+        let mut actor = self.shared_actor.lock().await;
+        let started_ns = super::poc_timing::now_ns();
+        let started = std::time::Instant::now();
+        let lifecycle_transfer = lease
+            .as_ref()
+            .and_then(|lease| lease.transfer.as_ref().map(Arc::clone));
+        actor
+            .admit_upstream(
+                request,
+                attempt_tx,
+                lifecycle_transfer,
+                block_hashes,
+                prepared,
+                queue_metadata.class_index,
+                ingress_at,
+            )
+            .await;
+        drop(actor);
+        super::poc_timing::record_actor(
+            poc_leg,
+            started_ns,
+            started.elapsed().as_nanos() as u64,
+            0,
+        );
+        lease
+    }
+
+    /// The hint fired whenever this scheduler releases booked load or its workers change.
+    pub(crate) fn room_changed(&self) -> &Arc<RoomChanged> {
+        &self.room_changed
     }
 
     /// Build the classifier's input and the rows for its declared worker inputs. Uses
@@ -1022,6 +1186,7 @@ impl<
             prepared: None,
             queue_metadata,
             lease: None,
+            admitted_upstream: None,
             ack_tx,
         };
         self.admission_tx
@@ -1204,6 +1369,7 @@ impl<
         if let Some(updates) = &self.capacity_updates {
             updates.record(worker);
         }
+        self.room_changed.notify();
     }
 
     pub(crate) fn ensure_running(&self) -> Result<(), KvSchedulerError> {
@@ -1290,6 +1456,25 @@ impl<
     }
 }
 
+/// Replace a waited request's overlap with a fresh read from the indexer.
+fn apply_refreshed_overlap(
+    request: &mut SchedulingRequest,
+    snapshot: RefreshedOverlap,
+    wait_ms: u64,
+) {
+    tracing::info!(
+        request_id = request.mode.request_id().unwrap_or("unknown"),
+        wait_ms,
+        "refreshed overlap scores after long queue wait"
+    );
+    request.overlap = snapshot.overlap;
+    request.kv_transfer_candidates = if request.retain_kv_transfer_chain {
+        snapshot.kv_transfer_candidates
+    } else {
+        None
+    };
+}
+
 impl<
     P: SequencePublisher + 'static,
     C: WorkerConfigLike + Send + Sync + 'static,
@@ -1297,12 +1482,20 @@ impl<
     RF: OverlapScoresRefresh + Send + Sync + 'static,
 > SchedulerQueueActor<P, C, Sel, RF>
 {
-    async fn run(mut self, mut rx: mpsc::Receiver<AdmissionCommand>) {
+    /// The actor's state is shared with [`SchedulerQueue::book_upstream_now`], which books
+    /// requests admitted upstream on the caller's task; the actor holds the lock only
+    /// while it handles one command or wakeup.
+    async fn run(state: Arc<tokio::sync::Mutex<Self>>, mut rx: mpsc::Receiver<AdmissionCommand>) {
         let mut commands_since_cleanup = 0usize;
-        let capacity_updates = self.capacity_updates.clone();
+        let capacity_updates = state.lock().await.capacity_updates.clone();
+        // POC: the leg this actor serves, learned from its first upstream booking.
+        let mut poc_role: Option<usize> = None;
         loop {
-            self.turn = self.turn.wrapping_add(1);
-            let due_at = self.pending.next_due_at();
+            let due_at = {
+                let mut this = state.lock().await;
+                this.turn = this.turn.wrapping_add(1);
+                this.pending.next_due_at()
+            };
             let command = if capacity_updates.is_none() && due_at.is_none() {
                 rx.recv().await
             } else {
@@ -1317,7 +1510,18 @@ impl<
                         if drain_cleanup {
                             commands_since_cleanup = 0;
                         }
-                        self.handle_capacity_updates(drain_cleanup).await;
+                        let started = std::time::Instant::now();
+                        state
+                            .lock()
+                            .await
+                            .handle_capacity_updates(drain_cleanup)
+                            .await;
+                        if let Some(role) = poc_role {
+                            super::poc_timing::record_capacity_wake(
+                                role,
+                                started.elapsed().as_nanos() as u64,
+                            );
+                        }
                         continue;
                     }
                     _ = async {
@@ -1325,17 +1529,21 @@ impl<
                             tokio::time::sleep_until(due_at).await;
                         }
                     }, if due_at.is_some() => {
-                        self.handle_update().await;
+                        state.lock().await.handle_update().await;
                         continue;
                     }
                 }
             };
             let Some(command) = command else { break };
+            let mut guard = state.lock().await;
+            let this = &mut *guard;
             commands_since_cleanup += 1;
             let drain_cleanup = rx.is_empty() || commands_since_cleanup == 256;
             if drain_cleanup {
                 commands_since_cleanup = 0;
             }
+            let command_started = std::time::Instant::now();
+            let mut upstream_command = false;
             match command {
                 AdmissionCommand::Enqueue {
                     request,
@@ -1344,33 +1552,62 @@ impl<
                     prepared,
                     queue_metadata,
                     lease,
+                    admitted_upstream,
                     ack_tx,
                 } => {
                     let lifecycle_transfer = lease
                         .as_ref()
                         .and_then(|lease| lease.transfer.as_ref().map(Arc::clone));
-                    let enqueue_ready = self.handle_enqueue(
-                        request,
-                        attempt_tx,
-                        lifecycle_transfer,
-                        block_hashes,
-                        prepared,
-                        queue_metadata,
-                    );
-                    let cleanup_ready = drain_cleanup && self.drain_cleanup();
+                    let poc_leg = super::poc_timing::leg_of(request.track_prefill_tokens);
+                    let started_ns = super::poc_timing::now_ns();
+                    let started = std::time::Instant::now();
+                    let enqueue_ready = match admitted_upstream {
+                        Some(ingress_at) => {
+                            this.admit_upstream(
+                                request,
+                                attempt_tx,
+                                lifecycle_transfer,
+                                block_hashes,
+                                prepared,
+                                queue_metadata.class_index,
+                                ingress_at,
+                            )
+                            .await
+                        }
+                        None => this.handle_enqueue(
+                            request,
+                            attempt_tx,
+                            lifecycle_transfer,
+                            block_hashes,
+                            prepared,
+                            queue_metadata,
+                        ),
+                    };
+                    let admitted = std::time::Instant::now();
+                    let cleanup_ready = drain_cleanup && this.drain_cleanup();
                     if cleanup_ready {
-                        self.handle_update().await;
+                        this.handle_update().await;
                     } else if enqueue_ready {
-                        self.handle_enqueued().await;
+                        this.handle_enqueued().await;
                     }
                     // A request still queued rebuilds its rows when admitted.
-                    self.turn_prepared = None;
+                    this.turn_prepared = None;
+                    if admitted_upstream.is_some() {
+                        upstream_command = true;
+                        poc_role = Some(poc_leg);
+                        super::poc_timing::record_actor(
+                            poc_leg,
+                            started_ns,
+                            (admitted - started).as_nanos() as u64,
+                            admitted.elapsed().as_nanos() as u64,
+                        );
+                    }
                     let _ = ack_tx.send(lease);
                 }
                 AdmissionCommand::SelectWithoutAdmission { request, resp_tx } => {
-                    let result = self.select_without_admission_inner(request, Instant::now());
-                    if drain_cleanup && self.drain_cleanup() {
-                        self.handle_update().await;
+                    let result = this.select_without_admission_inner(request, Instant::now());
+                    if drain_cleanup && this.drain_cleanup() {
+                        this.handle_update().await;
                     }
                     let _ = resp_tx.send(result);
                 }
@@ -1379,44 +1616,53 @@ impl<
                     if !response.is_closed() {
                         let result = match update {
                             Some(update) => {
-                                let result = self.selector.update_runtime_config(update);
+                                let result = this.selector.update_runtime_config(update);
                                 if result.is_ok() {
                                     // A replacement may need fewer inputs; prepare what it reads.
-                                    self.candidate_preparer
-                                        .store(self.selector.candidate_preparer().map(Arc::new));
+                                    this.candidate_preparer
+                                        .store(this.selector.candidate_preparer().map(Arc::new));
                                 }
                                 result
                             }
-                            None => self.selector.runtime_config(),
+                            None => this.selector.runtime_config(),
                         };
                         let _ = response.send(result);
                     }
-                    if drain_cleanup && self.drain_cleanup() {
-                        self.handle_update().await;
+                    if drain_cleanup && this.drain_cleanup() {
+                        this.handle_update().await;
                     }
                 }
                 AdmissionCommand::Update { ack_tx } => {
-                    self.handle_update().await;
-                    if drain_cleanup && self.drain_cleanup() {
-                        self.handle_update().await;
+                    this.handle_update().await;
+                    if drain_cleanup && this.drain_cleanup() {
+                        this.handle_update().await;
                     }
                     let _ = ack_tx.send(());
                 }
                 AdmissionCommand::Cleanup => {
-                    if self.drain_cleanup() {
-                        self.handle_update().await;
+                    if this.drain_cleanup() {
+                        this.handle_update().await;
                     }
                 }
             }
+            if let (false, Some(role)) = (upstream_command, poc_role) {
+                super::poc_timing::record_other_command(
+                    role,
+                    command_started.elapsed().as_nanos() as u64,
+                );
+            }
         }
-        self.drain_cleanup();
+        let mut guard = state.lock().await;
+        let this = &mut *guard;
+        this.drain_cleanup();
 
-        let class_counters = Arc::clone(&self.class_counters);
-        for entry in self.pending.drain() {
+        let class_counters = Arc::clone(&this.class_counters);
+        let pending = std::mem::replace(&mut this.pending, PolicyQueue::new(&this.profile));
+        for entry in pending.drain() {
             let class_index = entry.class_index();
             let snapshot = entry.snapshot();
-            self.pending_count.fetch_sub(1, AtomicOrdering::Relaxed);
-            self.pending_isl_tokens
+            this.pending_count.fetch_sub(1, AtomicOrdering::Relaxed);
+            this.pending_isl_tokens
                 .fetch_sub(snapshot.raw_isl_tokens, AtomicOrdering::Relaxed);
             let counters = &class_counters[class_index];
             counters.pending_count.fetch_sub(1, AtomicOrdering::Relaxed);
@@ -1430,6 +1676,49 @@ impl<
             let mut request = entry.into_payload().request;
             request.respond(Err(KvSchedulerError::SubscriberShutdown));
         }
+    }
+
+    /// An admission stage in front of this queue already admitted the request against
+    /// its class limits and holds work this booking completes. Book it now, ahead of any
+    /// backlog; selection still sheds workers past the host's reject thresholds. Its
+    /// overlap was gathered before `ingress_at` and aged while it waited upstream, so it
+    /// is refreshed as `drain_ready` refreshes a request that waited here.
+    #[allow(clippy::too_many_arguments)]
+    async fn admit_upstream(
+        &mut self,
+        mut request: SchedulingRequest,
+        attempt_tx: Option<oneshot::Sender<AttemptId>>,
+        lifecycle_transfer: Option<Arc<AdmissionLifecycleTransfer>>,
+        block_hashes: Option<Vec<LocalBlockHash>>,
+        prepared: Option<Box<PreparedAdmission>>,
+        class_index: usize,
+        ingress_at: Instant,
+    ) -> bool {
+        self.class_counters[class_index]
+            .received_total
+            .fetch_add(1, AtomicOrdering::Relaxed);
+        let refreshed = refresh_overlap(
+            self.overlap_scores_refresh.as_deref(),
+            self.overlap_refresh_after,
+            block_hashes.as_deref(),
+            request.retain_kv_transfer_chain,
+            ingress_at,
+            Instant::now(),
+        )
+        .await;
+        // A refresh replaces the overlap the prepared rows were built from.
+        let prepared = if refreshed.is_none() { prepared } else { None };
+        if let Some(snapshot) = refreshed {
+            let wait_ms = ingress_at.elapsed().as_millis() as u64;
+            apply_refreshed_overlap(&mut request, snapshot, wait_ms);
+        }
+        self.admit_one(
+            request,
+            attempt_tx,
+            lifecycle_transfer,
+            Instant::now(),
+            prepared,
+        )
     }
 
     fn handle_enqueue(
@@ -1643,6 +1932,9 @@ impl<
                 }
             }
         }
+        if made_ready {
+            self.room_changed.notify();
+        }
         made_ready || (removed_ready_head && self.has_dispatchable_ready_head())
     }
 
@@ -1824,17 +2116,7 @@ impl<
                 None
             };
             if let Some(snapshot) = refreshed {
-                tracing::info!(
-                    request_id = queued.request.mode.request_id().unwrap_or("unknown"),
-                    wait_ms,
-                    "refreshed overlap scores after long queue wait"
-                );
-                queued.request.overlap = snapshot.overlap;
-                queued.request.kv_transfer_candidates = if queued.request.retain_kv_transfer_chain {
-                    snapshot.kv_transfer_candidates
-                } else {
-                    None
-                };
+                apply_refreshed_overlap(&mut queued.request, snapshot, wait_ms);
             }
             let admit_now = Instant::now();
             let class_index = popped.class_index();
@@ -3469,6 +3751,7 @@ policy_classes:
                 prepared: None,
                 queue_metadata,
                 lease: None,
+                admitted_upstream: None,
                 ack_tx,
             })
             .await
@@ -3878,6 +4161,7 @@ policy_classes:
             ),
             selection_trace: Arc::clone(&queue.selection_trace),
             reject_thresholds: queue.reject_thresholds.clone(),
+            room_changed: Arc::clone(&queue.room_changed),
         }
     }
 
@@ -4045,6 +4329,7 @@ policy_classes:
                 prepared,
                 queue_metadata,
                 lease: None,
+                admitted_upstream: None,
                 ack_tx,
             })
             .await
@@ -4134,6 +4419,135 @@ policy_classes:
         let selected = rx.try_recv().unwrap().unwrap().best_worker;
         assert_eq!(selected, WorkerWithDpRank::new(1, 0));
         assert_eq!(prepared_queue.prepared_selections(), 0);
+    }
+
+    #[tokio::test]
+    async fn upstream_booking_skips_the_command_channel() {
+        let (queue, slots) = make_queue(2, 16, 64, None);
+        // Hold every slot: a booking sent through the actor could not even be sent.
+        let held = queue
+            .admission_tx
+            .reserve_many(queue.admission_tx.max_capacity())
+            .await
+            .unwrap();
+        let (request, mut rx) = make_request("upstream", 64);
+        let lease = queue.new_request_lifecycle_lease(Some("upstream"));
+        let enqueue = queue
+            .prepare_enqueue(request, None, lease, None, None, Instant::now(), true)
+            .expect("request is valid");
+        let lease = queue.book_upstream_now(enqueue).await;
+
+        // Answered and booked before returning, without an actor turn.
+        let worker = rx.try_recv().unwrap().unwrap().best_worker;
+        let booking = lease
+            .and_then(|lease| lease.commit())
+            .expect("booking is armed");
+        assert_eq!(booking.worker, worker);
+        assert!(slots.active_tokens(Instant::now())[&worker] > 0);
+        drop(held);
+    }
+
+    /// Book a request admitted upstream `wait` after its ingress, on the caller's task
+    /// (`direct`) or through the actor. Returns its response, the refresh count, and how
+    /// many selections used its prepared rows.
+    async fn book_upstream_after(
+        wait: Duration,
+        direct: bool,
+    ) -> (SchedulingResponse, usize, usize) {
+        let worker = WorkerWithDpRank::new(0, 0);
+        let refresher = Arc::new(CountingRefresher {
+            calls: AtomicUsize::new(0),
+            last_retain_kv_transfer_chain: AtomicBool::new(false),
+            response: RefreshedOverlap::from_overlap(OverlapSignals {
+                tier_overlap_blocks: Default::default(),
+                effective_overlap_blocks: FxHashMap::from_iter([(worker, 9.0)]),
+                effective_cached_tokens: FxHashMap::from_iter([(worker, 144)]),
+            }),
+        });
+        let slots = Arc::new(ActiveSequencesMultiWorker::new(
+            NoopSequencePublisher,
+            16,
+            (0..2).map(|id| (id, (0, 1))).collect(),
+            false,
+            0,
+            "test",
+        ));
+        let configs = (0..2)
+            .map(|id| {
+                let config = SimpleWorkerConfig {
+                    max_num_batched_tokens: Some(64),
+                    ..Default::default()
+                };
+                (id, config)
+            })
+            .collect();
+        let (_cfg_tx, cfg_rx) = watch::channel(configs);
+        let prepared_selections = Arc::new(AtomicUsize::new(0));
+        let queue = SchedulerQueue::new(
+            slots,
+            cfg_rx,
+            PolicyProfile::synthetic(None, RouterQueuePolicy::Fcfs),
+            16,
+            counting_policy(&prepared_selections),
+            None,
+            Some(Arc::clone(&refresher)),
+            None,
+            None,
+            None,
+        );
+
+        let (mut request, rx) = make_request("upstream", 64);
+        request.overlap.effective_overlap_blocks.insert(worker, 3.0);
+        request.overlap.effective_cached_tokens.insert(worker, 48);
+        let enqueue = queue
+            .prepare_enqueue(
+                request,
+                Some(vec![LocalBlockHash(42)]),
+                None,
+                None,
+                None,
+                Instant::now(),
+                true,
+            )
+            .expect("request is valid");
+        tokio::time::advance(wait).await;
+        if direct {
+            queue.book_upstream_now(enqueue).await;
+        } else {
+            queue.send_enqueue(enqueue).await;
+        }
+        let response = rx.await.unwrap().unwrap();
+        assert_eq!(response.best_worker, worker);
+        (
+            response,
+            refresher.calls.load(Ordering::Relaxed),
+            prepared_selections.load(Ordering::Relaxed),
+        )
+    }
+
+    #[tokio::test(flavor = "current_thread", start_paused = true)]
+    async fn upstream_booking_refreshes_overlap_after_a_long_wait() {
+        for direct in [true, false] {
+            let (response, refreshes, prepared_selections) =
+                book_upstream_after(Duration::from_secs(11), direct).await;
+            assert_eq!(refreshes, 1, "direct: {direct}");
+            // The rows prepared before the wait carry the overlap the refresh replaced.
+            assert_eq!(prepared_selections, 0, "direct: {direct}");
+            assert_eq!(response.effective_overlap_blocks, 9.0, "direct: {direct}");
+            assert_eq!(response.cached_tokens, 144, "direct: {direct}");
+        }
+    }
+
+    #[tokio::test(flavor = "current_thread", start_paused = true)]
+    async fn upstream_booking_keeps_overlap_within_the_refresh_window() {
+        for direct in [true, false] {
+            let (response, refreshes, prepared_selections) =
+                book_upstream_after(Duration::from_secs(9), direct).await;
+            assert_eq!(refreshes, 0, "direct: {direct}");
+            assert_eq!(prepared_selections, 1, "direct: {direct}");
+            assert_eq!(response.effective_overlap_blocks, 3.0, "direct: {direct}");
+            assert_eq!(response.cached_tokens, 48, "direct: {direct}");
+        }
     }
 
     #[tokio::test]
