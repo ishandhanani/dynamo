@@ -29,6 +29,20 @@ static ACTOR_ADMIT_NS: [AtomicU64; 2] = [ZERO; 2];
 static ACTOR_AFTER_NS: [AtomicU64; 2] = [ZERO; 2];
 static SUBMITS: [AtomicU64; 2] = [ZERO; 2];
 static SUBMIT_NS: [AtomicU64; 2] = [ZERO; 2];
+/// Queue-actor work other than upstream bookings, per leg: capacity-update wakeups and
+/// all other commands.
+static CAPACITY_WAKES: [AtomicU64; 2] = [ZERO; 2];
+static CAPACITY_NS: [AtomicU64; 2] = [ZERO; 2];
+static OTHER_COMMANDS: [AtomicU64; 2] = [ZERO; 2];
+static OTHER_COMMAND_NS: [AtomicU64; 2] = [ZERO; 2];
+
+/// Queue actors hold their "Selected worker" logs until after they reply.
+pub fn defer_selection_logs() -> bool {
+    static ENABLED: OnceLock<bool> = OnceLock::new();
+    *ENABLED.get_or_init(|| {
+        std::env::var("DYN_ROUTER_POC_DEFER_SELECTION_LOG").is_ok_and(|value| value == "1")
+    })
+}
 
 /// Leg of an upstream-admitted booking: 0 for prefill, 1 for decode (a decode leg does
 /// not track prefill tokens).
@@ -76,6 +90,16 @@ pub fn record_submit(leg: usize, ns: u64) {
     SUBMIT_NS[leg].fetch_add(ns, Ordering::Relaxed);
 }
 
+pub fn record_capacity_wake(leg: usize, ns: u64) {
+    CAPACITY_WAKES[leg].fetch_add(1, Ordering::Relaxed);
+    CAPACITY_NS[leg].fetch_add(ns, Ordering::Relaxed);
+}
+
+pub fn record_other_command(leg: usize, ns: u64) {
+    OTHER_COMMANDS[leg].fetch_add(1, Ordering::Relaxed);
+    OTHER_COMMAND_NS[leg].fetch_add(ns, Ordering::Relaxed);
+}
+
 /// Means for one leg since the last call, in microseconds.
 #[derive(Debug, Default, Clone, Copy)]
 pub struct LegSnapshot {
@@ -84,6 +108,12 @@ pub struct LegSnapshot {
     pub admit_us: f64,
     pub after_us: f64,
     pub submit_us: f64,
+    pub capacity_wakes: u64,
+    /// Total time in capacity-update wakeups, in microseconds.
+    pub capacity_total_us: f64,
+    pub other_commands: u64,
+    /// Total time in other commands, in microseconds.
+    pub other_total_us: f64,
 }
 
 /// Totals since the last call.
@@ -113,6 +143,10 @@ pub fn take() -> Snapshot {
             admit_us: mean_us(&ACTOR_ADMIT_NS[leg], steps),
             after_us: mean_us(&ACTOR_AFTER_NS[leg], steps),
             submit_us: mean_us(&SUBMIT_NS[leg], submits),
+            capacity_wakes: CAPACITY_WAKES[leg].swap(0, Ordering::Relaxed),
+            capacity_total_us: CAPACITY_NS[leg].swap(0, Ordering::Relaxed) as f64 / 1e3,
+            other_commands: OTHER_COMMANDS[leg].swap(0, Ordering::Relaxed),
+            other_total_us: OTHER_COMMAND_NS[leg].swap(0, Ordering::Relaxed) as f64 / 1e3,
         }
     };
     Snapshot {

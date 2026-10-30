@@ -759,6 +759,14 @@ async fn report_stats(stats: std::sync::Weak<FrontStats>, label: String) {
             d_after_us = d.after_us,
             d_submit_us = d.submit_us,
             constraints_us = timing.constraints_us,
+            p_cap_wakes_per_s = p.capacity_wakes as f64 / STATS_INTERVAL.as_secs_f64(),
+            p_cap_busy_frac = p.capacity_total_us / (interval_ns / 1e3),
+            p_other_per_s = p.other_commands as f64 / STATS_INTERVAL.as_secs_f64(),
+            p_other_busy_frac = p.other_total_us / (interval_ns / 1e3),
+            d_cap_wakes_per_s = d.capacity_wakes as f64 / STATS_INTERVAL.as_secs_f64(),
+            d_cap_busy_frac = d.capacity_total_us / (interval_ns / 1e3),
+            d_other_per_s = d.other_commands as f64 / STATS_INTERVAL.as_secs_f64(),
+            d_other_busy_frac = d.other_total_us / (interval_ns / 1e3),
             "front admission stats"
         );
     }

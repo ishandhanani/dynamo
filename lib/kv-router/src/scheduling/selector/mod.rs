@@ -572,7 +572,9 @@ fn log_selection<C: WorkerConfigLike>(
     cost: f64,
     effective_overlap_blocks: f64,
 ) {
-    let request_id = request.mode.request_id().unwrap_or("-");
+    if !tracing::enabled!(tracing::Level::INFO) {
+        return;
+    }
     let host_pinned_blocks = request
         .overlap
         .tier_overlap_blocks
@@ -587,46 +589,104 @@ fn log_selection<C: WorkerConfigLike>(
         .get(&worker)
         .copied()
         .unwrap_or(0);
-
-    if request.pinned_worker == Some(worker) {
-        tracing::info!(
-            request_id,
-            "Selected pinned worker: worker_type={}, worker_id={} dp_rank={:?}, logit: {:.3}, effective cached blocks: {:.2}",
-            worker_type,
-            worker.worker_id,
-            worker.dp_rank,
-            cost,
-            effective_overlap_blocks,
-        );
-    } else if worker_type == "decode" {
-        tracing::info!(
-            router_mode = "kv",
-            request_id,
-            worker_id = worker.worker_id,
-            worker_type = %worker_type,
-            dp_rank = ?worker.dp_rank,
-            logit = cost,
-            host_pinned_blocks,
-            disk_blocks,
-            "Selected worker"
-        );
-    } else {
-        let total_kv_blocks = workers
+    let mut record = Some(SelectionLog {
+        request_id: request.mode.request_id().unwrap_or("-").to_string(),
+        worker,
+        worker_type,
+        cost,
+        effective_overlap_blocks,
+        host_pinned_blocks,
+        disk_blocks,
+        total_kv_blocks: workers
             .get(&worker.worker_id)
-            .and_then(WorkerConfigLike::total_kv_blocks);
-        tracing::info!(
-            router_mode = "kv",
-            request_id,
-            worker_id = worker.worker_id,
-            worker_type = %worker_type,
-            dp_rank = ?worker.dp_rank,
-            logit = cost,
-            effective_cached_blocks = effective_overlap_blocks,
-            host_pinned_blocks,
-            disk_blocks,
-            total_kv_blocks = ?total_kv_blocks,
-            "Selected worker"
-        );
+            .and_then(WorkerConfigLike::total_kv_blocks),
+        pinned: request.pinned_worker == Some(worker),
+    });
+    // Inside a queue actor that defers its selection logs, emit after it replies.
+    let _ = DEFERRED_SELECTION_LOGS.try_with(|logs| {
+        logs.borrow_mut().extend(record.take());
+    });
+    if let Some(record) = record {
+        record.emit();
+    }
+}
+
+/// One "Selected worker" log record.
+struct SelectionLog {
+    request_id: String,
+    worker: WorkerWithDpRank,
+    worker_type: &'static str,
+    cost: f64,
+    effective_overlap_blocks: f64,
+    host_pinned_blocks: usize,
+    disk_blocks: usize,
+    total_kv_blocks: Option<u64>,
+    pinned: bool,
+}
+
+impl SelectionLog {
+    fn emit(self) {
+        let request_id = self.request_id.as_str();
+        let worker = self.worker;
+        if self.pinned {
+            tracing::info!(
+                request_id,
+                "Selected pinned worker: worker_type={}, worker_id={} dp_rank={:?}, logit: {:.3}, effective cached blocks: {:.2}",
+                self.worker_type,
+                worker.worker_id,
+                worker.dp_rank,
+                self.cost,
+                self.effective_overlap_blocks,
+            );
+        } else if self.worker_type == "decode" {
+            tracing::info!(
+                router_mode = "kv",
+                request_id,
+                worker_id = worker.worker_id,
+                worker_type = %self.worker_type,
+                dp_rank = ?worker.dp_rank,
+                logit = self.cost,
+                host_pinned_blocks = self.host_pinned_blocks,
+                disk_blocks = self.disk_blocks,
+                "Selected worker"
+            );
+        } else {
+            tracing::info!(
+                router_mode = "kv",
+                request_id,
+                worker_id = worker.worker_id,
+                worker_type = %self.worker_type,
+                dp_rank = ?worker.dp_rank,
+                logit = self.cost,
+                effective_cached_blocks = self.effective_overlap_blocks,
+                host_pinned_blocks = self.host_pinned_blocks,
+                disk_blocks = self.disk_blocks,
+                total_kv_blocks = ?self.total_kv_blocks,
+                "Selected worker"
+            );
+        }
+    }
+}
+
+tokio::task_local! {
+    static DEFERRED_SELECTION_LOGS: std::cell::RefCell<Vec<SelectionLog>>;
+}
+
+/// Run `future` with its "Selected worker" logs held until
+/// [`flush_deferred_selection_logs`], so a queue actor can reply first.
+pub(crate) async fn with_deferred_selection_logs<F: std::future::Future>(future: F) -> F::Output {
+    DEFERRED_SELECTION_LOGS
+        .scope(std::cell::RefCell::new(Vec::new()), future)
+        .await
+}
+
+/// Emit the logs held for the current task.
+pub(crate) fn flush_deferred_selection_logs() {
+    let logs = DEFERRED_SELECTION_LOGS
+        .try_with(|logs| std::mem::take(&mut *logs.borrow_mut()))
+        .unwrap_or_default();
+    for log in logs {
+        log.emit();
     }
 }
 

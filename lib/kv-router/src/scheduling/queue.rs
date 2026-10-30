@@ -829,7 +829,13 @@ impl<
             reject_thresholds: reject_thresholds.clone(),
             room_changed: Arc::clone(&room_changed),
         };
-        tokio::spawn(actor.run(admission_rx));
+        if super::poc_timing::defer_selection_logs() {
+            tokio::spawn(super::selector::with_deferred_selection_logs(
+                actor.run(admission_rx),
+            ));
+        } else {
+            tokio::spawn(actor.run(admission_rx));
+        }
         Self {
             admission_tx,
             runtime_policy,
@@ -1404,7 +1410,11 @@ impl<
     async fn run(mut self, mut rx: mpsc::Receiver<AdmissionCommand>) {
         let mut commands_since_cleanup = 0usize;
         let capacity_updates = self.capacity_updates.clone();
+        // POC: the leg this actor serves, learned from its first upstream booking.
+        let mut poc_role: Option<usize> = None;
         loop {
+            // After the previous command replied, before waiting for the next.
+            super::selector::flush_deferred_selection_logs();
             self.turn = self.turn.wrapping_add(1);
             let due_at = self.pending.next_due_at();
             let command = if capacity_updates.is_none() && due_at.is_none() {
@@ -1421,7 +1431,14 @@ impl<
                         if drain_cleanup {
                             commands_since_cleanup = 0;
                         }
+                        let started = std::time::Instant::now();
                         self.handle_capacity_updates(drain_cleanup).await;
+                        if let Some(role) = poc_role {
+                            super::poc_timing::record_capacity_wake(
+                                role,
+                                started.elapsed().as_nanos() as u64,
+                            );
+                        }
                         continue;
                     }
                     _ = async {
@@ -1440,6 +1457,8 @@ impl<
             if drain_cleanup {
                 commands_since_cleanup = 0;
             }
+            let command_started = std::time::Instant::now();
+            let mut upstream_command = false;
             match command {
                 AdmissionCommand::Enqueue {
                     request,
@@ -1476,6 +1495,8 @@ impl<
                     // A request still queued rebuilds its rows when admitted.
                     self.turn_prepared = None;
                     if admitted_upstream {
+                        upstream_command = true;
+                        poc_role = Some(poc_leg);
                         super::poc_timing::record_actor(
                             poc_leg,
                             started_ns,
@@ -1525,6 +1546,12 @@ impl<
                         self.handle_update().await;
                     }
                 }
+            }
+            if let (false, Some(role)) = (upstream_command, poc_role) {
+                super::poc_timing::record_other_command(
+                    role,
+                    command_started.elapsed().as_nanos() as u64,
+                );
             }
         }
         self.drain_cleanup();
