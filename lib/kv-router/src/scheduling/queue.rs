@@ -20,7 +20,8 @@ use super::config::RouterQueuePolicy;
 use super::filter::{RoutingEligibility, worker_config_for_rank};
 use super::overlap::SelectedWorkerTierSnapshot;
 use super::overlap_refresh::{
-    NoopOverlapScoresRefresh, OverlapScoresRefresh, read_overlap_refresh_after, refresh_overlap,
+    NoopOverlapScoresRefresh, OverlapScoresRefresh, RefreshedOverlap, read_overlap_refresh_after,
+    refresh_overlap,
 };
 use super::policy_config::{
     BusyThresholds, FullRankCounts, PolicyClassConfig, PolicyProfile, RejectThresholdsProvider,
@@ -206,6 +207,8 @@ pub(crate) struct PreparedEnqueue {
     queue_metadata: QueueMetadata,
     lease: Option<Box<RequestLifecycleLease>>,
     admitted_upstream: bool,
+    /// The caller's ingress; for a request admitted upstream, after its overlap was gathered.
+    ingress_at: Instant,
 }
 
 impl PreparedEnqueue {
@@ -229,8 +232,8 @@ enum AdmissionCommand {
         queue_metadata: QueueMetadata,
         lease: Option<Box<RequestLifecycleLease>>,
         /// An admission stage in front of this queue already admitted the request; book
-        /// it directly.
-        admitted_upstream: bool,
+        /// it directly. Carries the request's ingress, after its overlap was gathered.
+        admitted_upstream: Option<Instant>,
         ack_tx: oneshot::Sender<Option<Box<RequestLifecycleLease>>>,
     },
     SelectWithoutAdmission {
@@ -1009,6 +1012,7 @@ impl<
             queue_metadata,
             lease,
             admitted_upstream,
+            ingress_at,
         })
     }
 
@@ -1026,6 +1030,7 @@ impl<
             queue_metadata,
             lease,
             admitted_upstream,
+            ingress_at,
         } = enqueue;
         let Ok(slot) = self.admission_tx.reserve().await else {
             request.respond(Err(KvSchedulerError::SubscriberShutdown));
@@ -1048,7 +1053,7 @@ impl<
             prepared,
             queue_metadata,
             lease,
-            admitted_upstream,
+            admitted_upstream: admitted_upstream.then_some(ingress_at),
             ack_tx,
         });
 
@@ -1065,7 +1070,8 @@ impl<
     /// lock instead of through its command channel. The caller's response and attempt
     /// receivers are answered before this returns. Same booking as the actor's
     /// `Enqueue` with `admitted_upstream`, without the actor's cleanup drain or queue
-    /// drain, which it still runs on its own commands and wakeups.
+    /// drain, which it still runs on its own commands and wakeups. An overlap refresh,
+    /// when due, is awaited under the lock, as the actor awaits one in its own drain.
     pub(crate) async fn book_upstream_now(
         &self,
         enqueue: PreparedEnqueue,
@@ -1078,6 +1084,7 @@ impl<
             queue_metadata,
             lease,
             admitted_upstream,
+            ingress_at,
         } = enqueue;
         debug_assert!(admitted_upstream);
         let poc_leg = super::poc_timing::leg_of(request.track_prefill_tokens);
@@ -1088,15 +1095,17 @@ impl<
         let lifecycle_transfer = lease
             .as_ref()
             .and_then(|lease| lease.transfer.as_ref().map(Arc::clone));
-        actor.handle_enqueue(
-            request,
-            attempt_tx,
-            lifecycle_transfer,
-            block_hashes,
-            prepared,
-            queue_metadata,
-            true,
-        );
+        actor
+            .admit_upstream(
+                request,
+                attempt_tx,
+                lifecycle_transfer,
+                block_hashes,
+                prepared,
+                queue_metadata.class_index,
+                ingress_at,
+            )
+            .await;
         drop(actor);
         super::poc_timing::record_actor(
             poc_leg,
@@ -1177,7 +1186,7 @@ impl<
             prepared: None,
             queue_metadata,
             lease: None,
-            admitted_upstream: false,
+            admitted_upstream: None,
             ack_tx,
         };
         self.admission_tx
@@ -1447,6 +1456,25 @@ impl<
     }
 }
 
+/// Replace a waited request's overlap with a fresh read from the indexer.
+fn apply_refreshed_overlap(
+    request: &mut SchedulingRequest,
+    snapshot: RefreshedOverlap,
+    wait_ms: u64,
+) {
+    tracing::info!(
+        request_id = request.mode.request_id().unwrap_or("unknown"),
+        wait_ms,
+        "refreshed overlap scores after long queue wait"
+    );
+    request.overlap = snapshot.overlap;
+    request.kv_transfer_candidates = if request.retain_kv_transfer_chain {
+        snapshot.kv_transfer_candidates
+    } else {
+        None
+    };
+}
+
 impl<
     P: SequencePublisher + 'static,
     C: WorkerConfigLike + Send + Sync + 'static,
@@ -1533,15 +1561,28 @@ impl<
                     let poc_leg = super::poc_timing::leg_of(request.track_prefill_tokens);
                     let started_ns = super::poc_timing::now_ns();
                     let started = std::time::Instant::now();
-                    let enqueue_ready = this.handle_enqueue(
-                        request,
-                        attempt_tx,
-                        lifecycle_transfer,
-                        block_hashes,
-                        prepared,
-                        queue_metadata,
-                        admitted_upstream,
-                    );
+                    let enqueue_ready = match admitted_upstream {
+                        Some(ingress_at) => {
+                            this.admit_upstream(
+                                request,
+                                attempt_tx,
+                                lifecycle_transfer,
+                                block_hashes,
+                                prepared,
+                                queue_metadata.class_index,
+                                ingress_at,
+                            )
+                            .await
+                        }
+                        None => this.handle_enqueue(
+                            request,
+                            attempt_tx,
+                            lifecycle_transfer,
+                            block_hashes,
+                            prepared,
+                            queue_metadata,
+                        ),
+                    };
                     let admitted = std::time::Instant::now();
                     let cleanup_ready = drain_cleanup && this.drain_cleanup();
                     if cleanup_ready {
@@ -1551,7 +1592,7 @@ impl<
                     }
                     // A request still queued rebuilds its rows when admitted.
                     this.turn_prepared = None;
-                    if admitted_upstream {
+                    if admitted_upstream.is_some() {
                         upstream_command = true;
                         poc_role = Some(poc_leg);
                         super::poc_timing::record_actor(
@@ -1637,7 +1678,49 @@ impl<
         }
     }
 
+    /// An admission stage in front of this queue already admitted the request against
+    /// its class limits and holds work this booking completes. Book it now, ahead of any
+    /// backlog; selection still sheds workers past the host's reject thresholds. Its
+    /// overlap was gathered before `ingress_at` and aged while it waited upstream, so it
+    /// is refreshed as `drain_ready` refreshes a request that waited here.
     #[allow(clippy::too_many_arguments)]
+    async fn admit_upstream(
+        &mut self,
+        mut request: SchedulingRequest,
+        attempt_tx: Option<oneshot::Sender<AttemptId>>,
+        lifecycle_transfer: Option<Arc<AdmissionLifecycleTransfer>>,
+        block_hashes: Option<Vec<LocalBlockHash>>,
+        prepared: Option<Box<PreparedAdmission>>,
+        class_index: usize,
+        ingress_at: Instant,
+    ) -> bool {
+        self.class_counters[class_index]
+            .received_total
+            .fetch_add(1, AtomicOrdering::Relaxed);
+        let refreshed = refresh_overlap(
+            self.overlap_scores_refresh.as_deref(),
+            self.overlap_refresh_after,
+            block_hashes.as_deref(),
+            request.retain_kv_transfer_chain,
+            ingress_at,
+            Instant::now(),
+        )
+        .await;
+        // A refresh replaces the overlap the prepared rows were built from.
+        let prepared = if refreshed.is_none() { prepared } else { None };
+        if let Some(snapshot) = refreshed {
+            let wait_ms = ingress_at.elapsed().as_millis() as u64;
+            apply_refreshed_overlap(&mut request, snapshot, wait_ms);
+        }
+        self.admit_one(
+            request,
+            attempt_tx,
+            lifecycle_transfer,
+            Instant::now(),
+            prepared,
+        )
+    }
+
     fn handle_enqueue(
         &mut self,
         mut request: SchedulingRequest,
@@ -1646,19 +1729,12 @@ impl<
         block_hashes: Option<Vec<LocalBlockHash>>,
         prepared: Option<Box<PreparedAdmission>>,
         queue_metadata: QueueMetadata,
-        admitted_upstream: bool,
     ) -> bool {
         let class_index = queue_metadata.class_index;
         self.class_counters[class_index]
             .received_total
             .fetch_add(1, AtomicOrdering::Relaxed);
         let decay_now = Instant::now();
-        // An admission stage in front of this queue already admitted the request against
-        // its class limits and holds work this booking completes. Book it now, ahead of any
-        // backlog; selection still sheds workers past the host's reject thresholds.
-        if admitted_upstream {
-            return self.admit_one(request, attempt_tx, lifecycle_transfer, decay_now, prepared);
-        }
         if queue_metadata
             .due_at
             .is_some_and(|due_at| due_at <= decay_now)
@@ -2040,17 +2116,7 @@ impl<
                 None
             };
             if let Some(snapshot) = refreshed {
-                tracing::info!(
-                    request_id = queued.request.mode.request_id().unwrap_or("unknown"),
-                    wait_ms,
-                    "refreshed overlap scores after long queue wait"
-                );
-                queued.request.overlap = snapshot.overlap;
-                queued.request.kv_transfer_candidates = if queued.request.retain_kv_transfer_chain {
-                    snapshot.kv_transfer_candidates
-                } else {
-                    None
-                };
+                apply_refreshed_overlap(&mut queued.request, snapshot, wait_ms);
             }
             let admit_now = Instant::now();
             let class_index = popped.class_index();
@@ -3685,7 +3751,7 @@ policy_classes:
                 prepared: None,
                 queue_metadata,
                 lease: None,
-                admitted_upstream: false,
+                admitted_upstream: None,
                 ack_tx,
             })
             .await
@@ -4263,7 +4329,7 @@ policy_classes:
                 prepared,
                 queue_metadata,
                 lease: None,
-                admitted_upstream: false,
+                admitted_upstream: None,
                 ack_tx,
             })
             .await
@@ -4381,6 +4447,109 @@ policy_classes:
         drop(held);
     }
 
+    /// Book a request admitted upstream `wait` after its ingress, on the caller's task
+    /// (`direct`) or through the actor. Returns its response, the refresh count, and how
+    /// many selections used its prepared rows.
+    async fn book_upstream_after(
+        wait: Duration,
+        direct: bool,
+    ) -> (SchedulingResponse, usize, usize) {
+        let worker = WorkerWithDpRank::new(0, 0);
+        let refresher = Arc::new(CountingRefresher {
+            calls: AtomicUsize::new(0),
+            last_retain_kv_transfer_chain: AtomicBool::new(false),
+            response: RefreshedOverlap::from_overlap(OverlapSignals {
+                tier_overlap_blocks: Default::default(),
+                effective_overlap_blocks: FxHashMap::from_iter([(worker, 9.0)]),
+                effective_cached_tokens: FxHashMap::from_iter([(worker, 144)]),
+            }),
+        });
+        let slots = Arc::new(ActiveSequencesMultiWorker::new(
+            NoopSequencePublisher,
+            16,
+            (0..2).map(|id| (id, (0, 1))).collect(),
+            false,
+            0,
+            "test",
+        ));
+        let configs = (0..2)
+            .map(|id| {
+                let config = SimpleWorkerConfig {
+                    max_num_batched_tokens: Some(64),
+                    ..Default::default()
+                };
+                (id, config)
+            })
+            .collect();
+        let (_cfg_tx, cfg_rx) = watch::channel(configs);
+        let prepared_selections = Arc::new(AtomicUsize::new(0));
+        let queue = SchedulerQueue::new(
+            slots,
+            cfg_rx,
+            PolicyProfile::synthetic(None, RouterQueuePolicy::Fcfs),
+            16,
+            counting_policy(&prepared_selections),
+            None,
+            Some(Arc::clone(&refresher)),
+            None,
+            None,
+            None,
+        );
+
+        let (mut request, rx) = make_request("upstream", 64);
+        request.overlap.effective_overlap_blocks.insert(worker, 3.0);
+        request.overlap.effective_cached_tokens.insert(worker, 48);
+        let enqueue = queue
+            .prepare_enqueue(
+                request,
+                Some(vec![LocalBlockHash(42)]),
+                None,
+                None,
+                None,
+                Instant::now(),
+                true,
+            )
+            .expect("request is valid");
+        tokio::time::advance(wait).await;
+        if direct {
+            queue.book_upstream_now(enqueue).await;
+        } else {
+            queue.send_enqueue(enqueue).await;
+        }
+        let response = rx.await.unwrap().unwrap();
+        assert_eq!(response.best_worker, worker);
+        (
+            response,
+            refresher.calls.load(Ordering::Relaxed),
+            prepared_selections.load(Ordering::Relaxed),
+        )
+    }
+
+    #[tokio::test(flavor = "current_thread", start_paused = true)]
+    async fn upstream_booking_refreshes_overlap_after_a_long_wait() {
+        for direct in [true, false] {
+            let (response, refreshes, prepared_selections) =
+                book_upstream_after(Duration::from_secs(11), direct).await;
+            assert_eq!(refreshes, 1, "direct: {direct}");
+            // The rows prepared before the wait carry the overlap the refresh replaced.
+            assert_eq!(prepared_selections, 0, "direct: {direct}");
+            assert_eq!(response.effective_overlap_blocks, 9.0, "direct: {direct}");
+            assert_eq!(response.cached_tokens, 144, "direct: {direct}");
+        }
+    }
+
+    #[tokio::test(flavor = "current_thread", start_paused = true)]
+    async fn upstream_booking_keeps_overlap_within_the_refresh_window() {
+        for direct in [true, false] {
+            let (response, refreshes, prepared_selections) =
+                book_upstream_after(Duration::from_secs(9), direct).await;
+            assert_eq!(refreshes, 0, "direct: {direct}");
+            assert_eq!(prepared_selections, 1, "direct: {direct}");
+            assert_eq!(response.effective_overlap_blocks, 3.0, "direct: {direct}");
+            assert_eq!(response.cached_tokens, 48, "direct: {direct}");
+        }
+    }
+
     #[tokio::test]
     async fn prepared_rows_are_built_after_a_channel_slot() {
         let prepared_queue = make_prepared_queue();
@@ -4419,14 +4588,14 @@ policy_classes:
 
             let (active, mut active_rx) = make_request("active", 64);
             let metadata = queue.default_queue_metadata(&active, Instant::now());
-            assert!(actor.handle_enqueue(active, None, None, None, None, metadata, false));
+            assert!(actor.handle_enqueue(active, None, None, None, None, metadata));
             actor.handle_enqueued().await;
             assert_eq!(active_rx.try_recv().unwrap().unwrap().best_worker, worker);
 
             let (mut older, mut older_rx) = make_request("older-pinned", 64);
             older.pinned_worker = Some(worker);
             let metadata = queue.default_queue_metadata(&older, Instant::now());
-            assert!(actor.handle_enqueue(older, None, None, None, None, metadata, false));
+            assert!(actor.handle_enqueue(older, None, None, None, None, metadata));
             actor.handle_enqueued().await;
             assert!(older_rx.try_recv().is_err());
 
@@ -4436,7 +4605,7 @@ policy_classes:
             }
             let (later, mut later_rx) = make_request("later-shared", 64);
             let metadata = queue.default_queue_metadata(&later, Instant::now());
-            assert!(actor.handle_enqueue(later, None, None, None, None, metadata, false));
+            assert!(actor.handle_enqueue(later, None, None, None, None, metadata));
             // Force enqueue processing before the capacity select branch.
             actor.handle_enqueued().await;
             assert_eq!(older_rx.try_recv().unwrap().unwrap().best_worker, worker);
