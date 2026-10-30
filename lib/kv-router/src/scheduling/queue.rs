@@ -1516,6 +1516,7 @@ impl<
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn handle_enqueue(
         &mut self,
         mut request: SchedulingRequest,
@@ -4271,14 +4272,14 @@ policy_classes:
 
             let (active, mut active_rx) = make_request("active", 64);
             let metadata = queue.default_queue_metadata(&active, Instant::now());
-            assert!(actor.handle_enqueue(active, None, None, None, None, metadata));
+            assert!(actor.handle_enqueue(active, None, None, None, None, metadata, false));
             actor.handle_enqueued().await;
             assert_eq!(active_rx.try_recv().unwrap().unwrap().best_worker, worker);
 
             let (mut older, mut older_rx) = make_request("older-pinned", 64);
             older.pinned_worker = Some(worker);
             let metadata = queue.default_queue_metadata(&older, Instant::now());
-            assert!(actor.handle_enqueue(older, None, None, None, None, metadata));
+            assert!(actor.handle_enqueue(older, None, None, None, None, metadata, false));
             actor.handle_enqueued().await;
             assert!(older_rx.try_recv().is_err());
 
@@ -4288,7 +4289,7 @@ policy_classes:
             }
             let (later, mut later_rx) = make_request("later-shared", 64);
             let metadata = queue.default_queue_metadata(&later, Instant::now());
-            assert!(actor.handle_enqueue(later, None, None, None, None, metadata));
+            assert!(actor.handle_enqueue(later, None, None, None, None, metadata, false));
             // Force enqueue processing before the capacity select branch.
             actor.handle_enqueued().await;
             assert_eq!(older_rx.try_recv().unwrap().unwrap().best_worker, worker);
