@@ -28,16 +28,16 @@ use dynamo_kv_router::{
         WorkerWithDpRank, compute_block_hash_for_seq,
     },
     scheduling::{
-        CacheHitEstimates, OverlapAnalysis, OverloadedWorkerProvider, PotentialLoad,
-        RejectThresholdsProvider, RequestClassifier, RequestClassifierContext,
+        BusyThresholds, CacheHitEstimates, OverlapAnalysis, OverloadedWorkerProvider,
+        PotentialLoad, RejectThresholdsProvider, RequestClassifier, RequestClassifierContext,
         WorkerAvailabilityProvider, effective_prefill_tokens,
         overlap::cache_hit_estimates_from_tiered_matches,
         queue::{BookingHandle, SchedulerBookingDescriptor},
     },
     selector::WorkerInputs,
     services::selection::{
-        PromptView, Selected, SelectionAdmission, SelectionError, SelectionOperation,
-        SelectionOutcome, SelectionRun, SessionBinding,
+        PromptView, ScheduleRelay, Selected, SelectionAdmission, SelectionError,
+        SelectionOperation, SelectionOutcome, SelectionRun, SessionBinding,
     },
 };
 use dynamo_runtime::{
@@ -482,6 +482,9 @@ pub enum FindBestMatchOutcome {
 #[derive(Debug, Clone, Copy)]
 pub(super) enum FindBestMatchAdmission {
     WithAdmission,
+    /// Booked like `WithAdmission`, without waiting in the policy-class queue: an
+    /// admission stage in front of this router already admitted the request.
+    AdmittedUpstream,
     WithoutAdmission,
 }
 
@@ -986,6 +989,29 @@ impl KvRouter {
     }
 
     /// Get a reference to the client used by this KvRouter
+    /// Whether some reachable worker rank of this router has booked load within `limits`,
+    /// read directly from this router's scheduler with no message to its queue actor.
+    /// Per-request eligibility (LoRA, pins, routing constraints) is not applied: selection
+    /// enforces it when the worker is booked.
+    pub(crate) fn any_rank_has_room(&self, limits: &BusyThresholds) -> bool {
+        let available = self.client.available_instance_ids();
+        self.selection
+            .scheduler()
+            .any_rank_has_room(limits, available.as_deref())
+    }
+
+    /// Number of worker instances this router can currently reach.
+    pub(crate) fn reachable_worker_count(&self) -> usize {
+        self.client
+            .available_instance_ids()
+            .map_or_else(|| self.client.instance_ids().len(), |ids| ids.len())
+    }
+
+    /// Changes whenever this router's scheduler may have gained room.
+    pub(crate) fn subscribe_room_changed(&self) -> tokio::sync::watch::Receiver<()> {
+        self.selection.scheduler().subscribe_room_changed()
+    }
+
     pub fn client(&self) -> &Client {
         &self.client
     }
@@ -1305,6 +1331,7 @@ impl KvRouter {
             allowed_worker_ids,
             routing_constraints,
             FindBestMatchAdmission::WithAdmission,
+            None,
         )
         .await
     }
@@ -1330,12 +1357,16 @@ impl KvRouter {
         allowed_worker_ids: Option<HashSet<WorkerId>>,
         routing_constraints: RoutingConstraints,
         admission: FindBestMatchAdmission,
+        schedule_relay: Option<Arc<dyn ScheduleRelay>>,
     ) -> anyhow::Result<AdmittedFindBestMatchOutcome> {
         let start = Instant::now();
         if update_states && context_id.is_none() {
             anyhow::bail!("context_id must be provided if update_states is true");
         }
-        let is_admitted_routing = matches!(admission, FindBestMatchAdmission::WithAdmission);
+        let is_admitted_routing = matches!(
+            admission,
+            FindBestMatchAdmission::WithAdmission | FindBestMatchAdmission::AdmittedUpstream
+        );
         let session_index_context = if is_admitted_routing {
             self.session_prefix_index
                 .as_ref()
@@ -1345,12 +1376,18 @@ impl KvRouter {
             None
         };
         let core_admission = match admission {
-            FindBestMatchAdmission::WithAdmission if update_states => SelectionAdmission::Lease {
-                request_id: context_id.expect("validated above").to_string(),
-            },
-            FindBestMatchAdmission::WithAdmission => SelectionAdmission::Query {
-                request_id: context_id.map(str::to_string),
-            },
+            FindBestMatchAdmission::WithAdmission | FindBestMatchAdmission::AdmittedUpstream
+                if update_states =>
+            {
+                SelectionAdmission::Lease {
+                    request_id: context_id.expect("validated above").to_string(),
+                }
+            }
+            FindBestMatchAdmission::WithAdmission | FindBestMatchAdmission::AdmittedUpstream => {
+                SelectionAdmission::Query {
+                    request_id: context_id.map(str::to_string),
+                }
+            }
             FindBestMatchAdmission::WithoutAdmission => SelectionAdmission::Advisory {
                 request_id: context_id.map(str::to_string),
             },
@@ -1388,6 +1425,8 @@ impl KvRouter {
                 track_active_blocks: self.kv_router_config.router_track_active_blocks,
                 return_routing_hashes: return_routing_hashes || session_index_context.is_some(),
                 replay_id: None,
+                admitted_upstream: matches!(admission, FindBestMatchAdmission::AdmittedUpstream),
+                schedule_relay,
             })
             .await;
         if lookup.is_some_and(|lookup| lookup.shared_cache_error)
@@ -2766,6 +2805,7 @@ mod tests {
                     None,
                     RoutingConstraints::default(),
                     admission,
+                    None,
                 )
                 .await
                 .unwrap();
@@ -2951,6 +2991,7 @@ mod tests {
                     None,
                     RoutingConstraints::default(),
                     FindBestMatchAdmission::WithAdmission,
+                    None,
                 )
                 .await
                 .unwrap();
@@ -3099,6 +3140,7 @@ mod tests {
                 None,
                 RoutingConstraints::default(),
                 FindBestMatchAdmission::WithAdmission,
+                None,
             )
             .await
             .unwrap();

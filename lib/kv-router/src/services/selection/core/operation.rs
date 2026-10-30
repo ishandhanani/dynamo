@@ -5,6 +5,9 @@
 //! hosts build a [`SelectionOperation`] and consume a [`SelectionOutcome`].
 
 use std::collections::HashSet;
+use std::future::Future;
+use std::pin::Pin;
+use std::sync::Arc;
 use std::time::Duration;
 
 use dynamo_tokens::SequenceHash;
@@ -17,7 +20,10 @@ use crate::protocols::{
 };
 use crate::scheduling::config::RouterConfigOverride;
 use crate::scheduling::queue::BookingHandle;
-use crate::scheduling::{AdvisoryWorkerLoad, QueueRejection, SchedulingResponse, SessionContext};
+use crate::scheduling::{
+    AdmittedSchedulingResponse, AdvisoryWorkerLoad, KvSchedulerError, QueueRejection,
+    SchedulingResponse, SessionContext,
+};
 
 use super::super::error::SelectionError;
 use super::super::input::PromptView;
@@ -48,6 +54,28 @@ pub struct SelectionOperation<'a> {
     /// Cache the inputs under this id for a later `create_reservation` replay
     /// (unbooked admissions only).
     pub replay_id: Option<String>,
+    /// An admission stage in front of the partition's queue already admitted this
+    /// request. The queue books it without waiting on class limits; reject thresholds
+    /// still apply.
+    pub admitted_upstream: bool,
+    /// Orders the queue-actor step of an admitted selection. With a relay the core does
+    /// everything else (index lookup, candidate rows, post-processing) on the caller's
+    /// task and passes only the actor step to the relay.
+    pub schedule_relay: Option<Arc<dyn ScheduleRelay>>,
+}
+
+/// The queue actor's answer to one admitted selection.
+pub type ScheduledBooking =
+    Result<(AdmittedSchedulingResponse, Option<BookingHandle>), KvSchedulerError>;
+
+/// The ordered step of an admitted selection: hand the prepared request to the queue
+/// actor and wait for its booking.
+pub type ScheduleSubmit = Pin<Box<dyn Future<Output = ScheduledBooking> + Send + 'static>>;
+
+/// Runs the queue-actor step of admitted selections in an order the host chooses.
+pub trait ScheduleRelay: Send + Sync + 'static {
+    /// Run `submit` when the host's order allows and return its result.
+    fn relay(&self, submit: ScheduleSubmit) -> ScheduleSubmit;
 }
 
 pub enum SelectionAdmission {

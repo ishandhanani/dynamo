@@ -14,7 +14,7 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use tokio::sync::{mpsc, oneshot, watch};
 use tokio::time::Instant;
 
-use self::capacity::CapacityUpdates;
+use self::capacity::{CapacityUpdates, RoomChanged};
 #[cfg(test)]
 use super::config::RouterQueuePolicy;
 use super::filter::{RoutingEligibility, worker_config_for_rank};
@@ -197,6 +197,17 @@ fn non_max_overlap_selection<C: WorkerConfigLike>(
 }
 
 #[allow(clippy::large_enum_variant)]
+/// A request prepared for the queue actor by [`SchedulerQueue::prepare_enqueue`].
+pub(crate) struct PreparedEnqueue {
+    request: SchedulingRequest,
+    attempt_tx: Option<oneshot::Sender<AttemptId>>,
+    block_hashes: Option<Vec<LocalBlockHash>>,
+    prepared: Option<Box<PreparedAdmission>>,
+    queue_metadata: QueueMetadata,
+    lease: Option<Box<RequestLifecycleLease>>,
+    admitted_upstream: bool,
+}
+
 enum AdmissionCommand {
     PolicyConfig {
         update: Option<RuntimePolicyUpdate>,
@@ -209,6 +220,9 @@ enum AdmissionCommand {
         prepared: Option<Box<PreparedAdmission>>,
         queue_metadata: QueueMetadata,
         lease: Option<Box<RequestLifecycleLease>>,
+        /// An admission stage in front of this queue already admitted the request; book
+        /// it directly.
+        admitted_upstream: bool,
         ack_tx: oneshot::Sender<Option<Box<RequestLifecycleLease>>>,
     },
     SelectWithoutAdmission {
@@ -602,6 +616,8 @@ struct SchedulerQueueActor<
     /// Per-candidate cost capture for admitted selections, installed once by the host.
     selection_trace: Arc<OnceLock<SelectionTraceSpec>>,
     reject_thresholds: Option<RejectThresholdsProvider>,
+    /// Hints this scheduler's own frees to a front admission stage watching it.
+    room_changed: Arc<RoomChanged>,
 }
 
 /// Queue that gates scheduling requests behind a capacity check.
@@ -640,6 +656,7 @@ pub struct SchedulerQueue<
     /// Per-candidate cost capture for admitted selections, installed once by the host.
     selection_trace: Arc<OnceLock<SelectionTraceSpec>>,
     reject_thresholds: Option<RejectThresholdsProvider>,
+    room_changed: Arc<RoomChanged>,
     #[allow(clippy::type_complexity)]
     // Covariant type markers, without ownership or auto-trait bounds.
     _marker: PhantomData<fn() -> (P, C, Sel, RF)>,
@@ -749,9 +766,11 @@ impl<
         let selection_trace = Arc::new(OnceLock::new());
         let start_time = Instant::now();
         let capacity_updates = queueing_enabled.then(|| Arc::new(CapacityUpdates::new()));
+        let room_changed = Arc::new(RoomChanged::new());
         let direct_release: DirectBookingRelease = {
             let slots = Arc::clone(&slots);
             let capacity_updates = capacity_updates.clone();
+            let room_changed = Arc::clone(&room_changed);
             Arc::new(move |booking| {
                 let outcome = slots.free_if_booking(
                     &booking.request_id,
@@ -759,10 +778,11 @@ impl<
                     booking.attempt_id,
                     Instant::now(),
                 )?;
-                if outcome.is_applied()
-                    && let Some(updates) = &capacity_updates
-                {
-                    updates.record(Some(booking.worker));
+                if outcome.is_applied() {
+                    if let Some(updates) = &capacity_updates {
+                        updates.record(Some(booking.worker));
+                    }
+                    room_changed.notify();
                 }
                 Ok(())
             })
@@ -799,6 +819,7 @@ impl<
             non_max_overlap_selection_observer: Arc::clone(&non_max_overlap_selection_observer),
             selection_trace: Arc::clone(&selection_trace),
             reject_thresholds: reject_thresholds.clone(),
+            room_changed: Arc::clone(&room_changed),
         };
         tokio::spawn(actor.run(admission_rx));
         Self {
@@ -823,6 +844,7 @@ impl<
             non_max_overlap_selection_observer,
             selection_trace,
             reject_thresholds,
+            room_changed,
             _marker: PhantomData,
         }
     }
@@ -896,13 +918,39 @@ impl<
 
     pub(crate) async fn enqueue_admitted_with_block_hashes_and_lease(
         &self,
-        mut request: SchedulingRequest,
+        request: SchedulingRequest,
         block_hashes: Option<Vec<LocalBlockHash>>,
         lease: Option<Box<RequestLifecycleLease>>,
         attempt_tx: Option<oneshot::Sender<AttemptId>>,
         classified_request: Option<ClassifyRequest>,
         ingress_at: Instant,
     ) -> Option<Box<RequestLifecycleLease>> {
+        let enqueue = self.prepare_enqueue(
+            request,
+            block_hashes,
+            lease,
+            attempt_tx,
+            classified_request,
+            ingress_at,
+            false,
+        )?;
+        self.send_enqueue(enqueue).await
+    }
+
+    /// The caller-side half of an enqueue: validate the request, resolve its queue
+    /// metadata and prepare its candidate rows. Returns `None` after answering the request
+    /// with an error. Does not depend on admission order.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn prepare_enqueue(
+        &self,
+        mut request: SchedulingRequest,
+        block_hashes: Option<Vec<LocalBlockHash>>,
+        lease: Option<Box<RequestLifecycleLease>>,
+        attempt_tx: Option<oneshot::Sender<AttemptId>>,
+        classified_request: Option<ClassifyRequest>,
+        ingress_at: Instant,
+        admitted_upstream: bool,
+    ) -> Option<PreparedEnqueue> {
         if self.capacity_updates.is_some()
             && lease.is_none()
             && request.mode.lifecycle_request_id().is_some()
@@ -932,19 +980,46 @@ impl<
             return None;
         }
 
+        let prepared = self.prepare_candidates(&request);
+        Some(PreparedEnqueue {
+            block_hashes: self.prepare_block_hashes_for_refresh(block_hashes),
+            request,
+            attempt_tx,
+            prepared,
+            queue_metadata,
+            lease,
+            admitted_upstream,
+        })
+    }
+
+    /// The ordered half of an enqueue: hand a prepared request to the actor and wait for
+    /// its acknowledgement.
+    pub(crate) async fn send_enqueue(
+        &self,
+        enqueue: PreparedEnqueue,
+    ) -> Option<Box<RequestLifecycleLease>> {
+        let PreparedEnqueue {
+            mut request,
+            attempt_tx,
+            block_hashes,
+            prepared,
+            queue_metadata,
+            lease,
+            admitted_upstream,
+        } = enqueue;
         let Ok(slot) = self.admission_tx.reserve().await else {
             request.respond(Err(KvSchedulerError::SubscriberShutdown));
             return None;
         };
-        let prepared = self.prepare_candidates(&request);
         let (ack_tx, ack_rx) = oneshot::channel();
         slot.send(AdmissionCommand::Enqueue {
             request,
             attempt_tx,
-            block_hashes: self.prepare_block_hashes_for_refresh(block_hashes),
+            block_hashes,
             prepared,
             queue_metadata,
             lease,
+            admitted_upstream,
             ack_tx,
         });
 
@@ -955,6 +1030,11 @@ impl<
                 None
             }
         }
+    }
+
+    /// The hint fired whenever this scheduler releases booked load or its workers change.
+    pub(crate) fn room_changed(&self) -> &Arc<RoomChanged> {
+        &self.room_changed
     }
 
     /// Build the classifier's input and the rows for its declared worker inputs. Uses
@@ -1022,6 +1102,7 @@ impl<
             prepared: None,
             queue_metadata,
             lease: None,
+            admitted_upstream: false,
             ack_tx,
         };
         self.admission_tx
@@ -1204,6 +1285,7 @@ impl<
         if let Some(updates) = &self.capacity_updates {
             updates.record(worker);
         }
+        self.room_changed.notify();
     }
 
     pub(crate) fn ensure_running(&self) -> Result<(), KvSchedulerError> {
@@ -1344,6 +1426,7 @@ impl<
                     prepared,
                     queue_metadata,
                     lease,
+                    admitted_upstream,
                     ack_tx,
                 } => {
                     let lifecycle_transfer = lease
@@ -1356,6 +1439,7 @@ impl<
                         block_hashes,
                         prepared,
                         queue_metadata,
+                        admitted_upstream,
                     );
                     let cleanup_ready = drain_cleanup && self.drain_cleanup();
                     if cleanup_ready {
@@ -1440,12 +1524,19 @@ impl<
         block_hashes: Option<Vec<LocalBlockHash>>,
         prepared: Option<Box<PreparedAdmission>>,
         queue_metadata: QueueMetadata,
+        admitted_upstream: bool,
     ) -> bool {
         let class_index = queue_metadata.class_index;
         self.class_counters[class_index]
             .received_total
             .fetch_add(1, AtomicOrdering::Relaxed);
         let decay_now = Instant::now();
+        // An admission stage in front of this queue already admitted the request against
+        // its class limits and holds work this booking completes. Book it now, ahead of any
+        // backlog; selection still sheds workers past the host's reject thresholds.
+        if admitted_upstream {
+            return self.admit_one(request, attempt_tx, lifecycle_transfer, decay_now, prepared);
+        }
         if queue_metadata
             .due_at
             .is_some_and(|due_at| due_at <= decay_now)
@@ -1642,6 +1733,9 @@ impl<
                     self.subtract_pending_counters(class_index, entry.snapshot());
                 }
             }
+        }
+        if made_ready {
+            self.room_changed.notify();
         }
         made_ready || (removed_ready_head && self.has_dispatchable_ready_head())
     }
@@ -3469,6 +3563,7 @@ policy_classes:
                 prepared: None,
                 queue_metadata,
                 lease: None,
+                admitted_upstream: false,
                 ack_tx,
             })
             .await
@@ -3878,6 +3973,7 @@ policy_classes:
             ),
             selection_trace: Arc::clone(&queue.selection_trace),
             reject_thresholds: queue.reject_thresholds.clone(),
+            room_changed: Arc::clone(&queue.room_changed),
         }
     }
 
@@ -4045,6 +4141,7 @@ policy_classes:
                 prepared,
                 queue_metadata,
                 lease: None,
+                admitted_upstream: false,
                 ack_tx,
             })
             .await

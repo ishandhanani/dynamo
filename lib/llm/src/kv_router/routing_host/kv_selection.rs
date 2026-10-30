@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use std::collections::HashSet;
+use std::sync::Arc;
 
 use dynamo_kv_router::{
     RouterConfigOverride,
@@ -14,6 +15,7 @@ use dynamo_kv_router::{
         AdvisoryWorkerLoad, QueueRejection, RequestLifecycle, RoutingEligibility,
         queue::BookingHandle,
     },
+    services::selection::ScheduleRelay,
 };
 use dynamo_runtime::{dynamo_nvtx_range, pipeline::Error};
 
@@ -83,6 +85,8 @@ pub(super) struct SelectionOptions {
     pub(super) policy_class: Option<String>,
     pub(super) session_context: Option<dynamo_kv_router::SessionContext>,
     pub(super) admission: FindBestMatchAdmission,
+    /// POC front admission: orders the queue-actor step of this selection.
+    pub(super) schedule_relay: Option<Arc<dyn ScheduleRelay>>,
 }
 
 struct BestMatchArgs<'a> {
@@ -103,6 +107,7 @@ struct BestMatchArgs<'a> {
     allowed_worker_ids: Option<HashSet<WorkerId>>,
     routing_constraints: RoutingConstraints,
     admission: FindBestMatchAdmission,
+    schedule_relay: Option<Arc<dyn ScheduleRelay>>,
 }
 
 impl RoutingHost {
@@ -128,6 +133,7 @@ impl RoutingHost {
                 args.allowed_worker_ids,
                 args.routing_constraints,
                 args.admission,
+                args.schedule_relay,
             )
             .await?;
         match admitted.outcome {
@@ -219,6 +225,7 @@ impl RoutingHost {
             policy_class,
             session_context,
             admission,
+            schedule_relay,
         } = options;
         let worker_only_affinity = pinned_target.filter(|target| target.dp_rank.is_none());
         if let Some(target) = worker_only_affinity {
@@ -295,6 +302,7 @@ impl RoutingHost {
                     allowed_worker_ids,
                     routing_constraints: routing_constraints.clone(),
                     admission,
+                    schedule_relay: schedule_relay.clone(),
                 })
                 .await?;
 
@@ -362,6 +370,7 @@ impl RoutingHost {
             allowed_worker_ids,
             routing_constraints,
             admission,
+            schedule_relay,
         })
         .await
     }

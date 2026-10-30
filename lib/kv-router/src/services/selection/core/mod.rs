@@ -65,8 +65,8 @@ mod workers;
 use reservations::ReservationIndex;
 
 pub use operation::{
-    LookupTimings, Selected, SelectionAdmission, SelectionOperation, SelectionOutcome,
-    SelectionRun, SessionBinding,
+    LookupTimings, ScheduleRelay, ScheduleSubmit, ScheduledBooking, Selected, SelectionAdmission,
+    SelectionOperation, SelectionOutcome, SelectionRun, SessionBinding,
 };
 
 use super::affinity::{
