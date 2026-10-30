@@ -937,9 +937,10 @@ impl<
         self.send_enqueue(enqueue).await
     }
 
-    /// The caller-side half of an enqueue: validate the request, resolve its queue
-    /// metadata and prepare its candidate rows. Returns `None` after answering the request
-    /// with an error. Does not depend on admission order.
+    /// The caller-side half of an enqueue: validate the request and resolve its queue
+    /// metadata. A request admitted upstream also gets its candidate rows here, so the
+    /// upstream stage's ordered step does not build them. Returns `None` after answering
+    /// the request with an error.
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn prepare_enqueue(
         &self,
@@ -980,7 +981,11 @@ impl<
             return None;
         }
 
-        let prepared = self.prepare_candidates(&request);
+        let prepared = if admitted_upstream {
+            self.prepare_candidates(&request)
+        } else {
+            None
+        };
         Some(PreparedEnqueue {
             block_hashes: self.prepare_block_hashes_for_refresh(block_hashes),
             request,
@@ -1010,6 +1015,12 @@ impl<
         let Ok(slot) = self.admission_tx.reserve().await else {
             request.respond(Err(KvSchedulerError::SubscriberShutdown));
             return None;
+        };
+        // Rows built after the wait for a slot see the workers available now.
+        let prepared = if admitted_upstream {
+            prepared
+        } else {
+            self.prepare_candidates(&request)
         };
         let (ack_tx, ack_rx) = oneshot::channel();
         slot.send(AdmissionCommand::Enqueue {
