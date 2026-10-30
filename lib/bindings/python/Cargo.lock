@@ -2131,14 +2131,30 @@ dependencies = [
 ]
 
 [[package]]
+name = "dynamo-kv-events"
+version = "1.7.0"
+dependencies = [
+ "dynamo-kv-hashing",
+ "dynamo-router-protocol",
+ "rmp-serde",
+ "rustc-hash 2.1.2",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tracing",
+]
+
+[[package]]
 name = "dynamo-kv-hashing"
 version = "1.7.0"
 dependencies = [
  "derive_builder",
+ "dynamo-router-protocol",
  "dynamo-tokens",
  "serde",
  "serde_json",
  "thiserror 2.0.18",
+ "xxhash-rust",
 ]
 
 [[package]]
@@ -2155,6 +2171,7 @@ dependencies = [
  "crossbeam-utils",
  "dashmap",
  "derive_builder",
+ "dynamo-kv-events",
  "dynamo-kv-hashing",
  "dynamo-router-protocol",
  "dynamo-runtime",
