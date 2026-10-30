@@ -1017,6 +1017,9 @@ where
         let poc_leg = self.enqueue.as_ref().and_then(PreparedEnqueue::poc_leg);
         let started = std::time::Instant::now();
         let lifecycle_lease = match self.enqueue {
+            Some(enqueue) if poc_leg.is_some() && super::poc_timing::direct_booking() => {
+                self.queue.book_upstream_now(enqueue).await
+            }
             Some(enqueue) => self.queue.send_enqueue(enqueue).await,
             // Rejected while preparing: the response carries the error.
             None => None,

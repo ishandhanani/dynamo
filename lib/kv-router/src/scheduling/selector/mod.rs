@@ -602,13 +602,38 @@ fn log_selection<C: WorkerConfigLike>(
             .and_then(WorkerConfigLike::total_kv_blocks),
         pinned: request.pinned_worker == Some(worker),
     });
-    // Inside a queue actor that defers its selection logs, emit after it replies.
-    let _ = DEFERRED_SELECTION_LOGS.try_with(|logs| {
-        logs.borrow_mut().extend(record.take());
-    });
+    // POC: hand the record to the selection-log thread, off the booking path.
+    if let (Some(sender), Some(log)) = (selection_log_sender(), record.take())
+        && let Err(std::sync::mpsc::SendError(log)) = sender.send(log)
+    {
+        record = Some(log);
+    }
     if let Some(record) = record {
         record.emit();
     }
+}
+
+/// The selection-log thread's sender, when `DYN_ROUTER_POC_DEFER_SELECTION_LOG=1`.
+fn selection_log_sender() -> Option<&'static std::sync::mpsc::Sender<SelectionLog>> {
+    static SENDER: std::sync::OnceLock<Option<std::sync::mpsc::Sender<SelectionLog>>> =
+        std::sync::OnceLock::new();
+    SENDER
+        .get_or_init(|| {
+            if !crate::scheduling::poc_timing::defer_selection_logs() {
+                return None;
+            }
+            let (tx, rx) = std::sync::mpsc::channel::<SelectionLog>();
+            std::thread::Builder::new()
+                .name("selection-log".to_string())
+                .spawn(move || {
+                    for log in rx {
+                        log.emit();
+                    }
+                })
+                .ok()?;
+            Some(tx)
+        })
+        .as_ref()
 }
 
 /// One "Selected worker" log record.
@@ -665,28 +690,6 @@ impl SelectionLog {
                 "Selected worker"
             );
         }
-    }
-}
-
-tokio::task_local! {
-    static DEFERRED_SELECTION_LOGS: std::cell::RefCell<Vec<SelectionLog>>;
-}
-
-/// Run `future` with its "Selected worker" logs held until
-/// [`flush_deferred_selection_logs`], so a queue actor can reply first.
-pub(crate) async fn with_deferred_selection_logs<F: std::future::Future>(future: F) -> F::Output {
-    DEFERRED_SELECTION_LOGS
-        .scope(std::cell::RefCell::new(Vec::new()), future)
-        .await
-}
-
-/// Emit the logs held for the current task.
-pub(crate) fn flush_deferred_selection_logs() {
-    let logs = DEFERRED_SELECTION_LOGS
-        .try_with(|logs| std::mem::take(&mut *logs.borrow_mut()))
-        .unwrap_or_default();
-    for log in logs {
-        log.emit();
     }
 }
 

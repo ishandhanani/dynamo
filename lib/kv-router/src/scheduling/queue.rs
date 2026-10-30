@@ -665,6 +665,8 @@ pub struct SchedulerQueue<
     selection_trace: Arc<OnceLock<SelectionTraceSpec>>,
     reject_thresholds: Option<RejectThresholdsProvider>,
     room_changed: Arc<RoomChanged>,
+    /// The actor's state, for [`Self::book_upstream_now`].
+    shared_actor: Arc<tokio::sync::Mutex<SchedulerQueueActor<P, C, Sel, RF>>>,
     #[allow(clippy::type_complexity)]
     // Covariant type markers, without ownership or auto-trait bounds.
     _marker: PhantomData<fn() -> (P, C, Sel, RF)>,
@@ -829,13 +831,11 @@ impl<
             reject_thresholds: reject_thresholds.clone(),
             room_changed: Arc::clone(&room_changed),
         };
-        if super::poc_timing::defer_selection_logs() {
-            tokio::spawn(super::selector::with_deferred_selection_logs(
-                actor.run(admission_rx),
-            ));
-        } else {
-            tokio::spawn(actor.run(admission_rx));
-        }
+        let shared_actor = Arc::new(tokio::sync::Mutex::new(actor));
+        tokio::spawn(SchedulerQueueActor::run(
+            Arc::clone(&shared_actor),
+            admission_rx,
+        ));
         Self {
             admission_tx,
             runtime_policy,
@@ -859,6 +859,7 @@ impl<
             selection_trace,
             reject_thresholds,
             room_changed,
+            shared_actor,
             _marker: PhantomData,
         }
     }
@@ -1058,6 +1059,52 @@ impl<
                 None
             }
         }
+    }
+
+    /// Book a request admitted upstream now, on the caller's task, under the actor's
+    /// lock instead of through its command channel. The caller's response and attempt
+    /// receivers are answered before this returns. Same booking as the actor's
+    /// `Enqueue` with `admitted_upstream`, without the actor's cleanup drain or queue
+    /// drain, which it still runs on its own commands and wakeups.
+    pub(crate) async fn book_upstream_now(
+        &self,
+        enqueue: PreparedEnqueue,
+    ) -> Option<Box<RequestLifecycleLease>> {
+        let PreparedEnqueue {
+            request,
+            attempt_tx,
+            block_hashes,
+            prepared,
+            queue_metadata,
+            lease,
+            admitted_upstream,
+        } = enqueue;
+        debug_assert!(admitted_upstream);
+        let poc_leg = super::poc_timing::leg_of(request.track_prefill_tokens);
+        super::poc_timing::mark_sent(poc_leg);
+        let mut actor = self.shared_actor.lock().await;
+        let started_ns = super::poc_timing::now_ns();
+        let started = std::time::Instant::now();
+        let lifecycle_transfer = lease
+            .as_ref()
+            .and_then(|lease| lease.transfer.as_ref().map(Arc::clone));
+        actor.handle_enqueue(
+            request,
+            attempt_tx,
+            lifecycle_transfer,
+            block_hashes,
+            prepared,
+            queue_metadata,
+            true,
+        );
+        drop(actor);
+        super::poc_timing::record_actor(
+            poc_leg,
+            started_ns,
+            started.elapsed().as_nanos() as u64,
+            0,
+        );
+        lease
     }
 
     /// The hint fired whenever this scheduler releases booked load or its workers change.
@@ -1407,16 +1454,20 @@ impl<
     RF: OverlapScoresRefresh + Send + Sync + 'static,
 > SchedulerQueueActor<P, C, Sel, RF>
 {
-    async fn run(mut self, mut rx: mpsc::Receiver<AdmissionCommand>) {
+    /// The actor's state is shared with [`SchedulerQueue::book_upstream_now`], which books
+    /// requests admitted upstream on the caller's task; the actor holds the lock only
+    /// while it handles one command or wakeup.
+    async fn run(state: Arc<tokio::sync::Mutex<Self>>, mut rx: mpsc::Receiver<AdmissionCommand>) {
         let mut commands_since_cleanup = 0usize;
-        let capacity_updates = self.capacity_updates.clone();
+        let capacity_updates = state.lock().await.capacity_updates.clone();
         // POC: the leg this actor serves, learned from its first upstream booking.
         let mut poc_role: Option<usize> = None;
         loop {
-            // After the previous command replied, before waiting for the next.
-            super::selector::flush_deferred_selection_logs();
-            self.turn = self.turn.wrapping_add(1);
-            let due_at = self.pending.next_due_at();
+            let due_at = {
+                let mut this = state.lock().await;
+                this.turn = this.turn.wrapping_add(1);
+                this.pending.next_due_at()
+            };
             let command = if capacity_updates.is_none() && due_at.is_none() {
                 rx.recv().await
             } else {
@@ -1432,7 +1483,11 @@ impl<
                             commands_since_cleanup = 0;
                         }
                         let started = std::time::Instant::now();
-                        self.handle_capacity_updates(drain_cleanup).await;
+                        state
+                            .lock()
+                            .await
+                            .handle_capacity_updates(drain_cleanup)
+                            .await;
                         if let Some(role) = poc_role {
                             super::poc_timing::record_capacity_wake(
                                 role,
@@ -1446,12 +1501,14 @@ impl<
                             tokio::time::sleep_until(due_at).await;
                         }
                     }, if due_at.is_some() => {
-                        self.handle_update().await;
+                        state.lock().await.handle_update().await;
                         continue;
                     }
                 }
             };
             let Some(command) = command else { break };
+            let mut guard = state.lock().await;
+            let this = &mut *guard;
             commands_since_cleanup += 1;
             let drain_cleanup = rx.is_empty() || commands_since_cleanup == 256;
             if drain_cleanup {
@@ -1476,7 +1533,7 @@ impl<
                     let poc_leg = super::poc_timing::leg_of(request.track_prefill_tokens);
                     let started_ns = super::poc_timing::now_ns();
                     let started = std::time::Instant::now();
-                    let enqueue_ready = self.handle_enqueue(
+                    let enqueue_ready = this.handle_enqueue(
                         request,
                         attempt_tx,
                         lifecycle_transfer,
@@ -1486,14 +1543,14 @@ impl<
                         admitted_upstream,
                     );
                     let admitted = std::time::Instant::now();
-                    let cleanup_ready = drain_cleanup && self.drain_cleanup();
+                    let cleanup_ready = drain_cleanup && this.drain_cleanup();
                     if cleanup_ready {
-                        self.handle_update().await;
+                        this.handle_update().await;
                     } else if enqueue_ready {
-                        self.handle_enqueued().await;
+                        this.handle_enqueued().await;
                     }
                     // A request still queued rebuilds its rows when admitted.
-                    self.turn_prepared = None;
+                    this.turn_prepared = None;
                     if admitted_upstream {
                         upstream_command = true;
                         poc_role = Some(poc_leg);
@@ -1507,9 +1564,9 @@ impl<
                     let _ = ack_tx.send(lease);
                 }
                 AdmissionCommand::SelectWithoutAdmission { request, resp_tx } => {
-                    let result = self.select_without_admission_inner(request, Instant::now());
-                    if drain_cleanup && self.drain_cleanup() {
-                        self.handle_update().await;
+                    let result = this.select_without_admission_inner(request, Instant::now());
+                    if drain_cleanup && this.drain_cleanup() {
+                        this.handle_update().await;
                     }
                     let _ = resp_tx.send(result);
                 }
@@ -1518,32 +1575,32 @@ impl<
                     if !response.is_closed() {
                         let result = match update {
                             Some(update) => {
-                                let result = self.selector.update_runtime_config(update);
+                                let result = this.selector.update_runtime_config(update);
                                 if result.is_ok() {
                                     // A replacement may need fewer inputs; prepare what it reads.
-                                    self.candidate_preparer
-                                        .store(self.selector.candidate_preparer().map(Arc::new));
+                                    this.candidate_preparer
+                                        .store(this.selector.candidate_preparer().map(Arc::new));
                                 }
                                 result
                             }
-                            None => self.selector.runtime_config(),
+                            None => this.selector.runtime_config(),
                         };
                         let _ = response.send(result);
                     }
-                    if drain_cleanup && self.drain_cleanup() {
-                        self.handle_update().await;
+                    if drain_cleanup && this.drain_cleanup() {
+                        this.handle_update().await;
                     }
                 }
                 AdmissionCommand::Update { ack_tx } => {
-                    self.handle_update().await;
-                    if drain_cleanup && self.drain_cleanup() {
-                        self.handle_update().await;
+                    this.handle_update().await;
+                    if drain_cleanup && this.drain_cleanup() {
+                        this.handle_update().await;
                     }
                     let _ = ack_tx.send(());
                 }
                 AdmissionCommand::Cleanup => {
-                    if self.drain_cleanup() {
-                        self.handle_update().await;
+                    if this.drain_cleanup() {
+                        this.handle_update().await;
                     }
                 }
             }
@@ -1554,14 +1611,17 @@ impl<
                 );
             }
         }
-        self.drain_cleanup();
+        let mut guard = state.lock().await;
+        let this = &mut *guard;
+        this.drain_cleanup();
 
-        let class_counters = Arc::clone(&self.class_counters);
-        for entry in self.pending.drain() {
+        let class_counters = Arc::clone(&this.class_counters);
+        let pending = std::mem::replace(&mut this.pending, PolicyQueue::new(&this.profile));
+        for entry in pending.drain() {
             let class_index = entry.class_index();
             let snapshot = entry.snapshot();
-            self.pending_count.fetch_sub(1, AtomicOrdering::Relaxed);
-            self.pending_isl_tokens
+            this.pending_count.fetch_sub(1, AtomicOrdering::Relaxed);
+            this.pending_isl_tokens
                 .fetch_sub(snapshot.raw_isl_tokens, AtomicOrdering::Relaxed);
             let counters = &class_counters[class_index];
             counters.pending_count.fetch_sub(1, AtomicOrdering::Relaxed);

@@ -44,6 +44,15 @@ pub fn defer_selection_logs() -> bool {
     })
 }
 
+/// Requests admitted upstream are booked on the caller's task under the queue actor's
+/// lock, not through its command channel.
+pub fn direct_booking() -> bool {
+    static ENABLED: OnceLock<bool> = OnceLock::new();
+    *ENABLED.get_or_init(|| {
+        std::env::var("DYN_ROUTER_FRONT_ADMISSION_DIRECT_BOOK").is_ok_and(|value| value == "1")
+    })
+}
+
 /// Leg of an upstream-admitted booking: 0 for prefill, 1 for decode (a decode leg does
 /// not track prefill tokens).
 pub fn leg_of(track_prefill_tokens: bool) -> usize {
