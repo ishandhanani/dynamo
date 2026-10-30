@@ -32,8 +32,8 @@ Provide the delegate during construction. The running indexer has no delegate se
 
 ```rust
 use std::sync::Arc;
-use dynamo_kv_router::indexer::{KvIndexer, KvIndexerDelegate, KvIndexerMetrics};
-use dynamo_kv_router::protocols::ExternalSequenceBlockHash;
+use dynamo_kv_indexer::{KvIndexer, KvIndexerDelegate, KvIndexerMetrics};
+use dynamo_router_protocol::protocols::ExternalSequenceBlockHash;
 use tokio_util::sync::CancellationToken;
 
 struct Observer;

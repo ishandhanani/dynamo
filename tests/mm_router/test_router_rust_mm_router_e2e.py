@@ -74,7 +74,7 @@ pytestmark = [
 def _make_process_env(
     log_level: str = (
         "info,mm_routing=debug,"
-        "dynamo_schedulerdebug,dynamo_admissiondebug,dynamo_worker_selectiondebug,"
+        "dynamo_scheduler=debug,dynamo_admission=debug,dynamo_worker_selection=debug,"
         "dynamo_llm::kv_router=debug"
     ),
     **extra,
