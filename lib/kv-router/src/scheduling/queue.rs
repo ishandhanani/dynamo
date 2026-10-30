@@ -2328,7 +2328,7 @@ mod tests {
         let booking = SchedulerBookingDescriptor {
             request_id: "retryable-request".to_string(),
             worker: WorkerWithDpRank::new(7, 3),
-            attempt_id: AttemptId::new(41),
+            attempt_id: AttemptId::for_testing(41),
         };
         transfer.arm_booking(booking.clone());
 
