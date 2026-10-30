@@ -2619,6 +2619,7 @@ dependencies = [
  "dynamo-runtime",
  "dynamo-tokens",
  "dynamo-truthy",
+ "dynamo-zmq",
  "fastrand",
  "flume",
  "futures-util",
@@ -3358,6 +3359,16 @@ name = "dynamo-worker-selection-policy-catalog"
 version = "1.7.0"
 dependencies = [
  "dynamo-kv-router",
+]
+
+[[package]]
+name = "dynamo-zmq"
+version = "1.7.0"
+dependencies = [
+ "anyhow",
+ "tokio",
+ "tracing",
+ "zmq",
 ]
 
 [[package]]
