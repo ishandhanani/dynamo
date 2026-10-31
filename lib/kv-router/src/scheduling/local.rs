@@ -15,11 +15,11 @@ use tokio_util::sync::CancellationToken;
 use super::config::RouterQueuePolicy;
 use super::overlap::OverlapSignals;
 use super::overlap_refresh::{NoopOverlapScoresRefresh, OverlapScoresRefresh};
-use super::policy_config::{PolicyProfile, RejectThresholdsProvider};
+use super::policy_config::{BusyThresholds, PolicyProfile, RejectThresholdsProvider};
 use super::prefill_load::PrefillLoadEstimator;
 use super::queue::{
-    BookingHandle, ClassQueueStats, SchedulerBookingCleanup, SchedulerBookingDescriptor,
-    SchedulerQueue,
+    Booker, BookingHandle, ClassQueueStats, PickedWorker, PreparedEnqueue, SchedulerBookingCleanup,
+    SchedulerBookingDescriptor, SchedulerQueue,
 };
 use super::request_classifier::{RequestClassifierRuntime, RequestLifecycle};
 use super::selector::{WorkerInputs, WorkerSelector};
@@ -244,6 +244,7 @@ where
                             &mut applied,
                         );
                     }
+                    queue_config_updates.room_changed().notify();
                     // A publisher may already have applied this topology. The queue still
                     // needs every observed config update to recheck pending requests.
                     queue_config_updates.update().await;
@@ -272,6 +273,8 @@ where
                             tracing::trace!("LocalScheduler remote state listener shutting down");
                             break;
                         }
+                        // Peer routers' frees are already in the book.
+                        queue_remote_updates.room_changed().notify();
                         queue_remote_updates.update().await;
                         let _ = queue_updates_remote.send(());
                     }
@@ -382,6 +385,33 @@ where
         request: ScheduleRequest,
         ingress_at: Instant,
     ) -> Result<(AdmittedSchedulingResponse, Option<BookingHandle>), KvSchedulerError> {
+        self.prepare(request, ingress_at).await?.submit().await
+    }
+
+    /// Prepare an admitted scheduling call for a [`Booker`] of this pool: everything
+    /// [`Self::schedule_request_with_booking_and_context`] does before the queue actor,
+    /// plus the request's candidate rows, all on the caller's task.
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "the front coordinator books through a booker")
+    )]
+    pub(crate) async fn prepare_booking(
+        &self,
+        request: ScheduleRequest,
+        ingress_at: Instant,
+    ) -> Result<PreparedBooking<P, C, Sel, RF>, KvSchedulerError> {
+        let mut prepared = self.prepare(request, ingress_at).await?;
+        self.queue.prepare_candidate_rows(&mut prepared.enqueue);
+        Ok(prepared)
+    }
+
+    /// Build, classify, and validate the request and take its lifecycle lease. None of it
+    /// depends on the order of admissions.
+    async fn prepare(
+        &self,
+        request: ScheduleRequest,
+        ingress_at: Instant,
+    ) -> Result<PreparedBooking<P, C, Sel, RF>, KvSchedulerError> {
         let (resp_tx, resp_rx) = tokio::sync::oneshot::channel();
         let (attempt_tx, attempt_rx) = tokio::sync::oneshot::channel();
         let (mut request, block_hashes) = self.make_scheduling_request(request, Some(resp_tx));
@@ -390,37 +420,57 @@ where
         let lifecycle_lease = self
             .queue
             .new_request_lifecycle_lease(request.mode.lifecycle_request_id());
-
-        let lifecycle_lease = self
-            .queue
-            .enqueue_admitted_with_block_hashes_and_lease(
-                request,
-                block_hashes,
-                lifecycle_lease,
-                tracked.then_some(attempt_tx),
-                classified_request,
-                ingress_at,
-            )
-            .await;
-
-        let response = resp_rx
-            .await
-            .map_err(|_| KvSchedulerError::SubscriberShutdown)??;
-        let attempt = if tracked {
-            AdmissionAttempt::Tracked(
-                attempt_rx
-                    .await
-                    .map_err(|_| KvSchedulerError::SubscriberShutdown)?,
-            )
-        } else {
-            AdmissionAttempt::Untracked
+        let Some(enqueue) = self.queue.prepare_enqueue(
+            request,
+            block_hashes,
+            lifecycle_lease,
+            tracked.then_some(attempt_tx),
+            classified_request,
+            ingress_at,
+        ) else {
+            // Preparation answered the request with its error.
+            return Err(match resp_rx.await {
+                Ok(Err(error)) => error,
+                _ => KvSchedulerError::SubscriberShutdown,
+            });
         };
-        // No await between `commit()` and the handle build: the booking is
-        // always guarded by exactly one of the lease and the handle.
-        let booking = lifecycle_lease
-            .and_then(|lease| lease.commit())
-            .map(|booking| self.queue.booking_handle(booking));
-        Ok((AdmittedSchedulingResponse { response, attempt }, booking))
+        Ok(PreparedBooking {
+            queue: Arc::clone(&self.queue),
+            enqueue,
+            resp_rx,
+            attempt_rx,
+            tracked,
+        })
+    }
+
+    /// A booker for this pool; see [`Booker`].
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "the front coordinator books through a booker")
+    )]
+    pub(crate) fn booker(&self) -> Booker<P, C, Sel, RF> {
+        self.queue.booker()
+    }
+
+    /// Whether some rank of a worker in `available` (every registered worker when `None`)
+    /// has booked load within `limits`, judged against the capacity recorded for that
+    /// rank. Reads the book directly, without a turn of the queue actor. True when no rank
+    /// qualifies.
+    pub fn any_rank_has_room(
+        &self,
+        limits: &BusyThresholds,
+        available: Option<&HashSet<WorkerId>>,
+    ) -> bool {
+        self.slots
+            .any_rank_has_room(limits, Instant::now(), |worker| {
+                available.is_none_or(|available| available.contains(&worker.worker_id))
+            })
+    }
+
+    /// A signal that changes after this pool frees booked load, its workers change, or a
+    /// peer router's state arrives. Load that decays with time does not fire it.
+    pub fn subscribe_room_changed(&self) -> watch::Receiver<()> {
+        self.queue.room_changed().subscribe()
     }
 
     async fn classify_request(
@@ -960,6 +1010,112 @@ where
     }
 }
 
+/// An admitted scheduling call, built, classified, and validated for one pool and holding
+/// its lifecycle lease. The queue actor admits it through [`Self::submit`]; a [`Booker`]
+/// books it on its owner's task through [`Self::pick`] and [`Self::book`].
+pub(crate) struct PreparedBooking<P, C, Sel, RF>
+where
+    P: SequencePublisher,
+    C: WorkerConfigLike,
+    Sel: WorkerSelector<C>,
+    RF: OverlapScoresRefresh,
+{
+    queue: Arc<SchedulerQueue<P, C, Sel, RF>>,
+    enqueue: PreparedEnqueue,
+    resp_rx: tokio::sync::oneshot::Receiver<Result<SchedulingResponse, KvSchedulerError>>,
+    attempt_rx: tokio::sync::oneshot::Receiver<AttemptId>,
+    tracked: bool,
+}
+
+impl<P, C, Sel, RF> PreparedBooking<P, C, Sel, RF>
+where
+    P: SequencePublisher + 'static,
+    C: WorkerConfigLike + Send + Sync + 'static,
+    Sel: WorkerSelector<C> + Send + 'static,
+    RF: OverlapScoresRefresh + Send + Sync + 'static,
+{
+    /// Hand the request to the queue actor and wait for its booking.
+    pub(crate) async fn submit(
+        self,
+    ) -> Result<(AdmittedSchedulingResponse, Option<BookingHandle>), KvSchedulerError> {
+        let lifecycle_lease = self.queue.send_enqueue(self.enqueue).await;
+        let response = self
+            .resp_rx
+            .await
+            .map_err(|_| KvSchedulerError::SubscriberShutdown)??;
+        let attempt = if self.tracked {
+            AdmissionAttempt::Tracked(
+                self.attempt_rx
+                    .await
+                    .map_err(|_| KvSchedulerError::SubscriberShutdown)?,
+            )
+        } else {
+            AdmissionAttempt::Untracked
+        };
+        // No await between `commit()` and the handle build: the booking is
+        // always guarded by exactly one of the lease and the handle.
+        let booking = lifecycle_lease
+            .and_then(|lease| lease.commit())
+            .map(|booking| self.queue.booking_handle(booking));
+        Ok((AdmittedSchedulingResponse { response, attempt }, booking))
+    }
+}
+
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "the front coordinator books through a booker")
+)]
+impl<P, C, Sel, RF> PreparedBooking<P, C, Sel, RF>
+where
+    P: SequencePublisher + 'static,
+    C: WorkerConfigLike + Send + Sync + 'static,
+    Sel: WorkerSelector<C> + Send + 'static,
+    RF: OverlapScoresRefresh + Send + Sync + 'static,
+{
+    /// Refresh the request's overlap through `booker` once it has waited past the pool's
+    /// refresh window since ingress. Returns whether the overlap was replaced.
+    pub(crate) async fn refresh_overlap(&mut self, booker: &Booker<P, C, Sel, RF>) -> bool {
+        booker.refresh_overlap(&mut self.enqueue).await
+    }
+
+    /// Choose the request's worker through `booker` from the pool's current load. Books
+    /// nothing; on error the request stays prepared.
+    pub(crate) fn pick(
+        &mut self,
+        booker: &mut Booker<P, C, Sel, RF>,
+    ) -> Result<PickedWorker, KvSchedulerError> {
+        booker.pick(&mut self.enqueue)
+    }
+
+    /// Book `picked` through `booker` and return what [`Self::submit`] returns, without
+    /// the queue actor.
+    pub(crate) fn book(
+        mut self,
+        booker: &Booker<P, C, Sel, RF>,
+        picked: PickedWorker,
+    ) -> Result<(AdmittedSchedulingResponse, Option<BookingHandle>), KvSchedulerError> {
+        let lifecycle_lease = booker.book(self.enqueue, picked);
+        // The booker answered both channels before it returned.
+        let response = self
+            .resp_rx
+            .try_recv()
+            .map_err(|_| KvSchedulerError::SubscriberShutdown)??;
+        let attempt = if self.tracked {
+            AdmissionAttempt::Tracked(
+                self.attempt_rx
+                    .try_recv()
+                    .map_err(|_| KvSchedulerError::SubscriberShutdown)?,
+            )
+        } else {
+            AdmissionAttempt::Untracked
+        };
+        let booking = lifecycle_lease
+            .and_then(|lease| lease.commit())
+            .map(|booking| self.queue.booking_handle(booking));
+        Ok((AdmittedSchedulingResponse { response, attempt }, booking))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
@@ -1054,6 +1210,108 @@ mod tests {
             }
             cancellation.cancel();
         }
+    }
+
+    #[tokio::test]
+    async fn prepared_booking_books_through_a_booker() {
+        let (scheduler, slots, _configs, cancellation) = make_scheduler(
+            HashMap::from([(0, SimpleWorkerConfig::default())]),
+            None,
+            false,
+            None,
+        );
+        let mut booker = scheduler.booker();
+        let mut prepared = scheduler
+            .prepare_booking(
+                request(ScheduleMode::TrackedWithLifecycle {
+                    request_id: "booked".into(),
+                }),
+                Instant::now(),
+            )
+            .await
+            .unwrap();
+        // No refresher is installed.
+        assert!(!prepared.refresh_overlap(&booker).await);
+        let picked = prepared.pick(&mut booker).unwrap();
+        let worker = picked.worker();
+
+        let (admitted, booking) = prepared.book(&booker, picked).unwrap();
+        assert_eq!(admitted.response.best_worker, worker);
+        let AdmissionAttempt::Tracked(attempt_id) = admitted.attempt else {
+            panic!("a tracked request has an attempt");
+        };
+        let booking = booking
+            .expect("a lifecycle request returns its booking")
+            .commit();
+        assert_eq!((booking.worker, booking.attempt_id), (worker, attempt_id));
+        assert!(slots.has_booking(&booking));
+        scheduler.free_if_booking(&booking).await.unwrap();
+        slots.assert_completely_drained(Instant::now());
+        cancellation.cancel();
+    }
+
+    #[tokio::test]
+    async fn room_changed_fires_when_a_free_makes_room() {
+        let (scheduler, slots, _configs, cancellation) = make_scheduler(
+            HashMap::from([
+                (0, SimpleWorkerConfig::default()),
+                (1, SimpleWorkerConfig::default()),
+            ]),
+            None,
+            false,
+            None,
+        );
+        let limits = BusyThresholds {
+            prefill_busy_threshold: Some(32),
+            ..Default::default()
+        };
+        let only = |worker_id: WorkerId| HashSet::from([worker_id]);
+        assert!(scheduler.any_rank_has_room(&limits, None));
+        let mut room_changed = scheduler.subscribe_room_changed();
+
+        // 64 prefill tokens on each worker puts every rank past the 32-token limit.
+        let bookings: Vec<_> = (0..2)
+            .map(|worker_id| {
+                scheduler
+                    .add_request_if_registered_guarded(SequenceRequest {
+                        request_id: format!("held-{worker_id}"),
+                        token_sequence: None,
+                        track_prefill_tokens: true,
+                        expected_output_tokens: None,
+                        prefill_load_hint: Some(crate::protocols::PrefillLoadHint {
+                            initial_effective_prefill_tokens: 64,
+                            expected_prefill_duration: None,
+                        }),
+                        worker: WorkerWithDpRank::new(worker_id, 0),
+                        lora_name: None,
+                    })
+                    .unwrap()
+                    .commit()
+            })
+            .collect();
+        assert!(!scheduler.any_rank_has_room(&limits, None));
+        assert!(!scheduler.any_rank_has_room(&limits, Some(&only(1))));
+        // No registered rank is eligible, so none is full.
+        assert!(scheduler.any_rank_has_room(&limits, Some(&only(9))));
+        assert!(!room_changed.has_changed().unwrap(), "bookings take room");
+
+        // A free through the scheduler fires the signal after the book has room.
+        scheduler.free_if_booking(&bookings[1]).await.unwrap();
+        assert!(room_changed.has_changed().unwrap());
+        room_changed.mark_unchanged();
+        assert!(scheduler.any_rank_has_room(&limits, Some(&only(1))));
+        assert!(!scheduler.any_rank_has_room(&limits, Some(&only(0))));
+
+        // So does an acknowledged release through the booking cleanup.
+        scheduler
+            .booking_cleanup()
+            .enqueue_and_wait(bookings[0].clone())
+            .await
+            .unwrap();
+        assert!(room_changed.has_changed().unwrap());
+        assert!(scheduler.any_rank_has_room(&limits, Some(&only(0))));
+        slots.assert_completely_drained(Instant::now());
+        cancellation.cancel();
     }
 
     #[tokio::test]

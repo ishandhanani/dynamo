@@ -5,7 +5,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use crossbeam_queue::ArrayQueue;
 use rustc_hash::FxHashSet;
-use tokio::sync::Notify;
+use tokio::sync::{Notify, watch};
 
 use crate::protocols::WorkerWithDpRank;
 
@@ -57,6 +57,36 @@ impl CapacityUpdates {
             self.notify.notify_one();
         }
         full_recheck
+    }
+}
+
+/// Hint that this pool's workers may have gained room, for callers that book through a
+/// [`super::Booker`] and hold requests until a pool has room.
+///
+/// Separate from [`CapacityUpdates`] on purpose: that one wakes this pool's own actor with
+/// `notify_one`, so a second waiter would steal its permits. Any number of receivers may
+/// follow this one, and a hint nobody follows costs one atomic load.
+pub(crate) struct RoomChanged {
+    tx: watch::Sender<()>,
+}
+
+impl RoomChanged {
+    pub(crate) fn new() -> Self {
+        Self {
+            tx: watch::Sender::new(()),
+        }
+    }
+
+    /// Wake every receiver. Hints coalesce: a receiver that has not yet seen the previous
+    /// one sees a single change.
+    pub(crate) fn notify(&self) {
+        if self.tx.receiver_count() > 0 {
+            self.tx.send_replace(());
+        }
+    }
+
+    pub(crate) fn subscribe(&self) -> watch::Receiver<()> {
+        self.tx.subscribe()
     }
 }
 

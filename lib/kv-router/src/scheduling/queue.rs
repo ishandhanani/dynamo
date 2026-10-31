@@ -14,13 +14,14 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use tokio::sync::{mpsc, oneshot, watch};
 use tokio::time::Instant;
 
-use self::capacity::CapacityUpdates;
+use self::capacity::{CapacityUpdates, RoomChanged};
 #[cfg(test)]
 use super::config::RouterQueuePolicy;
 use super::filter::{RoutingEligibility, worker_config_for_rank};
 use super::overlap::SelectedWorkerTierSnapshot;
 use super::overlap_refresh::{
-    NoopOverlapScoresRefresh, OverlapScoresRefresh, read_overlap_refresh_after, refresh_overlap,
+    NoopOverlapScoresRefresh, OverlapScoresRefresh, RefreshedOverlap, read_overlap_refresh_after,
+    refresh_overlap,
 };
 use super::policy_config::{
     BusyThresholds, FullRankCounts, PolicyClassConfig, PolicyProfile, RejectThresholdsProvider,
@@ -194,6 +195,21 @@ fn non_max_overlap_selection<C: WorkerConfigLike>(
         highest_overlap_blocks,
         selected_overlap_blocks,
     })
+}
+
+/// A request validated and classified for this pool on the caller's task by
+/// [`SchedulerQueue::prepare_enqueue`]. The queue actor admits it after
+/// [`SchedulerQueue::send_enqueue`]; a [`Booker`] books it without the actor.
+pub(crate) struct PreparedEnqueue {
+    request: SchedulingRequest,
+    attempt_tx: Option<oneshot::Sender<AttemptId>>,
+    block_hashes: Option<Vec<LocalBlockHash>>,
+    prepared: Option<Box<PreparedAdmission>>,
+    queue_metadata: QueueMetadata,
+    lease: Option<Box<RequestLifecycleLease>>,
+    /// Router ingress. A booker refreshes overlap once the request has waited past the
+    /// pool's refresh window since.
+    ingress_at: Instant,
 }
 
 #[allow(clippy::large_enum_variant)]
@@ -563,45 +579,186 @@ impl Drop for RequestLifecycleLease {
     }
 }
 
+/// What admitting one request reads and books into, shared by the queue actor and every
+/// [`Booker`] of the same pool. The book takes `&self` and other tasks already free
+/// bookings in it; the rest is read-only or atomic, except the selector.
+struct BookingCore<
+    P: SequencePublisher,
+    C: WorkerConfigLike,
+    Sel: WorkerSelector<C>,
+    RF: OverlapScoresRefresh,
+> {
+    slots: Arc<ActiveSequencesMultiWorker<P>>,
+    /// Selection runs the policy's filters, scorers, and picker, which may keep state across
+    /// selections (the plugin traits take `&mut self`), so one selection or one runtime
+    /// update holds this at a time and an update is never seen half-applied. Never held
+    /// across an await, and taken only after any borrow of the worker configuration.
+    selector: Mutex<Sel>,
+    /// Advanced when a booking caller observes a configuration change; see `PreparedAdmission`.
+    workers_generation: AtomicU64,
+    /// Current preparer, republished after a runtime policy update.
+    candidate_preparer: ArcSwapOption<CandidatePreparer>,
+    block_size: u32,
+    prefill_load_estimator: Option<Arc<dyn PrefillLoadEstimator>>,
+    overlap_scores_refresh: Option<Arc<RF>>,
+    overlap_refresh_after: Option<Duration>,
+    overloaded_worker_provider: Option<OverloadedWorkerProvider>,
+    available_worker_provider: Option<WorkerAvailabilityProvider>,
+    non_max_overlap_selection_observer: OnceLock<NonMaxOverlapSelectionObserver>,
+    /// Per-candidate cost capture for admitted selections, installed once by the host.
+    selection_trace: OnceLock<SelectionTraceSpec>,
+    reject_thresholds: Option<RejectThresholdsProvider>,
+    _config: PhantomData<fn() -> C>,
+}
+
+/// What one booking caller owns: its view of the worker configuration, whose changes it
+/// reports through the shared generation, and storage reused across its admissions.
+struct BookingScratch<C> {
+    workers_with_configs: watch::Receiver<HashMap<WorkerId, C>>,
+    projected_loads: FxHashMap<WorkerWithDpRank, WorkerLoadProjection>,
+    /// Ranks the current request's load projection found past the host's reject thresholds,
+    /// counted per worker. Refilled by `with_projected_loads`; empty while nothing is full.
+    full_ranks: FullRankCounts,
+}
+
+impl<C> BookingScratch<C> {
+    fn new(workers_with_configs: watch::Receiver<HashMap<WorkerId, C>>) -> Self {
+        Self {
+            workers_with_configs,
+            projected_loads: FxHashMap::default(),
+            full_ranks: FullRankCounts::default(),
+        }
+    }
+}
+
+/// Books workers of one pool on its owner's task, without a command to the pool's queue
+/// actor. It shares the actor's [`BookingCore`]: it reads load from and books into the
+/// same book and selects with the same selector, so a runtime policy update applies to
+/// its next pick. Another caller's booking can land between a pick and its booking, as
+/// frees and peer routers' bookings already can between the actor's reads.
+pub(crate) struct Booker<
+    P: SequencePublisher,
+    C: WorkerConfigLike,
+    Sel: WorkerSelector<C>,
+    RF: OverlapScoresRefresh,
+> {
+    core: Arc<BookingCore<P, C, Sel, RF>>,
+    scratch: BookingScratch<C>,
+}
+
+/// A worker [`Booker::pick`] chose for one prepared request, not booked yet.
+pub(crate) struct PickedWorker {
+    selected: SelectedWorkerForRequest,
+}
+
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "the front coordinator books through it")
+)]
+impl PickedWorker {
+    pub(crate) fn worker(&self) -> WorkerWithDpRank {
+        self.selected.selection.worker
+    }
+}
+
+impl<
+    P: SequencePublisher + 'static,
+    C: WorkerConfigLike + Send + Sync + 'static,
+    Sel: WorkerSelector<C> + Send + 'static,
+    RF: OverlapScoresRefresh + Send + Sync + 'static,
+> Booker<P, C, Sel, RF>
+{
+    /// Replace `enqueue`'s overlap with a fresh read from the indexer once it has waited
+    /// past the pool's refresh window since ingress, as the queue actor refreshes a request
+    /// it held. Its prepared rows carry the replaced overlap, so a refresh drops them.
+    /// Returns whether the overlap was replaced.
+    pub(crate) async fn refresh_overlap(&self, enqueue: &mut PreparedEnqueue) -> bool {
+        let Some(refreshed) = refresh_overlap(
+            self.core.overlap_scores_refresh.as_deref(),
+            self.core.overlap_refresh_after,
+            enqueue.block_hashes.as_deref(),
+            enqueue.request.retain_kv_transfer_chain,
+            enqueue.ingress_at,
+            Instant::now(),
+        )
+        .await
+        else {
+            return false;
+        };
+        enqueue.prepared = None;
+        let wait_ms = enqueue.ingress_at.elapsed().as_millis() as u64;
+        apply_refreshed_overlap(&mut enqueue.request, refreshed, wait_ms);
+        true
+    }
+
+    /// Choose a worker for `enqueue` from the book's current load, as the queue actor
+    /// selects one for a request it admits. Books nothing.
+    pub(crate) fn pick(
+        &mut self,
+        enqueue: &mut PreparedEnqueue,
+    ) -> Result<PickedWorker, KvSchedulerError> {
+        let core = &*self.core;
+        let prepared = enqueue.prepared.take();
+        if prepared.is_some() {
+            core.refresh_workers_generation(&mut self.scratch);
+        }
+        core.with_projected_loads(
+            &mut self.scratch,
+            &mut enqueue.request,
+            Instant::now(),
+            |scratch, request| core.select_worker_for_request(scratch, request, true, prepared),
+        )
+        .map(|selected| PickedWorker { selected })
+    }
+
+    /// Book `picked` for `enqueue` and answer its response and attempt channels, as the
+    /// queue actor books a worker it selected. Returns the request's lifecycle lease, armed
+    /// with the booking when one was made.
+    pub(crate) fn book(
+        &self,
+        enqueue: PreparedEnqueue,
+        picked: PickedWorker,
+    ) -> Option<Box<RequestLifecycleLease>> {
+        let PreparedEnqueue {
+            mut request,
+            attempt_tx,
+            lease,
+            ..
+        } = enqueue;
+        let lifecycle_transfer = lease
+            .as_ref()
+            .and_then(|lease| lease.transfer.as_ref().map(Arc::clone));
+        self.core.book_selected(
+            &mut request,
+            attempt_tx,
+            lifecycle_transfer,
+            picked.selected,
+        );
+        lease
+    }
+}
+
 struct SchedulerQueueActor<
     P: SequencePublisher,
     C: WorkerConfigLike,
     Sel: WorkerSelector<C>,
     RF: OverlapScoresRefresh,
 > {
+    core: Arc<BookingCore<P, C, Sel, RF>>,
+    scratch: BookingScratch<C>,
     pending: PolicyQueue<QueuedRequest>,
     cleanup: Arc<AdmissionCleanup>,
     capacity_updates: Option<Arc<CapacityUpdates>>,
     capacity_workers: FxHashSet<WorkerWithDpRank>,
+    room_changed: Arc<RoomChanged>,
     profile: Arc<PolicyProfile>,
     pending_count: Arc<AtomicUsize>,
     pending_isl_tokens: Arc<AtomicUsize>,
     class_counters: Arc<Vec<ClassQueueCounters>>,
-    slots: Arc<ActiveSequencesMultiWorker<P>>,
-    workers_with_configs: watch::Receiver<HashMap<WorkerId, C>>,
-    /// Advanced when the actor observes a configuration change; see `PreparedAdmission`.
-    workers_generation: Arc<AtomicU64>,
-    /// Current preparer, republished after a runtime policy update.
-    candidate_preparer: Arc<ArcSwapOption<CandidatePreparer>>,
     /// One per command or wakeup. A request enqueued in an earlier turn rebuilds its rows.
     turn: u64,
     /// Rows prepared for the request enqueued this turn, dropped when the turn ends.
     turn_prepared: Option<Box<PreparedAdmission>>,
-    projected_loads: FxHashMap<WorkerWithDpRank, WorkerLoadProjection>,
-    /// Ranks the current request's load projection found past the host's reject thresholds,
-    /// counted per worker. Refilled by `with_projected_loads`; empty while nothing is full.
-    full_ranks: FullRankCounts,
-    block_size: u32,
-    selector: Sel,
-    prefill_load_estimator: Option<Arc<dyn PrefillLoadEstimator>>,
-    overlap_scores_refresh: Option<Arc<RF>>,
-    overlap_refresh_after: Option<Duration>,
-    overloaded_worker_provider: Option<OverloadedWorkerProvider>,
-    available_worker_provider: Option<WorkerAvailabilityProvider>,
-    non_max_overlap_selection_observer: Arc<OnceLock<NonMaxOverlapSelectionObserver>>,
-    /// Per-candidate cost capture for admitted selections, installed once by the host.
-    selection_trace: Arc<OnceLock<SelectionTraceSpec>>,
-    reject_thresholds: Option<RejectThresholdsProvider>,
 }
 
 /// Queue that gates scheduling requests behind a capacity check.
@@ -626,23 +783,13 @@ pub struct SchedulerQueue<
     /// Incremented after push, decremented after pop. Lock-free reads via `Relaxed` load.
     pending_isl_tokens: Arc<AtomicUsize>,
     class_counters: Arc<Vec<ClassQueueCounters>>,
+    room_changed: Arc<RoomChanged>,
+    core: Arc<BookingCore<P, C, Sel, RF>>,
     workers_with_configs: watch::Receiver<HashMap<WorkerId, C>>,
-    workers_generation: Arc<AtomicU64>,
-    candidate_preparer: Arc<ArcSwapOption<CandidatePreparer>>,
     exclusive_affinity: bool,
-    block_size: u32,
     profile: Arc<PolicyProfile>,
     start_time: Instant,
-    available_worker_provider: Option<WorkerAvailabilityProvider>,
-    overloaded_worker_provider: Option<OverloadedWorkerProvider>,
     supports_overlap_refresh: bool,
-    non_max_overlap_selection_observer: Arc<OnceLock<NonMaxOverlapSelectionObserver>>,
-    /// Per-candidate cost capture for admitted selections, installed once by the host.
-    selection_trace: Arc<OnceLock<SelectionTraceSpec>>,
-    reject_thresholds: Option<RejectThresholdsProvider>,
-    #[allow(clippy::type_complexity)]
-    // Covariant type markers, without ownership or auto-trait bounds.
-    _marker: PhantomData<fn() -> (P, C, Sel, RF)>,
 }
 
 impl<
@@ -745,13 +892,13 @@ impl<
             tx: admission_tx.downgrade(),
         });
         let cleanup = Arc::new(AdmissionCleanup::default());
-        let non_max_overlap_selection_observer = Arc::new(OnceLock::new());
-        let selection_trace = Arc::new(OnceLock::new());
         let start_time = Instant::now();
         let capacity_updates = queueing_enabled.then(|| Arc::new(CapacityUpdates::new()));
+        let room_changed = Arc::new(RoomChanged::new());
         let direct_release: DirectBookingRelease = {
             let slots = Arc::clone(&slots);
             let capacity_updates = capacity_updates.clone();
+            let room_changed = Arc::clone(&room_changed);
             Arc::new(move |booking| {
                 let outcome = slots.free_if_booking(
                     &booking.request_id,
@@ -759,46 +906,47 @@ impl<
                     booking.attempt_id,
                     Instant::now(),
                 )?;
-                if outcome.is_applied()
-                    && let Some(updates) = &capacity_updates
-                {
-                    updates.record(Some(booking.worker));
+                if outcome.is_applied() {
+                    if let Some(updates) = &capacity_updates {
+                        updates.record(Some(booking.worker));
+                    }
+                    room_changed.notify();
                 }
                 Ok(())
             })
         };
-        let workers_generation = Arc::new(AtomicU64::new(0));
-        let candidate_preparer = Arc::new(ArcSwapOption::from(
-            selector.candidate_preparer().map(Arc::new),
-        ));
+        let candidate_preparer = ArcSwapOption::from(selector.candidate_preparer().map(Arc::new));
         let exclusive_affinity = selector.uses_exclusive_affinity_target();
+        let core = Arc::new(BookingCore {
+            slots,
+            selector: Mutex::new(selector),
+            workers_generation: AtomicU64::new(0),
+            candidate_preparer,
+            block_size,
+            prefill_load_estimator,
+            overlap_scores_refresh,
+            overlap_refresh_after,
+            overloaded_worker_provider,
+            available_worker_provider,
+            non_max_overlap_selection_observer: OnceLock::new(),
+            selection_trace: OnceLock::new(),
+            reject_thresholds,
+            _config: PhantomData,
+        });
         let actor = SchedulerQueueActor {
+            core: Arc::clone(&core),
+            scratch: BookingScratch::new(workers_with_configs.clone()),
             pending,
             cleanup: Arc::clone(&cleanup),
             capacity_updates: capacity_updates.clone(),
             capacity_workers: FxHashSet::default(),
+            room_changed: Arc::clone(&room_changed),
             profile: Arc::clone(&profile),
             pending_count: Arc::clone(&pending_count),
             pending_isl_tokens: Arc::clone(&pending_isl_tokens),
             class_counters: Arc::clone(&class_counters),
-            slots,
-            workers_with_configs: workers_with_configs.clone(),
-            workers_generation: Arc::clone(&workers_generation),
-            candidate_preparer: Arc::clone(&candidate_preparer),
             turn: 0,
             turn_prepared: None,
-            projected_loads: FxHashMap::default(),
-            full_ranks: FullRankCounts::default(),
-            block_size,
-            selector,
-            prefill_load_estimator,
-            overlap_scores_refresh,
-            overlap_refresh_after,
-            overloaded_worker_provider: overloaded_worker_provider.clone(),
-            available_worker_provider: available_worker_provider.clone(),
-            non_max_overlap_selection_observer: Arc::clone(&non_max_overlap_selection_observer),
-            selection_trace: Arc::clone(&selection_trace),
-            reject_thresholds: reject_thresholds.clone(),
         };
         tokio::spawn(actor.run(admission_rx));
         Self {
@@ -810,20 +958,13 @@ impl<
             pending_count,
             pending_isl_tokens,
             class_counters,
+            room_changed,
+            core,
             workers_with_configs,
-            workers_generation,
-            candidate_preparer,
             exclusive_affinity,
-            block_size,
             profile,
             start_time,
-            available_worker_provider,
-            overloaded_worker_provider,
             supports_overlap_refresh: overlap_refresh_after.is_some(),
-            non_max_overlap_selection_observer,
-            selection_trace,
-            reject_thresholds,
-            _marker: PhantomData,
         }
     }
 }
@@ -842,7 +983,8 @@ impl<
         &self,
         observer: NonMaxOverlapSelectionObserver,
     ) -> bool {
-        self.non_max_overlap_selection_observer
+        self.core
+            .non_max_overlap_selection_observer
             .set(observer)
             .is_ok()
     }
@@ -851,7 +993,7 @@ impl<
     ///
     /// Returns `false` when a spec is already installed.
     pub fn set_selection_trace(&self, spec: SelectionTraceSpec) -> bool {
-        self.selection_trace.set(spec).is_ok()
+        self.core.selection_trace.set(spec).is_ok()
     }
 
     /// Enqueue a new request through the router-owned policy queue.
@@ -896,13 +1038,36 @@ impl<
 
     pub(crate) async fn enqueue_admitted_with_block_hashes_and_lease(
         &self,
-        mut request: SchedulingRequest,
+        request: SchedulingRequest,
         block_hashes: Option<Vec<LocalBlockHash>>,
         lease: Option<Box<RequestLifecycleLease>>,
         attempt_tx: Option<oneshot::Sender<AttemptId>>,
         classified_request: Option<ClassifyRequest>,
         ingress_at: Instant,
     ) -> Option<Box<RequestLifecycleLease>> {
+        let enqueue = self.prepare_enqueue(
+            request,
+            block_hashes,
+            lease,
+            attempt_tx,
+            classified_request,
+            ingress_at,
+        )?;
+        self.send_enqueue(enqueue).await
+    }
+
+    /// The caller-side half of an enqueue: validate the request and resolve its queue
+    /// metadata. None of it depends on admission order. Returns `None` after answering the
+    /// request with an error.
+    pub(crate) fn prepare_enqueue(
+        &self,
+        mut request: SchedulingRequest,
+        block_hashes: Option<Vec<LocalBlockHash>>,
+        lease: Option<Box<RequestLifecycleLease>>,
+        attempt_tx: Option<oneshot::Sender<AttemptId>>,
+        classified_request: Option<ClassifyRequest>,
+        ingress_at: Instant,
+    ) -> Option<PreparedEnqueue> {
         if self.capacity_updates.is_some()
             && lease.is_none()
             && request.mode.lifecycle_request_id().is_some()
@@ -932,16 +1097,52 @@ impl<
             return None;
         }
 
+        Some(PreparedEnqueue {
+            block_hashes: self.prepare_block_hashes_for_refresh(block_hashes),
+            request,
+            attempt_tx,
+            prepared: None,
+            queue_metadata,
+            lease,
+            ingress_at,
+        })
+    }
+
+    /// Build `enqueue`'s candidate rows now, on the caller's task, for a [`Booker`] that
+    /// picks for it later. The booker rebuilds rows whose selection inputs changed since.
+    pub(crate) fn prepare_candidate_rows(&self, enqueue: &mut PreparedEnqueue) {
+        if enqueue.prepared.is_none() {
+            enqueue.prepared = self.prepare_candidates(&enqueue.request);
+        }
+    }
+
+    /// The ordered half of an enqueue: hand a prepared request to the actor and wait for
+    /// its acknowledgement.
+    pub(crate) async fn send_enqueue(
+        &self,
+        enqueue: PreparedEnqueue,
+    ) -> Option<Box<RequestLifecycleLease>> {
+        let PreparedEnqueue {
+            mut request,
+            attempt_tx,
+            block_hashes,
+            prepared,
+            queue_metadata,
+            lease,
+            ..
+        } = enqueue;
         let Ok(slot) = self.admission_tx.reserve().await else {
             request.respond(Err(KvSchedulerError::SubscriberShutdown));
             return None;
         };
-        let prepared = self.prepare_candidates(&request);
+        // Rows built once a slot is held see the workers available now, and the channel
+        // bounds how many are in flight.
+        let prepared = prepared.or_else(|| self.prepare_candidates(&request));
         let (ack_tx, ack_rx) = oneshot::channel();
         slot.send(AdmissionCommand::Enqueue {
             request,
             attempt_tx,
-            block_hashes: self.prepare_block_hashes_for_refresh(block_hashes),
+            block_hashes,
             prepared,
             queue_metadata,
             lease,
@@ -968,6 +1169,7 @@ impl<
         worker_inputs: WorkerInputs,
     ) -> (ClassifyRequest, WorkerInputRows) {
         let available = self
+            .core
             .available_worker_provider
             .as_ref()
             .and_then(|provider| provider(request));
@@ -976,6 +1178,7 @@ impl<
             .with_available_workers(available.as_deref())
             .best_cached_tokens();
         let reject_thresholds = self
+            .core
             .reject_thresholds
             .as_ref()
             .map(|provider| provider())
@@ -1037,6 +1240,7 @@ impl<
         ingress_at: Instant,
     ) -> QueueMetadata {
         let available = self
+            .core
             .available_worker_provider
             .as_ref()
             .and_then(|provider| provider(request));
@@ -1204,6 +1408,20 @@ impl<
         if let Some(updates) = &self.capacity_updates {
             updates.record(worker);
         }
+        self.room_changed.notify();
+    }
+
+    /// The hint fired after this pool frees booked load or its workers change.
+    pub(crate) fn room_changed(&self) -> &RoomChanged {
+        &self.room_changed
+    }
+
+    /// A booker for this pool, with its own scratch; see [`Booker`].
+    pub(crate) fn booker(&self) -> Booker<P, C, Sel, RF> {
+        Booker {
+            core: Arc::clone(&self.core),
+            scratch: BookingScratch::new(self.workers_with_configs.clone()),
+        }
     }
 
     pub(crate) fn ensure_running(&self) -> Result<(), KvSchedulerError> {
@@ -1243,16 +1461,17 @@ impl<
         if request.pinned_worker.is_some() {
             return None;
         }
-        let preparer = self.candidate_preparer.load();
+        let core = &*self.core;
+        let preparer = core.candidate_preparer.load();
         let preparer = preparer.as_deref()?;
         // Load before reading the configuration: a change after this load
-        // advances the generation before the actor selects with these rows.
-        let workers_generation = self.workers_generation.load(AtomicOrdering::Acquire);
-        let available_worker_ids = self
+        // advances the generation before a caller selects with these rows.
+        let workers_generation = core.workers_generation.load(AtomicOrdering::Acquire);
+        let available_worker_ids = core
             .available_worker_provider
             .as_ref()
             .and_then(|provider| provider(request));
-        let overloaded_worker_ids = self
+        let overloaded_worker_ids = core
             .overloaded_worker_provider
             .as_ref()
             .and_then(|provider| provider());
@@ -1269,7 +1488,7 @@ impl<
             &workers,
             request,
             eligibility,
-            self.block_size,
+            core.block_size,
         ))?;
         Some(Box::new(PreparedAdmission {
             candidates,
@@ -1288,6 +1507,25 @@ impl<
         }
         block_hashes.filter(|hashes| !hashes.is_empty())
     }
+}
+
+/// Replace a waited request's overlap with a fresh read from the indexer.
+fn apply_refreshed_overlap(
+    request: &mut SchedulingRequest,
+    snapshot: RefreshedOverlap,
+    wait_ms: u64,
+) {
+    tracing::info!(
+        request_id = request.mode.request_id().unwrap_or("unknown"),
+        wait_ms,
+        "refreshed overlap scores after long queue wait"
+    );
+    request.overlap = snapshot.overlap;
+    request.kv_transfer_candidates = if request.retain_kv_transfer_chain {
+        snapshot.kv_transfer_candidates
+    } else {
+        None
+    };
 }
 
 impl<
@@ -1377,19 +1615,7 @@ impl<
                 AdmissionCommand::PolicyConfig { update, response } => {
                     // A cancelled or timed-out caller must not leave a queued mutation behind.
                     if !response.is_closed() {
-                        let result = match update {
-                            Some(update) => {
-                                let result = self.selector.update_runtime_config(update);
-                                if result.is_ok() {
-                                    // A replacement may need fewer inputs; prepare what it reads.
-                                    self.candidate_preparer
-                                        .store(self.selector.candidate_preparer().map(Arc::new));
-                                }
-                                result
-                            }
-                            None => self.selector.runtime_config(),
-                        };
-                        let _ = response.send(result);
+                        let _ = response.send(self.core.policy_config(update));
                     }
                     if drain_cleanup && self.drain_cleanup() {
                         self.handle_update().await;
@@ -1458,7 +1684,7 @@ impl<
         // With zero discovered workers every per-worker limit scales to zero and
         // `queue_rejection` would reject with `limit: 0`. Admit directly instead
         // so selection reports the real condition, `NoEndpoints`.
-        if self.workers_with_configs.borrow().is_empty() {
+        if self.scratch.workers_with_configs.borrow().is_empty() {
             return self.admit_one(request, attempt_tx, lifecycle_transfer, decay_now, prepared);
         }
         // A class with any zero per-worker limit never queues: keep the direct
@@ -1467,14 +1693,15 @@ impl<
         // limit-zero rejection the queued path always has.
         if class.never_queues() {
             let available = self
+                .core
                 .available_worker_provider
                 .as_ref()
                 .and_then(|provider| provider(&request));
             let should_queue = class.queueing_enabled()
                 && (self.pending.has_backlog(class_index) || {
-                    let configs = self.workers_with_configs.borrow();
+                    let configs = self.scratch.workers_with_configs.borrow();
                     Self::all_eligible_workers_full(
-                        &self.slots.worker_load_reader(decay_now),
+                        &self.core.slots.worker_load_reader(decay_now),
                         &configs,
                         class.busy_thresholds,
                         request
@@ -1508,7 +1735,7 @@ impl<
             enqueue_turn: self.turn,
         };
         self.turn_prepared = prepared;
-        let worker_count = self.workers_with_configs.borrow().len();
+        let worker_count = self.scratch.workers_with_configs.borrow().len();
         if let Err((rejection, queued)) = self.pending.enqueue_with_due_at(
             queue_metadata,
             worker_count,
@@ -1565,6 +1792,7 @@ impl<
                             Ok(())
                         }
                         Some(AdmissionLifecycleCleanup::Booking(booking)) => self
+                            .core
                             .slots
                             .free_if_booking(
                                 &booking.request_id,
@@ -1583,6 +1811,7 @@ impl<
                 }
                 SchedulerCleanupTarget::Booking(booking) => {
                     let result = self
+                        .core
                         .slots
                         .free_if_booking(
                             &booking.request_id,
@@ -1605,6 +1834,7 @@ impl<
                 }
                 SchedulerCleanupTarget::ExpiredBooking(booking) => {
                     let result = self
+                        .core
                         .slots
                         .expire_if_booking(
                             &booking.request_id,
@@ -1643,14 +1873,17 @@ impl<
                 }
             }
         }
+        if made_ready {
+            self.room_changed.notify();
+        }
         made_ready || (removed_ready_head && self.has_dispatchable_ready_head())
     }
 
     fn has_dispatchable_ready_head(&self) -> bool {
         let decay_now = Instant::now();
-        let slots = &self.slots;
-        let provider = self.available_worker_provider.as_ref();
-        let workers = &self.workers_with_configs;
+        let slots = &self.core.slots;
+        let provider = self.core.available_worker_provider.as_ref();
+        let workers = &self.scratch.workers_with_configs;
         self.pending.any_ready_head(|_, class, queued| {
             if !class.queueing_enabled() {
                 return true;
@@ -1687,7 +1920,7 @@ impl<
             return;
         }
         if !recheck_all {
-            let configs = self.workers_with_configs.borrow();
+            let configs = self.scratch.workers_with_configs.borrow();
             recheck_all = self
                 .capacity_workers
                 .iter()
@@ -1744,9 +1977,9 @@ impl<
             // reservation. Frees and peer bookings from other tasks can land between
             // two reads, as they can right after the gate.
             let popped = {
-                let slots = &self.slots;
-                let provider = self.available_worker_provider.as_ref();
-                let workers = &self.workers_with_configs;
+                let slots = &self.core.slots;
+                let provider = self.core.available_worker_provider.as_ref();
+                let workers = &self.scratch.workers_with_configs;
                 self.pending.pop_next(|_, class, queued| {
                     if !class.queueing_enabled() {
                         return true;
@@ -1794,8 +2027,8 @@ impl<
             // thresholds guide admission, not reservation. This differs from main
             // to avoid reversing counters, heap state, and charged DRR credit.
             let refreshed = refresh_overlap(
-                self.overlap_scores_refresh.as_deref(),
-                self.overlap_refresh_after,
+                self.core.overlap_scores_refresh.as_deref(),
+                self.core.overlap_refresh_after,
                 queued.block_hashes.as_deref(),
                 queued.request.retain_kv_transfer_chain,
                 queued.enqueue_at,
@@ -1824,17 +2057,7 @@ impl<
                 None
             };
             if let Some(snapshot) = refreshed {
-                tracing::info!(
-                    request_id = queued.request.mode.request_id().unwrap_or("unknown"),
-                    wait_ms,
-                    "refreshed overlap scores after long queue wait"
-                );
-                queued.request.overlap = snapshot.overlap;
-                queued.request.kv_transfer_candidates = if queued.request.retain_kv_transfer_chain {
-                    snapshot.kv_transfer_candidates
-                } else {
-                    None
-                };
+                apply_refreshed_overlap(&mut queued.request, snapshot, wait_ms);
             }
             let admit_now = Instant::now();
             let class_index = popped.class_index();
@@ -1854,15 +2077,80 @@ impl<
         }
     }
 
-    /// Refresh derived load for every request, retaining the allocation through
-    /// selection, booking, and response-field capture, including error paths.
-    fn with_projected_loads<R>(
+    fn select_without_admission_inner(
         &mut self,
         mut request: SchedulingRequest,
         decay_now: Instant,
-        handle: impl FnOnce(&Self, &mut SchedulingRequest) -> R,
+    ) -> Result<AdvisorySchedulingResponse, KvSchedulerError> {
+        let core = &*self.core;
+        core.with_projected_loads(
+            &mut self.scratch,
+            &mut request,
+            decay_now,
+            |scratch, request| {
+                let selected = core.select_worker_for_request(scratch, request, false, None)?;
+
+                Ok(AdvisorySchedulingResponse {
+                    selected_worker_load: selected.selected_worker_load,
+                    response: SchedulingResponse {
+                        best_worker: selected.selection.worker,
+                        effective_overlap_blocks: selected.selection.effective_overlap_blocks,
+                        cached_tokens: selected.selection.cached_tokens,
+                        max_raw_cached_tokens: selected.selection.max_raw_cached_tokens,
+                        selected_raw_cached_tokens: selected.selection.selected_raw_cached_tokens,
+                        selected_worker_tiers: selected.selected_worker_tiers,
+                        kv_transfer_source: selected.selection.kv_transfer_source,
+                        kv_transfer_candidates: request.kv_transfer_candidates.take(),
+                        potential_decode_blocks: selected.selection.potential_decode_blocks,
+                        selection_trace: selected.selection_trace,
+                    },
+                })
+            },
+        )
+    }
+
+    /// Run the full scheduling pipeline for a single request:
+    /// compute projected load -> select worker -> book tracked state -> respond.
+    fn admit_one(
+        &mut self,
+        mut request: SchedulingRequest,
+        attempt_tx: Option<oneshot::Sender<AttemptId>>,
+        lifecycle_transfer: Option<Arc<AdmissionLifecycleTransfer>>,
+        decay_now: Instant,
+        prepared: Option<Box<PreparedAdmission>>,
+    ) -> bool {
+        let core = &*self.core;
+        if prepared.is_some() {
+            core.refresh_workers_generation(&mut self.scratch);
+        }
+        core.with_projected_loads(
+            &mut self.scratch,
+            &mut request,
+            decay_now,
+            |scratch, request| {
+                core.admit_one_projected(scratch, request, attempt_tx, lifecycle_transfer, prepared)
+            },
+        )
+    }
+}
+
+impl<
+    P: SequencePublisher + 'static,
+    C: WorkerConfigLike + Send + Sync + 'static,
+    Sel: WorkerSelector<C> + Send + 'static,
+    RF: OverlapScoresRefresh + Send + Sync + 'static,
+> BookingCore<P, C, Sel, RF>
+{
+    /// Refresh derived load for every request, retaining the allocation through
+    /// selection, booking, and response-field capture, including error paths.
+    fn with_projected_loads<R>(
+        &self,
+        scratch: &mut BookingScratch<C>,
+        request: &mut SchedulingRequest,
+        decay_now: Instant,
+        handle: impl FnOnce(&BookingScratch<C>, &mut SchedulingRequest) -> R,
     ) -> R {
-        request.worker_loads = std::mem::take(&mut self.projected_loads);
+        request.worker_loads = std::mem::take(&mut scratch.projected_loads);
         // The host's reject thresholds are judged in the same pass that projects each rank's
         // load, so selection only consults the ranks found full: no second read per rank.
         let full_ranks = match self
@@ -1872,11 +2160,11 @@ impl<
             .filter(BusyThresholds::is_configured)
         {
             Some(limits) => {
-                self.full_ranks.reset(limits);
-                Some(&mut self.full_ranks)
+                scratch.full_ranks.reset(limits);
+                Some(&mut scratch.full_ranks)
             }
             None => {
-                self.full_ranks.clear();
+                scratch.full_ranks.clear();
                 None
             }
         };
@@ -1886,8 +2174,8 @@ impl<
             &mut request.worker_loads,
             full_ranks,
         );
-        let result = handle(self, &mut request);
-        self.projected_loads = std::mem::take(&mut request.worker_loads);
+        let result = handle(scratch, request);
+        scratch.projected_loads = std::mem::take(&mut request.worker_loads);
         result
     }
 
@@ -1895,6 +2183,7 @@ impl<
     /// probes never do, so they do not pay for capture.
     fn select_worker_for_request(
         &self,
+        scratch: &BookingScratch<C>,
         request: &SchedulingRequest,
         admitted: bool,
         prepared: Option<Box<PreparedAdmission>>,
@@ -1905,24 +2194,25 @@ impl<
             .and_then(|provider| provider(request));
 
         {
-            let workers = self.workers_with_configs.borrow();
+            let workers = scratch.workers_with_configs.borrow();
             let overloaded_worker_ids = self
                 .overloaded_worker_provider
                 .as_ref()
                 .and_then(|provider| provider());
+            let selector = self.selector.lock();
             let eligibility = selection_eligibility(
                 request,
                 &workers,
                 overloaded_worker_ids.as_deref(),
                 available_worker_ids.as_deref(),
-                Some(&self.full_ranks),
-                self.selector.uses_exclusive_affinity_target(),
+                Some(&scratch.full_ranks),
+                selector.uses_exclusive_affinity_target(),
             );
-            // Checked under the borrow selection uses: a change since the actor
+            // Checked under the borrow selection uses: a change since this caller
             // last advanced the generation is not counted in it yet. Prepared rows
             // never skip full ranks, so any full rank means rebuilding them.
             let prepared = prepared
-                .filter(|_| !workers.has_changed() && self.full_ranks.is_empty())
+                .filter(|_| !workers.has_changed() && scratch.full_ranks.is_empty())
                 .and_then(|prepared| {
                     prepared.into_current(
                         self.workers_generation.load(AtomicOrdering::Relaxed),
@@ -1935,7 +2225,7 @@ impl<
             } else {
                 None
             };
-            self.selector
+            selector
                 .select_worker_prepared(
                     WorkerSelectionInput::configured(
                         &workers,
@@ -1987,54 +2277,14 @@ impl<
         }
     }
 
-    fn select_without_admission_inner(
-        &mut self,
-        request: SchedulingRequest,
-        decay_now: Instant,
-    ) -> Result<AdvisorySchedulingResponse, KvSchedulerError> {
-        self.with_projected_loads(request, decay_now, |actor, request| {
-            let selected = actor.select_worker_for_request(request, false, None)?;
-
-            Ok(AdvisorySchedulingResponse {
-                selected_worker_load: selected.selected_worker_load,
-                response: SchedulingResponse {
-                    best_worker: selected.selection.worker,
-                    effective_overlap_blocks: selected.selection.effective_overlap_blocks,
-                    cached_tokens: selected.selection.cached_tokens,
-                    max_raw_cached_tokens: selected.selection.max_raw_cached_tokens,
-                    selected_raw_cached_tokens: selected.selection.selected_raw_cached_tokens,
-                    selected_worker_tiers: selected.selected_worker_tiers,
-                    kv_transfer_source: selected.selection.kv_transfer_source,
-                    kv_transfer_candidates: request.kv_transfer_candidates.take(),
-                    potential_decode_blocks: selected.selection.potential_decode_blocks,
-                    selection_trace: selected.selection_trace,
-                },
-            })
-        })
-    }
-
-    /// Run the full scheduling pipeline for a single request:
-    /// compute projected load -> select worker -> book tracked state -> respond.
-    fn admit_one(
-        &mut self,
-        request: SchedulingRequest,
-        attempt_tx: Option<oneshot::Sender<AttemptId>>,
-        lifecycle_transfer: Option<Arc<AdmissionLifecycleTransfer>>,
-        decay_now: Instant,
-        prepared: Option<Box<PreparedAdmission>>,
-    ) -> bool {
-        if prepared.is_some() {
-            self.refresh_workers_generation();
-        }
-        self.with_projected_loads(request, decay_now, |actor, request| {
-            actor.admit_one_projected(request, attempt_tx, lifecycle_transfer, prepared)
-        })
-    }
-
-    /// Advance the generation when the configuration changed since the actor
+    /// Advance the generation when `scratch`'s view of the configuration changed since it
     /// last looked, so rows prepared against an earlier one are rebuilt.
-    fn refresh_workers_generation(&mut self) {
-        if self.workers_with_configs.borrow_and_update().has_changed() {
+    fn refresh_workers_generation(&self, scratch: &mut BookingScratch<C>) {
+        if scratch
+            .workers_with_configs
+            .borrow_and_update()
+            .has_changed()
+        {
             self.workers_generation
                 .fetch_add(1, AtomicOrdering::Release);
         }
@@ -2042,12 +2292,13 @@ impl<
 
     fn admit_one_projected(
         &self,
+        scratch: &BookingScratch<C>,
         request: &mut SchedulingRequest,
         attempt_tx: Option<oneshot::Sender<AttemptId>>,
         lifecycle_transfer: Option<Arc<AdmissionLifecycleTransfer>>,
         prepared: Option<Box<PreparedAdmission>>,
     ) -> bool {
-        let selected = match self.select_worker_for_request(request, true, prepared) {
+        let selected = match self.select_worker_for_request(scratch, request, true, prepared) {
             Ok(s) => s,
             Err(e) => {
                 tracing::warn!("scheduling failed: {e}");
@@ -2055,7 +2306,18 @@ impl<
                 return false;
             }
         };
+        self.book_selected(request, attempt_tx, lifecycle_transfer, selected)
+    }
 
+    /// Book the selected worker for a tracked request and answer the request; an untracked
+    /// one is answered without a booking.
+    fn book_selected(
+        &self,
+        request: &mut SchedulingRequest,
+        attempt_tx: Option<oneshot::Sender<AttemptId>>,
+        lifecycle_transfer: Option<Arc<AdmissionLifecycleTransfer>>,
+        selected: SelectedWorkerForRequest,
+    ) -> bool {
         let response = SchedulingResponse {
             best_worker: selected.selection.worker,
             effective_overlap_blocks: selected.selection.effective_overlap_blocks,
@@ -2219,6 +2481,35 @@ impl<
         })
     }
 
+    /// Read or replace the selector's runtime parameters. The selector lock keeps the
+    /// replacement whole: a selection sees either the old policy or the new one.
+    fn policy_config(
+        &self,
+        update: Option<RuntimePolicyUpdate>,
+    ) -> Result<RuntimePolicyConfig, RuntimePolicyError> {
+        let mut selector = self.selector.lock();
+        match update {
+            Some(update) => {
+                let result = selector.update_runtime_config(update);
+                if result.is_ok() {
+                    // A replacement may need fewer inputs; prepare what it reads.
+                    self.candidate_preparer
+                        .store(selector.candidate_preparer().map(Arc::new));
+                }
+                result
+            }
+            None => selector.runtime_config(),
+        }
+    }
+}
+
+impl<
+    P: SequencePublisher + 'static,
+    C: WorkerConfigLike + Send + Sync + 'static,
+    Sel: WorkerSelector<C> + Send + 'static,
+    RF: OverlapScoresRefresh + Send + Sync + 'static,
+> SchedulerQueueActor<P, C, Sel, RF>
+{
     /// Whether every eligible rank is past `limits`, judged on the same `LOAD` row worker
     /// selection reads.
     fn all_eligible_workers_full(
@@ -3841,43 +4132,29 @@ policy_classes:
         }
     }
 
-    // The caller drives this actor directly. Its hints are separate from the
-    // idle actor spawned by make_queue, so tests control notification ordering.
-    fn actor_for_test<Sel: WorkerSelector<SimpleWorkerConfig>>(
+    // The caller drives this actor directly. It books through the queue's shared
+    // state, but its hints are separate from the idle actor spawned by make_queue, so
+    // tests control notification ordering.
+    fn actor_for_test<Sel: WorkerSelector<SimpleWorkerConfig> + Send + 'static>(
         queue: &SchedulerQueue<NoopSequencePublisher, SimpleWorkerConfig, Sel>,
-        slots: &Arc<ActiveSequencesMultiWorker<NoopSequencePublisher>>,
-        selector: Sel,
     ) -> SchedulerQueueActor<NoopSequencePublisher, SimpleWorkerConfig, Sel, NoopOverlapScoresRefresh>
     {
+        let mut scratch = BookingScratch::new(queue.workers_with_configs.clone());
+        scratch.projected_loads = FxHashMap::with_capacity_and_hasher(8, Default::default());
         SchedulerQueueActor {
+            core: Arc::clone(&queue.core),
+            scratch,
             pending: PolicyQueue::new(&queue.profile),
             cleanup: Arc::clone(&queue.cleanup),
             capacity_updates: None,
             capacity_workers: FxHashSet::default(),
+            room_changed: Arc::clone(&queue.room_changed),
             profile: Arc::clone(&queue.profile),
             pending_count: Arc::clone(&queue.pending_count),
             pending_isl_tokens: Arc::clone(&queue.pending_isl_tokens),
             class_counters: Arc::clone(&queue.class_counters),
-            slots: Arc::clone(slots),
-            workers_with_configs: queue.workers_with_configs.clone(),
-            workers_generation: Arc::clone(&queue.workers_generation),
-            candidate_preparer: Arc::clone(&queue.candidate_preparer),
             turn: 0,
             turn_prepared: None,
-            projected_loads: FxHashMap::with_capacity_and_hasher(8, Default::default()),
-            full_ranks: FullRankCounts::default(),
-            block_size: 16,
-            selector,
-            prefill_load_estimator: None,
-            overlap_scores_refresh: None::<Arc<NoopOverlapScoresRefresh>>,
-            overlap_refresh_after: None,
-            overloaded_worker_provider: None,
-            available_worker_provider: None,
-            non_max_overlap_selection_observer: Arc::clone(
-                &queue.non_max_overlap_selection_observer,
-            ),
-            selection_trace: Arc::clone(&queue.selection_trace),
-            reject_thresholds: queue.reject_thresholds.clone(),
         }
     }
 
@@ -4112,25 +4389,23 @@ policy_classes:
     #[tokio::test]
     async fn prepared_rows_recheck_config_under_selection_borrow() {
         let prepared_queue = make_prepared_queue();
-        let mut actor = actor_for_test(
-            &prepared_queue.queue,
-            &prepared_queue.slots,
-            counting_policy(&prepared_queue.prepared_selections),
-        );
-        let (request, mut rx) = make_request("request", 64);
+        let mut actor = actor_for_test(&prepared_queue.queue);
+        let core = Arc::clone(&actor.core);
+        let (mut request, mut rx) = make_request("request", 64);
         let prepared = prepared_queue.queue.prepare_candidates(&request);
         assert!(prepared.is_some());
 
         // Worker 0 leaves after the actor last advanced the generation.
-        actor.refresh_workers_generation();
+        core.refresh_workers_generation(&mut actor.scratch);
         prepared_queue.cfg_tx.send_modify(|configs| {
             configs.remove(&0);
         });
-        assert!(
-            actor.with_projected_loads(request, Instant::now(), |actor, request| {
-                actor.admit_one_projected(request, None, None, prepared)
-            })
-        );
+        assert!(core.with_projected_loads(
+            &mut actor.scratch,
+            &mut request,
+            Instant::now(),
+            |scratch, request| core.admit_one_projected(scratch, request, None, None, prepared)
+        ));
         let selected = rx.try_recv().unwrap().unwrap().best_worker;
         assert_eq!(selected, WorkerWithDpRank::new(1, 0));
         assert_eq!(prepared_queue.prepared_selections(), 0);
@@ -4162,12 +4437,268 @@ policy_classes:
         assert_eq!(prepared_queue.prepared_selections(), 1);
     }
 
+    type TestBooker<Sel, RF = NoopOverlapScoresRefresh> =
+        Booker<NoopSequencePublisher, SimpleWorkerConfig, Sel, RF>;
+
+    /// Prepare `request` with candidate rows, then pick and book it through `booker`.
+    /// Returns the worker its response names.
+    fn book_through<Sel, RF>(
+        queue: &SchedulerQueue<NoopSequencePublisher, SimpleWorkerConfig, Sel, RF>,
+        booker: &mut TestBooker<Sel, RF>,
+        request_id: &str,
+    ) -> WorkerWithDpRank
+    where
+        Sel: WorkerSelector<SimpleWorkerConfig> + Send + 'static,
+        RF: OverlapScoresRefresh + Send + Sync + 'static,
+    {
+        let (request, mut rx) = make_request(request_id, 64);
+        let mut enqueue = queue
+            .prepare_enqueue(request, None, None, None, None, Instant::now())
+            .expect("request is valid");
+        queue.prepare_candidate_rows(&mut enqueue);
+        let picked = booker.pick(&mut enqueue).unwrap();
+        let _ = booker.book(enqueue, picked);
+        rx.try_recv().unwrap().unwrap().best_worker
+    }
+
+    #[tokio::test]
+    async fn booker_books_without_an_actor_turn() {
+        let prepared_queue = make_prepared_queue();
+        let queue = &prepared_queue.queue;
+        let slots = &prepared_queue.slots;
+        // Hold every slot: no command can reach the actor while the booker books.
+        let held = queue
+            .admission_tx
+            .reserve_many(queue.admission_tx.max_capacity())
+            .await
+            .unwrap();
+        let mut booker = queue.booker();
+        let (request, mut rx) = make_request("booked", 64);
+        let lease = queue.new_request_lifecycle_lease(Some("booked"));
+        let (attempt_tx, mut attempt_rx) = oneshot::channel();
+        let mut enqueue = queue
+            .prepare_enqueue(request, None, lease, Some(attempt_tx), None, Instant::now())
+            .expect("request is valid");
+        queue.prepare_candidate_rows(&mut enqueue);
+
+        let picked = booker.pick(&mut enqueue).unwrap();
+        let worker = picked.worker();
+        assert_eq!(worker, WorkerWithDpRank::new(0, 0));
+        assert_eq!(
+            slots.active_tokens(Instant::now())[&worker],
+            0,
+            "pick books nothing"
+        );
+        let lease = booker.book(enqueue, picked);
+
+        // Booked and answered before `book` returned.
+        assert_eq!(rx.try_recv().unwrap().unwrap().best_worker, worker);
+        let booking = lease
+            .and_then(|lease| lease.commit())
+            .expect("the lease carries the booking");
+        assert_eq!(booking.worker, worker);
+        assert_eq!(booking.attempt_id, attempt_rx.try_recv().unwrap());
+        assert!(slots.has_booking(&booking));
+        assert_eq!(prepared_queue.prepared_selections(), 1);
+        drop(held);
+        slots.free(&booking.request_id, Instant::now()).unwrap();
+        slots.assert_completely_drained(Instant::now());
+    }
+
+    #[tokio::test]
+    async fn actor_and_booker_bookings_share_one_book() {
+        let prepared_queue = make_prepared_queue();
+        let queue = &prepared_queue.queue;
+        let slots = &prepared_queue.slots;
+        let mut booker = queue.booker();
+        let (worker0, worker1) = (WorkerWithDpRank::new(0, 0), WorkerWithDpRank::new(1, 0));
+        let admit = |request_id: &'static str| async move {
+            let (request, rx) = make_request(request_id, 64);
+            queue.enqueue(request).await;
+            rx.await.unwrap().unwrap().best_worker
+        };
+
+        // The least-loaded picker breaks ties toward worker 0, so each second booking
+        // lands on worker 1 only if it sees the first.
+        assert_eq!(admit("actor-first").await, worker0);
+        assert_eq!(book_through(queue, &mut booker, "booker-second"), worker1);
+        for request_id in ["actor-first", "booker-second"] {
+            slots.free(&request_id.to_owned(), Instant::now()).unwrap();
+        }
+        assert_eq!(book_through(queue, &mut booker, "booker-first"), worker0);
+        assert_eq!(admit("actor-second").await, worker1);
+
+        let active = slots.active_tokens(Instant::now());
+        assert!(active[&worker0] > 0 && active[&worker1] > 0);
+        for request_id in ["booker-first", "actor-second"] {
+            slots.free(&request_id.to_owned(), Instant::now()).unwrap();
+        }
+        slots.assert_completely_drained(Instant::now());
+    }
+
+    /// Picks `self.0`'s row when it is a candidate, else the first row.
+    struct PreferWorker(WorkerId);
+
+    impl crate::WorkerPicker for PreferWorker {
+        fn pick(
+            &mut self,
+            _context: &crate::WorkerSelectionContext<'_>,
+            input: crate::WorkerInputView<'_>,
+        ) -> Result<usize, crate::WorkerSelectionPolicyError> {
+            let candidates = input.candidates();
+            Ok((0..candidates.len())
+                .find(|&row| candidates[row].worker().worker_id == self.0)
+                .unwrap_or(0))
+        }
+    }
+
+    #[tokio::test]
+    async fn runtime_policy_update_reaches_the_next_booker_pick() {
+        let prefer = |worker_id| {
+            crate::WorkerSelectionPolicy::new(
+                crate::KvRouterConfig::default(),
+                "test",
+                vec![],
+                Box::new(PreferWorker(worker_id)),
+            )
+        };
+        let builder: crate::plugins::worker_selection::RuntimePolicyBuilder =
+            Arc::new(move |parameters| {
+                let worker_id = parameters["prefer"].as_u64().ok_or_else(|| {
+                    RuntimePolicyError::InvalidParameters("prefer must be a worker id".into())
+                })?;
+                Ok(prefer(worker_id))
+            });
+        let parameters = serde_json::Map::from_iter([("prefer".into(), serde_json::json!(0))]);
+        let selector = prefer(0).with_runtime_config(parameters, builder);
+        let (queue, slots) = make_queue_with_custom_selector(2, 16, 64, None, selector);
+        let mut booker = queue.booker();
+        assert_eq!(
+            book_through(&queue, &mut booker, "before"),
+            WorkerWithDpRank::new(0, 0)
+        );
+
+        let patch = serde_json::Map::from_iter([("prefer".into(), serde_json::json!(1))]);
+        let config = queue
+            .policy_control()
+            .update(RuntimePolicyUpdate::patch(0, patch))
+            .await
+            .unwrap();
+        assert_eq!(config.revision(), 1);
+        assert_eq!(
+            book_through(&queue, &mut booker, "after"),
+            WorkerWithDpRank::new(1, 0)
+        );
+        for request_id in ["before", "after"] {
+            slots.free(&request_id.to_owned(), Instant::now()).unwrap();
+        }
+        slots.assert_completely_drained(Instant::now());
+    }
+
+    /// Book a request with stale overlap through a booker `wait` after its ingress. Returns
+    /// its response, whether the booker refreshed it, the refresher's call count, and how
+    /// many selections used the request's prepared rows.
+    async fn book_through_booker_after(wait: Duration) -> (SchedulingResponse, bool, usize, usize) {
+        let worker = WorkerWithDpRank::new(0, 0);
+        let refresher = Arc::new(CountingRefresher {
+            calls: AtomicUsize::new(0),
+            last_retain_kv_transfer_chain: AtomicBool::new(false),
+            response: RefreshedOverlap::from_overlap(OverlapSignals {
+                tier_overlap_blocks: Default::default(),
+                effective_overlap_blocks: FxHashMap::from_iter([(worker, 9.0)]),
+                effective_cached_tokens: FxHashMap::from_iter([(worker, 144)]),
+            }),
+        });
+        let slots = Arc::new(ActiveSequencesMultiWorker::new(
+            NoopSequencePublisher,
+            16,
+            (0..2).map(|id| (id, (0, 1))).collect(),
+            false,
+            0,
+            "test",
+        ));
+        let configs = (0..2)
+            .map(|id| {
+                let config = SimpleWorkerConfig {
+                    max_num_batched_tokens: Some(64),
+                    ..Default::default()
+                };
+                (id, config)
+            })
+            .collect();
+        let (_cfg_tx, cfg_rx) = watch::channel(configs);
+        let prepared_selections = Arc::new(AtomicUsize::new(0));
+        let queue = SchedulerQueue::new(
+            Arc::clone(&slots),
+            cfg_rx,
+            PolicyProfile::synthetic(None, RouterQueuePolicy::Fcfs),
+            16,
+            counting_policy(&prepared_selections),
+            None,
+            Some(Arc::clone(&refresher)),
+            None,
+            None,
+            None,
+        );
+
+        let (mut request, mut rx) = make_request("waited", 64);
+        request.overlap.effective_overlap_blocks.insert(worker, 3.0);
+        request.overlap.effective_cached_tokens.insert(worker, 48);
+        let mut enqueue = queue
+            .prepare_enqueue(
+                request,
+                Some(vec![LocalBlockHash(42)]),
+                None,
+                None,
+                None,
+                Instant::now(),
+            )
+            .expect("request is valid");
+        queue.prepare_candidate_rows(&mut enqueue);
+        tokio::time::advance(wait).await;
+        let mut booker = queue.booker();
+        let refreshed = booker.refresh_overlap(&mut enqueue).await;
+        let picked = booker.pick(&mut enqueue).unwrap();
+        let _ = booker.book(enqueue, picked);
+        let response = rx.try_recv().unwrap().unwrap();
+        assert_eq!(response.best_worker, worker);
+        slots.free(&"waited".to_owned(), Instant::now()).unwrap();
+        (
+            response,
+            refreshed,
+            refresher.calls.load(Ordering::Relaxed),
+            prepared_selections.load(Ordering::Relaxed),
+        )
+    }
+
+    #[tokio::test(flavor = "current_thread", start_paused = true)]
+    async fn booker_refreshes_overlap_after_the_window() {
+        let (response, refreshed, refreshes, prepared_selections) =
+            book_through_booker_after(Duration::from_secs(11)).await;
+        assert!(refreshed);
+        assert_eq!(refreshes, 1);
+        // The rows prepared before the wait carry the overlap the refresh replaced.
+        assert_eq!(prepared_selections, 0);
+        assert_eq!(response.effective_overlap_blocks, 9.0);
+        assert_eq!(response.cached_tokens, 144);
+    }
+
+    #[tokio::test(flavor = "current_thread", start_paused = true)]
+    async fn booker_keeps_overlap_within_the_window() {
+        let (response, refreshed, refreshes, prepared_selections) =
+            book_through_booker_after(Duration::from_secs(9)).await;
+        assert!(!refreshed);
+        assert_eq!(refreshes, 0);
+        assert_eq!(prepared_selections, 1);
+        assert_eq!(response.effective_overlap_blocks, 3.0);
+        assert_eq!(response.cached_tokens, 48);
+    }
+
     #[tokio::test]
     async fn enqueue_rechecks_capacity_before_later_shared_admission() {
         for overflow in [false, true] {
             let (queue, slots) = make_queue(1, 16, 64, Some(0.0));
-            let mut actor =
-                actor_for_test(&queue, &slots, DefaultWorkerSelector::new(None, "test"));
+            let mut actor = actor_for_test(&queue);
             let updates = Arc::new(CapacityUpdates::new());
             actor.capacity_updates = Some(Arc::clone(&updates));
             let worker = WorkerWithDpRank::new(0, 0);
@@ -4278,34 +4809,41 @@ policy_classes:
     #[tokio::test]
     async fn projection_storage_survives_admission_and_errors_without_stale_entries() {
         let (queue, slots) = make_queue(1, 16, 64, None);
-        let mut actor = actor_for_test(&queue, &slots, DefaultWorkerSelector::new(None, "test"));
+        let mut actor = actor_for_test(&queue);
+        let core = Arc::clone(&actor.core);
         let worker = WorkerWithDpRank::new(0, 0);
         let stale = WorkerWithDpRank::new(999, 0);
-        let capacity = actor.projected_loads.capacity();
+        let capacity = actor.scratch.projected_loads.capacity();
         // The second admission refreshes load after the first booking. The
         // duplicate then exercises booking failure with the same allocation.
         for (id, succeeds) in [("first", true), ("second", true), ("first", false)] {
             actor
+                .scratch
                 .projected_loads
                 .insert(stale, WorkerLoadProjection::default());
             let now = Instant::now();
             let expected = slots.project_worker_loads(None, now);
-            let (request, mut rx) = make_request(id, 64);
-            let storage = actor.with_projected_loads(request, now, |actor, request| {
-                assert_eq!(request.worker_loads, expected);
-                assert!(!request.worker_loads.contains_key(&stale));
-                let storage = request.worker_loads.get(&worker).unwrap() as *const _;
-                assert_eq!(
-                    actor.admit_one_projected(request, None, None, None),
-                    succeeds
-                );
-                assert_eq!(rx.try_recv().unwrap().is_ok(), succeeds);
-                assert_eq!(request.worker_loads, expected);
-                storage
-            });
-            assert_eq!(actor.projected_loads.capacity(), capacity);
+            let (mut request, mut rx) = make_request(id, 64);
+            let storage = core.with_projected_loads(
+                &mut actor.scratch,
+                &mut request,
+                now,
+                |scratch, request| {
+                    assert_eq!(request.worker_loads, expected);
+                    assert!(!request.worker_loads.contains_key(&stale));
+                    let storage = request.worker_loads.get(&worker).unwrap() as *const _;
+                    assert_eq!(
+                        core.admit_one_projected(scratch, request, None, None, None),
+                        succeeds
+                    );
+                    assert_eq!(rx.try_recv().unwrap().is_ok(), succeeds);
+                    assert_eq!(request.worker_loads, expected);
+                    storage
+                },
+            );
+            assert_eq!(actor.scratch.projected_loads.capacity(), capacity);
             assert_eq!(
-                actor.projected_loads.get(&worker).unwrap() as *const _,
+                actor.scratch.projected_loads.get(&worker).unwrap() as *const _,
                 storage
             );
         }
@@ -4316,7 +4854,7 @@ policy_classes:
                 .select_without_admission_inner(request, Instant::now())
                 .is_err()
         );
-        assert_eq!(actor.projected_loads.capacity(), capacity);
+        assert_eq!(actor.scratch.projected_loads.capacity(), capacity);
         for id in ["first", "second"] {
             slots.free(&id.to_owned(), Instant::now()).unwrap();
         }
