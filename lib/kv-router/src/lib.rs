@@ -83,7 +83,9 @@ pub use plugins::worker_selection::{
 pub use session_prefix_index::{
     LogicalNode, NodeId, SessionId, SessionPrefixIndexError, SessionPrefixIndexer,
 };
-pub use tracking_hash::{TrackingHashAlgorithm, TrackingHashContext, TrackingHashScope};
+pub use tracking_hash::{
+    TrackingHashAlgorithm, TrackingHashContext, TrackingHashScope, tracking_hash_context,
+};
 pub use worker_type::WorkerType;
 
 // TODO(v1.7): Remove these compatibility re-exports; use crate::plugins instead.
