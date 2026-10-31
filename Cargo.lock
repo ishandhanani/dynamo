@@ -3153,6 +3153,7 @@ dependencies = [
  "fastrand",
  "futures-util",
  "http 1.4.1",
+ "once_cell",
  "ordered-float 4.6.0",
  "parking_lot",
  "rmp-serde",
@@ -3165,6 +3166,7 @@ dependencies = [
  "tokio",
  "tokio-util",
  "tracing",
+ "uuid",
  "zeroize",
 ]
 
