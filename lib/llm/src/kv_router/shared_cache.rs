@@ -31,11 +31,10 @@ use crate::{
     local_model::runtime_config::ModelRuntimeConfig,
     utils::zmq::{connect_sub_socket, multipart_message},
 };
-use dynamo_kv_router::{
-    SharedKvCache,
-    indexer::KvRouterError,
-    protocols::{SharedCacheHits, WorkerId},
-};
+use dynamo_kv_indexer::host::KvRouterError;
+use dynamo_router_protocol::worker::WorkerId;
+use dynamo_scheduler::host::SharedKvCache;
+use dynamo_worker_selection::host::SharedCacheHits;
 
 const SGLANG_HICACHE_MOONCAKE_RUNTIME_KEY: &str = "sglang_hicache_mooncake";
 const MOONCAKE_EVENT_RECONNECT_DELAY: Duration = Duration::from_secs(1);
