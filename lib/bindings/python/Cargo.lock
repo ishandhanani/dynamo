@@ -2128,6 +2128,7 @@ version = "1.7.0"
 dependencies = [
  "async-trait",
  "dynamo-kv-router",
+ "dynamo-scheduler",
  "fastrand",
  "parking_lot",
  "serde",

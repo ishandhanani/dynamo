@@ -21,7 +21,7 @@ pub fn default_registry() -> RouterPluginRegistry {
     RouterPluginRegistry::default().with_default_factory(default_factory())
 }
 
-use dynamo_kv_router::plugins::{RouterPluginRegistry, RouterPluginRegistryError};
+use dynamo_kv_router::plugins::prelude::*;
 
 /// Register the named providers Dynamo ships, without changing the host's default factory.
 ///
@@ -37,9 +37,7 @@ pub fn register(registry: &mut RouterPluginRegistry) -> Result<(), RouterPluginR
 
 #[cfg(test)]
 mod tests {
-    use dynamo_kv_router::plugins::WorkerSelectionPolicyRegistryError;
-    use dynamo_kv_router::plugins::worker_selection::WorkerSelectionPolicyFactory;
-    use dynamo_kv_router::{KvRouterConfig, RoutingPartitionRef, SelectionConfig, WorkerType};
+    use dynamo_kv_router::plugins::prelude::*;
 
     use super::*;
 
