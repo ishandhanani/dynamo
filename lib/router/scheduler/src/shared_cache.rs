@@ -6,8 +6,8 @@
 
 use async_trait::async_trait;
 
-use crate::indexer::KvRouterError;
 use crate::protocols::SharedCacheHits;
+use dynamo_kv_indexer::KvRouterError;
 
 /// Trait for querying an external shared KV cache pool.
 ///
