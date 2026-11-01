@@ -2446,6 +2446,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "dynamo-error"
+version = "1.7.0"
+dependencies = [
+ "anyhow",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "dynamo-ext-proc"
 version = "1.7.0"
 dependencies = [
@@ -2976,6 +2985,7 @@ dependencies = [
  "dashmap",
  "derive-getters",
  "derive_builder",
+ "dynamo-error",
  "dynamo-truthy",
  "educe",
  "either",
