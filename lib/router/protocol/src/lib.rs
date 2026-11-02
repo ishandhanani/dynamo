@@ -9,8 +9,9 @@
 //! `serde`, `serde_json`, and `thiserror`, and the layering gate checks that by equality.
 //!
 //! Deliberately elsewhere: KV event types, their engine codec, and the residency vocabulary
-//! (`dynamo-kv-events`), KV transfer hints and the worker transfer keys (`dynamo-kv-hints`),
-//! the hash functions (`dynamo-kv-hashing`), the scheduling request, eligibility, and host hooks
+//! (`dynamo-kv-events`; the compact `ResidencyOwnerKey` is an identity and stays here), KV
+//! transfer hints and the worker transfer keys (`dynamo-kv-hints`), the hash functions
+//! (`dynamo-kv-hashing`), the scheduling request, eligibility, and host hooks
 //! (`dynamo-scheduler`), candidate rows (`dynamo-worker-selection`), queue rejection
 //! (`dynamo-admission`), and the fullness rule and the scheduler-load replica wire
 //! (`dynamo-slot-tracker`).

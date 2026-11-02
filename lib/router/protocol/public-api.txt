@@ -105,6 +105,10 @@ pub fn dynamo_router_protocol::identity::PoolId::fmt(&self, &mut core::fmt::Form
 impl core::str::traits::FromStr for dynamo_router_protocol::identity::PoolId
 pub type dynamo_router_protocol::identity::PoolId::Err = dynamo_router_protocol::identity::IdentityParseError
 pub fn dynamo_router_protocol::identity::PoolId::from_str(&str) -> core::result::Result<Self, Self::Err>
+pub struct dynamo_router_protocol::identity::ResidencyOwnerKey(_)
+impl dynamo_router_protocol::identity::ResidencyOwnerKey
+pub const fn dynamo_router_protocol::identity::ResidencyOwnerKey::digest(self) -> [u8; 16]
+pub const fn dynamo_router_protocol::identity::ResidencyOwnerKey::from_digest([u8; 16]) -> Self
 pub struct dynamo_router_protocol::identity::RoutingPartitionId
 pub dynamo_router_protocol::identity::RoutingPartitionId::model_name: alloc::string::String
 pub dynamo_router_protocol::identity::RoutingPartitionId::routing_group: alloc::string::String

@@ -6,8 +6,8 @@
 
 use rustc_hash::FxHashMap;
 
-use dynamo_kv_events::residency::{ResidencyOwner, ResidencyOwnerKey};
-use dynamo_router_protocol::identity::CacheOwnerId;
+use dynamo_kv_events::residency::ResidencyOwner;
+use dynamo_router_protocol::identity::{CacheOwnerId, ResidencyOwnerKey};
 use dynamo_router_protocol::metadata::RouterHintSourceMetadata;
 use dynamo_router_protocol::worker::WorkerWithDpRank;
 

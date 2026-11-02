@@ -25,11 +25,13 @@ pub use dynamo_scheduler::protocols::{
 
 pub use dynamo_router_protocol::block_hash::{ExternalSequenceBlockHash, LocalBlockHash};
 
+pub use dynamo_router_protocol::identity::ResidencyOwnerKey;
+
 pub use dynamo_router_protocol::metadata::RouterHintSourceMetadata;
 
 pub use dynamo_kv_events::residency::{
-    ResetScope, ResidencyDomain, ResidencyOwner, ResidencyOwnerKey, StorageTier,
-    UnsupportedResidencyDomain, WireResidencyDomain,
+    ResetScope, ResidencyDomain, ResidencyOwner, StorageTier, UnsupportedResidencyDomain,
+    WireResidencyDomain,
 };
 
 pub use dynamo_router_protocol::worker::{
