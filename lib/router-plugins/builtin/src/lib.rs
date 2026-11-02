@@ -9,6 +9,7 @@
 //! Sequence tracking, eligibility, and admission remain in dynamo-kv-router.
 
 mod default;
+mod shape_classifier;
 mod thunderagent;
 mod two_tier_cost_fn;
 pub use default::{
@@ -32,6 +33,7 @@ pub fn register(registry: &mut RouterPluginRegistry) -> Result<(), RouterPluginR
     default::register(registry)?;
     two_tier_cost_fn::register(registry)?;
     thunderagent::register(registry)?;
+    shape_classifier::register(registry)?;
     Ok(())
 }
 

@@ -47,6 +47,7 @@ pub struct ClassifyRequest {
     session_context: Option<SessionContext>,
     pinned_worker: Option<WorkerWithDpRank>,
     busy_thresholds: Option<ClassifyBusyThresholds>,
+    expected_output_tokens: Option<u32>,
 }
 
 /// The router's policy classes and live router-wide thresholds, as seen by one
@@ -89,6 +90,7 @@ impl ClassifyRequest {
             session_context: None,
             pinned_worker: None,
             busy_thresholds: None,
+            expected_output_tokens: None,
         }
     }
 
@@ -109,6 +111,14 @@ impl ClassifyRequest {
 
     pub(crate) fn with_pinned_worker(mut self, pinned_worker: Option<WorkerWithDpRank>) -> Self {
         self.pinned_worker = pinned_worker;
+        self
+    }
+
+    pub(crate) fn with_expected_output_tokens(
+        mut self,
+        expected_output_tokens: Option<u32>,
+    ) -> Self {
+        self.expected_output_tokens = expected_output_tokens;
         self
     }
 
@@ -253,6 +263,12 @@ impl ClassifyRequest {
     /// target cannot override this pin.
     pub fn pinned_worker(&self) -> Option<WorkerWithDpRank> {
         self.pinned_worker
+    }
+
+    /// The caller's output budget (`max_tokens`), if the request carries one. Expected decode
+    /// work: not part of the default scheduling cost or any threshold.
+    pub fn expected_output_tokens(&self) -> Option<u32> {
+        self.expected_output_tokens
     }
 
     /// Only the explicit overrides feed the queue: cache eligibility is

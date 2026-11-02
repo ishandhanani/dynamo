@@ -1104,6 +1104,7 @@ impl<
         let mut classification =
             ClassifyRequest::with_timing(request.isl_tokens, cached_tokens, ingress_at)
                 .with_pinned_worker(request.pinned_worker)
+                .with_expected_output_tokens(request.expected_output_tokens)
                 .with_sequence_hashes(request.token_seq.as_deref())
                 .with_busy_thresholds(Arc::clone(&self.profile), reject_thresholds);
         if let Some(request_id) = request.mode.request_id() {
