@@ -7,21 +7,6 @@ pub struct dynamo_router_protocol::attempt::AttemptIdMinter
 impl dynamo_router_protocol::attempt::AttemptIdMinter
 pub fn dynamo_router_protocol::attempt::AttemptIdMinter::mint(&self) -> dynamo_router_protocol::attempt::AttemptId
 pub const fn dynamo_router_protocol::attempt::AttemptIdMinter::new() -> Self
-pub mod dynamo_router_protocol::block_hash
-pub struct dynamo_router_protocol::block_hash::ExternalSequenceBlockHash(pub u64)
-impl core::convert::From<i64> for dynamo_router_protocol::block_hash::ExternalSequenceBlockHash
-pub fn dynamo_router_protocol::block_hash::ExternalSequenceBlockHash::from(i64) -> Self
-impl core::convert::From<u64> for dynamo_router_protocol::block_hash::ExternalSequenceBlockHash
-pub fn dynamo_router_protocol::block_hash::ExternalSequenceBlockHash::from(u64) -> Self
-impl serde_core::ser::Serialize for dynamo_router_protocol::block_hash::ExternalSequenceBlockHash
-pub fn dynamo_router_protocol::block_hash::ExternalSequenceBlockHash::serialize<S>(&self, S) -> core::result::Result<<S as serde_core::ser::Serializer>::Ok, <S as serde_core::ser::Serializer>::Error> where S: serde_core::ser::Serializer
-impl<'de> serde_core::de::Deserialize<'de> for dynamo_router_protocol::block_hash::ExternalSequenceBlockHash
-pub fn dynamo_router_protocol::block_hash::ExternalSequenceBlockHash::deserialize<D>(D) -> core::result::Result<Self, <D as serde_core::de::Deserializer>::Error> where D: serde_core::de::Deserializer<'de>
-pub struct dynamo_router_protocol::block_hash::LocalBlockHash(pub u64)
-impl serde_core::ser::Serialize for dynamo_router_protocol::block_hash::LocalBlockHash
-pub fn dynamo_router_protocol::block_hash::LocalBlockHash::serialize<S>(&self, S) -> core::result::Result<<S as serde_core::ser::Serializer>::Ok, <S as serde_core::ser::Serializer>::Error> where S: serde_core::ser::Serializer
-impl<'de> serde_core::de::Deserialize<'de> for dynamo_router_protocol::block_hash::LocalBlockHash
-pub fn dynamo_router_protocol::block_hash::LocalBlockHash::deserialize<D>(D) -> core::result::Result<Self, <D as serde_core::de::Deserializer>::Error> where D: serde_core::de::Deserializer<'de>
 pub mod dynamo_router_protocol::columns
 pub struct dynamo_router_protocol::columns::WorkerInfo
 impl dynamo_router_protocol::columns::WorkerInfo
@@ -159,19 +144,6 @@ pub struct dynamo_router_protocol::metadata::RouterHintSourceMetadata
 pub dynamo_router_protocol::metadata::RouterHintSourceMetadata::source_control_endpoint: alloc::string::String
 pub dynamo_router_protocol::metadata::RouterHintSourceMetadata::topology_domains: std::collections::hash::map::HashMap<alloc::string::String, alloc::string::String>
 pub dynamo_router_protocol::metadata::RouterHintSourceMetadata::worker_type: alloc::string::String
-pub mod dynamo_router_protocol::mm
-pub struct dynamo_router_protocol::mm::BlockExtraInfo
-pub dynamo_router_protocol::mm::BlockExtraInfo::mm_objects: alloc::vec::Vec<dynamo_router_protocol::mm::BlockMmObjectInfo>
-pub struct dynamo_router_protocol::mm::BlockMmObjectInfo
-pub dynamo_router_protocol::mm::BlockMmObjectInfo::mm_hash: u64
-pub dynamo_router_protocol::mm::BlockMmObjectInfo::offsets: alloc::vec::Vec<(usize, usize)>
-pub struct dynamo_router_protocol::mm::RequestExtraInfo
-pub dynamo_router_protocol::mm::RequestExtraInfo::mm_objects: alloc::vec::Vec<dynamo_router_protocol::mm::RequestMmObjectInfo>
-impl dynamo_router_protocol::mm::RequestExtraInfo
-pub fn dynamo_router_protocol::mm::RequestExtraInfo::to_block_level(&self, usize, usize) -> alloc::vec::Vec<core::option::Option<dynamo_router_protocol::mm::BlockExtraInfo>>
-pub struct dynamo_router_protocol::mm::RequestMmObjectInfo
-pub dynamo_router_protocol::mm::RequestMmObjectInfo::mm_hash: u64
-pub dynamo_router_protocol::mm::RequestMmObjectInfo::offsets: alloc::vec::Vec<(usize, usize)>
 pub mod dynamo_router_protocol::session
 pub enum dynamo_router_protocol::session::WorkerSelectionInputTrigger
 pub dynamo_router_protocol::session::WorkerSelectionInputTrigger::Other

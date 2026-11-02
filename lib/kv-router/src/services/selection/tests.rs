@@ -24,8 +24,8 @@ use dynamo_kv_hashing::routing::{
 };
 use dynamo_kv_indexer::overlap::OverlapScores;
 use dynamo_kv_indexer::{LowerTierMatchDetails, MatchDetails, TieredMatchDetails};
+use dynamo_multimodal::{BlockExtraInfo, BlockMmObjectInfo};
 use dynamo_router_protocol::identity::RoutingPartitionRef;
-use dynamo_router_protocol::mm::{BlockExtraInfo, BlockMmObjectInfo};
 use dynamo_router_protocol::worker::{WorkerId, WorkerWithDpRank};
 use dynamo_scheduler::overlap::build_overlap_scores_response;
 use dynamo_scheduler::tracking_hash::{TrackingHashContext, TrackingHashScope};
@@ -793,8 +793,8 @@ fn keyed_hash_only_inputs_remain_trusted_for_selection_and_reservation() {
     assert_eq!(
         selection.block_hashes,
         vec![
-            dynamo_router_protocol::block_hash::LocalBlockHash(11),
-            dynamo_router_protocol::block_hash::LocalBlockHash(29)
+            dynamo_kv_hashing::LocalBlockHash(11),
+            dynamo_kv_hashing::LocalBlockHash(29)
         ]
     );
     assert_eq!(selection.sequence_hashes, vec![u64::MAX, 7]);

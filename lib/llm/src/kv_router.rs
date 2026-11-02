@@ -24,8 +24,8 @@ use dynamo_kv_router::plugins::worker_selection::{
     WorkerInfo, WorkerInfoExt, WorkerInputs, WorkerSelectionPolicyFactory,
 };
 use dynamo_kv_router::tracking_hash::tracking_hash_context;
+use dynamo_multimodal::BlockExtraInfo;
 use dynamo_router_protocol::identity::{DEFAULT_ROUTING_GROUP, RoutingPartitionRef};
-use dynamo_router_protocol::mm::BlockExtraInfo;
 use dynamo_router_protocol::worker::{WorkerId, WorkerWithDpRank};
 use dynamo_runtime::{
     CancellationToken,
@@ -2664,7 +2664,7 @@ mod tests {
     #[tokio::test]
     async fn session_prefix_tracking_survives_shared_core_selection(#[case] threads: u32) {
         use dynamo_kv_events::residency::StorageTier;
-        use dynamo_router_protocol::block_hash::ExternalSequenceBlockHash;
+        use dynamo_kv_hashing::ExternalSequenceBlockHash;
 
         let component = make_test_component("session-prefix-core").await;
         let endpoint = component.endpoint("backend");
@@ -3042,8 +3042,8 @@ mod tests {
     async fn enroll_public_request_attempt_cancelled_during_routing_update_frees_booking() {
         use std::sync::atomic::{AtomicBool, Ordering};
 
+        use dynamo_kv_hashing::LocalBlockHash;
         use dynamo_kv_indexer::host::{RemotePrimary, TieredMatchDetails};
-        use dynamo_router_protocol::block_hash::LocalBlockHash;
 
         /// Records park until `release` is notified.
         struct PausedRecord {
