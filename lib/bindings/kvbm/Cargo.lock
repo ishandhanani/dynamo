@@ -2063,6 +2063,7 @@ dependencies = [
  "dynamo-router-protocol",
  "dynamo-slot-tracker",
  "dynamo-tokens",
+ "dynamo-worker-selection",
  "futures-util",
  "ordered-float 4.6.0",
  "parking_lot",

@@ -18,6 +18,7 @@ testing = ["dynamo-router-protocol/testing"]
 [dependencies]
 dynamo-router-protocol = { workspace = true }
 dynamo-slot-tracker = { workspace = true }
+dynamo-worker-selection = { workspace = true }
 dynamo-tokens = { workspace = true }
 async-trait = { workspace = true }
 futures-util = { workspace = true }

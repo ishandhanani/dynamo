@@ -7,13 +7,15 @@
 //! [`WorkerSelectionPolicy`] pulls each rank's row at the columns its filters, scorers,
 //! and picker declared, and returns a [`RowPick`] or a [`SelectionFailure`]. Everything a
 //! plugin names lives here: the [`WorkerFilter`], [`WorkerScorer`], and [`WorkerPicker`]
-//! traits, the [`WorkerSelectionContext`] view of the request, the candidate rows and
-//! their views, runtime parameter updates, the selection slice of the router config, the
+//! traits, the [`WorkerSelectionContext`] view of the request, the column vocabulary
+//! ([`columns`]: [`WorkerInputs`], [`WorkerInfo`]), the candidate rows and their views,
+//! runtime parameter updates, the selection slice of the router config, the
 //! conditional-disaggregation policies, and the LoRA narrowing filter. The kv-transfer source
 //! summary a policy credits fetches with lives in `dynamo-kv-hints`; the kernel builds the
 //! [`WorkerTransferInput`] column from it. The kernel's `WorkerSelector`, its request-to-row
 //! materialization, and the config- and projection-derived columns stay in `lib/kv-router`.
 
+pub mod columns;
 pub mod conditional_disagg;
 mod context;
 mod error;

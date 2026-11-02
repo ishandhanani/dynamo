@@ -7,7 +7,7 @@
 
 use std::ops::BitOr;
 
-use crate::worker::{WorkerCapacity, WorkerWithDpRank};
+use dynamo_router_protocol::worker::{WorkerCapacity, WorkerWithDpRank};
 
 /// Optional worker-signal groups a stage component declares: a classifier, filter, scorer,
 /// or picker asks for the columns it reads, and the kernel builds rows with exactly those.

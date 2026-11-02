@@ -22,28 +22,6 @@ impl serde_core::ser::Serialize for dynamo_router_protocol::block_hash::LocalBlo
 pub fn dynamo_router_protocol::block_hash::LocalBlockHash::serialize<S>(&self, S) -> core::result::Result<<S as serde_core::ser::Serializer>::Ok, <S as serde_core::ser::Serializer>::Error> where S: serde_core::ser::Serializer
 impl<'de> serde_core::de::Deserialize<'de> for dynamo_router_protocol::block_hash::LocalBlockHash
 pub fn dynamo_router_protocol::block_hash::LocalBlockHash::deserialize<D>(D) -> core::result::Result<Self, <D as serde_core::de::Deserializer>::Error> where D: serde_core::de::Deserializer<'de>
-pub mod dynamo_router_protocol::columns
-pub struct dynamo_router_protocol::columns::WorkerInfo
-impl dynamo_router_protocol::columns::WorkerInfo
-pub fn dynamo_router_protocol::columns::WorkerInfo::capacity(&self) -> dynamo_router_protocol::worker::WorkerCapacity
-pub fn dynamo_router_protocol::columns::WorkerInfo::max_num_batched_tokens(&self) -> core::option::Option<u64>
-pub fn dynamo_router_protocol::columns::WorkerInfo::new(dynamo_router_protocol::worker::WorkerWithDpRank, dynamo_router_protocol::worker::WorkerCapacity) -> Self
-pub fn dynamo_router_protocol::columns::WorkerInfo::total_kv_blocks(&self) -> core::option::Option<u64>
-pub fn dynamo_router_protocol::columns::WorkerInfo::worker(&self) -> dynamo_router_protocol::worker::WorkerWithDpRank
-pub struct dynamo_router_protocol::columns::WorkerInputs(_)
-impl dynamo_router_protocol::columns::WorkerInputs
-pub const dynamo_router_protocol::columns::WorkerInputs::ALL: Self
-pub const dynamo_router_protocol::columns::WorkerInputs::CACHE: Self
-pub const dynamo_router_protocol::columns::WorkerInputs::KV_TRANSFER: Self
-pub const dynamo_router_protocol::columns::WorkerInputs::LOAD: Self
-pub const dynamo_router_protocol::columns::WorkerInputs::NONE: Self
-pub const dynamo_router_protocol::columns::WorkerInputs::OCCUPANCY: Self
-pub const dynamo_router_protocol::columns::WorkerInputs::PREFERRED_TAINT: Self
-pub const fn dynamo_router_protocol::columns::WorkerInputs::contains(self, Self) -> bool
-pub fn dynamo_router_protocol::columns::WorkerInputs::without(self, Self) -> Self
-impl core::ops::bit::BitOr for dynamo_router_protocol::columns::WorkerInputs
-pub type dynamo_router_protocol::columns::WorkerInputs::Output = dynamo_router_protocol::columns::WorkerInputs
-pub fn dynamo_router_protocol::columns::WorkerInputs::bitor(self, Self) -> Self::Output
 pub mod dynamo_router_protocol::identity
 pub enum dynamo_router_protocol::identity::IdentityParseError
 pub dynamo_router_protocol::identity::IdentityParseError::InvalidCacheOwner

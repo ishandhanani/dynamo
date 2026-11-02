@@ -15,8 +15,8 @@ use tokio::sync::{Mutex as AsyncMutex, Notify, mpsc};
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
-use dynamo_router_protocol::columns::WorkerInputs;
 use dynamo_router_protocol::worker::WorkerWithDpRank;
+use dynamo_worker_selection::columns::WorkerInputs;
 
 use super::WorkerView;
 

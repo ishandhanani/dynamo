@@ -352,7 +352,7 @@ const _: () = assert!(size_of::<WorkerLoadInput>() == 40);
 #[cfg(target_pointer_width = "64")]
 const _: () = assert!(size_of::<CandidateData>() == 128);
 
-pub use dynamo_router_protocol::columns::{WorkerInfo, WorkerInputs};
+pub use crate::columns::{WorkerInfo, WorkerInputs};
 pub use dynamo_router_protocol::worker::WorkerCapacity;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]

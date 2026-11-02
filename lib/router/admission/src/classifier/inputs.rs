@@ -3,7 +3,7 @@
 
 use std::sync::Arc;
 
-use dynamo_router_protocol::columns::WorkerInfo;
+use dynamo_worker_selection::columns::WorkerInfo;
 
 /// Cached discovery inputs for one router. Workers appear and disappear as the
 /// host processes registration updates; this does not probe worker health.

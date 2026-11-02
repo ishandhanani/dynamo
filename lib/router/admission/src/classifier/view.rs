@@ -5,8 +5,8 @@
 //! groups the classifier declared. Admission owns the view so that it never names worker
 //! selection's rows; the kernel implements it over them.
 
-use dynamo_router_protocol::columns::WorkerInfo;
 use dynamo_slot_tracker::busy::RankLoad;
+use dynamo_worker_selection::columns::WorkerInfo;
 
 /// Every worker rank eligible for one request, lent to [`super::RequestClassifier::classify`]
 /// for the duration of the call. Views are read-only snapshots, so they are `Sync` and a

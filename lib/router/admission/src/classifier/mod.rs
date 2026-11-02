@@ -21,10 +21,10 @@ use async_trait::async_trait;
 use dynamo_tokens::SequenceHash;
 use tokio::time::Instant;
 
-use dynamo_router_protocol::columns::WorkerInputs;
 use dynamo_router_protocol::session::SessionContext;
 use dynamo_router_protocol::worker::{WorkerAffinityTarget, WorkerWithDpRank};
 use dynamo_slot_tracker::busy::BusyThresholds;
+use dynamo_worker_selection::columns::WorkerInputs;
 
 use crate::profile::PolicyProfile;
 use crate::queue::QueueSnapshot;

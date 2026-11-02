@@ -9,7 +9,6 @@ use std::collections::{HashMap, HashSet};
 use std::time::Duration;
 
 use criterion::{BenchmarkId, Criterion, Throughput, black_box, criterion_group, criterion_main};
-use dynamo_router_protocol::columns::WorkerInputs;
 use dynamo_router_protocol::worker::{WorkerId, WorkerWithDpRank};
 use dynamo_scheduler::ScheduleMode;
 use dynamo_scheduler::SchedulingRequest;
@@ -17,6 +16,7 @@ use dynamo_scheduler::overlap::OverlapSignals;
 use dynamo_scheduler::protocols::{RoutingConstraints, WorkerConfigLike};
 use dynamo_scheduler::selector::{DefaultWorkerSelector, WorkerSelectionInput, WorkerSelector};
 use dynamo_slot_tracker::WorkerLoadProjection;
+use dynamo_worker_selection::columns::WorkerInputs;
 use dynamo_worker_selection::{
     SelectionConfig, WorkerCandidate, WorkerCandidates, WorkerFilter, WorkerInputView,
     WorkerPicker, WorkerScorer, WorkerSelectionContext, WorkerSelectionPolicy,
