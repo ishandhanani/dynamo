@@ -5,6 +5,7 @@
 //! from router configuration with runtime-backed metrics and, when configured,
 //! a request-plane remote primary.
 
+use dynamo_kv_router::indexer::KvIndexerMetricsExt;
 use std::{sync::Arc, time::Duration};
 
 use anyhow::Result;
@@ -34,6 +35,7 @@ mod embedding_cache;
 mod ingress;
 mod recovery;
 pub mod remote;
+pub(crate) mod reply;
 
 pub use self::embedding_cache::{
     EmbeddingCacheIndexer, preprocessed_multimodal_cache_keys, try_build_cache_indexer,
