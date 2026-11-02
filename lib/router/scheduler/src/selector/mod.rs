@@ -47,10 +47,9 @@ use dynamo_worker_selection::{RuntimePolicyConfig, RuntimePolicyError, RuntimePo
 
 use super::filter::{RoutingEligibility, WorkerEligibilityError};
 use super::types::{KvSchedulerError, SchedulingRequest, WorkerSelectionPolicyError};
-use crate::protocols::{
-    SelectionTrace, SelectionTraceSpec, WorkerConfigLike, WorkerId, WorkerSelectionResult,
-    WorkerWithDpRank,
-};
+use crate::protocols::{WorkerConfigLike, WorkerSelectionResult};
+use dynamo_router_protocol::worker::{WorkerId, WorkerWithDpRank};
+use dynamo_worker_selection::{SelectionTrace, SelectionTraceSpec};
 
 /// Low-level selector used by routing hosts.
 ///
