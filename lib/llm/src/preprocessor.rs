@@ -3654,6 +3654,9 @@ impl OpenAIPreprocessor {
                 "thinking_token_budget is not supported with GPT-OSS structured output on SGLang",
             ));
         }
+        // The caller's output budget doubles as the router's expected decode work when no
+        // agent hint overrides it.
+        let request_max_tokens = stop_conditions.max_tokens;
         builder.stop_conditions(stop_conditions);
         builder.sampling_options(request.extract_sampling_options()?);
 
@@ -3712,7 +3715,7 @@ impl OpenAIPreprocessor {
                 decode_worker_id: nvext.decode_worker_id,
                 dp_rank: nvext.dp_rank,
                 prefill_dp_rank: nvext.prefill_dp_rank,
-                expected_output_tokens: hints.and_then(|h| h.osl),
+                expected_output_tokens: hints.and_then(|h| h.osl).or(request_max_tokens),
                 priority_jump,
                 strict_priority,
                 priority,
@@ -3725,12 +3728,13 @@ impl OpenAIPreprocessor {
                     .map(routing_constraints_to_kv),
             };
             builder.routing(Some(routing));
-        } else if lora_name.is_some() || cache_namespace.is_some() {
-            // Ensure routing hints exist when we have LoRA or a legacy
-            // top-level cache_salt, even when nvext is absent.
+        } else if lora_name.is_some() || cache_namespace.is_some() || request_max_tokens.is_some() {
+            // Ensure routing hints exist when we have LoRA, a legacy top-level
+            // cache_salt, or an output budget, even when nvext is absent.
             builder.routing(Some(RoutingHints {
                 lora_name,
                 cache_namespace,
+                expected_output_tokens: request_max_tokens,
                 ..Default::default()
             }));
         }
