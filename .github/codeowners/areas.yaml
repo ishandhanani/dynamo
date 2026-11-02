@@ -53,6 +53,7 @@ areas:
   - components/src/dynamo/thunderagent_router/
   - lib/kv-events/
   - lib/kv-hints/
+  - lib/multimodal/
   - lib/zmq/
   - lib/kv-router/
   - lib/kv-router/src/indexer/
@@ -1062,6 +1063,10 @@ shared:
   - router
   - global-router
 - glob: lib/kv-events/src/zmq_wire/extra_keys.rs
+  owners:
+  - router
+  - multimodal
+- glob: lib/multimodal/
   owners:
   - router
   - multimodal

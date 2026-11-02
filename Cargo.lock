@@ -2613,6 +2613,7 @@ name = "dynamo-kv-events"
 version = "1.7.0"
 dependencies = [
  "dynamo-kv-hashing",
+ "dynamo-multimodal",
  "dynamo-router-protocol",
  "rmp-serde",
  "rstest 0.18.2",
@@ -2629,7 +2630,7 @@ version = "1.7.0"
 dependencies = [
  "criterion",
  "derive_builder",
- "dynamo-router-protocol",
+ "dynamo-multimodal",
  "dynamo-tokens",
  "rmp-serde",
  "rstest 0.18.2",
@@ -2703,6 +2704,7 @@ dependencies = [
  "dynamo-kv-hashing",
  "dynamo-kv-hints",
  "dynamo-kv-indexer",
+ "dynamo-multimodal",
  "dynamo-router-protocol",
  "dynamo-scheduler",
  "dynamo-session-affinity",
@@ -2780,6 +2782,7 @@ dependencies = [
  "dynamo-kv-router",
  "dynamo-memory",
  "dynamo-mocker",
+ "dynamo-multimodal",
  "dynamo-parsers",
  "dynamo-parsers-v2",
  "dynamo-protocols",
@@ -2982,6 +2985,14 @@ dependencies = [
  "tokio-util",
  "tracing",
  "uuid",
+]
+
+[[package]]
+name = "dynamo-multimodal"
+version = "1.7.0"
+dependencies = [
+ "serde",
+ "xxhash-rust",
 ]
 
 [[package]]
@@ -3197,6 +3208,7 @@ dependencies = [
  "dynamo-kv-hashing",
  "dynamo-kv-hints",
  "dynamo-kv-indexer",
+ "dynamo-multimodal",
  "dynamo-router-protocol",
  "dynamo-session-affinity",
  "dynamo-slot-tracker",
