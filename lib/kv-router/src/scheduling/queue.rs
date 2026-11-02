@@ -41,7 +41,9 @@ use super::types::{
 use crate::plugins::worker_selection::{
     RuntimePolicyConfig, RuntimePolicyError, RuntimePolicyUpdate,
 };
-use crate::plugins::worker_selection::{WorkerCapacity, WorkerInputRows, WorkerLoadInput};
+use crate::plugins::worker_selection::{
+    WorkerCapacity, WorkerCapacityExt, WorkerInputRows, WorkerLoadInput,
+};
 use crate::protocols::{
     LocalBlockHash, PrefillLoadHint, SelectionTrace, SelectionTraceSpec, WorkerConfigLike,
     WorkerId, WorkerSelectionResult, WorkerWithDpRank,
@@ -256,13 +258,7 @@ impl RuntimePolicyControl {
     }
 }
 
-#[doc(hidden)]
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SchedulerBookingDescriptor {
-    pub request_id: String,
-    pub worker: WorkerWithDpRank,
-    pub attempt_id: AttemptId,
-}
+pub use dynamo_slot_tracker::booking::SchedulerBookingDescriptor;
 
 #[derive(Debug)]
 enum SchedulerCleanupTarget {
