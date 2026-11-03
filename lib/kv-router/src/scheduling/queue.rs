@@ -6935,6 +6935,91 @@ policy_classes:
         }
     }
 
+    /// A command arriving while a candidate's overlap refresh waits on the indexer abandons
+    /// the refresh: the candidate is admitted with the scores it was enqueued with. Under
+    /// load, every long-waiting candidate drains while enqueues keep arriving, so this is the
+    /// common path, not the exception.
+    #[tokio::test(flavor = "current_thread", start_paused = true)]
+    async fn command_arriving_during_refresh_abandons_it_and_admits_stale_scores() {
+        let block_size = 16u32;
+        let isl = 64usize;
+        let worker = WorkerWithDpRank::new(0, 0);
+        let refresher = Arc::new(BlockingRefresher::new(RefreshedOverlap::from_overlap(
+            OverlapSignals {
+                tier_overlap_blocks: Default::default(),
+                effective_overlap_blocks: FxHashMap::from_iter([(worker, 7.0)]),
+                effective_cached_tokens: FxHashMap::from_iter([(worker, 56)]),
+            },
+        )));
+        let (queue, slots) = make_queue_with_blocking_refresher(
+            1,
+            block_size,
+            isl,
+            Some(0.0),
+            refresher.clone(),
+            ADMISSION_CHANNEL_CAPACITY,
+        );
+
+        let (req1, rx1) = make_request("req-1", isl);
+        queue.enqueue(req1).await;
+        let _ = rx1.await.expect("rx1 dropped").expect("req-1 failed");
+
+        let (mut req2, rx2) = make_request("req-2", isl);
+        // One cached block, so req-2 still books 48 prefill tokens and fills the worker.
+        req2.overlap.effective_overlap_blocks.insert(worker, 1.0);
+        req2.overlap.effective_cached_tokens.insert(worker, 16);
+        queue
+            .enqueue_with_block_hashes(req2, Some(vec![LocalBlockHash(42)]))
+            .await;
+        assert_eq!(queue.pending_count(), 1);
+
+        slots
+            .mark_prefill_completed(&"req-1".to_string(), decay_now())
+            .unwrap();
+        slots.free(&"req-1".to_string(), decay_now()).unwrap();
+        tokio::time::advance(Duration::from_secs(11)).await;
+
+        let update = {
+            let queue = Arc::clone(&queue);
+            tokio::spawn(async move {
+                queue.update().await;
+            })
+        };
+        refresher.wait_for_calls(1).await;
+        assert_eq!(queue.pending_count(), 0, "req-2 is the refreshing candidate");
+
+        // Ordinary scheduler work arrives while the lookup is outstanding: one enqueue.
+        let (req3, rx3) = make_request("req-3", isl);
+        queue.enqueue(req3).await;
+        update.await.unwrap();
+
+        // The refresh was never released, yet req-2 is admitted: the interrupted refresh
+        // is dropped and the enqueue-time scores are used.
+        let resp2 = rx2.await.expect("rx2 dropped").expect("req-2 failed");
+        assert_eq!(refresher.calls.load(Ordering::Relaxed), 1);
+        assert_eq!(resp2.best_worker, worker);
+        assert_eq!(
+            resp2.effective_overlap_blocks, 1.0,
+            "the refreshed score (7.0) was discarded"
+        );
+        assert_eq!(resp2.cached_tokens, 16, "the refreshed count (56) was discarded");
+
+        // req-3 waits behind the booked worker, then dispatches when it frees.
+        assert_eq!(queue.pending_count(), 1);
+        slots
+            .mark_prefill_completed(&"req-2".to_string(), decay_now())
+            .unwrap();
+        slots.free(&"req-2".to_string(), decay_now()).unwrap();
+        queue.update().await;
+        let resp3 = rx3.await.expect("rx3 dropped").expect("req-3 failed");
+        assert_eq!(resp3.best_worker, worker);
+        assert_eq!(queue.pending_count(), 0);
+        slots
+            .mark_prefill_completed(&"req-3".to_string(), decay_now())
+            .unwrap();
+        slots.free(&"req-3".to_string(), decay_now()).unwrap();
+    }
+
     #[tokio::test(flavor = "current_thread", start_paused = true)]
     async fn cancelled_enqueue_wait_keeps_cleanup_behind_command() {
         let block_size = 16u32;
