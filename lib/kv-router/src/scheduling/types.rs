@@ -35,25 +35,7 @@ pub type OverloadedWorkerProvider =
 pub type WorkerAvailabilityProvider =
     Arc<dyn Fn(&SchedulingRequest) -> Option<Arc<HashSet<WorkerId>>> + Send + Sync + 'static>;
 
-#[derive(Debug, thiserror::Error)]
-pub enum WorkerSelectionPolicyError {
-    #[error("worker selection policy failed: {0}")]
-    Failed(String),
-
-    #[error("scorer {scorer_index} produced a non-finite cost for candidate row {row}")]
-    NonFiniteCost { scorer_index: usize, row: usize },
-
-    #[error(
-        "picker returned candidate row {row}, but the candidate table contains {candidate_count} rows"
-    )]
-    InvalidPickerRow { row: usize, candidate_count: usize },
-}
-
-impl WorkerSelectionPolicyError {
-    pub fn failed(message: impl Into<String>) -> Self {
-        Self::Failed(message.into())
-    }
-}
+pub use crate::plugins::worker_selection::WorkerSelectionPolicyError;
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct TierOverlapBlocks {
@@ -463,6 +445,13 @@ impl SchedulingRequest {
         let device = tiers.device.get(&worker).copied().unwrap_or(0);
         let host_pinned = tiers.host_pinned.get(&worker).copied().unwrap_or(0);
         device.saturating_add(host_pinned)
+    }
+
+    /// Whether any rank reported per-tier overlap, so device overlap is read from the
+    /// tier blocks rather than the effective estimate.
+    pub(crate) fn has_tier_matches(&self) -> bool {
+        let tiers = &self.overlap.tier_overlap_blocks;
+        !tiers.device.is_empty() || !tiers.host_pinned.is_empty() || !tiers.disk.is_empty()
     }
 
     pub(crate) fn effective_overlap_blocks_for(&self, worker: WorkerWithDpRank) -> f64 {

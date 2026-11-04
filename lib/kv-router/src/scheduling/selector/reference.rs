@@ -8,87 +8,17 @@ use std::sync::Arc;
 
 use parking_lot::Mutex;
 
-use super::policy::WorkerSelectionPolicyStateRef;
 use super::{
-    CandidateData, MaterializedSelectionInput, WorkerInputs, WorkerSelectionContext,
-    WorkerSelectionInput, WorkerSelector, select_worker_with_policy, source_prefix_blocks,
+    CandidateData, SelectionRowSource, WorkerInputs, WorkerSelectionContext, WorkerSelectionInput,
+    WorkerSelector, select_reference, source_prefix_blocks,
 };
 use crate::kv_hints::KvTransferScope;
+use crate::plugins::worker_selection::DefaultWorkerPicker;
+use crate::plugins::worker_selection::SelectionConfig;
 use crate::plugins::worker_selection::WorkerTransferInput;
 use crate::protocols::{WorkerConfigLike, WorkerId, WorkerSelectionResult, WorkerWithDpRank};
-use crate::scheduling::config::KvRouterConfig;
 use crate::scheduling::filter::RoutingEligibility;
 use crate::scheduling::types::{KvSchedulerError, SchedulingRequest};
-
-#[cfg(any(test, feature = "bench"))]
-fn softmax_sample_entries<T: Copy>(
-    entries: Vec<(T, f64)>,
-    temperature: f64,
-    sample: f64,
-) -> (T, f64) {
-    assert!(!entries.is_empty(), "Empty logits for softmax sampling");
-
-    let mut probabilities = Vec::with_capacity(entries.len());
-    let row = softmax_sample_index(
-        &entries,
-        |(_, cost)| *cost,
-        temperature,
-        sample,
-        &mut probabilities,
-    );
-    entries[row]
-}
-
-fn softmax_sample_index<T>(
-    entries: &[T],
-    cost: impl Fn(&T) -> f64,
-    temperature: f64,
-    sample: f64,
-    probabilities: &mut Vec<f64>,
-) -> usize {
-    assert!(!entries.is_empty(), "Empty entries for softmax sampling");
-    debug_assert_ne!(temperature, 0.0);
-
-    let (min_cost, max_cost) = entries
-        .iter()
-        .map(&cost)
-        .fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), cost| {
-            (lo.min(cost), hi.max(cost))
-        });
-
-    probabilities.clear();
-    if min_cost == max_cost {
-        probabilities.resize(entries.len(), 1.0 / entries.len() as f64);
-    } else {
-        let range = max_cost - min_cost;
-        let magnitude = if range.is_finite() {
-            1.0
-        } else {
-            min_cost.abs().max(max_cost.abs())
-        };
-        let min_normalized = min_cost / magnitude;
-        let scale = -1.0 / ((max_cost / magnitude - min_normalized) * temperature);
-        let max_scaled = min_normalized * scale;
-        probabilities.extend(
-            entries
-                .iter()
-                .map(|entry| (cost(entry) / magnitude * scale - max_scaled).exp()),
-        );
-    }
-
-    let sum: f64 = probabilities.iter().sum();
-    for probability in probabilities.iter_mut() {
-        *probability /= sum;
-    }
-    let mut cumulative = 0.0;
-    for (row, probability) in probabilities.iter().enumerate() {
-        cumulative += probability;
-        if sample <= cumulative {
-            return row;
-        }
-    }
-    entries.len() - 1
-}
 
 #[derive(Debug, Clone, Copy)]
 struct LogitWeights {
@@ -100,12 +30,12 @@ struct LogitWeights {
 
 /// Default implementation matching the Python _cost_function.
 pub struct DefaultWorkerSelector {
-    pub kv_router_config: KvRouterConfig,
+    pub kv_router_config: SelectionConfig,
     pub worker_type: &'static str,
     picker: DefaultWorkerPicker,
 }
 
-pub(super) struct DefaultWorkerScorer<C = KvRouterConfig> {
+pub(super) struct DefaultWorkerScorer<C = SelectionConfig> {
     pub(super) kv_router_config: C,
     pub(super) worker_type: &'static str,
 }
@@ -115,19 +45,6 @@ struct DefaultScoringContext {
     weights: LogitWeights,
     min_active_prefill_tokens: usize,
     has_tier_overlap_blocks: bool,
-}
-
-pub(super) struct DefaultWorkerPicker {
-    // Preserve DefaultWorkerSelector's Sync contract. Zero-temperature selection never locks.
-    softmax_scratch: Mutex<DefaultSoftmaxScratch>,
-    #[cfg(any(test, feature = "bench"))]
-    deterministic_rng: Option<Arc<Mutex<fastrand::Rng>>>,
-}
-
-#[derive(Default)]
-struct DefaultSoftmaxScratch {
-    entries: Vec<(WorkerWithDpRank, f64)>,
-    probabilities: Vec<f64>,
 }
 
 impl std::fmt::Debug for DefaultWorkerSelector {
@@ -143,7 +60,7 @@ impl std::fmt::Debug for DefaultWorkerSelector {
 impl Clone for DefaultWorkerSelector {
     fn clone(&self) -> Self {
         #[cfg(any(test, feature = "bench"))]
-        let deterministic_rng = self.picker.deterministic_rng.clone();
+        let deterministic_rng = self.picker.rng().cloned();
         Self::from_parts(
             self.kv_router_config.clone(),
             self.worker_type,
@@ -154,7 +71,7 @@ impl Clone for DefaultWorkerSelector {
 }
 
 impl DefaultWorkerSelector {
-    pub fn new(kv_router_config: Option<KvRouterConfig>, worker_type: &'static str) -> Self {
+    pub fn new(kv_router_config: Option<SelectionConfig>, worker_type: &'static str) -> Self {
         Self::from_parts(
             kv_router_config.unwrap_or_default(),
             worker_type,
@@ -165,7 +82,7 @@ impl DefaultWorkerSelector {
 
     #[cfg(any(test, feature = "bench"))]
     pub fn new_seeded(
-        kv_router_config: Option<KvRouterConfig>,
+        kv_router_config: Option<SelectionConfig>,
         worker_type: &'static str,
         seed: u64,
     ) -> Self {
@@ -177,11 +94,11 @@ impl DefaultWorkerSelector {
     }
 
     fn from_parts(
-        kv_router_config: KvRouterConfig,
+        kv_router_config: SelectionConfig,
         worker_type: &'static str,
         #[cfg(any(test, feature = "bench"))] deterministic_rng: Option<Arc<Mutex<fastrand::Rng>>>,
     ) -> Self {
-        let picker = DefaultWorkerPicker::from_parts(
+        let picker = DefaultWorkerPicker::with_rng(
             #[cfg(any(test, feature = "bench"))]
             deterministic_rng,
         );
@@ -194,8 +111,8 @@ impl DefaultWorkerSelector {
 }
 
 #[cfg(test)]
-impl DefaultWorkerScorer<KvRouterConfig> {
-    pub(super) fn new(kv_router_config: KvRouterConfig, worker_type: &'static str) -> Self {
+impl DefaultWorkerScorer<SelectionConfig> {
+    pub(super) fn new(kv_router_config: SelectionConfig, worker_type: &'static str) -> Self {
         Self {
             kv_router_config,
             worker_type,
@@ -204,7 +121,7 @@ impl DefaultWorkerScorer<KvRouterConfig> {
 }
 
 fn selection_weights(
-    kv_router_config: &KvRouterConfig,
+    kv_router_config: &SelectionConfig,
     request: &SchedulingRequest,
 ) -> LogitWeights {
     LogitWeights {
@@ -225,8 +142,8 @@ fn selection_weights(
             .and_then(|config| config.shared_cache_multiplier)
             .or(kv_router_config.shared_cache_multiplier)
             .unwrap_or(match kv_router_config.shared_cache_type {
-                crate::config::SharedCacheType::None => 0.0,
-                crate::config::SharedCacheType::Hicache => 0.5,
+                crate::plugins::worker_selection::SharedCacheType::None => 0.0,
+                crate::plugins::worker_selection::SharedCacheType::Hicache => 0.5,
             }),
     }
 }
@@ -268,14 +185,13 @@ impl DefaultScoringContext {
 }
 
 fn default_row<C: WorkerConfigLike>(
-    input: &MaterializedSelectionInput<'_>,
+    source: &SelectionRowSource<'_, C>,
     context: DefaultScoringContext,
     worker: WorkerWithDpRank,
     config: &C,
     preferred_taint_multiplier: Option<f64>,
 ) -> CandidateData {
-    input.track_kept_candidate(worker);
-    let mut row = input.row_with_device_overlap(
+    let mut row = source.row_with_device_overlap(
         worker,
         preferred_taint_multiplier,
         WorkerInputs::ALL,
@@ -285,24 +201,25 @@ fn default_row<C: WorkerConfigLike>(
     );
     // Like the builtin scorer, read fetchable prefixes only when they earn credit.
     if context.weights.shared_cache_multiplier != 0.0 {
-        row.transfer = kv_transfer_input(input, worker, config);
+        row.transfer = kv_transfer_input(source, worker, config);
     }
+    source.track_kept(&row);
     row
 }
 
 /// A row's fetch input from the sources [`pick_default_worker`] built before
 /// scoring; `None` when the request has no transfer candidates.
 fn kv_transfer_input<C: WorkerConfigLike>(
-    input: &MaterializedSelectionInput<'_>,
+    source: &SelectionRowSource<'_, C>,
     worker: WorkerWithDpRank,
     config: &C,
 ) -> Option<WorkerTransferInput> {
-    let sources = input.kv_transfer_sources.get()?;
+    let sources = source.kv_transfer_sources.get()?;
     let source = config.kv_transfer_keys().target().and_then(|target| {
         sources.source_for(
             worker,
             target,
-            input.request.transfer_local_prefix_blocks_for(worker),
+            source.request.transfer_local_prefix_blocks_for(worker),
         )
     });
     Some(WorkerTransferInput {
@@ -310,12 +227,13 @@ fn kv_transfer_input<C: WorkerConfigLike>(
     })
 }
 
-impl<C: Borrow<KvRouterConfig>> DefaultWorkerScorer<C> {
+impl<C: Borrow<SelectionConfig>> DefaultWorkerScorer<C> {
     fn worker_logit(
         &self,
         context: &WorkerSelectionContext<'_>,
         default_context: DefaultScoringContext,
         row: &CandidateData,
+        transfer_local_prefix_blocks: usize,
         formula_name: &'static str,
     ) -> f64 {
         let kv_router_config = self.kv_router_config.borrow();
@@ -325,23 +243,17 @@ impl<C: Borrow<KvRouterConfig>> DefaultWorkerScorer<C> {
         let load = &row.load;
         let effective_overlap_blocks = cache.effective_overlap_blocks;
         let device_overlap_blocks = cache.device_overlap_blocks;
-        let shared_beyond_device_blocks = context
-            .request
-            .shared_cache_hits
-            .as_ref()
-            .map_or(0, |hits| {
-                hits.hits_beyond(device_overlap_blocks.round().max(0.0) as u32)
-            });
+        let shared_beyond_device_blocks = context.shared_cache_hits().map_or(0, |hits| {
+            hits.hits_beyond(device_overlap_blocks.round().max(0.0) as u32)
+        });
         // Blocks a fetch would add beyond everything this worker already holds.
         // Raw device overlap: `cache.device_overlap_blocks` may be the effective estimate.
         let fetchable_blocks = row
             .transfer
             .and_then(|transfer| transfer.source_prefix_blocks)
             .map_or(0, |source_blocks| {
-                let local_blocks = context
-                    .request
-                    .transfer_local_prefix_blocks_for(worker)
-                    .saturating_add(cache.disk_overlap_blocks as usize);
+                let local_blocks =
+                    transfer_local_prefix_blocks.saturating_add(cache.disk_overlap_blocks as usize);
                 source_blocks.saturating_sub(u32::try_from(local_blocks).unwrap_or(u32::MAX))
             });
         let remote_blocks = shared_beyond_device_blocks + fetchable_blocks;
@@ -350,16 +262,16 @@ impl<C: Borrow<KvRouterConfig>> DefaultWorkerScorer<C> {
         // size. The rational decay softly trades cache locality for prefill balance,
         // while leaving workers at the load floor with their full device credit.
         let overlap_credit_decay =
-            if context.track_prefill_tokens && weights.overlap_score_credit_decay > 0.0 {
+            if context.tracks_prefill_tokens() && weights.overlap_score_credit_decay > 0.0 {
                 let excess_active_prefill_blocks = load
                     .active_prefill_tokens
                     .saturating_sub(default_context.min_active_prefill_tokens)
                     as f64
-                    / context.block_size as f64;
+                    / context.block_size() as f64;
                 // An empty prompt (e.g. embeddings-only input) has no overlap to decay;
                 // clamp so a worker at the load floor does not compute 0/0.
                 let normalized_prefill_load =
-                    excess_active_prefill_blocks / context.request_blocks.max(1) as f64;
+                    excess_active_prefill_blocks / context.request_blocks().max(1) as f64;
                 1.0 / (1.0 + weights.overlap_score_credit_decay * normalized_prefill_load)
             } else {
                 1.0
@@ -378,7 +290,7 @@ impl<C: Borrow<KvRouterConfig>> DefaultWorkerScorer<C> {
         // conditional disagg leaves a positive overlap credit in place, prefer
         // cache-hot decode workers while still charging decode backlog.
         if self.worker_type == "decode"
-            && !context.track_prefill_tokens
+            && !context.tracks_prefill_tokens()
             && weights.overlap_score_credit > 0.0
         {
             // Clamp at zero because downstream taint multipliers assume non-negative scores.
@@ -391,7 +303,7 @@ impl<C: Borrow<KvRouterConfig>> DefaultWorkerScorer<C> {
             // `SchedulerQueueActor` task, so the logging layer cannot attach request identity to
             // it, and this branch returns early without reaching them.
             tracing::debug!(
-                request_id = context.request.mode.request_id().unwrap_or("-"),
+                request_id = context.request_id().unwrap_or("-"),
                 worker_type = self.worker_type,
                 "{formula_name} for worker_id={} dp_rank={:?} with {effective_overlap_blocks:.2} effective cached blocks: {logit:.3} \
                  = max(0, decode_blocks - overlap_credit_blocks) + active_request_cost_blocks \
@@ -404,18 +316,18 @@ impl<C: Borrow<KvRouterConfig>> DefaultWorkerScorer<C> {
 
         // Keep reference-only arithmetic out of public worker-input rows, including
         // benchmark builds: their layout must match the production plugin's inputs.
-        let raw_prefill_tokens = if context.track_prefill_tokens {
+        let raw_prefill_tokens = if context.tracks_prefill_tokens() {
             if load.available {
                 let cached_tokens = cache.estimated_cached_tokens;
-                let uncached_tokens = context.request.isl_tokens.saturating_sub(cached_tokens);
+                let uncached_tokens = context.isl_tokens().saturating_sub(cached_tokens);
                 (load.active_prefill_tokens + uncached_tokens).saturating_add(cached_tokens)
             } else {
-                context.request.isl_tokens
+                context.isl_tokens()
             }
         } else {
             0
         };
-        let raw_prefill_blocks = raw_prefill_tokens as f64 / context.block_size as f64;
+        let raw_prefill_blocks = raw_prefill_tokens as f64 / context.block_size() as f64;
         let adjusted_prefill_blocks = (raw_prefill_blocks - overlap_credit_blocks).max(0.0);
         let prefill_cost_blocks = weights.prefill_load_scale * adjusted_prefill_blocks;
         let logit = prefill_cost_blocks + decode_cost_blocks + active_request_cost_blocks;
@@ -428,7 +340,7 @@ impl<C: Borrow<KvRouterConfig>> DefaultWorkerScorer<C> {
         // inside the macro so they cost nothing when DEBUG is disabled.
         if remote_blocks > 0 {
             tracing::debug!(
-                request_id = context.request.mode.request_id().unwrap_or("-"),
+                request_id = context.request_id().unwrap_or("-"),
                 worker_type = self.worker_type,
                 "{formula_name} for worker_id={} dp_rank={:?} with {effective_overlap_blocks:.2} effective cached blocks, \
                  {} shared or fetchable blocks beyond the local prefix (multiplier={shared_cache_multiplier:.2}): {logit:.3} \
@@ -445,7 +357,7 @@ impl<C: Borrow<KvRouterConfig>> DefaultWorkerScorer<C> {
             );
         } else {
             tracing::debug!(
-                request_id = context.request.mode.request_id().unwrap_or("-"),
+                request_id = context.request_id().unwrap_or("-"),
                 worker_type = self.worker_type,
                 "{formula_name} for worker_id={} dp_rank={:?} with {effective_overlap_blocks:.2} effective cached blocks: {logit:.3} \
                  = prefill_load_scale * adjusted_prefill_blocks + decode_blocks + active_request_cost_blocks \
@@ -468,8 +380,15 @@ impl<C: Borrow<KvRouterConfig>> DefaultWorkerScorer<C> {
         context: &WorkerSelectionContext<'_>,
         default_context: DefaultScoringContext,
         row: &CandidateData,
+        transfer_local_prefix_blocks: usize,
     ) -> f64 {
-        let base_score = self.worker_logit(context, default_context, row, "Formula");
+        let base_score = self.worker_logit(
+            context,
+            default_context,
+            row,
+            transfer_local_prefix_blocks,
+            "Formula",
+        );
         match row.preferred_taint_multiplier {
             // NOTE: This multiplicative bias assumes a non-negative score. Negative
             // overlap scores expose its pre-existing sign sensitivity; keep it for now.
@@ -479,24 +398,16 @@ impl<C: Borrow<KvRouterConfig>> DefaultWorkerScorer<C> {
     }
 }
 
-impl DefaultWorkerPicker {
-    pub(super) fn new() -> Self {
-        Self::from_parts(
-            #[cfg(any(test, feature = "bench"))]
-            None,
-        )
-    }
-}
-
 #[inline(always)]
 pub(super) fn pick_default_worker<C: WorkerConfigLike>(
-    scorer: &DefaultWorkerScorer<&KvRouterConfig>,
+    scorer: &DefaultWorkerScorer<&SelectionConfig>,
     picker: &DefaultWorkerPicker,
-    input: &MaterializedSelectionInput<'_>,
-    workers: &HashMap<WorkerId, C>,
-    request: &SchedulingRequest,
-    eligibility: RoutingEligibility<'_>,
+    context: &WorkerSelectionContext<'_>,
+    source: &SelectionRowSource<'_, C>,
 ) -> Option<(WorkerWithDpRank, f64)> {
+    let workers = source.workers;
+    let request = source.request;
+    let eligibility = source.eligibility;
     let default_context = DefaultScoringContext::new(
         workers,
         request,
@@ -505,11 +416,11 @@ pub(super) fn pick_default_worker<C: WorkerConfigLike>(
     );
     // Rows are scored as they are built, so build every fetch source first.
     if default_context.weights.shared_cache_multiplier != 0.0 {
-        input.kv_transfer_sources(workers, KvTransferScope::all);
+        source.kv_transfer_sources(KvTransferScope::all);
     }
     if let Some(worker) = eligibility.pinned_worker() {
         let row = default_row(
-            input,
+            source,
             default_context,
             worker,
             &workers[&worker.worker_id],
@@ -517,122 +428,52 @@ pub(super) fn pick_default_worker<C: WorkerConfigLike>(
         );
         return Some((
             worker,
-            scorer.worker_logit(&input.context, default_context, &row, "Pinned formula"),
+            scorer.worker_logit(
+                context,
+                default_context,
+                &row,
+                request.transfer_local_prefix_blocks_for(worker),
+                "Pinned formula",
+            ),
         ));
     }
 
-    let temperature = input
-        .context
-        .router_temperature_override
+    let temperature = context
+        .router_temperature_override()
         .unwrap_or(scorer.kv_router_config.router_temperature);
     let get_score = |worker, config: &C| {
         let preferred_taint_multiplier = request
             .routing_constraints
             .preferred_taint_multiplier(config.taints());
         scorer.worker_cost(
-            &input.context,
+            context,
             default_context,
             &default_row(
-                input,
+                source,
                 default_context,
                 worker,
                 config,
                 preferred_taint_multiplier,
             ),
+            request.transfer_local_prefix_blocks_for(worker),
         )
     };
 
-    #[cfg(any(test, feature = "bench"))]
-    if let Some(rng) = &picker.deterministic_rng {
+    let mut pick = picker.begin(temperature);
+    if picker.is_deterministic() {
+        // Seeded picks replay only over a fixed candidate order.
         let mut candidates = Vec::new();
         eligibility.for_each_eligible_worker_rank(workers, |worker, _| candidates.push(worker));
         candidates.sort_unstable_by_key(|worker| (worker.worker_id, worker.dp_rank));
-        if candidates.is_empty() {
-            return None;
+        for worker in candidates {
+            pick.offer(worker, get_score(worker, &workers[&worker.worker_id]));
         }
-
-        let mut rng = rng.lock();
-        let get_candidate_score = |worker| get_score(worker, &workers[&worker.worker_id]);
-        if temperature == 0.0 {
-            let mut best_worker = None;
-            let mut best_cost = f64::INFINITY;
-            let mut tie_count = 0;
-            for worker in candidates {
-                let cost = get_candidate_score(worker);
-                if cost < best_cost {
-                    best_worker = Some(worker);
-                    best_cost = cost;
-                    tie_count = 1;
-                } else if cost == best_cost {
-                    tie_count += 1;
-                    if rng.usize(0..tie_count) == 0 {
-                        best_worker = Some(worker);
-                    }
-                }
-            }
-            return best_worker.map(|worker| (worker, best_cost));
-        }
-
-        let entries = candidates
-            .into_iter()
-            .map(|worker| (worker, get_candidate_score(worker)))
-            .collect();
-        return Some(softmax_sample_entries(entries, temperature, rng.f64()));
-    }
-
-    if temperature == 0.0 {
-        let mut best_worker = None;
-        let mut best_cost = f64::INFINITY;
-        let mut tie_count = 0;
-        eligibility.for_each_eligible_worker_rank(workers, |worker, config| {
-            let cost = get_score(worker, config);
-            if cost < best_cost {
-                best_worker = Some(worker);
-                best_cost = cost;
-                tie_count = 1;
-            } else if cost == best_cost {
-                tie_count += 1;
-                if fastrand::usize(0..tie_count) == 0 {
-                    best_worker = Some(worker);
-                }
-            }
-        });
-        return best_worker.map(|worker| (worker, best_cost));
-    }
-
-    let mut scratch = picker.softmax_scratch.lock();
-    scratch.entries.clear();
-    eligibility.for_each_eligible_worker_rank(workers, |worker, config| {
-        scratch.entries.push((worker, get_score(worker, config)));
-    });
-    if scratch.entries.is_empty() {
-        None
     } else {
-        let DefaultSoftmaxScratch {
-            entries,
-            probabilities,
-        } = &mut *scratch;
-        let row = softmax_sample_index(
-            entries,
-            |(_, cost)| *cost,
-            temperature,
-            fastrand::f64(),
-            probabilities,
-        );
-        Some(entries[row])
+        eligibility.for_each_eligible_worker_rank(workers, |worker, config| {
+            pick.offer(worker, get_score(worker, config));
+        });
     }
-}
-
-impl DefaultWorkerPicker {
-    fn from_parts(
-        #[cfg(any(test, feature = "bench"))] deterministic_rng: Option<Arc<Mutex<fastrand::Rng>>>,
-    ) -> Self {
-        Self {
-            softmax_scratch: Mutex::default(),
-            #[cfg(any(test, feature = "bench"))]
-            deterministic_rng,
-        }
-    }
+    pick.finish()
 }
 
 impl<C: WorkerConfigLike> WorkerSelector<C> for DefaultWorkerSelector {
@@ -649,12 +490,11 @@ impl<C: WorkerConfigLike> WorkerSelector<C> for DefaultWorkerSelector {
         &self,
         input: WorkerSelectionInput<'_, C>,
     ) -> Result<WorkerSelectionResult, KvSchedulerError> {
-        select_worker_with_policy(
+        select_reference(
             self.worker_type,
-            WorkerSelectionPolicyStateRef::Reference(&self.kv_router_config, &self.picker),
+            &self.kv_router_config,
+            &self.picker,
             input,
-            None,
-            None,
         )
         .map(|(result, _)| result)
     }
@@ -680,20 +520,22 @@ mod tests {
         weights: LogitWeights,
     ) -> f64 {
         let workers = HashMap::from([(worker.worker_id, TaintedWorkerConfig::default())]);
-        let input = MaterializedSelectionInput::new(request, block_size);
+        let source = SelectionRowSource::new(request, &workers, request.eligibility(), block_size);
+        let context = source.context();
         let default_context =
             DefaultScoringContext::new(&workers, request, request.eligibility(), weights);
         DefaultWorkerScorer::new(selector.kv_router_config.clone(), selector.worker_type)
             .worker_logit(
-                &input.context,
+                &context,
                 default_context,
                 &default_row(
-                    &input,
+                    &source,
                     default_context,
                     worker,
                     &workers[&worker.worker_id],
                     None,
                 ),
+                request.transfer_local_prefix_blocks_for(worker),
                 "test",
             )
     }
@@ -747,12 +589,6 @@ mod tests {
     }
 
     #[test]
-    fn softmax_sample_orders_extreme_finite_costs() {
-        let result = softmax_sample_entries(vec![(0, -f64::MAX), (1, f64::MAX)], 1.0, 0.6);
-        assert_eq!(result.0, 0);
-    }
-
-    #[test]
     fn empty_prompt_routes_by_load() {
         use crate::test_utils::SimpleWorkerConfig;
 
@@ -775,7 +611,7 @@ mod tests {
 
         for overlap_score_credit_decay in [0.0, 1.0] {
             let selector = DefaultWorkerSelector::new(
-                Some(KvRouterConfig {
+                Some(SelectionConfig {
                     router_temperature: 0.0,
                     overlap_score_credit_decay,
                     ..Default::default()
@@ -801,7 +637,7 @@ mod tests {
     fn test_default_selector_randomizes_zero_temperature_ties() {
         use crate::test_utils::SimpleWorkerConfig;
 
-        let config = KvRouterConfig {
+        let config = SelectionConfig {
             router_temperature: 0.0,
             ..Default::default()
         };
@@ -884,12 +720,12 @@ mod tests {
                 ],
             ),
         ] {
-            let config = KvRouterConfig {
+            let config = SelectionConfig {
                 router_temperature: temperature,
                 ..Default::default()
             };
             let mut first = DefaultWorkerSelector::new_seeded(
-                Some(KvRouterConfig {
+                Some(SelectionConfig {
                     router_temperature: 0.0,
                     ..Default::default()
                 }),
@@ -980,7 +816,7 @@ mod tests {
         let shared_cache_hits = SharedCacheHits::from_ranges(vec![0..4]);
         request.shared_cache_hits = Some(shared_cache_hits);
 
-        let config = KvRouterConfig {
+        let config = SelectionConfig {
             overlap_score_credit: 1.0,
             prefill_load_scale: 1.0,
             shared_cache_multiplier: Some(0.0),
@@ -1041,7 +877,7 @@ mod tests {
         use crate::test_utils::SimpleWorkerConfig;
 
         let selector = DefaultWorkerSelector::new(
-            Some(KvRouterConfig {
+            Some(SelectionConfig {
                 overlap_score_credit: 1.0,
                 router_temperature: 0.0,
                 ..Default::default()
@@ -1079,7 +915,7 @@ mod tests {
         use crate::test_utils::SimpleWorkerConfig;
 
         let selector = DefaultWorkerSelector::new(
-            Some(KvRouterConfig {
+            Some(SelectionConfig {
                 overlap_score_credit_decay: 1.0,
                 ..Default::default()
             }),
@@ -1111,7 +947,7 @@ mod tests {
         use crate::test_utils::SimpleWorkerConfig;
 
         let selector = DefaultWorkerSelector::new(
-            Some(KvRouterConfig {
+            Some(SelectionConfig {
                 router_temperature: 0.0,
                 ..Default::default()
             }),
@@ -1184,7 +1020,7 @@ mod tests {
     fn test_overloaded_pinned_worker_is_not_rerouted() {
         use crate::test_utils::SimpleWorkerConfig;
 
-        let selector = DefaultWorkerSelector::new(Some(KvRouterConfig::default()), "test");
+        let selector = DefaultWorkerSelector::new(Some(SelectionConfig::default()), "test");
         let workers = HashMap::from([
             (0, SimpleWorkerConfig::default()),
             (1, SimpleWorkerConfig::default()),
@@ -1208,7 +1044,7 @@ mod tests {
 
     #[test]
     fn test_required_taints_return_no_endpoints_when_no_worker_matches() {
-        let selector = DefaultWorkerSelector::new(Some(KvRouterConfig::default()), "test");
+        let selector = DefaultWorkerSelector::new(Some(SelectionConfig::default()), "test");
         let workers = HashMap::from([(
             10,
             TaintedWorkerConfig {
@@ -1259,7 +1095,7 @@ mod tests {
 
     #[test]
     fn test_required_taints_filter_out_incompatible_workers() {
-        let selector = DefaultWorkerSelector::new(Some(KvRouterConfig::default()), "test");
+        let selector = DefaultWorkerSelector::new(Some(SelectionConfig::default()), "test");
         let workers = HashMap::from([
             (
                 10,
@@ -1320,7 +1156,7 @@ mod tests {
 
     #[test]
     fn test_required_taints_switch_matching_worker_sets_by_label() {
-        let selector = DefaultWorkerSelector::new(Some(KvRouterConfig::default()), "test");
+        let selector = DefaultWorkerSelector::new(Some(SelectionConfig::default()), "test");
         let name_a = "mdc-a".to_string();
         let name_b = "mdc-b".to_string();
         let name_c = "mdc-c".to_string();
@@ -1402,7 +1238,7 @@ mod tests {
     #[test]
     fn test_preferred_taints_prefer_matching_worker() {
         let selector = DefaultWorkerSelector::new(
-            Some(KvRouterConfig {
+            Some(SelectionConfig {
                 router_temperature: 0.0,
                 ..Default::default()
             }),
@@ -1473,7 +1309,7 @@ mod tests {
     #[test]
     fn test_negative_preferred_taints_avoid_matching_worker() {
         let selector = DefaultWorkerSelector::new(
-            Some(KvRouterConfig {
+            Some(SelectionConfig {
                 router_temperature: 0.0,
                 ..Default::default()
             }),
@@ -1571,7 +1407,7 @@ mod tests {
         #[allow(clippy::single_range_in_vec_init)]
         let shared_hits = SharedCacheHits::from_ranges(vec![0..4]);
 
-        let config = KvRouterConfig {
+        let config = SelectionConfig {
             overlap_score_credit: 1.0,
             shared_cache_multiplier: Some(0.5),
             router_temperature: 0.0,
@@ -1645,7 +1481,7 @@ mod tests {
         let mut tier_overlap_blocks = crate::scheduling::TierOverlapBlocks::default();
         tier_overlap_blocks.device.insert(worker0, 2);
 
-        let config = KvRouterConfig {
+        let config = SelectionConfig {
             overlap_score_credit: 1.0,
             prefill_load_scale: 2.0,
             router_temperature: 0.0,
@@ -1738,14 +1574,14 @@ mod tests {
         );
 
         let normal_credit = DefaultWorkerSelector::new(
-            Some(KvRouterConfig {
+            Some(SelectionConfig {
                 overlap_score_credit: 1.0,
                 ..Default::default()
             }),
             "test",
         );
         let amplified_credit = DefaultWorkerSelector::new(
-            Some(KvRouterConfig {
+            Some(SelectionConfig {
                 overlap_score_credit: 1.5,
                 ..Default::default()
             }),
@@ -1793,7 +1629,7 @@ mod tests {
                 additional_active_blocks: 3,
             },
         );
-        let selector = DefaultWorkerSelector::new(Some(KvRouterConfig::default()), "test");
+        let selector = DefaultWorkerSelector::new(Some(SelectionConfig::default()), "test");
         let weights = LogitWeights {
             overlap_score_credit: 1.0,
             overlap_score_credit_decay: 0.0,
@@ -1825,9 +1661,9 @@ mod tests {
             prefill_load_scale: 1.0,
             shared_cache_multiplier: 0.0,
         };
-        let default = DefaultWorkerSelector::new(Some(KvRouterConfig::default()), "test");
+        let default = DefaultWorkerSelector::new(Some(SelectionConfig::default()), "test");
         let weighted = DefaultWorkerSelector::new(
-            Some(KvRouterConfig {
+            Some(SelectionConfig {
                 decode_active_request_weight: 32.0,
                 ..Default::default()
             }),
@@ -1854,7 +1690,7 @@ mod tests {
                 ..Default::default()
             },
         );
-        let selector = DefaultWorkerSelector::new(Some(KvRouterConfig::default()), "decode");
+        let selector = DefaultWorkerSelector::new(Some(SelectionConfig::default()), "decode");
         let weights = LogitWeights {
             overlap_score_credit: 1.0,
             overlap_score_credit_decay: 0.0,
@@ -1896,14 +1732,14 @@ mod tests {
         );
 
         let no_decay = DefaultWorkerSelector::new(
-            Some(KvRouterConfig {
+            Some(SelectionConfig {
                 overlap_score_credit_decay: 0.0,
                 ..Default::default()
             }),
             "test",
         );
         let with_decay = DefaultWorkerSelector::new(
-            Some(KvRouterConfig {
+            Some(SelectionConfig {
                 overlap_score_credit_decay: 1.0,
                 ..Default::default()
             }),
@@ -1948,7 +1784,7 @@ mod tests {
         let mut effective_overlap_blocks = rustc_hash::FxHashMap::default();
         effective_overlap_blocks.insert(worker0, 4.0);
 
-        let config = KvRouterConfig {
+        let config = SelectionConfig {
             overlap_score_credit: 1.0,
             router_temperature: 0.0,
             ..Default::default()
@@ -2024,12 +1860,17 @@ mod tests {
             prefill_load_scale: 1.0,
             shared_cache_multiplier: 1.0,
         };
-        let input = MaterializedSelectionInput::new(&request, 16);
+        let source = SelectionRowSource::new(&request, &workers, request.eligibility(), 16);
         let default_context =
             DefaultScoringContext::new(&workers, &request, request.eligibility(), weights);
         let config = &workers[&worker.worker_id];
-        let custom_row = input.row(worker, None, WorkerInputs::CACHE);
-        let default_row = default_row(&input, default_context, worker, config, None);
+        let custom_row = source.row_with_device_overlap(
+            worker,
+            None,
+            WorkerInputs::CACHE,
+            |_, device_overlap_blocks| device_overlap_blocks,
+        );
+        let default_row = default_row(&source, default_context, worker, config, None);
 
         assert_eq!(custom_row.cache.device_overlap_blocks, 0.0);
         assert_eq!(
@@ -2063,7 +1904,7 @@ mod tests {
         let mut effective_overlap_blocks = rustc_hash::FxHashMap::default();
         effective_overlap_blocks.insert(worker0, 2.0);
 
-        let config = KvRouterConfig::default();
+        let config = SelectionConfig::default();
         let selector = DefaultWorkerSelector::new(Some(config), "test");
         let mut workers = HashMap::new();
         workers.insert(0, SimpleWorkerConfig::default());

@@ -30,8 +30,8 @@ use super::prefill_load::{PrefillLoadEstimator, effective_prefill_tokens};
 use super::queue_admission::WorkerPlacement;
 use super::request_classifier::{ClassificationOverrides, ClassifyRequest};
 use super::selector::{
-    CandidatePreparer, PreparedCandidates, WorkerInputs, WorkerSelectionInput, WorkerSelector,
-    worker_input_rows,
+    CandidatePreparer, CandidatePreparerExt, PreparedCandidates, WorkerInputs, WorkerLoadInputExt,
+    WorkerSelectionInput, WorkerSelector, worker_input_rows,
 };
 use super::types::{
     AdvisorySchedulingResponse, AdvisoryWorkerLoad, AttemptId, KvSchedulerError,
@@ -54,7 +54,7 @@ use crate::sequences::{
 };
 
 // The fallback lives beside `WorkerCapacity`; this path stays for existing importers.
-pub use crate::plugins::worker_selection::inputs::DEFAULT_MAX_BATCHED_TOKENS;
+pub use dynamo_router_protocol::load::DEFAULT_MAX_BATCHED_TOKENS;
 
 mod capacity;
 
@@ -3940,7 +3940,7 @@ policy_classes:
     fn counting_policy(prepared_selections: &Arc<AtomicUsize>) -> CountingPreparedPolicy {
         CountingPreparedPolicy {
             inner: crate::WorkerSelectionPolicy::new(
-                crate::KvRouterConfig::default(),
+                crate::plugins::worker_selection::SelectionConfig::default(),
                 "test",
                 vec![],
                 Box::new(LeastLoaded),
