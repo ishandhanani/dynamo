@@ -6,8 +6,8 @@
 use serde::de::{IgnoredAny, MapAccess, SeqAccess, Visitor};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
-use crate::identity::CacheOwnerId;
-use crate::worker::WorkerWithDpRank;
+use dynamo_router_protocol::identity::CacheOwnerId;
+use dynamo_router_protocol::worker::WorkerWithDpRank;
 
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq, Hash)]
 #[serde(rename_all = "snake_case")]
@@ -38,25 +38,6 @@ pub enum ResidencyDomain {
 pub enum ResidencyOwner {
     Worker(WorkerWithDpRank),
     CacheOwner(CacheOwnerId),
-}
-
-/// Compact mutation-path identity for an exact residency owner.
-///
-/// Lower-tier edges carry this fixed-size value instead of embedding the full
-/// [`CacheOwnerId`] in every ownership entry. The full owner remains in the
-/// reverse index once per logical owner so dumps can round-trip it exactly.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct ResidencyOwnerKey([u8; 16]);
-
-impl ResidencyOwnerKey {
-    /// Wrap a 16-byte digest. The router computes the digest; this crate only carries it.
-    pub const fn from_digest(digest: [u8; 16]) -> Self {
-        Self(digest)
-    }
-
-    pub const fn digest(self) -> [u8; 16] {
-        self.0
-    }
 }
 
 impl ResidencyOwner {

@@ -8,10 +8,10 @@ use std::time::{Duration, Instant};
 
 use dynamo_kv_indexer::cuckoo::{CkfBuildError, CkfConfig, DcCkfState, ProducerIdentity};
 use dynamo_router_protocol::identity::PoolId;
-use dynamo_router_protocol::load::{ActiveLoad, SchedulerLoad};
 use dynamo_router_protocol::worker::{WorkerId, WorkerWithDpRank};
 use dynamo_runtime::protocols::EndpointId;
 use dynamo_runtime::transports::event_plane::EventEnvelope;
+use dynamo_slot_tracker::host::SchedulerLoad;
 use parking_lot::Mutex;
 use tokio::sync::{Notify, OwnedSemaphorePermit, TryAcquireError};
 use tokio::sync::{Semaphore, mpsc, oneshot, watch};
@@ -32,6 +32,7 @@ use super::publication::{
     TerminalFailure, publication_lease,
 };
 use super::serving_load::PoolServingLoad;
+use crate::kv_router::ActiveLoad;
 use crate::local_model::runtime_config::ModelRuntimeConfig;
 
 const DEFAULT_CKF_ALLOCATION_CONCURRENCY: usize = 2;
@@ -1611,7 +1612,7 @@ mod tests {
     use dynamo_kv_events::event::{
         KvCacheEvent, KvCacheEventData, KvCacheStoreData, KvCacheStoredBlockData, RouterEvent,
     };
-    use dynamo_router_protocol::block_hash::{ExternalSequenceBlockHash, LocalBlockHash};
+    use dynamo_kv_hashing::{ExternalSequenceBlockHash, LocalBlockHash};
     use dynamo_router_protocol::identity::{
         CacheSemanticsId, ClusterId, IdentitySource, IndexerDomainId, RoutingScopeId,
     };
@@ -3381,7 +3382,7 @@ mod tests {
             dp_rank,
             active_decode_blocks: 3,
             active_prefill_tokens: 4,
-            group: dynamo_router_protocol::load::SchedulerGroup::Standalone { scheduler_id: 7 },
+            group: dynamo_slot_tracker::host::SchedulerGroup::Standalone { scheduler_id: 7 },
         }
     }
 

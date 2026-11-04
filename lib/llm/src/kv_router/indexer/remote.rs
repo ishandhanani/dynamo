@@ -6,12 +6,12 @@ use std::sync::{Arc, LazyLock};
 
 use anyhow::Result;
 use dashmap::DashMap;
+use dynamo_kv_hashing::LocalBlockHash;
 use dynamo_kv_indexer::host::{
     IndexerQueryRequest, IndexerQueryResponse, IndexerRecordRoutingDecisionRequest,
     IndexerRecordRoutingDecisionResponse, KV_INDEXER_QUERY_ENDPOINT,
     KV_INDEXER_RECORD_ROUTING_DECISION_ENDPOINT,
 };
-use dynamo_router_protocol::block_hash::LocalBlockHash;
 use dynamo_router_protocol::worker::WorkerWithDpRank;
 use dynamo_runtime::component::{Client, Component};
 use dynamo_runtime::discovery::{DiscoveryInstance, DiscoveryQuery};
@@ -549,9 +549,9 @@ mod tests {
     use crate::kv_router::indexer::{LowerTierIndexers, SideIndexer};
     use std::time::Duration;
 
+    use dynamo_kv_events::residency::StorageTier;
     use dynamo_kv_hashing::routing::compute_seq_hash_for_block;
     use dynamo_kv_indexer::host::{KvIndexer, KvIndexerInterface, KvIndexerMetrics, PruneConfig};
-    use dynamo_router_protocol::residency::StorageTier;
     use dynamo_router_protocol::worker::WorkerWithDpRank;
     use tokio_util::sync::CancellationToken;
 

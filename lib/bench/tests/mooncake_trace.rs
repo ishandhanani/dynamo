@@ -30,7 +30,9 @@ use dynamo_bench::kv_router_common::replay::{
 use dynamo_kv_events::event::{
     KvCacheEvent, KvCacheEventData, KvCacheRemoveData, KvCacheStoreData, KvCacheStoredBlockData,
 };
+use dynamo_kv_events::residency::StorageTier;
 use dynamo_kv_hashing::routing::TokensWithHashes;
+use dynamo_kv_hashing::{ExternalSequenceBlockHash, LocalBlockHash};
 use dynamo_kv_indexer::host::{
     ConcurrentRadixTreeCompressed, KvIndexerInterface, KvIndexerMetrics, OverlapScores,
     PruneConfig, ThreadPoolIndexer,
@@ -40,8 +42,6 @@ use dynamo_mocker::loadgen::{ReplayRequestHashes, SessionTrace, Trace, TurnTrace
 use dynamo_mocker::replay::{
     ReplayTimedKvEvent, ReplayTimedRequest, ReplayWorkerArtifacts, native_g1_parent_chain_artifact,
 };
-use dynamo_router_protocol::block_hash::{ExternalSequenceBlockHash, LocalBlockHash};
-use dynamo_router_protocol::residency::StorageTier;
 use dynamo_router_protocol::worker::WorkerWithDpRank;
 use mooncake_lower_tier::LowerTierRun;
 use mooncake_open_loop::{

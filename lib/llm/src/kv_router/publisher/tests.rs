@@ -863,10 +863,10 @@ mod tests_startup_helpers {
     use super::*;
     use crate::utils::zmq::{bind_pub_socket, send_multipart};
     use bytes::Bytes;
+    use dynamo_kv_hashing::{ExternalSequenceBlockHash, LocalBlockHash};
     use dynamo_kv_indexer::host::{
         GetWorkersRequest, KvIndexer, KvIndexerInterface, WorkerKvQueryResponse,
     };
-    use dynamo_router_protocol::block_hash::{ExternalSequenceBlockHash, LocalBlockHash};
     use dynamo_runtime::discovery::{
         Discovery, DiscoveryQuery, EventSourceQuery, MockDiscovery, SharedMockRegistry,
     };
@@ -2318,8 +2318,8 @@ mod test_event_dedup_filter {
 mod worker_metrics_tests {
     use std::time::Duration;
 
+    use crate::kv_router::ActiveLoad;
     use anyhow::Result;
-    use dynamo_router_protocol::load::ActiveLoad;
 
     use super::super::worker_metrics::{WorkerMetricsPublisher, WorkerMetricsSink};
 
@@ -2374,8 +2374,8 @@ mod worker_metrics_tests {
 #[cfg(all(test, feature = "integration"))]
 mod test_integration_publisher {
     use super::*;
+    use crate::kv_router::ActiveLoad;
     use crate::kv_router::KV_METRICS_SUBJECT;
-    use dynamo_router_protocol::load::ActiveLoad;
     use dynamo_runtime::distributed_test_utils::create_test_drt_async;
     use dynamo_runtime::transports::event_plane::{EventPublisher, EventSubscriber};
 
@@ -4127,8 +4127,8 @@ mod event_plane_batch_tests {
         KvCacheEvent, KvCacheEventData, KvCacheRemoveData, KvCacheStoreData,
         KvCacheStoredBlockData, RouterEvent,
     };
-    use dynamo_router_protocol::block_hash::{ExternalSequenceBlockHash, LocalBlockHash};
-    use dynamo_router_protocol::mm::{BlockExtraInfo, BlockMmObjectInfo};
+    use dynamo_kv_hashing::{ExternalSequenceBlockHash, LocalBlockHash};
+    use dynamo_multimodal::{BlockExtraInfo, BlockMmObjectInfo};
     use dynamo_runtime::config::environment_names::zmq_broker as broker_env;
     use dynamo_runtime::distributed::DistributedConfig;
     use dynamo_runtime::transports::event_plane::{

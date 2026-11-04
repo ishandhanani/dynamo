@@ -1,20 +1,44 @@
 // SPDX-FileCopyrightText: Copyright (c) 2024-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-//! KV transfer candidates the indexer emits with a match, and the hashed hint identity of a
-//! cache owner that `ResidencyRoutingSnapshot` carries for them.
+//! The transfer candidate vocabulary the indexer emits with a match: who holds a KV prefix a
+//! target could fetch ([`KvTransferCandidateSource`]), the candidates with the routing
+//! snapshot they were read under ([`KvTransferCandidates`]), the hashed hint identity of a
+//! cache owner ([`CacheOwnerKvTransferKeys`]), and the label hashing both sides of a source
+//! match use ([`label_key`], [`topology_keys`]). The producer owns its output: `dynamo-kv-hints`
+//! re-exports the source enum and the two hash functions from here, never the reverse.
+//!
+//! `label_key` hashes with `std::collections::hash_map::DefaultHasher::new()`: fixed SipHash
+//! keys, deterministic within one toolchain, not a cross-version contract. Both sides of a
+//! comparison are computed in the same process today; if keys ever cross a process boundary,
+//! replace the hasher with a pinned one.
 
 use std::collections::HashMap;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
-use dynamo_router_protocol::block_hash::ExternalSequenceBlockHash;
+use dynamo_kv_hashing::ExternalSequenceBlockHash;
 use dynamo_router_protocol::metadata::RouterHintSourceMetadata;
+use dynamo_router_protocol::worker::WorkerWithDpRank;
 
-use crate::residency::ResidencyRoutingSnapshot;
+use crate::residency::{ResidencyOwnerKey, ResidencyRoutingSnapshot};
 
-pub use dynamo_router_protocol::kv_hints::KvTransferCandidateSource;
+/// Who holds a KV prefix a target could fetch: a worker rank, or a cache owner known by its
+/// compact residency key. Produced by the indexer, consumed by worker selection.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum KvTransferCandidateSource {
+    /// A worker's data-parallel rank.
+    Worker(WorkerWithDpRank),
+    /// A cache owner, by the compact key of its residency owner.
+    CacheOwner(ResidencyOwnerKey),
+}
+
+impl From<WorkerWithDpRank> for KvTransferCandidateSource {
+    fn from(worker: WorkerWithDpRank) -> Self {
+        Self::Worker(worker)
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct KvTransferCandidates {

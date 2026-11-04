@@ -31,8 +31,8 @@ use super::types::{
     SchedulingContext, SchedulingRequest, SchedulingResponse, WorkerAvailabilityProvider,
 };
 use crate::protocols::{
-    LocalBlockHash, PrefillLoadHint, SelectionTrace, SelectionTraceSpec, WorkerConfigLike,
-    WorkerId, WorkerSelectionResult, WorkerWithDpRank,
+    PrefillLoadHint, SelectionTrace, SelectionTraceSpec, WorkerConfigLike, WorkerId,
+    WorkerSelectionResult, WorkerWithDpRank,
 };
 use crate::selector::WorkerCapacityExt;
 use crate::types::RejectThresholdsProvider;
@@ -42,6 +42,7 @@ use dynamo_admission::classifier::{ClassificationOverrides, ClassifyRequest};
 use dynamo_admission::placement::WorkerPlacement;
 use dynamo_admission::queue::{PolicyQueue, QueueMetadata, QueueSnapshot};
 use dynamo_admission::{PolicyClassConfig, PolicyProfile};
+use dynamo_kv_hashing::LocalBlockHash;
 use dynamo_slot_tracker::busy::{BusyThresholds, FullRankCounts};
 use dynamo_slot_tracker::{
     ActiveSequencesMultiWorker, SequenceError, SequencePublisher, SequenceRequest,
@@ -51,7 +52,7 @@ use dynamo_worker_selection::{RuntimePolicyConfig, RuntimePolicyError, RuntimePo
 use dynamo_worker_selection::{WorkerCapacity, WorkerInputRows, WorkerLoadInput};
 
 // The fallback lives beside `WorkerCapacity`; this path stays for existing importers.
-pub use dynamo_router_protocol::load::DEFAULT_MAX_BATCHED_TOKENS;
+pub use dynamo_router_protocol::worker::DEFAULT_MAX_BATCHED_TOKENS;
 
 mod capacity;
 
@@ -2316,9 +2317,8 @@ mod tests {
 
     use crate::kv_hints::KvTransferCandidates;
 
-    use crate::protocols::{
-        ActiveSequenceEvent, ExternalSequenceBlockHash, WorkerSelectionResult, WorkerWithDpRank,
-    };
+    use crate::protocols::{ActiveSequenceEvent, WorkerSelectionResult, WorkerWithDpRank};
+    use dynamo_kv_hashing::ExternalSequenceBlockHash;
 
     use crate::selector::{DefaultWorkerSelector, WorkerInputs, WorkerSelector};
 

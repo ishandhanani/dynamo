@@ -14,7 +14,7 @@ use rmp_serde as rmps;
 use rustc_hash::FxHashMap;
 
 use crate::placement::PlacementEvent;
-use dynamo_router_protocol::residency::StorageTier;
+use crate::residency::StorageTier;
 use dynamo_router_protocol::worker::{DpRank, WorkerWithDpRank};
 
 mod convert;
@@ -31,7 +31,6 @@ pub use convert::{
 };
 pub use extra_keys::{
     DYNAMO_CACHE_SALT_PREFIX, extra_keys_to_block_mm_infos, extra_keys_to_cache_namespace,
-    mark_mm_hash_for_extra_key, parse_mm_hash_from_extra_key,
 };
 pub use filter::KvCacheSpecKind;
 pub use types::{

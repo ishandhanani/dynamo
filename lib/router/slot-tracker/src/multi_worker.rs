@@ -39,7 +39,7 @@ use crate::prelude::{
     ActiveSequenceEvent, ActiveSequenceEventData, PrefillLoadHint, WorkerId, WorkerWithDpRank,
 };
 use dynamo_router_protocol::attempt::AttemptId;
-use dynamo_router_protocol::load::WorkerCapacity;
+use dynamo_router_protocol::worker::WorkerCapacity;
 
 // How often we force expire stale requests across all workers. See the comment
 // in ActiveSequencesMultiWorker::force_expire_requests_across_all_workers for
@@ -96,9 +96,9 @@ fn active_request_expiry_duration_from_lookup(
 
 /// Complete scheduler-owned load for one worker rank.
 ///
-/// This is an in-process snapshot rather than the event-plane [`ActiveLoad`](dynamo_router_protocol::load::ActiveLoad)
-/// protocol. Scheduler publishers always own both active-load fields, while remote wire updates may
-/// contain only a subset of fields.
+/// This is an in-process snapshot rather than the event-plane `ActiveLoad` message in lib/llm
+/// (`dynamo_llm::kv_router::ActiveLoad`). Scheduler publishers always own both active-load fields,
+/// while remote wire updates may contain only a subset of fields.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SchedulerLoadSnapshot {
     pub worker: WorkerWithDpRank,

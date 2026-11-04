@@ -11,6 +11,7 @@ use std::{
 use anyhow::Result;
 use dynamo_kv_events::event::{KV_EVENT_SUBJECT, RouterEvent};
 use dynamo_kv_hashing::routing::{BlockHashOptions, TokensWithHashes, compute_block_hash_for_seq};
+use dynamo_kv_hints::KvHint;
 use dynamo_kv_indexer::host::{
     ApproximateLruIncarnation, ApproximateLruStats, KvRouterError, RoutingDecisionHashes,
     SessionPrefixIndexer,
@@ -23,9 +24,8 @@ use dynamo_kv_router::plugins::worker_selection::{
     WorkerInfo, WorkerInfoExt, WorkerInputs, WorkerSelectionPolicyFactory,
 };
 use dynamo_kv_router::tracking_hash::tracking_hash_context;
+use dynamo_multimodal::BlockExtraInfo;
 use dynamo_router_protocol::identity::{DEFAULT_ROUTING_GROUP, RoutingPartitionRef};
-use dynamo_router_protocol::kv_hints::KvHint;
-use dynamo_router_protocol::mm::BlockExtraInfo;
 use dynamo_router_protocol::worker::{WorkerId, WorkerWithDpRank};
 use dynamo_runtime::{
     CancellationToken,
@@ -56,6 +56,7 @@ pub use dynamo_kv_router::scheduling;
 pub use dynamo_scheduler::host::OverlapScoresResponse;
 pub use dynamo_scheduler::protocols;
 
+pub mod active_load;
 pub(crate) mod embedded;
 pub mod encoder_router;
 pub mod indexer;
@@ -69,6 +70,8 @@ mod routing_host;
 pub(crate) mod routing_load;
 pub mod sequence;
 pub mod shared_cache;
+
+pub use active_load::ActiveLoad;
 
 // TODO(v1.7): Remove these compatibility aliases; use kv_router::plugins instead.
 pub use encoder_router::EncoderRouter;
@@ -2663,8 +2666,8 @@ mod tests {
     #[case::concurrent(2)]
     #[tokio::test]
     async fn session_prefix_tracking_survives_shared_core_selection(#[case] threads: u32) {
-        use dynamo_router_protocol::block_hash::ExternalSequenceBlockHash;
-        use dynamo_router_protocol::residency::StorageTier;
+        use dynamo_kv_events::residency::StorageTier;
+        use dynamo_kv_hashing::ExternalSequenceBlockHash;
 
         let component = make_test_component("session-prefix-core").await;
         let endpoint = component.endpoint("backend");
@@ -3042,8 +3045,8 @@ mod tests {
     async fn enroll_public_request_attempt_cancelled_during_routing_update_frees_booking() {
         use std::sync::atomic::{AtomicBool, Ordering};
 
+        use dynamo_kv_hashing::LocalBlockHash;
         use dynamo_kv_indexer::host::{RemotePrimary, TieredMatchDetails};
-        use dynamo_router_protocol::block_hash::LocalBlockHash;
 
         /// Records park until `release` is notified.
         struct PausedRecord {

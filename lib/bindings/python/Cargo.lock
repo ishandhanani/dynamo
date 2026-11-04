@@ -2085,6 +2085,7 @@ version = "1.7.0"
 dependencies = [
  "async-trait",
  "dynamo-router-protocol",
+ "dynamo-slot-tracker",
  "dynamo-tokens",
  "futures-util",
  "ordered-float 4.6.0",
@@ -2174,6 +2175,7 @@ name = "dynamo-kv-events"
 version = "1.7.0"
 dependencies = [
  "dynamo-kv-hashing",
+ "dynamo-multimodal",
  "dynamo-router-protocol",
  "rmp-serde",
  "rustc-hash 2.1.2",
@@ -2188,12 +2190,24 @@ name = "dynamo-kv-hashing"
 version = "1.7.0"
 dependencies = [
  "derive_builder",
- "dynamo-router-protocol",
+ "dynamo-multimodal",
  "dynamo-tokens",
  "serde",
  "serde_json",
  "thiserror 2.0.18",
  "xxhash-rust",
+]
+
+[[package]]
+name = "dynamo-kv-hints"
+version = "1.7.0"
+dependencies = [
+ "dynamo-kv-hashing",
+ "dynamo-kv-indexer",
+ "dynamo-router-protocol",
+ "rustc-hash 2.1.2",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -2241,7 +2255,9 @@ dependencies = [
  "dynamo-admission",
  "dynamo-kv-events",
  "dynamo-kv-hashing",
+ "dynamo-kv-hints",
  "dynamo-kv-indexer",
+ "dynamo-multimodal",
  "dynamo-router-protocol",
  "dynamo-scheduler",
  "dynamo-session-affinity",
@@ -2305,10 +2321,12 @@ dependencies = [
  "dynamo-decisions",
  "dynamo-kv-events",
  "dynamo-kv-hashing",
+ "dynamo-kv-hints",
  "dynamo-kv-indexer",
  "dynamo-kv-router",
  "dynamo-memory",
  "dynamo-mocker",
+ "dynamo-multimodal",
  "dynamo-parsers",
  "dynamo-parsers-v2",
  "dynamo-protocols",
@@ -2452,6 +2470,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "dynamo-multimodal"
+version = "1.7.0"
+dependencies = [
+ "serde",
+ "xxhash-rust",
+]
+
+[[package]]
 name = "dynamo-parsers"
 version = "10.2.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2534,6 +2560,7 @@ dependencies = [
  "dynamo-kv-router",
  "dynamo-llm",
  "dynamo-mocker",
+ "dynamo-multimodal",
  "dynamo-parsers",
  "dynamo-router-protocol",
  "dynamo-runtime",
@@ -2705,7 +2732,9 @@ dependencies = [
  "dynamo-admission",
  "dynamo-kv-events",
  "dynamo-kv-hashing",
+ "dynamo-kv-hints",
  "dynamo-kv-indexer",
+ "dynamo-multimodal",
  "dynamo-router-protocol",
  "dynamo-session-affinity",
  "dynamo-slot-tracker",
@@ -2921,6 +2950,7 @@ dependencies = [
  "dynamo-kv-events",
  "dynamo-kv-hashing",
  "dynamo-llm",
+ "dynamo-multimodal",
  "dynamo-protocols",
  "dynamo-runtime",
  "serde",
@@ -2960,6 +2990,7 @@ dependencies = [
  "async-trait",
  "crossbeam-queue",
  "dynamo-router-protocol",
+ "dynamo-slot-tracker",
  "fastrand",
  "parking_lot",
  "rustc-hash 2.1.2",

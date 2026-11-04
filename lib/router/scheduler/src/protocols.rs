@@ -20,44 +20,37 @@ pub use dynamo_kv_events::event::{
     KvCacheRemoveData, KvCacheStoreData, KvCacheStoredBlockData, RouterEvent,
 };
 pub use dynamo_kv_events::placement::{Placement, PlacementEvent, PlacementOwner};
-pub use dynamo_kv_hashing::routing::{
-    BlockHashOptions, MM_PAD_HASH_MASK, MM_PAD_SHIFT_VALUE, TokensWithHashes, XXH3_SEED,
-    complete_block_count, compute_block_hash, compute_block_hash_for_seq,
-    compute_block_hash_for_seq_with_seed, compute_next_seq_hash, compute_seq_hash_for_block,
-    compute_seq_hash_for_tokens_with_seeds, hash_mm_identifier, pad_value_for_mm_hash,
+pub use dynamo_kv_events::residency::{
+    ResetScope, ResidencyDomain, ResidencyOwner, StorageTier, UnsupportedResidencyDomain,
+    WireResidencyDomain,
 };
+pub use dynamo_kv_hashing::routing::{
+    BlockHashOptions, TokensWithHashes, XXH3_SEED, complete_block_count, compute_block_hash,
+    compute_block_hash_for_seq, compute_block_hash_for_seq_with_seed, compute_next_seq_hash,
+    compute_seq_hash_for_block, compute_seq_hash_for_tokens_with_seeds,
+};
+pub use dynamo_kv_hints::{KvHintTransferWorkerMetadata, KvTransferEnforcement};
 pub use dynamo_kv_indexer::overlap::OverlapScores;
 pub use dynamo_kv_indexer::residency::{
-    ResidencyOwnerKeyExt, ResidencyProjection, ResidencyProjectionError, ResidencyRoutingSnapshot,
-    ResolvedRouterHintSource,
+    ResidencyOwnerKey, ResidencyOwnerKeyExt, ResidencyProjection, ResidencyProjectionError,
+    ResidencyRoutingSnapshot, ResolvedRouterHintSource,
 };
-pub use dynamo_router_protocol::block_hash::{ExternalSequenceBlockHash, LocalBlockHash};
-pub use dynamo_router_protocol::load::{ActiveLoad, SchedulerGroup, SchedulerLoad};
+pub use dynamo_multimodal::{
+    BlockExtraInfo, BlockMmObjectInfo, MM_PAD_HASH_MASK, MM_PAD_SHIFT_VALUE, RequestExtraInfo,
+    RequestMmObjectInfo, hash_mm_identifier, pad_value_for_mm_hash,
+};
 pub use dynamo_router_protocol::metadata::RouterHintSourceMetadata;
-pub use dynamo_router_protocol::mm::{
-    BlockExtraInfo, BlockMmObjectInfo, RequestExtraInfo, RequestMmObjectInfo,
-};
-pub use dynamo_router_protocol::residency::{
-    ResetScope, ResidencyDomain, ResidencyOwner, ResidencyOwnerKey, StorageTier,
-    UnsupportedResidencyDomain, WireResidencyDomain,
-};
 pub use dynamo_router_protocol::worker::{
     DpRank, WorkerAffinityTarget, WorkerId, WorkerWithDpRank,
 };
 pub use dynamo_slot_tracker::wire::{
     ActiveBlockEvent, ActiveBlockEventData, ActiveSequenceEvent, ActiveSequenceEventBatch,
     ActiveSequenceEventData, MAX_REPLICA_BATCH_DURATION, MAX_REPLICA_BATCH_EVENTS, PrefillEvent,
-    PrefillEventData, PrefillLoadHint,
+    PrefillEventData, PrefillLoadHint, SchedulerGroup, SchedulerLoad,
 };
 pub use dynamo_worker_selection::{
     SelectionTrace, SelectionTraceRow, SelectionTraceSpec, SharedCacheHits,
 };
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct KvHintTransferWorkerMetadata<'a> {
-    pub worker_type: &'a str,
-    pub source_control_endpoint: Option<&'a str>,
-}
 
 /// Trait abstracting the worker configuration fields needed by the scheduling layer.
 ///
@@ -131,15 +124,6 @@ pub trait WorkerConfigLike {
     fn kv_transfer_keys(&self) -> Cow<'_, WorkerKvTransferKeys> {
         Cow::Owned(WorkerKvTransferKeys::of(self))
     }
-}
-
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum KvTransferEnforcement {
-    /// Put the generated topology taint in `RoutingConstraints.required_taints`.
-    Required,
-    /// Put the generated topology taint in `RoutingConstraints.preferred_taints`.
-    Preferred,
 }
 
 /// Request-level taint constraints evaluated against each worker's published taints.
@@ -381,19 +365,6 @@ mod tests {
             request,
             RouterRequest::MarkFree { request_id: None }
         ));
-    }
-
-    #[test]
-    fn test_kv_transfer_enforcement_serde() {
-        assert_eq!(
-            serde_json::to_string(&KvTransferEnforcement::Required).unwrap(),
-            r#""required""#
-        );
-        assert_eq!(
-            serde_json::from_str::<KvTransferEnforcement>(r#""preferred""#).unwrap(),
-            KvTransferEnforcement::Preferred
-        );
-        assert!(serde_json::from_str::<KvTransferEnforcement>(r#""fallback""#).is_err());
     }
 
     #[test]
