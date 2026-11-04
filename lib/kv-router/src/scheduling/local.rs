@@ -11,6 +11,7 @@ use tokio::sync::watch;
 use tokio::time::Instant;
 use tokio_util::sync::CancellationToken;
 
+use super::classifier_rows::ClassifierRows;
 #[cfg(test)]
 use super::config::RouterQueuePolicy;
 use super::overlap::OverlapSignals;
@@ -465,9 +466,10 @@ where
         // one entry per worker; the actor projects load again before selection.
         request.worker_loads = FxHashMap::default();
         classifier
-            .classify_with(classification, workers)
+            .classify_with(classification, &ClassifierRows(workers))
             .await
             .map(Some)
+            .map_err(KvSchedulerError::from)
     }
 
     /// Install the request classifier plugin. Must be called from within a
@@ -492,7 +494,11 @@ where
     ) -> Result<Option<RequestLifecycle>, KvSchedulerError> {
         self.request_classifier
             .get()
-            .map(|classifier| classifier.begin_request(request_id))
+            .map(|classifier| {
+                classifier
+                    .begin_request(request_id)
+                    .map_err(KvSchedulerError::from)
+            })
             .transpose()
     }
 
@@ -975,7 +981,7 @@ mod tests {
     use tokio::sync::{mpsc, watch};
 
     use super::*;
-    use crate::plugins::worker_selection::WorkerCandidates;
+    use crate::plugins::request_classifier::WorkerView;
     use crate::protocols::{ActiveSequenceEvent, ActiveSequenceEventData};
     use crate::scheduling::request_classifier::ClassifyFuture;
     use crate::scheduling::selector::DefaultWorkerSelector;
@@ -1385,7 +1391,7 @@ mod tests {
         fn classify(
             &mut self,
             request: ClassifyRequest,
-            workers: WorkerCandidates<'_>,
+            workers: &dyn WorkerView,
         ) -> ClassifyFuture {
             self.calls.fetch_add(1, Ordering::Relaxed);
             assert!(workers.is_empty());
@@ -1479,7 +1485,7 @@ mod tests {
             fn classify(
                 &mut self,
                 mut request: ClassifyRequest,
-                _workers: WorkerCandidates<'_>,
+                _workers: &dyn WorkerView,
             ) -> ClassifyFuture {
                 assert_eq!(request.ingress_at(), self.0);
                 request.set_due_at(self.0 + Duration::from_secs(1));
@@ -1528,7 +1534,7 @@ mod tests {
             fn classify(
                 &mut self,
                 request: ClassifyRequest,
-                workers: WorkerCandidates<'_>,
+                workers: &dyn WorkerView,
             ) -> ClassifyFuture {
                 // The queue's capacity check, run on the classifier's own rows.
                 let thresholds = BusyThresholds {
@@ -1536,19 +1542,19 @@ mod tests {
                     ..Default::default()
                 };
                 *self.0.lock() = Some(
-                    workers
-                        .iter()
-                        .map(|candidate| {
-                            let load = candidate.load().expect("LOAD was declared");
+                    (0..workers.len())
+                        .map(|row| {
+                            let info = workers.info(row).expect("row in range");
+                            let load = workers.load(row).expect("LOAD was declared");
                             (
-                                candidate.worker(),
-                                candidate
-                                    .cache()
+                                info.worker(),
+                                workers
+                                    .cache(row)
                                     .expect("CACHE was declared")
-                                    .device_overlap_blocks(),
-                                load.is_available(),
-                                load.active_requests(),
-                                thresholds.has_room(load, candidate.info().capacity()),
+                                    .device_overlap_blocks,
+                                load.available,
+                                load.active_requests,
+                                thresholds.has_room(&load, info.capacity()),
                             )
                         })
                         .collect(),

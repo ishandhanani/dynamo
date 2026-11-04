@@ -1,6 +1,8 @@
 // SPDX-FileCopyrightText: Copyright (c) 2024-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
+mod admission_config;
+mod classifier_rows;
 pub mod config;
 mod filter;
 mod local;
@@ -10,6 +12,8 @@ pub mod overlap_refresh;
 pub mod policy;
 pub mod policy_config;
 pub mod policy_queue;
+#[cfg(test)]
+mod policy_queue_tests;
 pub mod prefill_load;
 pub mod queue;
 mod queue_admission;
@@ -31,8 +35,8 @@ pub use overlap_refresh::{
     NoopOverlapScoresRefresh, OverlapScoresRefresh, RefreshedOverlap, TieredOverlapRefresher,
 };
 pub use policy_config::{
-    BusyThresholds, BusyThresholdsExt, PolicyClassConfig, PolicyProfile, RejectThresholdsProvider,
-    RouterPolicyConfig, RouterPolicyConfigError,
+    BusyRanksExt, BusyThresholds, BusyThresholdsExt, PolicyClassConfig, PolicyProfile,
+    RejectThresholdsProvider, RouterPolicyConfig, RouterPolicyConfigError,
 };
 pub use policy_queue::{
     PolicyQueue, PolicyQueueEntry, QueueLimitKind, QueueRejection, QueueSnapshot,
@@ -42,7 +46,7 @@ pub use prefill_load::{
     prefill_load_hint_from_effective_tokens,
 };
 pub use queue_admission::WorkerPlacement;
-pub use request_classifier::RequestLifecycle;
+pub use request_classifier::{ClassificationError, RequestLifecycle};
 // TODO(v1.7): Remove these compatibility re-exports; use crate::plugins instead.
 pub use crate::plugins::request_classifier::{
     AbortCause, ClassifierError, ClassifyEvent, ClassifyFuture, ClassifyRequest, RequestClassifier,
