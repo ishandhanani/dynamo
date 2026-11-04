@@ -15,9 +15,11 @@ use serde::de::DeserializeOwned;
 use tokio::net::TcpListener;
 
 use crate::protocols::WorkerId;
+use crate::scheduling::KvSchedulerError;
 use crate::services::common::http::{json_error, json_ok, json_rejection};
 use crate::services::common::replica_sync_http;
 
+use super::error::SelectionError;
 use super::service::SelectionService;
 use super::types::{
     OutputBlockRequest, OverlapScoresRequest, PotentialLoadsRequest, REQUEST_BODY_LIMIT_BYTES,
@@ -34,6 +36,45 @@ pub struct AppState {
     pub service: Arc<SelectionService>,
 }
 
+/// The HTTP response for a selection error: its status class, and a JSON body
+/// that keeps plugin-produced detail server-side.
+pub(crate) fn selection_error_response(error: SelectionError) -> Response {
+    let status = error.status();
+    if matches!(
+        &error,
+        SelectionError::Scheduler(
+            KvSchedulerError::RequestClassifierPanicked(_)
+                | KvSchedulerError::RequestClassifierFailed(_)
+                | KvSchedulerError::InvalidClassificationMetadata(_)
+        )
+    ) {
+        // Plugin-produced detail (its error text, or the metadata it
+        // returned) stays server-side: log it and return a fixed body.
+        tracing::warn!(error = %error, "request classifier failure sanitized from response");
+        return (
+            status,
+            Json(serde_json::json!({"error": "request classifier failed"})),
+        )
+            .into_response();
+    }
+    if let SelectionError::Scheduler(KvSchedulerError::QueueRejected(rejection)) = &error {
+        return (
+            status,
+            Json(serde_json::json!({
+                "error": error.to_string(),
+                "details": rejection,
+            })),
+        )
+            .into_response();
+    }
+
+    (
+        status,
+        Json(serde_json::json!({"error": error.to_string()})),
+    )
+        .into_response()
+}
+
 async fn create_worker(
     State(state): State<Arc<AppState>>,
     payload: Result<Json<WorkerRequest>, JsonRejection>,
@@ -44,7 +85,7 @@ async fn create_worker(
     };
     match state.service.upsert_worker(req).await {
         Ok(worker) => (StatusCode::CREATED, Json(worker)).into_response(),
-        Err(error) => error.into_response(),
+        Err(error) => selection_error_response(error),
     }
 }
 
@@ -59,7 +100,7 @@ async fn patch_worker(
     };
     match state.service.patch_worker(worker_id, req).await {
         Ok(worker) => Json(worker).into_response(),
-        Err(error) => error.into_response(),
+        Err(error) => selection_error_response(error),
     }
 }
 
@@ -69,7 +110,7 @@ async fn delete_worker(
 ) -> Response {
     match state.service.delete_worker(worker_id).await {
         Ok(worker) => Json(worker).into_response(),
-        Err(error) => error.into_response(),
+        Err(error) => selection_error_response(error),
     }
 }
 
@@ -95,7 +136,7 @@ async fn select(
         .await
     {
         Ok(response) => Json(response).into_response(),
-        Err(error) => error.into_response(),
+        Err(error) => selection_error_response(error),
     }
 }
 
@@ -110,7 +151,7 @@ async fn select_and_reserve(
         .await
     {
         Ok(response) => Json(response).into_response(),
-        Err(error) => error.into_response(),
+        Err(error) => selection_error_response(error),
     }
 }
 
@@ -120,7 +161,7 @@ async fn create_reservation(
 ) -> Response {
     match state.service.create_reservation(req).await {
         Ok(response) => (StatusCode::CREATED, Json(response)).into_response(),
-        Err(error) => error.into_response(),
+        Err(error) => selection_error_response(error),
     }
 }
 
@@ -130,7 +171,7 @@ async fn prefill_complete(
 ) -> Response {
     match state.service.prefill_complete(&selection_id).await {
         Ok(()) => json_ok(StatusCode::OK),
-        Err(error) => error.into_response(),
+        Err(error) => selection_error_response(error),
     }
 }
 
@@ -140,7 +181,7 @@ async fn delete_reservation(
 ) -> Response {
     match state.service.free_reservation(&selection_id).await {
         Ok(()) => json_ok(StatusCode::OK),
-        Err(error) => error.into_response(),
+        Err(error) => selection_error_response(error),
     }
 }
 
@@ -158,7 +199,7 @@ async fn add_output_block(
         .add_output_block(&selection_id, req.decay_fraction)
     {
         Ok(()) => json_ok(StatusCode::OK),
-        Err(error) => error.into_response(),
+        Err(error) => selection_error_response(error),
     }
 }
 
@@ -189,7 +230,7 @@ async fn potential_loads(
 ) -> Response {
     match state.service.potential_loads(req).await {
         Ok(response) => Json(response).into_response(),
-        Err(error) => error.into_response(),
+        Err(error) => selection_error_response(error),
     }
 }
 
@@ -199,7 +240,7 @@ async fn overlap_scores(
 ) -> Response {
     match state.service.overlap_scores(req).await {
         Ok(response) => Json(response).into_response(),
-        Err(error) => error.into_response(),
+        Err(error) => selection_error_response(error),
     }
 }
 
@@ -329,4 +370,41 @@ pub async fn run_server(port: u16, service: SelectionService) -> anyhow::Result<
     service.shutdown().await;
     result?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[derive(Debug, thiserror::Error)]
+    #[error("private plugin detail")]
+    struct PrivateClassifierError;
+
+    #[tokio::test]
+    async fn classifier_error_response_is_sanitized() {
+        let response = selection_error_response(SelectionError::Scheduler(
+            KvSchedulerError::RequestClassifierFailed(std::sync::Arc::new(PrivateClassifierError)),
+        ));
+
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        assert_eq!(body.as_ref(), br#"{"error":"request classifier failed"}"#);
+    }
+
+    #[tokio::test]
+    async fn invalid_classification_metadata_response_is_sanitized() {
+        let response = selection_error_response(SelectionError::Scheduler(
+            KvSchedulerError::InvalidClassificationMetadata(
+                "unknown policy class \"plugin-private-class\"".to_string(),
+            ),
+        ));
+
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        assert_eq!(body.as_ref(), br#"{"error":"request classifier failed"}"#);
+    }
 }

@@ -17,11 +17,13 @@ use dynamo_kv_router::protocols::{
     BlockHashOptions, RouterEvent, RoutingConstraints, StorageTier, WorkerId,
     compute_block_hash_for_seq,
 };
+use dynamo_kv_router::scheduling::CacheHitWeights;
 use dynamo_kv_router::scheduling::{
     OverlapAnalysis, ScheduleMode, ScheduleRequest, SessionContext,
 };
 use dynamo_kv_router::{
     ConcurrentRadixTreeCompressed, RoutingPartitionRef, TrackingHashContext, TrackingHashScope,
+    tracking_hash_context,
 };
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
@@ -261,7 +263,7 @@ impl KvReplayRouter {
         num_workers: usize,
     ) -> Result<Self> {
         let config = replay_router_config(args, router_config);
-        let tracking_hash = TrackingHashContext::from_config(&config)?;
+        let tracking_hash = tracking_hash_context(&config)?;
         let indexer =
             create_replay_indexer(args.block_size as u32, config.router_event_threads as usize);
         let workers_with_configs = replay_workers_with_configs(args, num_workers);
@@ -337,7 +339,12 @@ impl KvReplayRouter {
             .indexer
             .find_matches_for_request(&request.tokens, None)
             .await?;
-        let overlap = OverlapAnalysis::new(&self.config, self.block_size, &tiered).signals();
+        let overlap = OverlapAnalysis::new(
+            &CacheHitWeights::from(&self.config),
+            self.block_size,
+            &tiered,
+        )
+        .signals();
         let token_seq = self.config.compute_seq_hashes_for_tracking_with_context(
             &self.tracking_hash,
             TrackingHashScope {

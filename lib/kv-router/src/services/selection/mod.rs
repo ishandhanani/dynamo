@@ -7,17 +7,32 @@
 //! model requests and never owns model responses.
 
 pub use dynamo_session_affinity as affinity;
-mod catalog;
-mod core;
-mod error;
-mod ingress;
-mod input;
-mod membership;
-mod pending;
+// Shims over the kernel's selection modules, so the server, the service, the ZMQ ingress, and
+// the HTTP tests keep their `super::` paths until step 8 flips hosts to the owners.
+mod core {
+    pub use dynamo_scheduler::selection::core::*;
+}
+mod error {
+    pub use dynamo_scheduler::selection::error::*;
+}
+mod ingress {
+    pub use dynamo_scheduler::selection::ingress::*;
+}
+mod input {
+    pub use dynamo_scheduler::selection::input::*;
+}
+mod pending {
+    pub use dynamo_scheduler::selection::pending::*;
+}
+mod types {
+    pub use dynamo_scheduler::selection::types::*;
+}
 mod server;
 mod service;
-mod types;
+mod zmq_ingress;
 
+#[cfg(test)]
+mod core_host_tests;
 #[cfg(test)]
 mod tests;
 
@@ -29,23 +44,27 @@ pub use crate::plugins::{
     WorkerSelectionPolicyProviderError, WorkerSelectionPolicyRegistry,
     WorkerSelectionPolicyRegistryError,
 };
-pub use crate::services::common::replica_sync::{
-    AffinityBindingEvent, HostReplicaChannels, HostReplicaSyncFactory, ReplicaIngressObserver,
-    ReplicaPeerError, SchedulerLoadSink,
-};
+pub use crate::services::common::replica_sync::ReplicaPeerError;
 pub use core::{
     HostCache, HostEligibility, HostLoad, HostReplication, HostTelemetry, KvIndexSource, Selected,
     SelectionAdmission, SelectionCore, SelectionHost, SelectionOperation, SelectionOutcome,
-    SelectionPartition, SelectionRun, SelectionScheduler, SelectionServiceConfig, SessionBinding,
+    SelectionPartition, SelectionRun, SelectionScheduler, SessionBinding,
+};
+pub use dynamo_scheduler::replication::{
+    AffinityBindingEvent, HostReplicaChannels, HostReplicaSyncFactory, ReplicaIngressObserver,
+    SchedulerLoadSink,
+};
+pub use dynamo_scheduler::selection::membership::{
+    CatalogObserver, CatalogReconciler, WorkerCatalogSource,
 };
 pub use error::SelectionError;
-pub use ingress::KvEventIngress;
+pub use ingress::{KvEventIngress, LocalIndexIngress};
 pub use input::{PromptRequest, PromptView};
-pub use membership::{CatalogObserver, CatalogReconciler, WorkerCatalogSource};
 pub use pending::SelectionCacheConfig;
 pub use server::{AppState, run_server};
 pub use service::{
-    SelectionService, SelectionServiceBuilder, SessionBindingUpdates,
+    SelectionService, SelectionServiceBuilder, SelectionServiceConfig, SessionBindingUpdates,
+    local_selection_core, local_selection_core_with_host,
     warn_for_unserved_worker_selection_policies,
 };
 pub use types::{
@@ -56,3 +75,4 @@ pub use types::{
     SharedCacheOverlapScore, WorkerCatalogRecord, WorkerLifecycle, WorkerOverlapScore,
     WorkerPatchRequest, WorkerRequest,
 };
+pub use zmq_ingress::ZmqDirectIngress;

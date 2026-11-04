@@ -11,6 +11,7 @@ use std::{
 use anyhow::Result;
 #[cfg(test)]
 use dynamo_kv_router::WorkerSelectionPolicy;
+use dynamo_kv_router::scheduling::CacheHitWeights;
 use dynamo_kv_router::{
     DEFAULT_ROUTING_GROUP, KvSchedulerError, PrefillLoadEstimator, RoutingPartitionRef,
     SessionPrefixIndexer, SharedKvCache, TrackingHashAlgorithm, TrackingHashContext,
@@ -40,6 +41,7 @@ use dynamo_kv_router::{
         PromptView, Selected, SelectionAdmission, SelectionError, SelectionOperation,
         SelectionOutcome, SelectionRun, SessionBinding,
     },
+    tracking_hash_context,
 };
 use dynamo_runtime::{
     CancellationToken,
@@ -749,7 +751,7 @@ impl KvRouter {
         } else {
             None
         };
-        let tracking_hash = TrackingHashContext::from_config(&kv_router_config)?;
+        let tracking_hash = tracking_hash_context(&kv_router_config)?;
         let tracking_model_name =
             resolve_tracking_model_name(tracking_hash.algorithm(), model_name.as_deref())?;
         let kv_event_source_requirement = KvEventSourceRequirement::derive(
@@ -1085,7 +1087,7 @@ impl KvRouter {
         tiered_matches: &indexer::TieredMatchDetails,
     ) -> CacheHitEstimates {
         cache_hit_estimates_from_tiered_matches(
-            &self.kv_router_config,
+            &CacheHitWeights::from(&self.kv_router_config),
             self.block_size,
             tiered_matches,
         )
@@ -1868,16 +1870,18 @@ impl KvRouter {
                 })
                 .collect::<Vec<_>>()
         };
-        Ok(
-            OverlapAnalysis::new(&self.kv_router_config, self.block_size, &tiered_matches)
-                .scores_response(
-                    num_blocks,
-                    expected_workers,
-                    shared_enabled,
-                    shared_hits.as_ref(),
-                    shared_error,
-                ),
+        Ok(OverlapAnalysis::new(
+            &CacheHitWeights::from(&self.kv_router_config),
+            self.block_size,
+            &tiered_matches,
         )
+        .scores_response(
+            num_blocks,
+            expected_workers,
+            shared_enabled,
+            shared_hits.as_ref(),
+            shared_error,
+        ))
     }
 
     /// Dump all events from the indexer

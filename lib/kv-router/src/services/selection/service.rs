@@ -12,14 +12,16 @@ use crate::WorkerSelectionPolicyFactory;
 use crate::config::KvRouterConfig;
 use crate::protocols::WorkerId;
 use crate::scheduling::PotentialLoad;
+use crate::scheduling::RouterConfig;
 use crate::services::common::replica_sync::{
-    AffinityBindingEvent, PeerManager, ReplicaPeerError, ReplicaSyncRuntime, setup_replica_sync,
+    PeerManager, ReplicaPeerError, ReplicaSyncRuntime, setup_replica_sync,
 };
 use crate::services::indexer::backend::IndexerPolicy;
-use crate::tracking_hash::TrackingHashContext;
+use crate::tracking_hash::tracking_hash_context;
+use dynamo_scheduler::replication::AffinityBindingEvent;
 
 use super::affinity::{SessionAffinityConfig, SessionAffinityMode};
-use super::core::{KvIndexSource, SelectionCore, SelectionHost, SelectionServiceConfig};
+use super::core::{HostCache, KvIndexSource, SelectionCore, SelectionHost};
 use super::error::SelectionError;
 use super::pending::SelectionCacheConfig;
 use super::types::{
@@ -27,6 +29,7 @@ use super::types::{
     ReadyResponse, ReservationRequest, ReservationResponse, SelectAndReserveRequest, SelectRequest,
     SelectResponse, WorkerCatalogRecord, WorkerPatchRequest, WorkerRequest,
 };
+use super::zmq_ingress::ZmqDirectIngress;
 use crate::WorkerType;
 use crate::plugins::RouterPluginRegistry;
 
@@ -82,7 +85,15 @@ impl SelectionServiceBuilder {
             selection_cache: SelectionCacheConfig::default(),
             worker_type,
             plugin_registry,
-            host: SelectionHost::default(),
+            // The standalone service's partitions index worker KV events
+            // published over ZMQ; `kv_index` overrides this.
+            host: SelectionHost {
+                cache: HostCache {
+                    index: KvIndexSource::Owned(Arc::new(ZmqDirectIngress::default())),
+                    ..HostCache::default()
+                },
+                ..SelectionHost::default()
+            },
             worker_selection_policy_factory: None,
             session_affinity_ttl: None,
             session_affinity_mode: SessionAffinityMode::default(),
@@ -197,7 +208,7 @@ impl SelectionServiceBuilder {
                 .resolve_for_worker_type(&self.kv_router_config, self.worker_type)?
                 .ok_or(crate::plugins::WorkerSelectionPolicyRegistryError::MissingDefault)?,
         };
-        let tracking_hash = Arc::new(TrackingHashContext::from_config(&self.kv_router_config)?);
+        let tracking_hash = Arc::new(tracking_hash_context(&self.kv_router_config)?);
         let indexer_policy = IndexerPolicy::from_config(
             &dynamo_kv_indexer::config::IndexerConfig::from(&self.kv_router_config),
         )?;
@@ -217,8 +228,11 @@ impl SelectionServiceBuilder {
             );
         }
         let replica_config = replica_runtime.as_ref().map(ReplicaSyncRuntime::config);
-        let core = SelectionCore::new_inner(
-            self.kv_router_config,
+        let config = RouterConfig::from(&self.kv_router_config)
+            .validate()
+            .map_err(anyhow::Error::from)?;
+        let core = SelectionCore::new(
+            config,
             self.indexer_threads,
             cancel_token.clone(),
             replica_config,
@@ -242,7 +256,12 @@ impl SelectionServiceBuilder {
         let core = Arc::new(core);
 
         if recover_from_peers {
-            match core.recover_indexer_from_peers(&self.indexer_peers).await {
+            match crate::services::indexer::recovery::recover_from_peers(
+                &self.indexer_peers,
+                core.index_registry(),
+            )
+            .await
+            {
                 Ok(true) => tracing::info!("Selection indexer recovery completed"),
                 Ok(false) => {
                     tracing::warn!(
@@ -289,6 +308,78 @@ impl SelectionServiceBuilder {
             cancel_token,
         })
     }
+}
+
+/// A local selection core from the flat configuration: applies the policy file, validates,
+/// resolves the tracking hash and indexer policy, and builds the kernel over the passive
+/// index ingress. Tests, benches, and in-process hosts use it; the standalone service goes
+/// through [`SelectionServiceBuilder`].
+pub fn local_selection_core(
+    kv_router_config: KvRouterConfig,
+    indexer_threads: usize,
+    cancel_token: CancellationToken,
+    cache_config: SelectionCacheConfig,
+    policy_factory: WorkerSelectionPolicyFactory,
+) -> anyhow::Result<SelectionCore> {
+    local_selection_core_with_host(
+        kv_router_config,
+        indexer_threads,
+        cancel_token,
+        cache_config,
+        policy_factory,
+        SelectionHost::default(),
+    )
+}
+
+/// [`local_selection_core`] with an explicit host (ingress, load and cache signals).
+pub fn local_selection_core_with_host(
+    mut kv_router_config: KvRouterConfig,
+    indexer_threads: usize,
+    cancel_token: CancellationToken,
+    cache_config: SelectionCacheConfig,
+    policy_factory: WorkerSelectionPolicyFactory,
+    host: SelectionHost,
+) -> anyhow::Result<SelectionCore> {
+    kv_router_config
+        .apply_policy_config()
+        .map_err(anyhow::Error::msg)?;
+    kv_router_config
+        .validate_config()
+        .map_err(anyhow::Error::msg)?;
+    let tracking_hash = Arc::new(tracking_hash_context(&kv_router_config)?);
+    let indexer_policy = IndexerPolicy::from_config(
+        &dynamo_kv_indexer::config::IndexerConfig::from(&kv_router_config),
+    )?;
+    let config = RouterConfig::from(&kv_router_config).validate()?;
+    Ok(SelectionCore::new(
+        config,
+        indexer_threads,
+        cancel_token,
+        None,
+        policy_factory,
+        host,
+        WorkerType::Aggregated,
+        true,
+        cache_config,
+        tracking_hash,
+        indexer_policy,
+        None,
+    ))
+}
+
+/// The standalone selection service's configuration, as the CLI and the Python bindings
+/// hand it over; `service_builder` turns it into a builder.
+#[derive(Debug, Clone)]
+pub struct SelectionServiceConfig {
+    pub port: u16,
+    pub threads: usize,
+    pub indexer_peers: Vec<String>,
+    pub replica_sync_port: Option<u16>,
+    pub replica_sync_peers: Vec<String>,
+    pub kv_router_config: crate::config::KvRouterConfig,
+    pub selection_cache: SelectionCacheConfig,
+    /// Session stickiness TTL; `None` disables session affinity.
+    pub session_affinity_ttl: Option<Duration>,
 }
 
 impl SelectionServiceConfig {
@@ -412,7 +503,7 @@ impl SelectionService {
         Self {
             session_binding_rx: None,
             core: Arc::new(
-                SelectionCore::try_new_local(
+                local_selection_core_with_host(
                     kv_router_config,
                     indexer_threads,
                     cancel_token.clone(),
@@ -423,6 +514,13 @@ impl SelectionService {
                             role.default_selector_label(),
                         )
                     }),
+                    SelectionHost {
+                        cache: HostCache {
+                            index: KvIndexSource::Owned(Arc::new(ZmqDirectIngress::default())),
+                            ..HostCache::default()
+                        },
+                        ..SelectionHost::default()
+                    },
                 )
                 .expect("valid test config"),
             ),
@@ -582,11 +680,12 @@ impl SelectionService {
     }
 
     pub async fn indexer_snapshot(&self) -> serde_json::Value {
-        self.core.dump_indexer_events().await
+        crate::services::indexer::server::dump_registry(self.core.index_registry()).await
     }
 
     pub async fn recover_indexer_from_peers(&self, peers: &[String]) -> anyhow::Result<bool> {
-        self.core.recover_indexer_from_peers(peers).await
+        crate::services::indexer::recovery::recover_from_peers(peers, self.core.index_registry())
+            .await
     }
 
     pub async fn shutdown(&self) {

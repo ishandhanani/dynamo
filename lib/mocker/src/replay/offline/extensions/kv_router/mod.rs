@@ -21,6 +21,7 @@ use dynamo_kv_router::protocols::{
     BlockHashOptions, KvCacheEventData, PrefillLoadHint, RouterEvent, RoutingConstraints, WorkerId,
     WorkerWithDpRank, compute_block_hash_for_seq,
 };
+use dynamo_kv_router::scheduling::CacheHitWeights;
 use dynamo_kv_router::scheduling::{BusyRanksExt, BusyThresholdsExt};
 use dynamo_kv_router::scheduling::{
     OverlapAnalysis, OverlapSignals, PolicyClassConfig, PolicyProfile, PolicyQueue, QueueSnapshot,
@@ -35,6 +36,7 @@ use dynamo_kv_router::{
     ActiveSequencesMultiWorker, RadixTree, RoutingPartitionRef, SchedulingRequest, SequenceRequest,
     SessionContext, SessionPrefixIndexer, TrackingHashAlgorithm, TrackingHashContext,
     TrackingHashScope, WorkerLoadProjection, WorkerSelectionInput, WorkerSelector,
+    tracking_hash_context,
 };
 use dynamo_tokens::SequenceHash;
 use futures::executor::block_on;
@@ -709,9 +711,12 @@ impl<Request: PlacementRequestView> PlacementPolicy<Request> for KvRouterPlaceme
             if self.router.acquire_affinity(&mut request)? {
                 if let Some(hashes) = &request.block_hashes {
                     let tiered = self.router.indexer.find_matches_for_hashes(hashes.clone());
-                    request.overlap =
-                        OverlapAnalysis::new(&self.router.config, self.router.block_size, &tiered)
-                            .signals();
+                    request.overlap = OverlapAnalysis::new(
+                        &CacheHitWeights::from(&self.router.config),
+                        self.router.block_size,
+                        &tiered,
+                    )
+                    .signals();
                 }
                 let effects = self.router.enqueue_or_admit(request, now_ms)?;
                 admissions.extend(effects.admissions);
@@ -793,7 +798,7 @@ impl OfflineReplayRouter {
             config.validate().map_err(anyhow::Error::msg)?;
             indexer.session_prefix_index = Some(SessionPrefixIndexer::new());
         }
-        let tracking_hash = TrackingHashContext::from_config(&config)?;
+        let tracking_hash = tracking_hash_context(&config)?;
         let worker_config_template = replay_worker_config(args);
         let workers_with_configs = replay_workers_with_configs(args, num_workers);
         let slots = replay_slots(args, &workers_with_configs);
@@ -1309,7 +1314,12 @@ impl OfflineReplayRouter {
                 (tiered, token_seq)
             }
         };
-        let overlap = OverlapAnalysis::new(&self.config, self.block_size, &tiered).signals();
+        let overlap = OverlapAnalysis::new(
+            &CacheHitWeights::from(&self.config),
+            self.block_size,
+            &tiered,
+        )
+        .signals();
 
         Ok(PendingRequest {
             uuid,
