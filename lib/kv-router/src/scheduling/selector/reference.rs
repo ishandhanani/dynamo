@@ -848,6 +848,8 @@ mod tests {
             allowed_worker_ids: None,
             routing_constraints: crate::protocols::RoutingConstraints::default(),
             shared_cache_hits: None,
+            prefetch_tokens: None,
+            prefetch_on_arrival: false,
             resp_tx: None,
         };
         let mut selected = [false; 3];
@@ -1255,6 +1257,8 @@ mod tests {
                 preferred_taints: HashMap::new(),
             },
             shared_cache_hits: None,
+            prefetch_tokens: None,
+            prefetch_on_arrival: false,
             resp_tx: None,
         };
 
@@ -1314,6 +1318,8 @@ mod tests {
                 preferred_taints: HashMap::new(),
             },
             shared_cache_hits: None,
+            prefetch_tokens: None,
+            prefetch_on_arrival: false,
             resp_tx: None,
         };
 
@@ -1391,6 +1397,8 @@ mod tests {
                     preferred_taints: HashMap::new(),
                 },
                 shared_cache_hits: None,
+                prefetch_tokens: None,
+                prefetch_on_arrival: false,
                 resp_tx: None,
             };
 
@@ -1466,6 +1474,8 @@ mod tests {
                 preferred_taints: HashMap::from([("mdc-a".to_string(), 0.85)]),
             },
             shared_cache_hits: None,
+            prefetch_tokens: None,
+            prefetch_on_arrival: false,
             resp_tx: None,
         };
 
@@ -1537,6 +1547,8 @@ mod tests {
                 preferred_taints: HashMap::from([("mdc-a".to_string(), -0.25)]),
             },
             shared_cache_hits: None,
+            prefetch_tokens: None,
+            prefetch_on_arrival: false,
             resp_tx: None,
         };
 
@@ -1621,6 +1633,8 @@ mod tests {
             allowed_worker_ids: None,
             routing_constraints: crate::protocols::RoutingConstraints::default(),
             shared_cache_hits: Some(shared_hits),
+            prefetch_tokens: None,
+            prefetch_on_arrival: false,
             resp_tx: Some(tx),
         };
 
@@ -1699,6 +1713,8 @@ mod tests {
             allowed_worker_ids: None,
             routing_constraints: crate::protocols::RoutingConstraints::default(),
             shared_cache_hits: None,
+            prefetch_tokens: None,
+            prefetch_on_arrival: false,
             resp_tx: Some(tx),
         };
 
@@ -2001,6 +2017,8 @@ mod tests {
             allowed_worker_ids: None,
             routing_constraints: crate::protocols::RoutingConstraints::default(),
             shared_cache_hits: None,
+            prefetch_tokens: None,
+            prefetch_on_arrival: false,
             resp_tx: Some(tx),
         };
 
@@ -2106,6 +2124,8 @@ mod tests {
             allowed_worker_ids: None,
             routing_constraints: crate::protocols::RoutingConstraints::default(),
             shared_cache_hits: None,
+            prefetch_tokens: None,
+            prefetch_on_arrival: false,
             resp_tx: Some(tx),
         };
 

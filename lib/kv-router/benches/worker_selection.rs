@@ -234,6 +234,8 @@ fn fixture_with_preferred_taints(
         kv_transfer_candidates: None,
         retain_kv_transfer_chain: false,
         shared_cache_hits: None,
+        prefetch_tokens: None,
+        prefetch_on_arrival: false,
         worker_loads,
         resp_tx: None,
     };

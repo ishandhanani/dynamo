@@ -425,6 +425,13 @@ pub struct ScheduleRequest {
     pub kv_transfer_candidates: Option<KvTransferCandidates>,
     pub retain_kv_transfer_chain: bool,
     pub shared_cache_hits: Option<SharedCacheHits>,
+    /// Prompt token ids for a prefetch hint, shared with the caller; `None` when
+    /// no [`PrefetchTrigger`](super::PrefetchTrigger) is installed, so untouched
+    /// requests pay nothing.
+    pub prefetch_tokens: Option<Arc<Vec<u32>>>,
+    /// Send the prefetch hint as soon as the request is queued instead of `lead`
+    /// before its deadline (a client wake-up). Needs `prefetch_tokens`.
+    pub prefetch_on_arrival: bool,
 }
 
 /// Actor-owned admission request.
@@ -459,6 +466,10 @@ pub struct SchedulingRequest {
     pub kv_transfer_candidates: Option<KvTransferCandidates>,
     pub retain_kv_transfer_chain: bool,
     pub shared_cache_hits: Option<SharedCacheHits>,
+    /// See [`ScheduleRequest::prefetch_tokens`].
+    pub prefetch_tokens: Option<Arc<Vec<u32>>>,
+    /// See [`ScheduleRequest::prefetch_on_arrival`].
+    pub prefetch_on_arrival: bool,
 
     // Load state computed during admission.
     pub worker_loads: FxHashMap<WorkerWithDpRank, WorkerLoadProjection>,
@@ -679,6 +690,8 @@ mod tests {
             kv_transfer_candidates: None,
             retain_kv_transfer_chain: false,
             shared_cache_hits: None,
+            prefetch_tokens: None,
+            prefetch_on_arrival: false,
             worker_loads,
             resp_tx: None,
         }

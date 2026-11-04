@@ -48,6 +48,7 @@ impl PromptRequest {
     pub fn view(&self) -> PromptView<'_> {
         PromptView {
             token_ids: self.token_ids.as_deref(),
+            shared_token_ids: None,
             mm_routing_info: self.mm_routing_info.as_ref(),
             block_mm_infos: self.block_mm_infos.as_deref(),
             block_hashes: self.block_hashes.as_deref(),
@@ -66,6 +67,9 @@ impl PromptRequest {
 #[derive(Debug, Clone, Copy)]
 pub struct PromptView<'a> {
     pub token_ids: Option<&'a [u32]>,
+    /// The same prompt tokens as an owned handle, when the host has one; the
+    /// scheduler clones the handle for a prefetch hint instead of the tokens.
+    pub shared_token_ids: Option<&'a std::sync::Arc<Vec<u32>>>,
     pub mm_routing_info: Option<&'a MmRoutingInfoRequest>,
     pub block_mm_infos: Option<&'a [Option<BlockExtraInfo>]>,
     pub block_hashes: Option<&'a [i64]>,

@@ -40,6 +40,9 @@ pub struct SelectionOperation<'a> {
     pub allowed_worker_ids: Option<HashSet<WorkerId>>,
     pub routing_constraints: RoutingConstraints,
     pub admission: SelectionAdmission,
+    /// Ask the scheduler for a prefetch hint as soon as the request is queued
+    /// (a client wake-up). Ignored without an installed trigger.
+    pub prefetch_on_arrival: bool,
     /// Send the prompt's tracking hashes to the scheduler so the booking's
     /// blocks count as active on its worker.
     pub track_active_blocks: bool,

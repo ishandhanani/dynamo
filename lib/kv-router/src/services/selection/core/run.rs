@@ -101,6 +101,7 @@ impl SelectionCore {
                 allowed_worker_ids: req.allowed_worker_ids,
                 routing_constraints: req.routing_constraints,
                 admission,
+                prefetch_on_arrival: false,
                 track_active_blocks: true,
                 return_routing_hashes: false,
                 replay_id: req.selection_id.clone(),
@@ -145,6 +146,7 @@ impl SelectionCore {
                 admission: SelectionAdmission::Book {
                     selection_id: selection_id.clone(),
                 },
+                prefetch_on_arrival: false,
                 track_active_blocks: true,
                 return_routing_hashes: false,
                 replay_id: None,
@@ -278,6 +280,7 @@ impl SelectionCore {
             allowed_worker_ids,
             routing_constraints,
             admission,
+            prefetch_on_arrival,
             track_active_blocks,
             return_routing_hashes,
             replay_id,
@@ -417,6 +420,7 @@ impl SelectionCore {
         let booked_sequence_hashes =
             matches!(admission, SelectionAdmission::Book { .. }).then(|| sequence_hashes.clone());
         let returned_routing_hashes = return_routing_hashes.then(|| block_hashes.clone());
+        let prefetch_enabled = entry.scheduler.prefetch_enabled();
         let schedule_request = ScheduleRequest {
             mode,
             token_seq: track_active_blocks.then_some(sequence_hashes),
@@ -437,6 +441,10 @@ impl SelectionCore {
             allowed_worker_ids,
             routing_constraints,
             shared_cache_hits,
+            prefetch_tokens: prefetch_enabled
+                .then(|| prompt.shared_token_ids.cloned())
+                .flatten(),
+            prefetch_on_arrival: prefetch_enabled && prefetch_on_arrival,
         };
         // `booking` guards the booking until it is installed below: any early
         // return or drop before then frees it.

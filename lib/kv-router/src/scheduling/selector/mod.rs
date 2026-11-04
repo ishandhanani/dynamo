@@ -878,6 +878,8 @@ mod test_support {
             allowed_worker_ids: None,
             routing_constraints: crate::protocols::RoutingConstraints::default(),
             shared_cache_hits: None,
+            prefetch_tokens: None,
+            prefetch_on_arrival: false,
             resp_tx: None,
         }
     }

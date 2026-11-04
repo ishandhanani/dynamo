@@ -26,6 +26,7 @@ use super::policy_config::{
     BusyThresholds, FullRankCounts, PolicyClassConfig, PolicyProfile, RejectThresholdsProvider,
 };
 use super::policy_queue::{PolicyQueue, QueueMetadata, QueueSnapshot};
+use super::prefetch::PrefetchTrigger;
 use super::prefill_load::{PrefillLoadEstimator, effective_prefill_tokens};
 use super::queue_admission::WorkerPlacement;
 use super::request_classifier::ClassificationOverrides;
@@ -604,6 +605,8 @@ struct SchedulerQueueActor<
     /// Per-candidate cost capture for admitted selections, installed once by the host.
     selection_trace: Arc<OnceLock<SelectionTraceSpec>>,
     reject_thresholds: Option<RejectThresholdsProvider>,
+    /// Deadline-led prefetch hints, installed once by the host.
+    prefetch_trigger: Arc<OnceLock<PrefetchTrigger>>,
 }
 
 /// Queue that gates scheduling requests behind a capacity check.
@@ -642,6 +645,7 @@ pub struct SchedulerQueue<
     /// Per-candidate cost capture for admitted selections, installed once by the host.
     selection_trace: Arc<OnceLock<SelectionTraceSpec>>,
     reject_thresholds: Option<RejectThresholdsProvider>,
+    prefetch_trigger: Arc<OnceLock<PrefetchTrigger>>,
     #[allow(clippy::type_complexity)]
     // Covariant type markers, without ownership or auto-trait bounds.
     _marker: PhantomData<fn() -> (P, C, Sel, RF)>,
@@ -749,6 +753,7 @@ impl<
         let cleanup = Arc::new(AdmissionCleanup::default());
         let non_max_overlap_selection_observer = Arc::new(OnceLock::new());
         let selection_trace = Arc::new(OnceLock::new());
+        let prefetch_trigger = Arc::new(OnceLock::new());
         let start_time = Instant::now();
         let capacity_updates = queueing_enabled.then(|| Arc::new(CapacityUpdates::new()));
         let direct_release: DirectBookingRelease = {
@@ -801,6 +806,7 @@ impl<
             non_max_overlap_selection_observer: Arc::clone(&non_max_overlap_selection_observer),
             selection_trace: Arc::clone(&selection_trace),
             reject_thresholds: reject_thresholds.clone(),
+            prefetch_trigger: Arc::clone(&prefetch_trigger),
         };
         tokio::spawn(actor.run(admission_rx));
         Self {
@@ -825,6 +831,7 @@ impl<
             non_max_overlap_selection_observer,
             selection_trace,
             reject_thresholds,
+            prefetch_trigger,
             _marker: PhantomData,
         }
     }
@@ -854,6 +861,17 @@ impl<
     /// Returns `false` when a spec is already installed.
     pub fn set_selection_trace(&self, spec: SelectionTraceSpec) -> bool {
         self.selection_trace.set(spec).is_ok()
+    }
+
+    /// Install deadline-led prefetch hints for queued requests.
+    ///
+    /// Returns `false` when a trigger is already installed.
+    pub fn set_prefetch_trigger(&self, trigger: PrefetchTrigger) -> bool {
+        self.prefetch_trigger.set(trigger).is_ok()
+    }
+
+    pub fn prefetch_enabled(&self) -> bool {
+        self.prefetch_trigger.get().is_some()
     }
 
     /// Enqueue a new request through the router-owned policy queue.
@@ -1056,6 +1074,7 @@ impl<
             class_index,
             snapshot,
             due_at: None,
+            prefetch_on_arrival: false,
             // "Arrival" is the router ingress time, stamped before the
             // admission channel — one basis for classified and unclassified
             // requests alike, so time spent in a classifier does not reorder
@@ -1304,7 +1323,11 @@ impl<
         let capacity_updates = self.capacity_updates.clone();
         loop {
             self.turn = self.turn.wrapping_add(1);
-            let due_at = self.pending.next_due_at();
+            // Wake for the earlier of the next deadline and the next prefetch lead.
+            let due_at = match (self.pending.next_due_at(), self.next_prefetch_at()) {
+                (Some(due_at), Some(prefetch_at)) => Some(due_at.min(prefetch_at)),
+                (due_at, prefetch_at) => due_at.or(prefetch_at),
+            };
             let command = if capacity_updates.is_none() && due_at.is_none() {
                 rx.recv().await
             } else {
@@ -1495,6 +1518,9 @@ impl<
             }
         }
         tracing::trace!(policy_class = class.name, "ordering request");
+        let mut queue_metadata = queue_metadata;
+        queue_metadata.prefetch_on_arrival =
+            request.prefetch_on_arrival && self.prefetch_trigger.get().is_some();
         let priority_jump = request.priority_jump;
         let strict_priority = request.strict_priority;
         let placement = request
@@ -1546,6 +1572,90 @@ impl<
             self.subtract_pending_counters(class_index, entry.snapshot());
             let mut request = entry.into_payload().request;
             self.reject_due_time_passed(class_index, &mut request);
+        }
+    }
+
+    /// When the next queued entry's prefetch hint is due: its `due_at` less the lead.
+    fn next_prefetch_at(&self) -> Option<Instant> {
+        let trigger = self.prefetch_trigger.get()?;
+        let due_at = self.pending.next_prefetch_due_at()?;
+        Some(due_at.checked_sub(trigger.lead).unwrap_or(due_at))
+    }
+
+    /// Send a prefetch hint for every still-queued entry within `lead` of its
+    /// deadline (or flagged `prefetch_on_arrival`): select a worker without
+    /// booking, hand the tokens to the sink, and, only when a hint was sent,
+    /// record the worker as the entry's affinity target (exclusive while
+    /// eligible, like session affinity). The entry goes back in place; nothing
+    /// here awaits.
+    fn fire_prefetch(&mut self, now: Instant) {
+        let Some(trigger) = self.prefetch_trigger.get().cloned() else {
+            return;
+        };
+        for (mut entry, placement) in self.pending.take_prefetch_due(now + trigger.lead) {
+            let queued = entry.payload_mut();
+            if let Some(tokens) = queued.request.prefetch_tokens.clone() {
+                let selected =
+                    self.with_projected_loads(&mut queued.request, now, |actor, request| {
+                        actor.select_worker_for_request(request, false, None)
+                    });
+                match selected {
+                    Ok(selected) => {
+                        let worker = selected.selection.worker;
+                        // The prefetch set is the L3-resident prefix (shared-cache hits
+                        // from block 0) minus what this worker already holds on device.
+                        let resident_prefix_blocks = queued
+                            .request
+                            .shared_cache_hits
+                            .as_ref()
+                            .and_then(|hits| hits.ranges.first())
+                            .filter(|range| range.start == 0)
+                            .map_or(0, |range| range.end);
+                        let worker_blocks = queued
+                            .request
+                            .overlap
+                            .tier_overlap_blocks
+                            .device
+                            .get(&worker)
+                            .copied()
+                            .unwrap_or(0) as u32;
+                        let missing_blocks = resident_prefix_blocks.saturating_sub(worker_blocks);
+                        if missing_blocks > 0 {
+                            let prefix_len = (resident_prefix_blocks as usize)
+                                .saturating_mul(self.block_size as usize)
+                                .min(tokens.len());
+                            trigger.sink.prefetch(worker, &tokens[..prefix_len]);
+                            // Steer the admitted selection to the worker now loading the
+                            // prefix. Exclusive while that worker stays eligible, like
+                            // session affinity; explicit steering wins.
+                            if queued.request.pinned_worker.is_none()
+                                && queued.request.affinity_target.is_none()
+                            {
+                                queued.request.affinity_target = Some(worker.into());
+                            }
+                            tracing::debug!(
+                                request_id = queued.request.mode.request_id().unwrap_or("unknown"),
+                                worker_id = worker.worker_id,
+                                resident_prefix_blocks,
+                                worker_blocks,
+                                tokens = prefix_len,
+                                "sent prefetch hint ahead of queue deadline"
+                            );
+                        } else {
+                            tracing::trace!(
+                                worker_id = worker.worker_id,
+                                resident_prefix_blocks,
+                                worker_blocks,
+                                "prefetch hint skipped: worker holds the shared-resident prefix"
+                            );
+                        }
+                    }
+                    Err(error) => {
+                        tracing::debug!(%error, "prefetch hint skipped: no worker selectable");
+                    }
+                }
+            }
+            self.pending.reinsert(entry, placement);
         }
     }
 
@@ -1705,7 +1815,9 @@ impl<
     }
 
     async fn handle_capacity_updates(&mut self, drain_cleanup: bool) {
-        self.reject_expired(Instant::now());
+        let now = Instant::now();
+        self.reject_expired(now);
+        self.fire_prefetch(now);
         let cleanup_ready = drain_cleanup && self.drain_cleanup();
         self.recheck_capacity_updates(cleanup_ready);
         if !self.pending.has_ready() {
@@ -1715,7 +1827,9 @@ impl<
     }
 
     async fn handle_update(&mut self) {
-        self.reject_expired(Instant::now());
+        let now = Instant::now();
+        self.reject_expired(now);
+        self.fire_prefetch(now);
         self.recheck_capacity_updates(true);
         if !self.pending.has_ready() {
             return;
@@ -1726,7 +1840,9 @@ impl<
     /// Recheck recorded capacity changes before an enqueue drains the queue, so
     /// an older blocked pinned lane competes with later shared arrivals.
     async fn handle_enqueued(&mut self) {
-        self.reject_expired(Instant::now());
+        let now = Instant::now();
+        self.reject_expired(now);
+        self.fire_prefetch(now);
         self.recheck_capacity_updates(false);
         if !self.pending.has_ready() {
             return;
@@ -1860,7 +1976,7 @@ impl<
     /// selection, booking, and response-field capture, including error paths.
     fn with_projected_loads<R>(
         &mut self,
-        mut request: SchedulingRequest,
+        request: &mut SchedulingRequest,
         decay_now: Instant,
         handle: impl FnOnce(&Self, &mut SchedulingRequest) -> R,
     ) -> R {
@@ -1888,7 +2004,7 @@ impl<
             &mut request.worker_loads,
             full_ranks,
         );
-        let result = handle(self, &mut request);
+        let result = handle(self, request);
         self.projected_loads = std::mem::take(&mut request.worker_loads);
         result
     }
@@ -1991,10 +2107,10 @@ impl<
 
     fn select_without_admission_inner(
         &mut self,
-        request: SchedulingRequest,
+        mut request: SchedulingRequest,
         decay_now: Instant,
     ) -> Result<AdvisorySchedulingResponse, KvSchedulerError> {
-        self.with_projected_loads(request, decay_now, |actor, request| {
+        self.with_projected_loads(&mut request, decay_now, |actor, request| {
             let selected = actor.select_worker_for_request(request, false, None)?;
 
             Ok(AdvisorySchedulingResponse {
@@ -2020,7 +2136,7 @@ impl<
     /// compute projected load -> select worker -> book tracked state -> respond.
     fn admit_one(
         &mut self,
-        request: SchedulingRequest,
+        mut request: SchedulingRequest,
         attempt_tx: Option<oneshot::Sender<AttemptId>>,
         lifecycle_transfer: Option<Arc<AdmissionLifecycleTransfer>>,
         decay_now: Instant,
@@ -2029,7 +2145,7 @@ impl<
         if prepared.is_some() {
             self.refresh_workers_generation();
         }
-        self.with_projected_loads(request, decay_now, |actor, request| {
+        self.with_projected_loads(&mut request, decay_now, |actor, request| {
             actor.admit_one_projected(request, attempt_tx, lifecycle_transfer, prepared)
         })
     }
@@ -3019,6 +3135,8 @@ mod tests {
             allowed_worker_ids: None,
             routing_constraints: crate::protocols::RoutingConstraints::default(),
             shared_cache_hits: None,
+            prefetch_tokens: None,
+            prefetch_on_arrival: false,
             resp_tx: Some(tx),
         };
         (req, rx)
@@ -3445,6 +3563,133 @@ policy_classes:
         let stats = queue.class_queue_stats(0).unwrap();
         assert_eq!(stats.received_total, 2);
         assert_eq!(stats.rejected_due_time_passed_total, 1);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn prefetch_fires_lead_before_deadline_and_pins_soft_affinity() {
+        struct RecordingSink(Mutex<Vec<(WorkerWithDpRank, Vec<u32>, Instant)>>);
+        impl super::super::prefetch::PrefetchHintSink for RecordingSink {
+            fn prefetch(&self, worker: WorkerWithDpRank, tokens: &[u32]) {
+                self.0
+                    .lock()
+                    .push((worker, tokens.to_vec(), Instant::now()));
+            }
+        }
+
+        let (queue, slots) = make_queue(2, 16, 64, Some(0.0));
+        let sink = Arc::new(RecordingSink(Mutex::new(Vec::new())));
+        assert!(queue.set_prefetch_trigger(PrefetchTrigger {
+            lead: Duration::from_secs(2),
+            sink: sink.clone(),
+        }));
+
+        // Both workers busy, so the deadline-bearing request parks.
+        let mut active = Vec::new();
+        for id in 0..2 {
+            let (request, rx) = make_request(&format!("active-{id}"), 64);
+            queue.enqueue(request).await;
+            active.push(rx.await.unwrap().unwrap().best_worker);
+        }
+        let (mut parked, mut parked_rx) = make_request("parked", 64);
+        // 32 prompt tokens = two 16-token blocks; only block 0 is resident in the
+        // shared store, and no worker holds it on device.
+        let tokens: Arc<Vec<u32>> = Arc::new((1..=32).collect::<Vec<u32>>());
+        parked.prefetch_tokens = Some(Arc::clone(&tokens));
+        parked.shared_cache_hits =
+            Some(crate::protocols::SharedCacheHits::from_hits(&[true, false]));
+        let start = Instant::now();
+        queue
+            .enqueue_with_due_at_for_test(parked, start + Duration::from_secs(5))
+            .await;
+        assert_eq!(queue.pending_count(), 1);
+
+        // Nothing fires before `due_at - lead`.
+        tokio::time::sleep(Duration::from_millis(2_900)).await;
+        assert!(sink.0.lock().is_empty());
+
+        // The actor timer fires at `due_at - lead` without any command.
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        let (prefetched_worker, sent_tokens, fired_at) = {
+            let hints = sink.0.lock();
+            assert_eq!(hints.len(), 1, "exactly one hint per entry");
+            hints[0].clone()
+        };
+        assert_eq!(
+            sent_tokens,
+            tokens[..16].to_vec(),
+            "only the shared-resident prefix block is prefetched"
+        );
+        assert!(fired_at >= start + Duration::from_secs(3));
+        assert!(fired_at < start + Duration::from_millis(3_100));
+        assert_eq!(queue.pending_count(), 1, "the entry is still queued");
+        assert!(parked_rx.try_recv().is_err());
+
+        // Freeing the other worker wakes the queue; the final selection follows
+        // the soft affinity to the prefetched worker.
+        let other = active
+            .iter()
+            .position(|worker| *worker != prefetched_worker)
+            .expect("two distinct workers were booked");
+        slots.free(&format!("active-{other}"), decay_now()).unwrap();
+        queue.update().await;
+        let admitted = parked_rx.await.unwrap().expect("parked request admitted");
+        assert_eq!(admitted.best_worker, prefetched_worker);
+        assert_eq!(sink.0.lock().len(), 1, "no second hint after admission");
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn prefetch_on_arrival_fires_at_enqueue_without_a_deadline() {
+        struct RecordingSink(Mutex<Vec<(WorkerWithDpRank, Vec<u32>)>>);
+        impl super::super::prefetch::PrefetchHintSink for RecordingSink {
+            fn prefetch(&self, worker: WorkerWithDpRank, tokens: &[u32]) {
+                self.0.lock().push((worker, tokens.to_vec()));
+            }
+        }
+
+        let (queue, slots) = make_queue(2, 16, 64, Some(0.0));
+        let sink = Arc::new(RecordingSink(Mutex::new(Vec::new())));
+        assert!(queue.set_prefetch_trigger(PrefetchTrigger {
+            lead: Duration::from_secs(2),
+            sink: sink.clone(),
+        }));
+
+        let mut active = Vec::new();
+        for id in 0..2 {
+            let (request, rx) = make_request(&format!("active-{id}"), 64);
+            queue.enqueue(request).await;
+            active.push(rx.await.unwrap().unwrap().best_worker);
+        }
+        // No deadline: only the on-arrival flag can trigger a hint.
+        let (mut parked, mut parked_rx) = make_request("parked", 64);
+        let tokens: Arc<Vec<u32>> = Arc::new((1..=32).collect::<Vec<u32>>());
+        parked.prefetch_tokens = Some(Arc::clone(&tokens));
+        parked.prefetch_on_arrival = true;
+        parked.shared_cache_hits =
+            Some(crate::protocols::SharedCacheHits::from_hits(&[true, false]));
+        queue.enqueue(parked).await;
+        tokio::time::sleep(Duration::from_millis(1)).await;
+
+        let (prefetched_worker, sent_tokens) = {
+            let hints = sink.0.lock();
+            assert_eq!(hints.len(), 1, "one hint, sent at enqueue");
+            hints[0].clone()
+        };
+        assert_eq!(sent_tokens, tokens[..16].to_vec());
+        assert_eq!(queue.pending_count(), 1, "the entry is still queued");
+        assert!(parked_rx.try_recv().is_err());
+
+        // A long wait sends no second hint: the entry left `prefetch_entries`.
+        tokio::time::sleep(Duration::from_secs(30)).await;
+        assert_eq!(sink.0.lock().len(), 1);
+
+        let other = active
+            .iter()
+            .position(|worker| *worker != prefetched_worker)
+            .expect("two distinct workers were booked");
+        slots.free(&format!("active-{other}"), decay_now()).unwrap();
+        queue.update().await;
+        let admitted = parked_rx.await.unwrap().expect("parked request admitted");
+        assert_eq!(admitted.best_worker, prefetched_worker);
     }
 
     #[tokio::test(start_paused = true)]
@@ -3884,6 +4129,7 @@ policy_classes:
             ),
             selection_trace: Arc::clone(&queue.selection_trace),
             reject_thresholds: queue.reject_thresholds.clone(),
+            prefetch_trigger: Arc::clone(&queue.prefetch_trigger),
         }
     }
 
@@ -4132,8 +4378,9 @@ policy_classes:
         prepared_queue.cfg_tx.send_modify(|configs| {
             configs.remove(&0);
         });
+        let mut request = request;
         assert!(
-            actor.with_projected_loads(request, Instant::now(), |actor, request| {
+            actor.with_projected_loads(&mut request, Instant::now(), |actor, request| {
                 actor.admit_one_projected(request, None, None, prepared)
             })
         );
@@ -4296,8 +4543,8 @@ policy_classes:
                 .insert(stale, WorkerLoadProjection::default());
             let now = Instant::now();
             let expected = slots.project_worker_loads(None, now);
-            let (request, mut rx) = make_request(id, 64);
-            let storage = actor.with_projected_loads(request, now, |actor, request| {
+            let (mut request, mut rx) = make_request(id, 64);
+            let storage = actor.with_projected_loads(&mut request, now, |actor, request| {
                 assert_eq!(request.worker_loads, expected);
                 assert!(!request.worker_loads.contains_key(&stale));
                 let storage = request.worker_loads.get(&worker).unwrap() as *const _;

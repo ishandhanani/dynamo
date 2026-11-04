@@ -108,6 +108,8 @@ where
             kv_transfer_candidates,
             retain_kv_transfer_chain,
             shared_cache_hits,
+            prefetch_tokens,
+            prefetch_on_arrival,
         } = request;
         let request = SchedulingRequest {
             mode,
@@ -129,6 +131,8 @@ where
             kv_transfer_candidates,
             retain_kv_transfer_chain,
             shared_cache_hits,
+            prefetch_tokens,
+            prefetch_on_arrival,
             worker_loads: FxHashMap::default(),
             resp_tx,
         };
@@ -525,6 +529,18 @@ where
         self.queue.set_selection_trace(spec)
     }
 
+    /// Install deadline-led prefetch hints for queued requests.
+    ///
+    /// Returns `false` when a trigger is already installed.
+    pub fn set_prefetch_trigger(&self, trigger: super::PrefetchTrigger) -> bool {
+        self.queue.set_prefetch_trigger(trigger)
+    }
+
+    /// Whether a prefetch trigger is installed, so callers know to carry tokens.
+    pub fn prefetch_enabled(&self) -> bool {
+        self.queue.prefetch_enabled()
+    }
+
     #[expect(clippy::too_many_arguments)]
     pub async fn schedule(
         &self,
@@ -662,6 +678,8 @@ where
             pinned_worker,
             allowed_worker_ids,
             shared_cache_hits,
+            prefetch_tokens: None,
+            prefetch_on_arrival: false,
         })
         .await
     }
@@ -1229,6 +1247,8 @@ mod tests {
             kv_transfer_candidates: None,
             retain_kv_transfer_chain: false,
             shared_cache_hits: None,
+            prefetch_tokens: None,
+            prefetch_on_arrival: false,
         }
     }
 

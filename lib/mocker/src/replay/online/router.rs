@@ -381,6 +381,8 @@ impl KvReplayRouter {
                 pinned_worker: None,
                 allowed_worker_ids: None,
                 shared_cache_hits: None,
+                prefetch_tokens: None,
+                prefetch_on_arrival: false,
             })
             .await?;
         Ok(ReplayPlacement {

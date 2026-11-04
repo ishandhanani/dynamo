@@ -43,6 +43,8 @@ pub(crate) struct QueueMetadata {
     pub(crate) snapshot: QueueSnapshot,
     pub(crate) due_at: Option<Instant>,
     pub(crate) arrival_offset_secs: f64,
+    /// Register the entry for a prefetch hint that is due immediately.
+    pub(crate) prefetch_on_arrival: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -90,6 +92,8 @@ struct QueuePriority {
 }
 
 const NO_DUE_TIME: u64 = u64::MAX;
+/// `prefetch_entries` key of an entry whose hint is due at enqueue.
+const PREFETCH_NOW_KEY: u64 = 0;
 
 // Within one strict tier, deadline-bearing entries order earliest-due-first
 // ahead of every non-deadline entry, before the FCFS/LCFS/WSPT policy score
@@ -481,6 +485,10 @@ pub struct PolicyQueue<T> {
     next_enqueue_seq: u64,
     pending_count: usize,
     due_entries: BTreeSet<(u64, u64)>,
+    /// Entries whose prefetch hint has not fired, keyed like `due_entries`:
+    /// deadline entries at their due time, on-arrival entries at
+    /// `PREFETCH_NOW_KEY`. An entry leaves when its hint fires or it is removed.
+    prefetch_entries: BTreeSet<(u64, u64)>,
     deadline_origin: Instant,
     candidates: Vec<Option<DispatchCandidate>>,
 }
@@ -509,6 +517,7 @@ impl<T> PolicyQueue<T> {
             next_enqueue_seq: 0,
             pending_count: 0,
             due_entries: BTreeSet::new(),
+            prefetch_entries: BTreeSet::new(),
             deadline_origin: Instant::now(),
             candidates: vec![None; class_count],
         }
@@ -542,6 +551,65 @@ impl<T> PolicyQueue<T> {
     pub(crate) fn next_due_at(&self) -> Option<Instant> {
         let &(due_time_key, _) = self.due_entries.first()?;
         Some(self.deadline_origin + std::time::Duration::from_nanos(due_time_key))
+    }
+
+    /// Earliest `due_at` among entries whose prefetch hint has not fired.
+    pub(crate) fn next_prefetch_due_at(&self) -> Option<Instant> {
+        let &(due_time_key, _) = self.prefetch_entries.first()?;
+        Some(self.deadline_origin + std::time::Duration::from_nanos(due_time_key))
+    }
+
+    /// Remove and return every entry due at or before `due_before` whose prefetch
+    /// hint has not fired, with the lane it came from. The caller hands each entry
+    /// back through [`Self::reinsert`]; the hint is recorded as fired here so an
+    /// entry is returned at most once, and a class's DRR deficit survives the
+    /// round trip. Same O(N) cost note as `take_expired`.
+    pub(crate) fn take_prefetch_due(
+        &mut self,
+        due_before: Instant,
+    ) -> Vec<(PolicyQueueEntry<T>, WorkerPlacement)> {
+        if self.prefetch_entries.is_empty() {
+            return Vec::new();
+        }
+        let due_key = due_before
+            .saturating_duration_since(self.deadline_origin)
+            .as_nanos()
+            .min((NO_DUE_TIME - 1) as u128) as u64;
+        let due_sequences: FxHashSet<u64> = self
+            .prefetch_entries
+            .range(..=(due_key, u64::MAX))
+            .map(|(_, enqueue_seq)| *enqueue_seq)
+            .collect();
+        if due_sequences.is_empty() {
+            return Vec::new();
+        }
+        let mut taken = Vec::new();
+        for class_index in 0..self.classes.len() {
+            let deficit = self.classes[class_index].deficit;
+            let (removed, _) = self.take_if_entry_in_class_with_placement(class_index, |entry| {
+                due_sequences.contains(&entry.enqueue_seq)
+            });
+            if removed.is_empty() {
+                continue;
+            }
+            // Entries come straight back: keep the class's round-robin credit.
+            self.classes[class_index].deficit = deficit;
+            taken.extend(removed);
+        }
+        taken
+    }
+
+    /// Put back an entry taken by [`Self::take_prefetch_due`], preserving its
+    /// scheduling key and sequence so queue order is unchanged. Limits are not
+    /// rechecked: the entry was already admitted to the queue.
+    pub(crate) fn reinsert(&mut self, entry: PolicyQueueEntry<T>, placement: WorkerPlacement) {
+        let class = &mut self.classes[entry.class_index];
+        add_stats(&mut class.stats, entry.snapshot());
+        if let Some(due_time_key) = entry.due_time_key() {
+            self.due_entries.insert((due_time_key, entry.enqueue_seq));
+        }
+        class.push_ready(placement, entry);
+        self.pending_count += 1;
     }
 
     pub fn class_count(&self) -> usize {
@@ -608,6 +676,7 @@ impl<T> PolicyQueue<T> {
                 snapshot,
                 due_at: None,
                 arrival_offset_secs,
+                prefetch_on_arrival: false,
             },
             worker_count,
             priority_jump,
@@ -631,6 +700,7 @@ impl<T> PolicyQueue<T> {
             snapshot,
             due_at,
             arrival_offset_secs,
+            prefetch_on_arrival,
         } = metadata;
         if due_at.is_some() && self.due_entries.is_empty() {
             self.deadline_origin = Instant::now();
@@ -659,6 +729,13 @@ impl<T> PolicyQueue<T> {
         );
         if due_time_key != NO_DUE_TIME {
             self.due_entries
+                .insert((due_time_key, self.next_enqueue_seq));
+        }
+        if prefetch_on_arrival {
+            self.prefetch_entries
+                .insert((PREFETCH_NOW_KEY, self.next_enqueue_seq));
+        } else if due_time_key != NO_DUE_TIME {
+            self.prefetch_entries
                 .insert((due_time_key, self.next_enqueue_seq));
         }
         self.next_enqueue_seq = self.next_enqueue_seq.wrapping_add(1);
@@ -714,8 +791,21 @@ impl<T> PolicyQueue<T> {
     fn take_if_entry_in_class(
         &mut self,
         class_index: usize,
-        mut predicate: impl FnMut(&PolicyQueueEntry<T>) -> bool,
+        predicate: impl FnMut(&PolicyQueueEntry<T>) -> bool,
     ) -> (Vec<PolicyQueueEntry<T>>, bool) {
+        let (removed, removed_ready_head) =
+            self.take_if_entry_in_class_with_placement(class_index, predicate);
+        (
+            removed.into_iter().map(|(entry, _)| entry).collect(),
+            removed_ready_head,
+        )
+    }
+
+    fn take_if_entry_in_class_with_placement(
+        &mut self,
+        class_index: usize,
+        mut predicate: impl FnMut(&PolicyQueueEntry<T>) -> bool,
+    ) -> (Vec<(PolicyQueueEntry<T>, WorkerPlacement)>, bool) {
         let class = &mut self.classes[class_index];
         let remove_sequences: FxHashSet<u64> = class
             .entries()
@@ -740,18 +830,18 @@ impl<T> PolicyQueue<T> {
         let mut retained = Vec::with_capacity(class.pending.len());
         for entry in class.pending.drain() {
             if remove_sequences.contains(&entry.enqueue_seq) {
-                removed.push(entry);
+                removed.push((entry, WorkerPlacement::Any));
             } else {
                 retained.push(entry);
             }
         }
         class.pending = BinaryHeap::from(retained);
 
-        class.ready_by_worker.retain(|_, ready| {
+        class.ready_by_worker.retain(|&worker, ready| {
             let mut retained = Vec::with_capacity(ready.len());
             for entry in ready.drain() {
                 if remove_sequences.contains(&entry.enqueue_seq) {
-                    removed.push(entry);
+                    removed.push((entry, WorkerPlacement::Exact(worker)));
                 } else {
                     retained.push(entry);
                 }
@@ -761,10 +851,10 @@ impl<T> PolicyQueue<T> {
         });
         class.rebuild_worker_heads();
 
-        for entry in &removed {
+        for (entry, _) in &removed {
             subtract_stats(&mut class.stats, entry.snapshot());
             self.pending_count -= 1;
-            remove_due_time(&mut self.due_entries, entry);
+            remove_due_time(&mut self.due_entries, &mut self.prefetch_entries, entry);
         }
         if class.ready_is_empty() {
             class.deficit = 0;
@@ -894,7 +984,7 @@ impl<T> PolicyQueue<T> {
             .saturating_sub(entry.snapshot.scheduling_cost_tokens);
         subtract_stats(&mut class.stats, entry.snapshot());
         self.pending_count -= 1;
-        remove_due_time(&mut self.due_entries, &entry);
+        remove_due_time(&mut self.due_entries, &mut self.prefetch_entries, &entry);
         if class.ready_is_empty() {
             class.deficit = 0;
         } else {
@@ -904,11 +994,19 @@ impl<T> PolicyQueue<T> {
     }
 }
 
-fn remove_due_time<T>(due_entries: &mut BTreeSet<(u64, u64)>, entry: &PolicyQueueEntry<T>) {
+fn remove_due_time<T>(
+    due_entries: &mut BTreeSet<(u64, u64)>,
+    prefetch_entries: &mut BTreeSet<(u64, u64)>,
+    entry: &PolicyQueueEntry<T>,
+) {
     if let Some(due_time_key) = entry.due_time_key() {
         let removed = due_entries.remove(&(due_time_key, entry.enqueue_seq));
         debug_assert!(removed);
+        // Absent once the hint fired.
+        prefetch_entries.remove(&(due_time_key, entry.enqueue_seq));
     }
+    // An on-arrival entry waits at `PREFETCH_NOW_KEY` whatever its deadline.
+    prefetch_entries.remove(&(PREFETCH_NOW_KEY, entry.enqueue_seq));
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1108,6 +1206,7 @@ policy_classes:
                     snapshot: QueueSnapshot::new(1, 0),
                     due_at: Some(now + std::time::Duration::from_secs(20)),
                     arrival_offset_secs: 0.0,
+                    prefetch_on_arrival: false,
                 },
                 1,
                 0.0,
@@ -1123,6 +1222,7 @@ policy_classes:
                     snapshot: QueueSnapshot::new(1, 0),
                     due_at: Some(now + std::time::Duration::from_secs(10)),
                     arrival_offset_secs: 1.0,
+                    prefetch_on_arrival: false,
                 },
                 1,
                 0.0,
@@ -1164,6 +1264,7 @@ policy_classes:
                     snapshot: QueueSnapshot::new(1, 0),
                     due_at: Some(due_at + std::time::Duration::from_nanos(1)),
                     arrival_offset_secs: 0.0,
+                    prefetch_on_arrival: false,
                 },
                 1,
                 0.0,
@@ -1179,6 +1280,7 @@ policy_classes:
                     snapshot: QueueSnapshot::new(1, 0),
                     due_at: Some(due_at),
                     arrival_offset_secs: 1.0,
+                    prefetch_on_arrival: false,
                 },
                 1,
                 0.0,
@@ -1217,6 +1319,7 @@ policy_classes:
                     snapshot: QueueSnapshot::new(1, 0),
                     due_at: Some(due_at),
                     arrival_offset_secs: 1.0,
+                    prefetch_on_arrival: false,
                 },
                 2,
                 0.0,
@@ -1245,6 +1348,7 @@ policy_classes:
                     snapshot: QueueSnapshot::new(1, 0),
                     due_at: Some(due_at),
                     arrival_offset_secs: 0.0,
+                    prefetch_on_arrival: false,
                 },
                 1,
                 0.0,
@@ -1283,6 +1387,7 @@ policy_classes:
                     snapshot: QueueSnapshot::new(1, 0),
                     due_at: Some(now + std::time::Duration::from_secs(20)),
                     arrival_offset_secs: 0.0,
+                    prefetch_on_arrival: false,
                 },
                 1,
                 0.0,
@@ -1298,6 +1403,7 @@ policy_classes:
                     snapshot: QueueSnapshot::new(1, 0),
                     due_at: Some(now + std::time::Duration::from_secs(10)),
                     arrival_offset_secs: 1.0,
+                    prefetch_on_arrival: false,
                 },
                 1,
                 0.0,

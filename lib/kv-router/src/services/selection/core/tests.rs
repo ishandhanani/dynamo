@@ -261,6 +261,7 @@ fn lease_operation<'a>(
         pinned_worker: None,
         allowed_worker_ids: None,
         routing_constraints: RoutingConstraints::default(),
+        prefetch_on_arrival: false,
         admission: SelectionAdmission::Lease {
             request_id: request_id.to_string(),
         },
