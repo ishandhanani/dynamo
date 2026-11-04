@@ -48,6 +48,16 @@ impl RoutingHost {
                     policy_class,
                     session_context,
                     admission,
+                    // A wake-up tag already hinted through `/v1/hints/prefetch`
+                    // inside the dedup window is not hinted again.
+                    prefetch_on_arrival: self.kv_router().wakeup_dedup().is_some_and(|dedup| {
+                        request
+                            .get::<crate::kv_router::hints::WakeupTag>(
+                                crate::kv_router::hints::WAKEUP_CONTEXT_KEY,
+                            )
+                            .ok()
+                            .is_some_and(|tag| dedup.mark(&tag.0))
+                    }),
                 },
             )
             .instrument(tracing::info_span!("kv_router.select_worker"));

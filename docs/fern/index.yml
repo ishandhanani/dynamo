@@ -469,6 +469,8 @@ navigation:
                         path: pages/developer-guide/knowledge-base/modular-components/router/kv-event-replay-comparison.md
                       - page: Global Router Configuration
                         path: pages/reference/components/global-router-configuration.mdx
+                      - page: KV Cache Hints
+                        path: pages/reference/components/kv-cache-hints.mdx
                   - section: Distributed Deployments
                     skip-slug: true
                     collapsed: true
@@ -1262,6 +1264,8 @@ navigation:
             path: pages/reference/components/tls-configuration.mdx
           - page: Frontend Configuration
             path: pages/reference/components/frontend-configuration.mdx
+          - page: KV Cache Hints
+            path: pages/reference/components/kv-cache-hints.mdx
           - page: Pool Relay Configuration
             path: pages/reference/components/pool-relay-configuration.md
             slug: pool-relay-configuration

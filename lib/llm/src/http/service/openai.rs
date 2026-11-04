@@ -1236,6 +1236,11 @@ where
     if let Some(session_affinity) = session_affinity_from_headers(headers) {
         request.insert(SESSION_AFFINITY_CONTEXT_KEY, session_affinity);
     }
+    if crate::kv_router::hints::wakeup_header_enabled()
+        && let Some(tag) = crate::kv_router::hints::wakeup_tag_from_headers(headers)
+    {
+        request.insert(crate::kv_router::hints::WAKEUP_CONTEXT_KEY, tag);
+    }
     Ok(request)
 }
 

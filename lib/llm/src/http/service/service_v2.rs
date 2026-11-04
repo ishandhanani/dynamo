@@ -1738,6 +1738,9 @@ impl HttpServiceConfigBuilder {
             let route_set = extension(FrontendExtensionContext::new(state.clone()))?;
             system_routes.push(route_set.into_parts());
         }
+        if env_is_truthy(env_llm::DYN_ENABLE_KVM_HINTS_API) {
+            system_routes.push(super::kv_hints::router(state.clone()));
+        }
         if let Some(gateway) = config.batch_gateway_url.as_deref() {
             system_routes.push(super::batch_proxy::router(
                 gateway,

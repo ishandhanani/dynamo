@@ -2,6 +2,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use std::collections::HashSet;
+use std::sync::Arc;
+
+use crate::kv_router::hints::PrefetchHintInput;
 
 use dynamo_kv_router::{
     RouterConfigOverride,
@@ -64,14 +67,22 @@ impl SelectionOutcome {
 pub(super) struct RoutingRequestParts<'a> {
     pub(super) token_ids: &'a [TokenIdType],
     pub(super) block_mm_infos: Option<&'a [Option<BlockExtraInfo>]>,
+    /// The prompt as the owned handle the request already holds, when the routing
+    /// tokens are the prompt itself (multimodal routing tokens differ, so a hint
+    /// would load the wrong pages); the scheduler clones only the handle.
+    pub(super) shared_token_ids: Option<&'a Arc<Vec<TokenIdType>>>,
 }
 
 impl<'a> RoutingRequestParts<'a> {
     pub(super) fn new(request: &'a PreprocessedRequest) -> Self {
         let (token_ids, block_mm_infos) = request.block_mm_routing_info();
+        let shared_token_ids = (std::ptr::eq(token_ids.as_ptr(), request.token_ids.as_ptr())
+            && token_ids.len() == request.token_ids.len())
+        .then_some(&request.token_ids);
         Self {
             token_ids,
             block_mm_infos,
+            shared_token_ids,
         }
     }
 }
@@ -83,6 +94,8 @@ pub(super) struct SelectionOptions {
     pub(super) policy_class: Option<String>,
     pub(super) session_context: Option<dynamo_kv_router::SessionContext>,
     pub(super) admission: FindBestMatchAdmission,
+    /// Ask the scheduler to prefetch this prompt as soon as it is queued.
+    pub(super) prefetch_on_arrival: bool,
 }
 
 struct BestMatchArgs<'a> {
@@ -103,6 +116,7 @@ struct BestMatchArgs<'a> {
     allowed_worker_ids: Option<HashSet<WorkerId>>,
     routing_constraints: RoutingConstraints,
     admission: FindBestMatchAdmission,
+    prefetch: PrefetchHintInput<'a>,
 }
 
 impl RoutingHost {
@@ -128,6 +142,7 @@ impl RoutingHost {
                 args.allowed_worker_ids,
                 args.routing_constraints,
                 args.admission,
+                args.prefetch,
             )
             .await?;
         match admitted.outcome {
@@ -219,7 +234,12 @@ impl RoutingHost {
             policy_class,
             session_context,
             admission,
+            prefetch_on_arrival,
         } = options;
+        let prefetch = PrefetchHintInput {
+            shared_tokens: routing_parts.shared_token_ids,
+            on_arrival: prefetch_on_arrival,
+        };
         let worker_only_affinity = pinned_target.filter(|target| target.dp_rank.is_none());
         if let Some(target) = worker_only_affinity {
             match &mut allowed_worker_ids {
@@ -295,6 +315,7 @@ impl RoutingHost {
                     allowed_worker_ids,
                     routing_constraints: routing_constraints.clone(),
                     admission,
+                    prefetch,
                 })
                 .await?;
 
@@ -362,6 +383,7 @@ impl RoutingHost {
             allowed_worker_ids,
             routing_constraints,
             admission,
+            prefetch,
         })
         .await
     }

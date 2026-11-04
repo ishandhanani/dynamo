@@ -35,6 +35,7 @@ pub mod format_generate;
 pub mod frontend_extension;
 
 pub mod health;
+pub mod kv_hints;
 pub mod metrics;
 pub mod openapi_docs;
 pub mod realtime;

@@ -60,6 +60,7 @@ pub use dynamo_kv_router::scheduling;
 
 pub(crate) mod embedded;
 pub mod encoder_router;
+pub mod hints;
 pub mod indexer;
 pub mod metrics;
 pub(crate) mod metrics_subscriber;
@@ -603,6 +604,10 @@ pub struct KvRouter {
     teardown_task_guard: Option<dynamo_runtime::engine::EngineContextGuard>,
     /// Optional session-aware logical prefix index.
     session_prefix_index: Option<Arc<SessionPrefixIndexer>>,
+    /// Out-of-band KV cache hints to this router's workers, when a consumer is enabled.
+    hint_controller: Option<dynamo_kvm::HintController>,
+    /// Wake-up header dedup state, when `DYN_KVM_WAKEUP_HEADER` is on.
+    wakeup_dedup: Option<hints::WakeupDedup>,
 }
 
 fn resolve_tracking_model_name(
@@ -895,6 +900,17 @@ impl KvRouter {
         )
         .await?;
         request_leases.set_scheduler(selection.scheduler().booking_cleanup());
+        let hint_controller = hints::hint_controller_for(workers_with_configs.clone());
+        if let Some(trigger) = hints::prefetch_trigger(hint_controller.as_ref()) {
+            let lead_ms = trigger.lead.as_millis() as u64;
+            if selection.scheduler().set_prefetch_trigger(trigger) {
+                tracing::info!(
+                    lead_ms,
+                    worker_type = metric_worker_type,
+                    "deadline-led prefetch hints enabled"
+                );
+            }
+        }
         // Inbound lifecycle events start only now that their consumer can
         // release bookings.
         replica_ingress.start().await;
@@ -917,6 +933,8 @@ impl KvRouter {
             approximate_lru_ranks,
             request_leases,
             shared_cache,
+            hint_controller,
+            wakeup_dedup: hints::wakeup_dedup_from_env(),
             teardown_task_guard: None,
             session_prefix_index,
         })
@@ -1256,6 +1274,48 @@ impl KvRouter {
         Ok(admitted.outcome)
     }
 
+    /// The hint controller for this router's workers, when enabled.
+    pub fn hint_controller(&self) -> Option<&dynamo_kvm::HintController> {
+        self.hint_controller.as_ref()
+    }
+
+    /// Recent wake-up prefetches by session tag, when the wake-up header is enabled.
+    pub fn wakeup_dedup(&self) -> Option<&hints::WakeupDedup> {
+        self.wakeup_dedup.as_ref()
+    }
+
+    /// Select the worker this router would pick for `tokens` right now, without
+    /// queue admission or booking. Used by out-of-band hints.
+    pub async fn find_best_match_without_admission(
+        &self,
+        tokens: &[u32],
+    ) -> anyhow::Result<FindBestMatchOutcome> {
+        let admitted = self
+            .find_best_match_details_with_policy_class_inner(
+                None,
+                tokens,
+                None,
+                None,
+                false,
+                false,
+                None,
+                None,
+                0.0,
+                0,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                RoutingConstraints::default(),
+                FindBestMatchAdmission::WithoutAdmission,
+                hints::PrefetchHintInput::default(),
+            )
+            .await?;
+        Ok(admitted.outcome)
+    }
+
     /// Return the admitted routing wrapper without enrolling its booking handle
     /// in a detached lease. Internal bindings use this to attach optional LRU state
     /// before installing the one shared request lease.
@@ -1299,6 +1359,7 @@ impl KvRouter {
             allowed_worker_ids,
             routing_constraints,
             FindBestMatchAdmission::WithAdmission,
+            hints::PrefetchHintInput::default(),
         )
         .await
     }
@@ -1324,6 +1385,7 @@ impl KvRouter {
         allowed_worker_ids: Option<HashSet<WorkerId>>,
         routing_constraints: RoutingConstraints,
         admission: FindBestMatchAdmission,
+        hint: hints::PrefetchHintInput<'_>,
     ) -> anyhow::Result<AdmittedFindBestMatchOutcome> {
         let start = Instant::now();
         if update_states && context_id.is_none() {
@@ -1358,6 +1420,7 @@ impl KvRouter {
                 key: self.selection.partition_key().clone(),
                 prompt: PromptView {
                     token_ids: Some(tokens),
+                    shared_token_ids: hint.shared_tokens,
                     mm_routing_info: None,
                     block_mm_infos,
                     block_hashes: None,
@@ -1379,6 +1442,7 @@ impl KvRouter {
                 allowed_worker_ids,
                 routing_constraints,
                 admission: core_admission,
+                prefetch_on_arrival: hint.on_arrival,
                 track_active_blocks: self.kv_router_config.router_track_active_blocks,
                 return_routing_hashes: return_routing_hashes || session_index_context.is_some(),
                 replay_id: None,
@@ -2760,6 +2824,7 @@ mod tests {
                     None,
                     RoutingConstraints::default(),
                     admission,
+                    hints::PrefetchHintInput::default(),
                 )
                 .await
                 .unwrap();
@@ -2945,6 +3010,7 @@ mod tests {
                     None,
                     RoutingConstraints::default(),
                     FindBestMatchAdmission::WithAdmission,
+                    hints::PrefetchHintInput::default(),
                 )
                 .await
                 .unwrap();
@@ -3093,6 +3159,7 @@ mod tests {
                 None,
                 RoutingConstraints::default(),
                 FindBestMatchAdmission::WithAdmission,
+                hints::PrefetchHintInput::default(),
             )
             .await
             .unwrap();

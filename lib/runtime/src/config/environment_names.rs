@@ -465,6 +465,44 @@ pub mod llm {
     /// enabled and this port cannot be bound, startup aborts.
     pub const DYN_FRONTEND_ADMIN_PORT: &str = "DYN_FRONTEND_ADMIN_PORT";
 
+    /// KV cache hints (`dynamo-kvm`). The frontend router can tell an SGLang worker's
+    /// scheduler to pull a prompt's KV pages from the shared store into device cache
+    /// ahead of the request. Each worker publishes its scheduler's inbound hint socket
+    /// as `hint_zmq_endpoint` in its runtime config; a hint consumer below enables the
+    /// controller.
+    ///
+    /// Lead time, in milliseconds, before a queued request's due time at which the
+    /// router sends a prefetch hint for it. `0` or unset disables the deadline trigger.
+    pub const DYN_KVM_PREFETCH_LEAD_MS: &str = "DYN_KVM_PREFETCH_LEAD_MS";
+
+    /// Serve `POST /v1/hints/prefetch` on the frontend. Disabled by default; truthy
+    /// values enable it.
+    pub const DYN_ENABLE_KVM_HINTS_API: &str = "DYN_ENABLE_KVM_HINTS_API";
+
+    /// Honor the `x-dyn-wakeup` request header: when truthy, a request carrying it gets
+    /// a prefetch hint for its prompt on arrival, before admission. Disabled by default.
+    pub const DYN_KVM_WAKEUP_HEADER: &str = "DYN_KVM_WAKEUP_HEADER";
+
+    /// Window, in milliseconds, within which a second prefetch for the same
+    /// `x-dyn-wakeup` session tag is skipped. Default `2000`.
+    pub const DYN_KVM_WAKEUP_DEDUP_MS: &str = "DYN_KVM_WAKEUP_DEDUP_MS";
+
+    /// Hints waiting for a sender slot before new ones are dropped. Default `256`.
+    pub const DYN_KVM_QUEUE_DEPTH: &str = "DYN_KVM_QUEUE_DEPTH";
+
+    /// Concurrent in-flight hint deliveries, also the per-scheduler pending bound.
+    /// Default `4`.
+    pub const DYN_KVM_CONCURRENCY: &str = "DYN_KVM_CONCURRENCY";
+
+    /// Milliseconds to wait for a scheduler's reply before counting a hint as failed.
+    /// `0`, unset, or invalid values mean the default, `2000`.
+    pub const DYN_KVM_TIMEOUT_MS: &str = "DYN_KVM_TIMEOUT_MS";
+
+    /// Development override: one `tcp://host:port` scheduler hint socket used for every
+    /// worker instead of the `hint_zmq_endpoint` each worker publishes. For single-worker
+    /// setups whose runtime config lacks the endpoint; unset in production.
+    pub const DYN_KVM_HINT_ENDPOINT: &str = "DYN_KVM_HINT_ENDPOINT";
+
     /// Strip the Claude Code billing preamble (`x-anthropic-billing-header: ...`)
     /// from the system prompt before forwarding to the target model. The preamble
     /// varies per session and per release, wasting tokens and breaking prompt caching.
@@ -1243,6 +1281,14 @@ mod tests {
             llm::DYN_ENABLE_FRONTEND_ADMIN_API,
             llm::DYN_FRONTEND_ADMIN_HOST,
             llm::DYN_FRONTEND_ADMIN_PORT,
+            llm::DYN_KVM_PREFETCH_LEAD_MS,
+            llm::DYN_ENABLE_KVM_HINTS_API,
+            llm::DYN_KVM_WAKEUP_HEADER,
+            llm::DYN_KVM_WAKEUP_DEDUP_MS,
+            llm::DYN_KVM_QUEUE_DEPTH,
+            llm::DYN_KVM_CONCURRENCY,
+            llm::DYN_KVM_TIMEOUT_MS,
+            llm::DYN_KVM_HINT_ENDPOINT,
             llm::DYN_STRIP_ANTHROPIC_PREAMBLE,
             llm::DYN_REJECT_MEDIA,
             llm::DYN_REJECT_MEDIA_STATUS_CODE,

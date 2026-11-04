@@ -2739,6 +2739,7 @@ dependencies = [
  "dynamo-global-discovery-client",
  "dynamo-global-view-broadcaster",
  "dynamo-kv-router",
+ "dynamo-kvm",
  "dynamo-memory",
  "dynamo-mocker",
  "dynamo-parsers",

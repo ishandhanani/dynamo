@@ -190,6 +190,10 @@ pub struct ModelManager {
     /// Per-endpoint HiCache state and its one Mooncake event subscriber.
     hicache_caches: DashMap<EndpointId, HicacheSharedKvCache>,
 
+    /// Routers by served model name, for out-of-band hints. Weak so a rebuilt
+    /// pipeline's retired router is not kept alive; dead entries are pruned on use.
+    kv_routers: parking_lot::Mutex<Vec<(String, WorkerType, Weak<KvRouter>)>>,
+
     /// Shared KV-source membership coordinators, scoped by exact serving endpoint.
     /// Weak ownership lets the discovery loop stop when its last consumer goes away.
     kv_source_memberships: DashMap<EndpointId, Weak<KvSourceMembershipCoordinator>>,
@@ -290,6 +294,7 @@ impl ModelManager {
             worker_inventory: Default::default(),
             runtime_configs: DashMap::new(),
             hicache_caches: DashMap::new(),
+            kv_routers: parking_lot::Mutex::new(Vec::new()),
             kv_source_memberships: DashMap::new(),
             lora_domains: DashMap::new(),
             committed_lora_endpoints: parking_lot::Mutex::new(HashSet::new()),
@@ -2166,6 +2171,24 @@ impl ModelManager {
             .clone()
     }
 
+    /// The live KV router serving `model` for out-of-band hints. In a disaggregated
+    /// deployment the shared-store load happens on prefill, so the prefill router
+    /// wins; otherwise the aggregated or decode router. `None` when the model is
+    /// not KV-routed.
+    pub fn kv_router_for_model(&self, model: &str) -> Option<Arc<KvRouter>> {
+        let canonical = self.resolve_canonical_name(model);
+        let routers = self.kv_routers.lock();
+        let live = routers
+            .iter()
+            .filter(|(name, _, _)| *name == model || *name == canonical)
+            .filter_map(|(_, worker_type, router)| Some((*worker_type, router.upgrade()?)))
+            .collect::<Vec<_>>();
+        live.iter()
+            .find(|(worker_type, _)| *worker_type == WorkerType::Prefill)
+            .or_else(|| live.first())
+            .map(|(_, router)| Arc::clone(router))
+    }
+
     pub fn remove_hicache_caches(&self, namespace: &str, component: &str) {
         let endpoint_ids = self
             .hicache_caches
@@ -2561,6 +2584,14 @@ impl ModelManager {
             );
         }
         Ok(Arc::new(chooser))
+    }
+
+    /// Make `router` reachable by `model` for out-of-band hints. Called by the owner
+    /// once it holds the router: a `Weak` taken earlier would defeat its `Arc::get_mut`.
+    pub fn register_kv_router(&self, model: &str, worker_type: WorkerType, router: &Arc<KvRouter>) {
+        let mut routers = self.kv_routers.lock();
+        routers.retain(|(_, _, router)| router.strong_count() != 0);
+        routers.push((model.to_string(), worker_type, Arc::downgrade(router)));
     }
 
     // ── LoRA allocation accessors ───────────────────────────────────────

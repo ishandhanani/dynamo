@@ -654,6 +654,11 @@ impl ModelWatcher {
                     Arc::get_mut(&mut chooser)
                         .expect("new KV chooser must have one owner")
                         .set_teardown_task_guard(allocator_trim.clone());
+                    self.manager.register_kv_router(
+                        &card.display_name,
+                        effective_worker_type(card.worker_type, card.model_type),
+                        &chooser,
+                    );
                     Some(chooser)
                 } else {
                     None

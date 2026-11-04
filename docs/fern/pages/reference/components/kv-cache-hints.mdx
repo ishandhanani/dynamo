@@ -1,0 +1,120 @@
+---
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+title: KV Cache Hints
+subtitle: Prefetch a prompt's KV pages from the shared store into a worker's device cache before the request arrives
+---
+
+<Warning>
+**Experimental.** The hint API, header, environment variables, and scheduler wire can change. SGLang only, served in gRPC mode behind the Dynamo SGLang sidecar (`dynamo-sglang-sidecar`), with the external linker (`--enable-unified-cache-external-linker`) and a shared store such as Mooncake. The engine-side `--hint-zmq-endpoint` flag is not in a released SGLang yet: it ships with the KV cache hint series on the `idhanani/sgl-kv-cache-hints` branch of `ishandhanani/sglang`.
+</Warning>
+
+A worker that offloads KV cache to a shared store (L3) loads a cached prefix back into device memory when a request reaches its scheduler, and that load sits on the request's time to first token. KV cache hints let the Dynamo frontend ask a worker's scheduler to start that load earlier, off the request path. The `dynamo-kvm` crate (`lib/kvm`) owns the hint controller and transport; the KV router and the frontend decide when to send a hint.
+
+A prefetch saves the shared-store load time off TTFT only when the request would otherwise wait at least that long before the scheduler sees it. Hints fire from three places, all inside the router's scheduling actor:
+
+- **Admission queue deadline.** A queued request with a due time gets a hint `lead` before it is due, while it still waits in the router's admission queue.
+- **Client wake-up.** A client sends `POST /v1/hints/prefetch` ahead of the real request, or marks the real request with `x-dyn-wakeup`, which hints as soon as the request is queued.
+- **Both together.** A wake-up header whose session tag was already hinted through `/v1/hints/prefetch` inside the dedup window is not hinted again.
+
+## Enable hints
+
+The worker is SGLang in gRPC mode behind the Dynamo SGLang sidecar; see the [SGLang sidecar](../../developer-guide/knowledge-base/modular-components/backends/sglang/sidecar.md) page for the launch scripts. On the engine, bind the scheduler's inbound hint socket to the pod IP and allow the frontends to connect to it:
+
+```bash
+SGLANG_ZMQ_ALLOWED_PEERS="<frontend-ip>,<frontend-ip>" \
+python3 -m sglang.launch_server ... --grpc-port 30000 --hint-zmq-endpoint "tcp://${POD_IP}:5558"
+```
+
+The hint socket is unauthenticated, so SGLang refuses a non-loopback TCP bind at startup unless `SGLANG_ZMQ_ALLOWED_PEERS` (comma-separated IP addresses) lists every address a frontend connects from.
+
+The sidecar reads `hint_zmq_endpoint` from SGLang's server info and publishes the connectable address in the worker's runtime config under `hint_zmq_endpoint`. An explicit host is published as given. A wildcard host (`*`, `0.0.0.0`, `::`) is replaced by the engine's routable address, derived the same way as the prefill bootstrap host: SGLang's `--host` when routable, then the `dist_init_addr` host, then the node's advertised IP. An absent flag publishes nothing; a non-TCP or portless value is skipped with a warning.
+
+With data parallelism SGLang binds one hint socket per KV cache at the base port plus the rank (`tcp://host:5558` serves rank 0, `5559` rank 1, and so on) and answers a frame whose `dp_rank` names another cache with an error. The sidecar publishes the base socket; the router currently sends every hint there, so with more than one DP rank only hints for rank 0 load pages.
+
+The router reads the published key per worker and opens a ZMQ DEALER to it on first use. A hint for a worker that publishes no endpoint is skipped, counted, and logged at debug level. The router closes a worker's socket when the worker leaves discovery and after eight reply timeouts without traffic; the next hint reopens it.
+
+On the frontend, enable at least one consumer; the controller starts when any is set:
+
+```bash
+DYN_ROUTER_MODE=kv \
+DYN_KVM_PREFETCH_LEAD_MS=300 \
+DYN_ENABLE_KVM_HINTS_API=1 \
+DYN_KVM_WAKEUP_HEADER=1 \
+python3 -m dynamo.frontend --http-port 8000
+```
+
+## Hint API
+
+`POST /v1/hints/prefetch` is served on the frontend's main listener only when `DYN_ENABLE_KVM_HINTS_API` is truthy; it is off by default. The body is the `/v1/chat/completions` request body the client is about to send, so tools, `chat_template_kwargs`, and response formats render the same prompt; generation parameters are ignored. When `nvext.token_data` is present, it is the prompt verbatim; otherwise `messages` are rendered and tokenized with the model's own template.
+
+```json
+{"model": "my-model", "nvext": {"token_data": [1, 2, 3]}}
+```
+
+```json
+{"model": "my-model", "messages": [{"role": "user", "content": "..."}]}
+```
+
+The router selects the worker it would pick for that prompt right now, without booking it, and sends the hint. The reply is `202 Accepted` with the chosen worker:
+
+```json
+{"worker": 8432929671911492, "dp_rank": 0, "tokens": 32060}
+```
+
+Other statuses: `400` for a body that renders no tokens or whose prompt exceeds the model's context length; `404` for an unknown model; `503` when the model has no KV router, no hint controller, or no selectable worker. In a disaggregated deployment the hint goes through the prefill router, where the shared-store load happens. The hint itself is fire-and-forget: a scheduler reply or failure is logged and counted, never returned to the client.
+
+## Wake-up header
+
+With `DYN_KVM_WAKEUP_HEADER` truthy, a request on any OpenAI-compatible route that carries `x-dyn-wakeup: <session-tag>` (at most 128 bytes) is flagged for a prefetch at enqueue: the moment it enters the router's scheduling queue, the same code path as the deadline trigger selects a worker and sends the hint, so the hint and the admitted selection never disagree. The tag is opaque; a tag already hinted through `/v1/hints/prefetch` inside `DYN_KVM_WAKEUP_DEDUP_MS` is skipped.
+
+## Admission-queue trigger
+
+With `DYN_KVM_PREFETCH_LEAD_MS` set, the router's scheduling queue tracks every deadline-bearing entry and wakes `lead` before the earliest one is due (an `x-dyn-wakeup` entry is due immediately). For each such entry it:
+
+1. Selects a worker with the current projected loads, without booking.
+2. Sends that worker the shared-store-resident prefix (the leading run of shared-cache hits) when the worker holds fewer of those blocks on device than the store does; the scheduler's insert skips pages already on device. If the worker already holds the whole resident prefix, no hint is sent.
+3. Only when a hint was sent, and the request has no pinned worker or affinity target of its own, records the worker as the entry's affinity target. This has the field's usual semantics: the default selector treats it as exclusive while that worker stays eligible, like session affinity, and falls back to a free selection otherwise; custom policies see it as advisory.
+
+Each entry gets at most one hint and keeps its place and its class's round-robin credit. Requests carry their prompt tokens into the queue only while a trigger is installed, as a shared handle, so untouched deployments pay nothing.
+
+## Environment variables
+
+Truthy values are `1`, `true`, `yes`, or `on`, case-insensitive.
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `DYN_KVM_PREFETCH_LEAD_MS` | unset | Lead time before a queued request's due time at which its hint fires. `0` or unset disables the admission-queue trigger. |
+| `DYN_ENABLE_KVM_HINTS_API` | `false` | Serve `POST /v1/hints/prefetch` on the main listener. |
+| `DYN_KVM_WAKEUP_HEADER` | `false` | Honor `x-dyn-wakeup` on incoming requests. Read once at process start. |
+| `DYN_KVM_WAKEUP_DEDUP_MS` | `2000` | Window within which a second prefetch for the same wake-up tag is skipped. At most 4096 tags are remembered at once. |
+| `DYN_KVM_QUEUE_DEPTH` | `256` | Hints waiting for a sender slot before new ones are dropped (logged and counted). |
+| `DYN_KVM_CONCURRENCY` | `4` | Concurrent in-flight deliveries, also the per-scheduler pending bound and the socket's send high-water mark. |
+| `DYN_KVM_TIMEOUT_MS` | `2000` | Wait for a scheduler reply before counting a hint as failed. `0`, unset, or an invalid value means the default. |
+| `DYN_KVM_HINT_ENDPOINT` | unset | Test-only override: one `tcp://host:port` scheduler socket for every worker, instead of each worker's published `hint_zmq_endpoint`. For a single-worker test bench whose runtime config lacks the key; never set it in production, and expect it to be removed once sidecar publication is verified live. |
+
+## Scheduler wire
+
+The transport speaks SGLang's own IPC structs, encoded as msgpack by `msgspec` with `tag=True, array_like=True`: one array per message, the class name first, then every field in declaration order, base class first, `nil` for unset optionals. Dynamo's DEALER connects to the scheduler's ROUTER (attention TP rank 0) with a send high-water mark of `DYN_KVM_CONCURRENCY` and `ZMQ_IMMEDIATE` set, so hints for a scheduler that is not connected fail instead of queueing; the ROUTER strips the sender identity before the handler and addresses the reply back to it.
+
+Request, five elements:
+
+```text
+["PrefetchReqInput", rid, http_worker_ipc, [token_id, ...], dp_rank]
+```
+
+`rid` is a sender-chosen string echoed in the reply; `http_worker_ipc` is `nil` from Dynamo; `dp_rank` is the data-parallel attention group that should hold the pages, `nil` meaning group 0.
+
+Reply, seven elements:
+
+```text
+["PrefetchReqOutput", rid, http_worker_ipc, matched_tokens, loaded_tokens, elapsed_ms, error]
+```
+
+`matched_tokens` is the page-aligned prefix resident on device after the prefetch, `loaded_tokens` what the linker loaded from the store, `elapsed_ms` the scheduler's wall-clock from dispatch to the load landing, and `error` is `nil` on success or a reason string. A rejected hint reaches the controller immediately through `error`; it is not a timeout. The `wire` tests in `lib/kvm` pin the exact bytes msgspec produces; a change to either side is a change to both.
+
+## Related pages
+
+- [Configuration and Tuning](../../developer-guide/knowledge-base/modular-components/router/configuration-and-tuning.md) covers the admission queue and deadlines that the trigger builds on.
+- [Write an Admission Control Plugin](../../developer-guide/knowledge-base/modular-components/router/custom-admission-control.md) assigns the due times the trigger reads.
+- [Frontend Configuration](frontend-configuration.mdx) lists the frontend's other environment variables.
