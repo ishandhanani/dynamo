@@ -35,30 +35,57 @@ assert!(scores.scores.is_empty());
 For end-to-end routing, pair the indexers with `LocalScheduler` and the worker/config protocol
 types re-exported from the crate root.
 
+## Writing a Plugin
+
+A statically linked worker-selection policy or request classifier imports
+`dynamo_kv_router::plugins::prelude::*` and depends on this crate alone; the prelude lists
+every contract, signal view, wire type, configuration type, and registry type a plugin
+names (`tests/plugin_api_prelude.rs` is a policy and a classifier written against it).
+
 ## Features
+
+`default = []`: the flat configuration, the plugin registry, and the shims over the kernel
+and the stage crates compile without any transport crate. Each adapter is a feature:
+
+- `http`: the axum servers and their response envelope (`services::indexer::server`,
+  `services::slot_tracker`, `services::selection::server`)
+- `ingest-zmq`: the ZMQ KV-event listener, its registry, and `ZmqDirectIngress`
+  (`services::indexer::{listener, registry}`, `services::selection::ZmqDirectIngress`)
+- `replica-sync-zmq`: the ZMQ peer mesh that replicates slot-tracker and session-affinity
+  state (`services::common::replica_sync`)
+- `peer-recovery`: the HTTP client that replays a peer indexer's state on startup
+  (`services::indexer::recovery`)
+
+A service is a combination: the standalone indexer is `http` + `ingest-zmq` + `peer-recovery`;
+the slot tracker is `http` + `replica-sync-zmq`; the selection service builder
+(`services::selection`) needs `ingest-zmq` + `replica-sync-zmq` + `peer-recovery`, and its
+HTTP server `http` as well. The pre-split names stay for one release as aliases of those
+combinations: `standalone-indexer`, `standalone-slot-tracker`, `standalone-selection`.
+
+Other features:
 
 - `metrics`: Prometheus metrics for router internals
 - `runtime-protocols`: integration points with `dynamo-runtime`
-- `standalone-indexer`: standalone indexer, overlap, and shared-cache services
-  (`services::indexer`, `services::overlap`, `services::shared_cache`)
-- `standalone-selection`: standalone worker-selection service
-  (`services::selection`); implies `standalone-indexer`
-- `standalone-slot-tracker`: standalone slot-tracker service
-  (`services::slot_tracker`)
 - `bench`: internal benchmarking helpers
 - `profile`: keeps hot indexer functions un-inlined for profiling
 - `testing`: test-only hooks consumed by dependent crates' tests; never enable in release
 
-## Testing the Standalone Services
+## Testing the Services
 
 The `services/` modules are feature-gated and are not compiled by default, so
 a plain `cargo test -p dynamo-kv-router` silently skips their code and tests.
-Enable the corresponding feature when working on them:
+Enable the adapters when working on them, and run the per-feature build check
+before pushing (it needs `cargo-hack`):
 
 ```bash
-cargo test -p dynamo-kv-router --features standalone-selection,standalone-slot-tracker
-cargo clippy -p dynamo-kv-router --all-targets --features standalone-selection,standalone-slot-tracker
+cargo test -p dynamo-kv-router --features http,ingest-zmq,replica-sync-zmq,peer-recovery
+cargo clippy -p dynamo-kv-router --all-targets --features http,ingest-zmq,replica-sync-zmq,peer-recovery
+bash scripts/router_features_check.sh
 ```
+
+The crate's public surface is a committed snapshot, `public-api.txt`; `bash
+scripts/router_public_api_check.sh` regenerates it with `cargo-public-api` and fails on a
+difference (`--update` rewrites it; review the diff in the PR).
 
 ## Further Reading
 
