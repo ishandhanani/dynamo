@@ -2080,6 +2080,8 @@ version = "1.7.0"
 dependencies = [
  "async-trait",
  "dynamo-kv-router",
+ "dynamo-scheduler",
+ "dynamo-session-affinity",
  "fastrand",
  "parking_lot",
  "serde",
@@ -2164,9 +2166,7 @@ dependencies = [
  "anyhow",
  "arc-swap",
  "async-trait",
- "axum",
  "blake3",
- "chrono",
  "crossbeam-queue",
  "dashmap",
  "derive_builder",
@@ -2175,21 +2175,18 @@ dependencies = [
  "dynamo-kv-hashing",
  "dynamo-kv-indexer",
  "dynamo-router-protocol",
- "dynamo-runtime",
  "dynamo-scheduler",
  "dynamo-session-affinity",
  "dynamo-slot-tracker",
  "dynamo-tokens",
  "dynamo-truthy",
  "dynamo-worker-selection",
- "dynamo-zmq",
  "fastrand",
  "flume",
  "futures-util",
  "http 1.4.1",
  "parking_lot",
  "prometheus",
- "reqwest 0.12.28",
  "rmp-serde",
  "rustc-hash 2.1.2",
  "serde",
@@ -2199,11 +2196,9 @@ dependencies = [
  "tokio",
  "tokio-util",
  "tracing",
- "tracing-appender",
  "uuid",
  "xxhash-rust",
  "zeroize",
- "zmq",
 ]
 
 [[package]]
@@ -2233,8 +2228,12 @@ dependencies = [
  "derive-getters",
  "derive_builder",
  "dialoguer",
+ "dynamo-admission",
  "dynamo-custom-policy-builtin",
  "dynamo-decisions",
+ "dynamo-kv-events",
+ "dynamo-kv-hashing",
+ "dynamo-kv-indexer",
  "dynamo-kv-router",
  "dynamo-memory",
  "dynamo-mocker",
@@ -2243,9 +2242,14 @@ dependencies = [
  "dynamo-protocols",
  "dynamo-renderer",
  "dynamo-rl",
+ "dynamo-router-protocol",
  "dynamo-runtime",
+ "dynamo-scheduler",
+ "dynamo-session-affinity",
+ "dynamo-slot-tracker",
  "dynamo-tokenizers",
  "dynamo-tokens",
+ "dynamo-worker-selection",
  "either",
  "flate2",
  "futures",
@@ -2339,9 +2343,18 @@ dependencies = [
  "blake3",
  "bytes",
  "dashmap",
+ "dynamo-admission",
  "dynamo-custom-policy-builtin",
+ "dynamo-kv-events",
+ "dynamo-kv-hashing",
+ "dynamo-kv-indexer",
  "dynamo-kv-router",
+ "dynamo-router-protocol",
+ "dynamo-scheduler",
+ "dynamo-session-affinity",
+ "dynamo-slot-tracker",
  "dynamo-tokens",
+ "dynamo-worker-selection",
  "futures",
  "ndarray",
  "ndarray-interp",
@@ -2689,16 +2702,6 @@ dependencies = [
  "serde_json",
  "thiserror 2.0.18",
  "tracing",
-]
-
-[[package]]
-name = "dynamo-zmq"
-version = "1.7.0"
-dependencies = [
- "anyhow",
- "tokio",
- "tracing",
- "zmq",
 ]
 
 [[package]]
@@ -7918,12 +7921,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "13c2bddecc57b384dee18652358fb23172facb8a2c51ccc10d74c157bdea3292"
 
 [[package]]
-name = "symlink"
-version = "0.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a7973cce6668464ea31f176d85b13c7ab3bba2cb3b77a2ed26abd7801688010a"
-
-[[package]]
 name = "syn"
 version = "2.0.117"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -8634,19 +8631,6 @@ dependencies = [
  "pin-project-lite",
  "tracing-attributes",
  "tracing-core",
-]
-
-[[package]]
-name = "tracing-appender"
-version = "0.2.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "050686193eb999b4bb3bc2acfa891a13da00f79734704c4b8b4ef1a10b368a3c"
-dependencies = [
- "crossbeam-channel",
- "symlink",
- "thiserror 2.0.18",
- "time",
- "tracing-subscriber",
 ]
 
 [[package]]
