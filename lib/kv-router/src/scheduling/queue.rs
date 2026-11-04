@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: Copyright (c) 2024-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
+use std::cell::Cell;
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::marker::PhantomData;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering as AtomicOrdering};
@@ -28,7 +29,7 @@ use super::policy_config::{
 };
 use super::policy_queue::{PolicyQueue, QueueMetadata, QueueSnapshot};
 use super::prefill_load::{PrefillLoadEstimator, effective_prefill_tokens};
-use super::queue_admission::WorkerPlacement;
+use super::queue_admission::{SessionLane, WorkerPlacement};
 use super::request_classifier::ClassificationOverrides;
 use super::selector::{
     CandidatePreparer, PreparedCandidates, WorkerSelectionInput, WorkerSelector, worker_input_rows,
@@ -40,6 +41,9 @@ use super::types::{
     WorkerAvailabilityProvider, WorkerIdSet,
 };
 use crate::plugins::request_classifier::ClassifyRequest;
+use crate::plugins::request_classifier::{
+    DispatchDecision, DispatchGate, DispatchHead, DispatchRecheck,
+};
 use crate::plugins::worker_selection::{
     RuntimePolicyConfig, RuntimePolicyError, RuntimePolicyUpdate,
 };
@@ -100,6 +104,44 @@ struct QueuedRequest {
     block_hashes: Option<Vec<LocalBlockHash>>,
     /// Actor turn that received the request. Its prepared rows last only that turn.
     enqueue_turn: u64,
+    /// The dispatch gate's last `Go` target for this head, written by the dispatch predicate
+    /// and taken when the head leaves the queue. Only the actor touches it.
+    gate_target: Cell<Option<Option<WorkerWithDpRank>>>,
+}
+
+impl QueuedRequest {
+    fn dispatch_head<'a>(&'a self, policy_class: &'a str) -> DispatchHead<'a> {
+        DispatchHead::new(
+            self.request.mode.request_id(),
+            self.request.session_context.as_ref(),
+            self.request.isl_tokens,
+            self.request.pinned_worker,
+            policy_class,
+            self.enqueue_at,
+        )
+    }
+}
+
+/// Asks the dispatch gate about one head inside a dispatch predicate: `false` holds the head
+/// and records the earliest requested recheck; `true` stores the gate's target on the head.
+fn gate_allows(
+    gate: &dyn DispatchGate,
+    policy_class: &str,
+    queued: &QueuedRequest,
+    recheck_at: &Cell<Option<Instant>>,
+) -> bool {
+    match gate.check(&queued.dispatch_head(policy_class)) {
+        DispatchDecision::Go { target } => {
+            queued.gate_target.set(Some(target));
+            true
+        }
+        DispatchDecision::Hold { until } => {
+            if let Some(until) = until {
+                recheck_at.set(Some(recheck_at.get().map_or(until, |at| at.min(until))));
+            }
+            false
+        }
+    }
 }
 
 /// Candidate rows built on the caller task, before the request reaches the actor.
@@ -797,6 +839,10 @@ struct SchedulerQueueActor<
     /// Per-candidate cost capture for admitted selections, installed once by the host.
     selection_trace: Arc<OnceLock<SelectionTraceSpec>>,
     reject_thresholds: Option<RejectThresholdsProvider>,
+    /// The request classifier's dispatch gate, installed once by the host.
+    dispatch_gate: Arc<OnceLock<Arc<dyn DispatchGate>>>,
+    /// Earliest recheck a held head asked for; cleared when its timer fires.
+    gate_recheck_at: Option<Instant>,
 }
 
 /// Queue that gates scheduling requests behind a capacity check.
@@ -835,6 +881,7 @@ pub struct SchedulerQueue<
     /// Per-candidate cost capture for admitted selections, installed once by the host.
     selection_trace: Arc<OnceLock<SelectionTraceSpec>>,
     reject_thresholds: Option<RejectThresholdsProvider>,
+    dispatch_gate: Arc<OnceLock<Arc<dyn DispatchGate>>>,
     #[allow(clippy::type_complexity)]
     // Covariant type markers, without ownership or auto-trait bounds.
     _marker: PhantomData<fn() -> (P, C, Sel, RF)>,
@@ -943,6 +990,7 @@ impl<
         let cleanup = Arc::new(AdmissionCleanup::default());
         let non_max_overlap_selection_observer = Arc::new(OnceLock::new());
         let selection_trace = Arc::new(OnceLock::new());
+        let dispatch_gate = Arc::new(OnceLock::new());
         let start_time = Instant::now();
         let capacity_updates = queueing_enabled.then(|| Arc::new(CapacityUpdates::new()));
         let direct_release: DirectBookingRelease = {
@@ -999,6 +1047,8 @@ impl<
             non_max_overlap_selection_observer: Arc::clone(&non_max_overlap_selection_observer),
             selection_trace: Arc::clone(&selection_trace),
             reject_thresholds: reject_thresholds.clone(),
+            dispatch_gate: Arc::clone(&dispatch_gate),
+            gate_recheck_at: None,
         };
         tokio::spawn(actor.run());
         Self {
@@ -1023,6 +1073,7 @@ impl<
             non_max_overlap_selection_observer,
             selection_trace,
             reject_thresholds,
+            dispatch_gate,
             _marker: PhantomData,
         }
     }
@@ -1050,6 +1101,22 @@ impl<
     /// Install per-candidate cost capture for admitted selections.
     ///
     /// Returns `false` when a spec is already installed.
+    /// Install the request classifier's dispatch gate. Returns `false` when one is already
+    /// installed. The gate receives a recheck handle that wakes the actor for a full lane
+    /// recheck; without a queueing class nothing is ever held, so the handle is then a no-op.
+    pub(crate) fn install_dispatch_gate(&self, gate: Arc<dyn DispatchGate>) -> bool {
+        if self.dispatch_gate.set(Arc::clone(&gate)).is_err() {
+            return false;
+        }
+        let updates = self.capacity_updates.clone();
+        gate.attach(DispatchRecheck::new(Arc::new(move || {
+            if let Some(updates) = &updates {
+                updates.record(None);
+            }
+        })));
+        true
+    }
+
     pub fn set_selection_trace(&self, spec: SelectionTraceSpec) -> bool {
         self.selection_trace.set(spec).is_ok()
     }
@@ -1525,7 +1592,10 @@ impl<
         let capacity_updates = self.capacity_updates.clone();
         loop {
             self.begin_turn();
-            let due_at = self.class_timers.next_deadline();
+            let due_at = match (self.class_timers.next_deadline(), self.gate_recheck_at) {
+                (Some(class_due), Some(gate_due)) => Some(class_due.min(gate_due)),
+                (class_due, gate_due) => class_due.or(gate_due),
+            };
             let command = if capacity_updates.is_none() && due_at.is_none() {
                 self.commands.recv().await
             } else {
@@ -1549,6 +1619,9 @@ impl<
                             tokio::time::sleep_until(due_at).await;
                         }
                     }, if due_at.is_some() => {
+                        if self.gate_recheck_at.is_some_and(|at| at <= Instant::now()) {
+                            self.gate_recheck_at = None;
+                        }
                         self.handle_update(None).await;
                         continue;
                     }
@@ -1765,6 +1838,7 @@ impl<
             due_at,
             block_hashes,
             enqueue_turn: self.turn,
+            gate_target: Cell::new(None),
         };
         self.turn_prepared = prepared;
         if let Insertion::Refused { exposed } =
@@ -1805,10 +1879,18 @@ impl<
         let mut exposed = self.expire_due_classes(now);
         let priority_jump = queued.request.priority_jump;
         let strict_priority = queued.request.strict_priority;
-        let placement = queued
-            .request
-            .pinned_worker
-            .map_or(WorkerPlacement::Any, WorkerPlacement::Exact);
+        // With a dispatch gate installed, a session's requests wait in their own lane so a hold
+        // on one session blocks only that session.
+        let placement = match (
+            queued.request.pinned_worker,
+            &queued.request.session_context,
+        ) {
+            (Some(worker), _) => WorkerPlacement::Exact(worker),
+            (None, Some(session)) if self.dispatch_gate.get().is_some() => {
+                WorkerPlacement::Session(SessionLane::new(session.session_id()))
+            }
+            (None, _) => WorkerPlacement::Any,
+        };
         let worker_count = self.workers_with_configs.borrow().len();
         loop {
             if due_at.is_some_and(|due_at| due_at <= Instant::now()) {
@@ -2008,14 +2090,31 @@ impl<
         made_ready || (removed_ready_head && self.has_dispatchable_ready_head())
     }
 
+    /// Keeps the earliest recheck a held head asked for during one dispatch pass.
+    fn note_gate_recheck(&mut self, requested: Option<Instant>) {
+        if let Some(requested) = requested {
+            self.gate_recheck_at = Some(
+                self.gate_recheck_at
+                    .map_or(requested, |at| at.min(requested)),
+            );
+        }
+    }
+
     fn has_dispatchable_ready_head(&self) -> bool {
         let decay_now = Instant::now();
         let slots = &self.slots;
         let available_ids = self.available_worker_ids.as_ref();
         let workers = &self.workers_with_configs;
+        let gate = self.dispatch_gate.get();
+        let gate_recheck_at = Cell::new(None);
         self.pending.any_ready_head(|_, class, queued| {
             if !class.queueing_enabled() {
                 return true;
+            }
+            if let Some(gate) = gate
+                && !gate_allows(gate.as_ref(), &class.name, queued, &gate_recheck_at)
+            {
+                return false;
             }
             let available = available_ids.and_then(|ids| ids.get(&queued.request));
             let configs = workers.borrow();
@@ -2105,13 +2204,21 @@ impl<
             // Load is read after the previous admission booked, so this one sees that
             // reservation. Frees and peer bookings from other tasks can land between
             // two reads, as they can right after the gate.
+            let gate = self.dispatch_gate.get().cloned();
+            let gate_recheck_at = Cell::new(None);
             let extracted = {
                 let slots = &self.slots;
                 let available_ids = self.available_worker_ids.as_ref();
                 let workers = &self.workers_with_configs;
+                let gate = gate.as_deref();
                 self.pending.extract_next(|_, class, queued| {
                     if !class.queueing_enabled() {
                         return true;
+                    }
+                    if let Some(gate) = gate
+                        && !gate_allows(gate, &class.name, queued, &gate_recheck_at)
+                    {
+                        return false;
                     }
                     let available = available_ids.and_then(|ids| ids.get(&queued.request));
                     let configs = workers.borrow();
@@ -2129,6 +2236,7 @@ impl<
                     )
                 })
             };
+            self.note_gate_recheck(gate_recheck_at.get());
             let Some((mut candidate, charge)) = extracted else {
                 break;
             };
@@ -2198,7 +2306,24 @@ impl<
                     }
                 }
             }
-            let queued = candidate.into_payload();
+            let mut queued = candidate.into_payload();
+            // The gate's `Go` target replaces the soft affinity target unless the caller
+            // pinned a worker; the gate learns the head left the queue once, here.
+            if let Some(gate) = &gate
+                && !released
+            {
+                let target = queued.gate_target.take().flatten();
+                if queued.request.pinned_worker.is_none()
+                    && let Some(target) = target
+                {
+                    queued.request.affinity_target = Some(target.into());
+                }
+                let policy_class = self.profile.class(class_index).name.clone();
+                gate.dispatched(
+                    &queued.dispatch_head(&policy_class),
+                    queued.request.pinned_worker.or(target),
+                );
+            }
             // Only this turn's request has rows, and a refresh replaces the overlap
             // they were built from.
             let prepared = if queued.enqueue_turn == self.turn && !refreshed {
@@ -4517,6 +4642,8 @@ policy_classes:
             ),
             selection_trace: Arc::clone(&queue.selection_trace),
             reject_thresholds: queue.reject_thresholds.clone(),
+            dispatch_gate: Arc::new(OnceLock::new()),
+            gate_recheck_at: None,
         }
     }
 

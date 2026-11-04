@@ -40,6 +40,6 @@ pub use prefill_load::{
     InvalidEffectivePrefillTokens, PrefillLoadEstimator, effective_prefill_tokens,
     prefill_load_hint_from_effective_tokens,
 };
-pub use queue_admission::WorkerPlacement;
+pub use queue_admission::{SessionLane, WorkerPlacement};
 pub use request_classifier::RequestLifecycle;
 pub use types::*;

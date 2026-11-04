@@ -480,9 +480,15 @@ where
         classifier: Box<dyn RequestClassifier>,
         shutdown: CancellationToken,
     ) -> bool {
-        self.request_classifier
+        let gate = classifier.dispatch_gate();
+        let installed = self
+            .request_classifier
             .set(RequestClassifierRuntime::new(classifier, shutdown))
-            .is_ok()
+            .is_ok();
+        if installed && let Some(gate) = gate {
+            self.queue.install_dispatch_gate(gate);
+        }
+        installed
     }
 
     #[doc(hidden)]
@@ -975,7 +981,9 @@ mod tests {
     use tokio::sync::{mpsc, watch};
 
     use super::*;
-    use crate::plugins::request_classifier::ClassifyFuture;
+    use crate::plugins::request_classifier::{
+        ClassifyFuture, DispatchDecision, DispatchGate, DispatchHead, DispatchRecheck,
+    };
     use crate::plugins::worker_selection::WorkerCandidates;
     use crate::protocols::{ActiveSequenceEvent, ActiveSequenceEventData};
     use crate::scheduling::selector::DefaultWorkerSelector;
@@ -1375,6 +1383,215 @@ mod tests {
         let loads = scheduler.get_potential_loads(None, 0, Default::default(), false);
         assert_eq!(loads[0].active_requests, 0);
         cancel_token.cancel();
+    }
+
+    /// A gate that holds the sessions in `held` and prefers `target` for everything it lets go.
+    struct TestGate {
+        held: parking_lot::Mutex<std::collections::HashSet<String>>,
+        hold_until: parking_lot::Mutex<Option<Instant>>,
+        target: Option<WorkerWithDpRank>,
+        dispatched: parking_lot::Mutex<Vec<(String, Option<WorkerWithDpRank>)>>,
+        recheck: std::sync::OnceLock<DispatchRecheck>,
+    }
+
+    impl TestGate {
+        fn holding(sessions: &[&str], target: Option<WorkerWithDpRank>) -> Arc<Self> {
+            Arc::new(Self {
+                held: parking_lot::Mutex::new(sessions.iter().map(|s| (*s).to_owned()).collect()),
+                hold_until: parking_lot::Mutex::new(None),
+                target,
+                dispatched: parking_lot::Mutex::new(Vec::new()),
+                recheck: std::sync::OnceLock::new(),
+            })
+        }
+
+        fn dispatched_ids(&self) -> Vec<String> {
+            self.dispatched
+                .lock()
+                .iter()
+                .map(|(id, _)| id.clone())
+                .collect()
+        }
+    }
+
+    impl DispatchGate for TestGate {
+        fn check(&self, head: &DispatchHead<'_>) -> DispatchDecision {
+            let held = head
+                .session_context()
+                .is_some_and(|session| self.held.lock().contains(session.session_id()));
+            if held {
+                let until = *self.hold_until.lock();
+                if until.is_none_or(|until| Instant::now() < until) {
+                    return DispatchDecision::Hold { until };
+                }
+            }
+            DispatchDecision::Go {
+                target: self.target,
+            }
+        }
+
+        fn dispatched(&self, head: &DispatchHead<'_>, target: Option<WorkerWithDpRank>) {
+            self.dispatched
+                .lock()
+                .push((head.request_id().unwrap_or_default().to_owned(), target));
+        }
+
+        fn attach(&self, recheck: DispatchRecheck) {
+            assert!(self.recheck.set(recheck).is_ok(), "attached once");
+        }
+    }
+
+    struct GateClassifier(Arc<TestGate>);
+
+    impl RequestClassifier for GateClassifier {
+        fn dispatch_gate(&self) -> Option<Arc<dyn DispatchGate>> {
+            Some(Arc::clone(&self.0) as Arc<dyn DispatchGate>)
+        }
+    }
+
+    fn session_request(request_id: &str, session_id: &str) -> ScheduleRequest {
+        let mut request = request(ScheduleMode::TrackedWithLifecycle {
+            request_id: request_id.into(),
+        });
+        request.session_context = Some(crate::scheduling::SessionContext::new(
+            session_id.into(),
+            None,
+            None,
+            None,
+        ));
+        request
+    }
+
+    fn gated_scheduler(
+        gate: &Arc<TestGate>,
+    ) -> (
+        Arc<LocalScheduler<NoopSequencePublisher, SimpleWorkerConfig, DefaultWorkerSelector>>,
+        CancellationToken,
+    ) {
+        let roomy = SimpleWorkerConfig {
+            max_num_batched_tokens: Some(10_000),
+            ..Default::default()
+        };
+        let (scheduler, _slots, _configs, cancel) = make_scheduler(
+            HashMap::from([(0, roomy.clone()), (1, roomy)]),
+            Some(0.5),
+            false,
+            None,
+        );
+        assert!(scheduler.install_request_classifier(
+            Box::new(GateClassifier(Arc::clone(gate))),
+            cancel.clone(),
+        ));
+        assert!(
+            gate.recheck.get().is_some(),
+            "install hands the gate its recheck handle"
+        );
+        (scheduler, cancel)
+    }
+
+    type Admission = std::pin::Pin<
+        Box<dyn std::future::Future<Output = Result<AdmittedSchedulingResponse, KvSchedulerError>>>,
+    >;
+
+    /// Submits a request and lets the actor process it; returns the still-pending future.
+    async fn submit(
+        scheduler: &Arc<
+            LocalScheduler<NoopSequencePublisher, SimpleWorkerConfig, DefaultWorkerSelector>,
+        >,
+        request: ScheduleRequest,
+    ) -> Admission {
+        let owned = Arc::clone(scheduler);
+        let mut admission: Admission =
+            Box::pin(async move { owned.schedule_request_admitted(request).await });
+        assert!(poll_once(admission.as_mut()).is_pending());
+        scheduler.admission_barrier().await.unwrap();
+        admission
+    }
+
+    fn admitted_worker(admission: &mut Admission) -> Option<WorkerWithDpRank> {
+        match poll_once(admission.as_mut()) {
+            std::task::Poll::Ready(Ok(admitted)) => Some(admitted.response.best_worker),
+            std::task::Poll::Ready(Err(error)) => panic!("admission failed: {error}"),
+            std::task::Poll::Pending => None,
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn dispatch_gate_holds_one_session_lane_and_releases_on_notify() {
+        let target = WorkerWithDpRank::new(1, 0);
+        let gate = TestGate::holding(&["a"], Some(target));
+        let (scheduler, cancel) = gated_scheduler(&gate);
+
+        // Session a's turns are held. They arrived first, yet session b dispatches: a held head
+        // blocks only its session's lane. The gate's target becomes the soft affinity target.
+        let mut a1 = submit(&scheduler, session_request("a1", "a")).await;
+        let mut a2 = submit(&scheduler, session_request("a2", "a")).await;
+        let mut b1 = submit(&scheduler, session_request("b1", "b")).await;
+        assert_eq!(admitted_worker(&mut b1), Some(target));
+        assert_eq!(admitted_worker(&mut a1), None);
+        assert_eq!(admitted_worker(&mut a2), None);
+        assert_eq!(scheduler.pending_count(), 2);
+        assert_eq!(gate.dispatched_ids(), ["b1"]);
+
+        // Nothing changes without a recheck.
+        scheduler.admission_barrier().await.unwrap();
+        assert_eq!(admitted_worker(&mut a1), None);
+
+        // The gate releases the session and wakes the queue: both held turns go, in order.
+        gate.held.lock().clear();
+        gate.recheck.get().unwrap().notify();
+        scheduler.admission_barrier().await.unwrap();
+        assert_eq!(admitted_worker(&mut a1), Some(target));
+        assert_eq!(admitted_worker(&mut a2), Some(target));
+        assert_eq!(scheduler.pending_count(), 0);
+        assert_eq!(gate.dispatched_ids(), ["b1", "a1", "a2"]);
+        assert!(
+            gate.dispatched
+                .lock()
+                .iter()
+                .all(|(_, target_seen)| *target_seen == Some(target))
+        );
+        cancel.cancel();
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn dispatch_gate_hold_until_wakes_the_queue_without_a_notify() {
+        let gate = TestGate::holding(&["a"], None);
+        let until = Instant::now() + Duration::from_secs(5);
+        *gate.hold_until.lock() = Some(until);
+        let (scheduler, cancel) = gated_scheduler(&gate);
+
+        let mut a1 = submit(&scheduler, session_request("a1", "a")).await;
+        assert_eq!(admitted_worker(&mut a1), None);
+
+        // The actor armed a timer for the hold. Once it fires, the actor rechecks on its own:
+        // no barrier, no notify, only yields so the actor task can run.
+        tokio::time::advance(Duration::from_secs(5)).await;
+        let mut admitted = None;
+        for _ in 0..64 {
+            tokio::task::yield_now().await;
+            admitted = admitted_worker(&mut a1);
+            if admitted.is_some() {
+                break;
+            }
+        }
+        assert!(admitted.is_some(), "the hold timer must wake the queue");
+        assert_eq!(gate.dispatched_ids(), ["a1"]);
+        cancel.cancel();
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn dispatch_gate_target_does_not_override_a_hard_pin() {
+        let pin = WorkerWithDpRank::new(0, 0);
+        let gate = TestGate::holding(&[], Some(WorkerWithDpRank::new(1, 0)));
+        let (scheduler, cancel) = gated_scheduler(&gate);
+
+        let mut pinned = session_request("p1", "p");
+        pinned.pinned_worker = Some(pin);
+        let mut p1 = submit(&scheduler, pinned).await;
+        assert_eq!(admitted_worker(&mut p1), Some(pin));
+        assert_eq!(*gate.dispatched.lock(), [("p1".to_owned(), Some(pin))]);
+        cancel.cancel();
     }
 
     struct CountingClassifier {

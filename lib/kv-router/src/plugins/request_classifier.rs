@@ -71,6 +71,20 @@ impl ClassifyRequest {
         Self::with_timing(input_tokens, initial_cached_tokens, Instant::now())
     }
 
+    /// A classification input for plugin tests and benchmarks: `input_tokens` with no cached
+    /// prefix, an optional request id, and an optional session.
+    #[cfg(any(test, feature = "bench"))]
+    pub fn for_test(
+        input_tokens: usize,
+        request_id: Option<&str>,
+        session_context: Option<SessionContext>,
+    ) -> Self {
+        let mut request = Self::with_timing(input_tokens, 0, Instant::now());
+        request.request_id = request_id.map(str::to_owned);
+        request.session_context = session_context;
+        request
+    }
+
     pub(crate) fn with_timing(
         input_tokens: usize,
         initial_cached_tokens: usize,
@@ -379,4 +393,132 @@ pub trait RequestClassifier: Send + 'static {
     }
 
     async fn on_event(&mut self, _event: ClassifyEvent) {}
+
+    /// The classifier's dispatch gate, read once at install. With a gate installed, the router
+    /// asks it about each queue head before dispatch and keeps a held head queued; a request
+    /// that has a session context and no hard pin waits in a per-session lane, so a hold
+    /// blocks only that session. `None` dispatches every head the host's own capacity checks
+    /// allow.
+    fn dispatch_gate(&self) -> Option<Arc<dyn DispatchGate>> {
+        None
+    }
+}
+
+/// One queue head the dispatch gate is asked about.
+#[derive(Debug, Clone, Copy)]
+pub struct DispatchHead<'a> {
+    request_id: Option<&'a str>,
+    session_context: Option<&'a SessionContext>,
+    isl_tokens: usize,
+    pinned_worker: Option<WorkerWithDpRank>,
+    policy_class: &'a str,
+    queued_at: Instant,
+}
+
+impl<'a> DispatchHead<'a> {
+    /// Builds a head view. Hosts build one per queue head; plugin tests build them directly.
+    pub fn new(
+        request_id: Option<&'a str>,
+        session_context: Option<&'a SessionContext>,
+        isl_tokens: usize,
+        pinned_worker: Option<WorkerWithDpRank>,
+        policy_class: &'a str,
+        queued_at: Instant,
+    ) -> Self {
+        Self {
+            request_id,
+            session_context,
+            isl_tokens,
+            pinned_worker,
+            policy_class,
+            queued_at,
+        }
+    }
+
+    pub fn request_id(&self) -> Option<&'a str> {
+        self.request_id
+    }
+
+    pub fn session_context(&self) -> Option<&'a SessionContext> {
+        self.session_context
+    }
+
+    /// Input sequence length in tokens, the size the scheduler uses.
+    pub fn isl_tokens(&self) -> usize {
+        self.isl_tokens
+    }
+
+    /// Exact worker/rank required by the caller. A `Go` target cannot override this pin.
+    pub fn pinned_worker(&self) -> Option<WorkerWithDpRank> {
+        self.pinned_worker
+    }
+
+    /// Name of the policy class whose queue holds this head.
+    pub fn policy_class(&self) -> &'a str {
+        self.policy_class
+    }
+
+    /// When the head entered the router queue, after classification.
+    pub fn queued_at(&self) -> Instant {
+        self.queued_at
+    }
+}
+
+/// Answer of [`DispatchGate::check`] for one queue head.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DispatchDecision {
+    /// Dispatch now. `target` replaces the request's soft affinity target unless the request
+    /// carries a hard pin; a custom selector may still pick another eligible worker, and
+    /// `Sent` reports the result.
+    Go { target: Option<WorkerWithDpRank> },
+    /// Keep the head queued. The host asks again when a worker's capacity changes, when
+    /// [`DispatchRecheck::notify`] is called, and no later than `until` when it is set.
+    Hold { until: Option<Instant> },
+}
+
+/// Wakes the router queue to ask the gate about its held heads again. Cheap to clone and to
+/// call from any thread; calls coalesce into one recheck.
+#[derive(Clone)]
+pub struct DispatchRecheck(Arc<dyn Fn() + Send + Sync>);
+
+impl DispatchRecheck {
+    /// Wraps the wake function the host (or a test) wants `notify` to call.
+    pub fn new(wake: Arc<dyn Fn() + Send + Sync>) -> Self {
+        Self(wake)
+    }
+
+    pub fn notify(&self) {
+        (self.0)();
+    }
+}
+
+impl std::fmt::Debug for DispatchRecheck {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("DispatchRecheck")
+    }
+}
+
+/// Per-head admission decision consulted by the router queue at dispatch time.
+///
+/// The gate is the place for a policy that must hold a request after it is queued: a session
+/// admission controller, a wait for a preferred worker, a per-request fit check. The queue
+/// keeps the request, its order, its class budget, and its expiry; the gate only answers
+/// whether the head at the front of a lane may go now.
+///
+/// [`Self::check`] runs on the scheduler's actor thread, inside its dispatch loop, and may be
+/// asked more than once about the same head within one drain. It must not block and must not
+/// change what later answers depend on: treat it as a read. The host's own capacity checks run
+/// after a `Go`, so a `Go` is a permission, not a dispatch. [`Self::dispatched`] runs once, when
+/// the host takes the head out of the queue to admit it; admission can still fail, and the
+/// request's lifecycle then ends with [`ClassifyEvent::Aborted`] as for any other failure.
+pub trait DispatchGate: Send + Sync + 'static {
+    fn check(&self, head: &DispatchHead<'_>) -> DispatchDecision;
+
+    /// The host took `head` out of the queue for admission with `target`, the `Go` target
+    /// after the request's hard pin, if any, replaced it.
+    fn dispatched(&self, _head: &DispatchHead<'_>, _target: Option<WorkerWithDpRank>) {}
+
+    /// Handed the recheck handle once, when the gate is installed. Keep it to wake the queue
+    /// when a hold's reason goes away.
+    fn attach(&self, _recheck: DispatchRecheck) {}
 }

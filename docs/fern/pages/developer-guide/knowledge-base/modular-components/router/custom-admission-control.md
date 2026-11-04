@@ -291,6 +291,38 @@ Defer a request when it may become admissible later, such as when another reques
 
 Give the wait its own timeout if admission has a time budget. `set_due_at` limits queue waiting after admission; it does not end the classifier's wait or stop a running generation.
 
+### Hold Queued Requests With a Dispatch Gate
+
+Waiting inside `classify` holds a request before it reaches the router queue, so the classifier must keep its own order, wakeups, and cancellation. When the decision depends on what else is queued or in flight, implement a `DispatchGate` instead and return it from `dispatch_gate`. Dynamo then queues every request at once and asks the gate about each queue head before it dispatches:
+
+```rust
+use dynamo_kv_router::plugins::request_classifier::{
+    DispatchDecision, DispatchGate, DispatchHead, DispatchRecheck,
+};
+
+impl DispatchGate for SessionGate {
+    fn check(&self, head: &DispatchHead<'_>) -> DispatchDecision {
+        match self.room_for(head.session_context(), head.isl_tokens()) {
+            Some(worker) => DispatchDecision::Go { target: Some(worker) },
+            None => DispatchDecision::Hold { until: Some(head.queued_at() + self.max_hold) },
+        }
+    }
+
+    fn dispatched(&self, head: &DispatchHead<'_>, target: Option<WorkerWithDpRank>) {
+        self.reserve(head.request_id(), target);
+    }
+
+    fn attach(&self, recheck: DispatchRecheck) {
+        self.recheck.set(recheck).ok();
+    }
+}
+```
+
+- `check` runs inside the router's dispatch loop and may be asked more than once about the same head: keep it a read, with no waiting.
+- `Hold` keeps the request queued. Dynamo asks again when a worker's capacity changes, when the gate calls `notify` on the handle it received in `attach`, and no later than `until`. A held request still spends its policy class's waiting budget.
+- `Go` lets the request through Dynamo's own capacity checks; `target` becomes its soft worker preference unless it carries a hard pin. `dispatched` runs once when Dynamo takes the request out of the queue, before selection. Admission can still fail, and the request's lifecycle then ends with `Aborted`.
+- With a gate installed, a request that has a session context and no hard pin waits in a lane of its own session, so a held session never blocks other sessions in its class. A held request without a session blocks the class's shared lane.
+
 Implement `on_event` when the classifier tracks active requests or session capacity. For example, use completion or abort events to release capacity and wake waiting requests:
 
 | Event | Use |
