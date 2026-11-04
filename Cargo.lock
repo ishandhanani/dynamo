@@ -2688,6 +2688,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "dynamo-kvm"
+version = "1.7.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "futures",
+ "rmp-serde",
+ "serde",
+ "tmq",
+ "tokio",
+ "tracing",
+ "zmq",
+]
+
+[[package]]
 name = "dynamo-llm"
 version = "1.7.0"
 dependencies = [
