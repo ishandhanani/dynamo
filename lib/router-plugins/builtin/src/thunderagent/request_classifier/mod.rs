@@ -20,10 +20,9 @@ use tokio::time::Instant;
 use async_trait::async_trait;
 use dynamo_kv_router::plugins::RouterPluginRegistry;
 use dynamo_kv_router::plugins::request_classifier::{
-    ClassifierError, ClassifyEvent, ClassifyFuture, ClassifyRequest, DispatchDecision,
-    DispatchGate, DispatchHead, DispatchRecheck, RequestClassifier, RequestClassifierContext,
-    RequestClassifierFactory, RequestClassifierParameters, RequestClassifierProviderError,
-    RequestClassifierRegistryError,
+    ClassifierError, ClassifyEvent, ClassifyRequest, DispatchDecision, DispatchGate, DispatchHead,
+    DispatchRecheck, RequestClassifier, RequestClassifierContext, RequestClassifierFactory,
+    RequestClassifierParameters, RequestClassifierProviderError, RequestClassifierRegistryError,
 };
 use dynamo_kv_router::plugins::worker_selection::WorkerCandidates;
 use dynamo_kv_router::protocols::WorkerWithDpRank;
@@ -190,14 +189,12 @@ impl RequestClassifier for ThunderAgentClassifier {
         &mut self,
         request: ClassifyRequest,
         _workers: WorkerCandidates<'_>,
-    ) -> ClassifyFuture {
+    ) -> Result<ClassifyRequest, Box<ClassifierError>> {
         let Some(session) = request.session_context() else {
-            return Box::pin(async move { Ok(request) });
+            return Ok(request);
         };
         let Some(request_id) = request.request_id().map(str::to_owned) else {
-            return Box::pin(async move {
-                Err(Box::new(ThunderAgentError::MissingRequestId) as Box<ClassifierError>)
-            });
+            return Err(Box::new(ThunderAgentError::MissingRequestId) as Box<ClassifierError>);
         };
         let registration = RequestRegistration::new(
             request_id,
@@ -207,15 +204,12 @@ impl RequestClassifier for ThunderAgentClassifier {
             session.session_final() == Some(true),
         )
         .with_pinned_worker(request.pinned_worker());
-        let registered = self
-            .inner
+        self.inner
             .state
             .lock()
-            .register(registration, Instant::now());
-        Box::pin(async move {
-            registered.map_err(|error| Box::new(error) as Box<ClassifierError>)?;
-            Ok(request)
-        })
+            .register(registration, Instant::now())
+            .map_err(|error| Box::new(error) as Box<ClassifierError>)?;
+        Ok(request)
     }
 
     async fn on_event(&mut self, event: ClassifyEvent) {
@@ -365,18 +359,19 @@ mod tests {
         assert!(
             classifier
                 .classify(plain, WorkerCandidates::empty())
-                .await
                 .is_ok()
         );
 
         let session_a = SessionContext::new("a".into(), None, None, None);
         let session_b = SessionContext::new("b".into(), None, None, None);
-        let a1 = classifier.classify(session_request("a1", "a", 200), WorkerCandidates::empty());
-        assert!(a1.await.is_ok(), "classification does not wait");
+        assert!(
+            classifier
+                .classify(session_request("a1", "a", 200), WorkerCandidates::empty())
+                .is_ok()
+        );
         assert!(
             classifier
                 .classify(session_request("b1", "b", 200), WorkerCandidates::empty())
-                .await
                 .is_ok()
         );
 
@@ -442,7 +437,6 @@ mod tests {
         );
         let error = classifier
             .classify(request, WorkerCandidates::empty())
-            .await
             .unwrap_err();
         assert!(error.to_string().contains("request ID"));
     }

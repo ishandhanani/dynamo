@@ -16,7 +16,8 @@ use dynamo_kv_router::plugins::worker_selection::WorkerCandidates;
 use dynamo_kv_router::{
     config::KvRouterConfig,
     plugins::request_classifier::{
-        ClassifierError, ClassifyEvent, ClassifyFuture, ClassifyRequest, RequestClassifier,
+        ClassifierError, ClassifyEvent, ClassifyRequest, DispatchDecision, DispatchGate,
+        DispatchHead, DispatchRecheck, RequestClassifier,
     },
     protocols::RoutingConstraints,
 };
@@ -2109,9 +2110,9 @@ impl RequestClassifier for RecordingClassifier {
         &mut self,
         request: ClassifyRequest,
         _workers: WorkerCandidates<'_>,
-    ) -> ClassifyFuture {
+    ) -> Result<ClassifyRequest, Box<ClassifierError>> {
         self.calls.fetch_add(1, Ordering::Relaxed);
-        Box::pin(async move { Ok(request) })
+        Ok(request)
     }
 
     async fn on_event(&mut self, event: ClassifyEvent) {
@@ -2146,9 +2147,9 @@ impl RequestClassifier for RejectingClassifier {
         &mut self,
         _request: ClassifyRequest,
         _workers: WorkerCandidates<'_>,
-    ) -> ClassifyFuture {
+    ) -> Result<ClassifyRequest, Box<ClassifierError>> {
         self.calls.fetch_add(1, Ordering::Relaxed);
-        Box::pin(async { Err(Box::new(ClassifierRejected) as Box<ClassifierError>) })
+        Err(Box::new(ClassifierRejected) as Box<ClassifierError>)
     }
 
     async fn on_event(&mut self, event: ClassifyEvent) {
@@ -2220,17 +2221,14 @@ impl RequestClassifier for TypedRejectingClassifier {
         &mut self,
         _request: ClassifyRequest,
         _workers: WorkerCandidates<'_>,
-    ) -> ClassifyFuture {
+    ) -> Result<ClassifyRequest, Box<ClassifierError>> {
         self.calls.fetch_add(1, Ordering::Relaxed);
-        let error_type = self.error_type;
-        Box::pin(async move {
-            Err(Box::new(
-                DynamoError::builder()
-                    .error_type(error_type)
-                    .message("classifier shed load")
-                    .build(),
-            ) as Box<ClassifierError>)
-        })
+        Err(Box::new(
+            DynamoError::builder()
+                .error_type(self.error_type)
+                .message("classifier shed load")
+                .build(),
+        ) as Box<ClassifierError>)
     }
 
     async fn on_event(&mut self, event: ClassifyEvent) {
@@ -2413,39 +2411,67 @@ async fn planned_route_admission_classifies_and_carries_lifecycle() {
     runtime.shutdown();
 }
 
+/// Holds every head while `paused` is set; releases through the recheck handle.
+struct PausingGate {
+    paused: AtomicBool,
+    checked: Arc<Notify>,
+    recheck: std::sync::OnceLock<DispatchRecheck>,
+}
+
+impl DispatchGate for PausingGate {
+    fn check(&self, _head: &DispatchHead<'_>) -> DispatchDecision {
+        self.checked.notify_one();
+        if self.paused.load(Ordering::Relaxed) {
+            DispatchDecision::Hold { until: None }
+        } else {
+            DispatchDecision::Go { target: None }
+        }
+    }
+
+    fn attach(&self, recheck: DispatchRecheck) {
+        let _ = self.recheck.set(recheck);
+    }
+}
+
 struct PausingClassifier {
-    entered: Arc<Notify>,
-    resumed: Arc<Notify>,
+    gate: Arc<PausingGate>,
 }
 
 impl RequestClassifier for PausingClassifier {
-    fn classify(
-        &mut self,
-        request: ClassifyRequest,
-        _workers: WorkerCandidates<'_>,
-    ) -> ClassifyFuture {
-        let entered = Arc::clone(&self.entered);
-        let resumed = Arc::clone(&self.resumed);
-        Box::pin(async move {
-            entered.notify_one();
-            resumed.notified().await;
-            Ok(request)
-        })
+    fn dispatch_gate(&self) -> Option<Arc<dyn DispatchGate>> {
+        Some(Arc::clone(&self.gate) as Arc<dyn DispatchGate>)
     }
 }
 
 #[tokio::test]
-async fn classifier_pause_defers_admission_until_resumed() {
-    let entered = Arc::new(Notify::new());
-    let resumed = Arc::new(Notify::new());
-    let (router, runtime) = router_with_classifier(
-        PausingClassifier {
-            entered: Arc::clone(&entered),
-            resumed: Arc::clone(&resumed),
-        },
+async fn gate_hold_defers_admission_until_resumed() {
+    let gate = Arc::new(PausingGate {
+        paused: AtomicBool::new(true),
+        checked: Arc::new(Notify::new()),
+        recheck: std::sync::OnceLock::new(),
+    });
+    let checked = Arc::clone(&gate.checked);
+    // The gate is consulted only by a class that queues.
+    let config = KvRouterConfig {
+        skip_initial_worker_wait: true,
+        use_kv_events: false,
+        router_track_active_blocks: false,
+        router_queue_threshold: Some(1.0),
+        ..Default::default()
+    };
+    let (router, runtime) = router_with_config_and_classifier(
         None,
+        HashMap::from([(7, ModelRuntimeConfig::default())]),
+        config,
+        Some(PausingClassifier {
+            gate: Arc::clone(&gate),
+        }),
     )
     .await;
+    assert!(
+        gate.recheck.get().is_some(),
+        "the router hands the gate its recheck handle"
+    );
     let router = Arc::new(router);
     let request = Context::new(request());
     let request_id = request.id().to_string();
@@ -2463,9 +2489,10 @@ async fn classifier_pause_defers_admission_until_resumed() {
         })
     };
 
-    entered.notified().await;
+    checked.notified().await;
     assert!(!selection.is_finished());
-    resumed.notify_one();
+    gate.paused.store(false, Ordering::Relaxed);
+    gate.recheck.get().unwrap().notify();
     let (selection, _) = selection.await.unwrap().unwrap();
     assert!(selection.request_lifecycle.is_some());
     router.kv_router().free(&request_id).await.unwrap();
@@ -2545,11 +2572,11 @@ impl RequestClassifier for TokenContractClassifier {
         &mut self,
         request: ClassifyRequest,
         _workers: WorkerCandidates<'_>,
-    ) -> ClassifyFuture {
+    ) -> Result<ClassifyRequest, Box<ClassifierError>> {
         self.classified
             .send((request.isl_tokens(), request.progress().clone()))
             .unwrap();
-        Box::pin(async move { Ok(request) })
+        Ok(request)
     }
 
     async fn on_event(&mut self, event: ClassifyEvent) {

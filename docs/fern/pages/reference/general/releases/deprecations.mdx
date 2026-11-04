@@ -66,7 +66,7 @@ Upgrading? Pick the version you run today to see the dependency migration and th
 | Removed | Replacement |
 | :---- | :---- |
 | Crate-root `dynamo_kv_router::{WorkerFilter, WorkerScorer, WorkerPicker, WorkerCandidate, WorkerCandidates, WorkerInputs, WorkerInputView, WorkerLoadInput, WorkerCacheInput, WorkerCacheInputs, ScoredWorkerCandidate, WorkerSelectionContext, WorkerSelectionPolicy, WorkerSelectionPolicyFactory}`, the same contract names under `selector`, and `services::selection::WorkerSelectionPolicyFactory` | `dynamo_kv_router::plugins::worker_selection::*` |
-| `scheduling::{RequestClassifier, ClassifyRequest, ClassifyFuture, ClassifyEvent, ClassifierError, AbortCause, RequestClassifierContext, RequestProgress, ...}` and the same names under `scheduling::request_classifier` | `dynamo_kv_router::plugins::request_classifier::*` |
+| `scheduling::{RequestClassifier, ClassifyRequest, ClassifyEvent, ClassifierError, AbortCause, RequestClassifierContext, RequestProgress, ...}` and the same names under `scheduling::request_classifier` | `dynamo_kv_router::plugins::request_classifier::*` |
 | `scheduling::{WorkerSelectionConfig, WorkerSelectionInstance}`, `scheduling::policy_config::{RequestClassifierConfig, WorkerSelectionConfig, WorkerSelectionInstance}` | `plugins::worker_selection::{WorkerSelectionConfig, WorkerSelectionInstance}`, `plugins::request_classifier::RequestClassifierConfig` |
 | `WorkerSelectionPolicyRegistry`; `RouterPluginRegistry::register` | `RouterPluginRegistry`; `RouterPluginRegistry::register_worker_selection` |
 | `dynamo_llm::kv_router::{install_worker_selection_policy_registry, worker_selection_policy_registry}` | `dynamo_llm::kv_router::plugins::{install_router_plugin_registry, router_plugin_registry}` |

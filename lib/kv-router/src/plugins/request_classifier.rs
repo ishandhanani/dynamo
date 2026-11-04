@@ -19,8 +19,6 @@ pub use registry::{
 };
 
 use std::error::Error;
-use std::future::Future;
-use std::pin::Pin;
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -320,50 +318,20 @@ pub enum ClassifyEvent {
     },
 }
 
-/// An independently pollable classifier invocation. See [`RequestClassifier`]
-/// for why this is a `'static` future rather than `async fn`.
-pub type ClassifyFuture =
-    Pin<Box<dyn Future<Output = Result<ClassifyRequest, Box<ClassifierError>>> + Send + 'static>>;
-
 /// User-provided request classifier.
 ///
-/// [`Self::classify`] deliberately avoids `async fn` and returns a `'static`
-/// future which the router polls on its own runtime, so a classifier may
-/// await, sleep, or park a request without blocking a thread and without
-/// standing up a runtime of its own. `async fn` cannot express this: its
-/// future borrows `&mut self` for the whole pending wait, which would hold the
-/// router-wide classifier lock and block every other request and every event.
+/// [`Self::classify`] is synchronous and runs under the router-wide classifier lock: it reads
+/// the request and the worker rows, writes its overrides, and returns. It must not wait. A
+/// policy that has to hold a request until something else happens (a turn finishes, a worker
+/// gets room, a session resumes) returns a [`DispatchGate`] from [`Self::dispatch_gate`]; the
+/// router queues the request at once and asks the gate before each dispatch, so the queue
+/// keeps the order, the class budget, the expiry, and the wakeups.
 ///
-/// Because the returned future is `'static`, state it touches must be owned or
-/// shared rather than borrowed from `self`:
-///
-/// ```ignore
-/// struct Pauser {
-///     state: Arc<Mutex<ProgramState>>,
-/// }
-///
-/// impl RequestClassifier for Pauser {
-///     fn classify(&mut self, request: ClassifyRequest, _workers: WorkerCandidates<'_>) -> ClassifyFuture {
-///         // Clone the handle into the future; `self` cannot be borrowed.
-///         let state = Arc::clone(&self.state);
-///         Box::pin(async move {
-///             state.lock().await.wait_for_slot().await;
-///             Ok(request)
-///         })
-///     }
-/// }
-/// ```
-///
-/// `classify`'s synchronous prologue runs under the router-wide classifier
-/// lock: build the future and return promptly, then wait inside it. Blocking
-/// before the future is returned stalls classification and event delivery.
-///
-/// [`Self::on_event`] is `async fn`. A dedicated router task delivers events
-/// one at a time in lifecycle order and awaits each callback, so `on_event`
-/// may await freely. A pending `classify` future never blocks delivery, but a
-/// slow `on_event` delays classification of new requests because both share
-/// the classifier lock. Terminal events arrive asynchronously, shortly after
-/// the request ends; events still queued at router shutdown are dropped.
+/// [`Self::on_event`] is `async fn`. A dedicated router task delivers events one at a time in
+/// lifecycle order and awaits each callback, so `on_event` may await freely. A slow `on_event`
+/// delays classification of new requests because both share the classifier lock. Terminal
+/// events arrive asynchronously, shortly after the request ends; events still queued at router
+/// shutdown are dropped.
 #[async_trait]
 pub trait RequestClassifier: Send + 'static {
     /// Declare the worker-signal groups the `workers` view passed to [`Self::classify`]
@@ -381,15 +349,17 @@ pub trait RequestClassifier: Send + 'static {
     /// or scorer.
     ///
     /// The view is a snapshot taken for this call and is lent only for its duration: the host
-    /// frees the rows when `classify` returns, so a deferred classification does not hold them.
-    /// Copy into the returned future anything it needs. Worker selection takes its own
-    /// snapshot when it later picks a worker, so it can pick a different worker.
+    /// frees the rows when `classify` returns. Worker selection takes its own snapshot when it
+    /// later picks a worker, so it can pick a different worker.
+    ///
+    /// Return `Ok(request)` to queue the request, with any overrides set on it, or an error to
+    /// reject it.
     fn classify(
         &mut self,
         request: ClassifyRequest,
         _workers: WorkerCandidates<'_>,
-    ) -> ClassifyFuture {
-        Box::pin(async move { Ok(request) })
+    ) -> Result<ClassifyRequest, Box<ClassifierError>> {
+        Ok(request)
     }
 
     async fn on_event(&mut self, _event: ClassifyEvent) {}

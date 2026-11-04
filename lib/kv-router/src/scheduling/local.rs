@@ -982,7 +982,7 @@ mod tests {
 
     use super::*;
     use crate::plugins::request_classifier::{
-        ClassifyFuture, DispatchDecision, DispatchGate, DispatchHead, DispatchRecheck,
+        ClassifierError, DispatchDecision, DispatchGate, DispatchHead, DispatchRecheck,
     };
     use crate::plugins::worker_selection::WorkerCandidates;
     use crate::protocols::{ActiveSequenceEvent, ActiveSequenceEventData};
@@ -1603,10 +1603,10 @@ mod tests {
             &mut self,
             request: ClassifyRequest,
             workers: WorkerCandidates<'_>,
-        ) -> ClassifyFuture {
+        ) -> Result<ClassifyRequest, Box<ClassifierError>> {
             self.calls.fetch_add(1, Ordering::Relaxed);
             assert!(workers.is_empty());
-            Box::pin(async move { Ok(request) })
+            Ok(request)
         }
     }
 
@@ -1697,10 +1697,10 @@ mod tests {
                 &mut self,
                 mut request: ClassifyRequest,
                 _workers: WorkerCandidates<'_>,
-            ) -> ClassifyFuture {
+            ) -> Result<ClassifyRequest, Box<ClassifierError>> {
                 assert_eq!(request.ingress_at(), self.0);
                 request.set_due_at(self.0 + Duration::from_secs(1));
-                Box::pin(async move { Ok(request) })
+                Ok(request)
             }
         }
 
@@ -1746,7 +1746,7 @@ mod tests {
                 &mut self,
                 request: ClassifyRequest,
                 workers: WorkerCandidates<'_>,
-            ) -> ClassifyFuture {
+            ) -> Result<ClassifyRequest, Box<ClassifierError>> {
                 // The queue's capacity check, run on the classifier's own rows.
                 let thresholds = BusyThresholds {
                     prefill_busy_threshold_frac: Some(0.5),
@@ -1770,7 +1770,7 @@ mod tests {
                         })
                         .collect(),
                 );
-                Box::pin(async move { Ok(request) })
+                Ok(request)
             }
         }
 
