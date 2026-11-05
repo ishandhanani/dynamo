@@ -1596,6 +1596,12 @@ impl<
         };
         for (mut entry, placement) in self.pending.take_prefetch_due(now + trigger.lead) {
             let queued = entry.payload_mut();
+            if queued.request.prefetch_tokens.is_none() {
+                tracing::debug!(
+                    request_id = queued.request.mode.request_id().unwrap_or("unknown"),
+                    "prefetch hint skipped: request carries no prefetch tokens"
+                );
+            }
             if let Some(tokens) = queued.request.prefetch_tokens.clone() {
                 let selected =
                     self.with_projected_loads(&mut queued.request, now, |actor, request| {
@@ -1644,7 +1650,8 @@ impl<
                                 "sent prefetch hint ahead of queue deadline"
                             );
                         } else {
-                            tracing::trace!(
+                            tracing::debug!(
+                                request_id = queued.request.mode.request_id().unwrap_or("unknown"),
                                 worker_id = worker.worker_id,
                                 resident_prefix_blocks,
                                 worker_blocks,
