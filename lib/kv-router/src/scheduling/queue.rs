@@ -4458,8 +4458,6 @@ policy_classes:
         }
     }
 
-    // The caller drives this actor directly. Its hints are separate from the
-    // idle actor spawned by make_queue, so tests control notification ordering.
     /// A gate that lets every head go. Installing it turns session lanes on, so tests of lane
     /// behavior put each session in its own lane.
     struct OpenGate;
@@ -4485,6 +4483,8 @@ policy_classes:
         ));
     }
 
+    // The caller drives this actor directly. Its hints are separate from the
+    // idle actor spawned by make_queue, so tests control notification ordering.
     fn actor_for_test(
         queue: &SchedulerQueue<NoopSequencePublisher, SimpleWorkerConfig, DefaultWorkerSelector>,
         slots: &Arc<ActiveSequencesMultiWorker<NoopSequencePublisher>>,
