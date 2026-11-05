@@ -882,6 +882,8 @@ pub struct SchedulerQueue<
     selection_trace: Arc<OnceLock<SelectionTraceSpec>>,
     reject_thresholds: Option<RejectThresholdsProvider>,
     dispatch_gate: Arc<OnceLock<Arc<dyn DispatchGate>>>,
+    /// Wakes the actor for a full lane recheck, whether or not any class queues.
+    actor_wake: Arc<CapacityUpdates>,
     #[allow(clippy::type_complexity)]
     // Covariant type markers, without ownership or auto-trait bounds.
     _marker: PhantomData<fn() -> (P, C, Sel, RF)>,
@@ -993,6 +995,11 @@ impl<
         let dispatch_gate = Arc::new(OnceLock::new());
         let start_time = Instant::now();
         let capacity_updates = queueing_enabled.then(|| Arc::new(CapacityUpdates::new()));
+        // The actor always listens for wakes: a dispatch gate installed later holds heads even
+        // when no class queues on capacity, and its rechecks arrive here.
+        let actor_wake = capacity_updates
+            .clone()
+            .unwrap_or_else(|| Arc::new(CapacityUpdates::new()));
         let direct_release: DirectBookingRelease = {
             let slots = Arc::clone(&slots);
             let capacity_updates = capacity_updates.clone();
@@ -1023,7 +1030,7 @@ impl<
             pending,
             class_timers: ClassTimers::new(profile.classes().len()),
             cleanup: Arc::clone(&cleanup),
-            capacity_updates: capacity_updates.clone(),
+            capacity_updates: Some(Arc::clone(&actor_wake)),
             capacity_workers: FxHashSet::default(),
             profile: Arc::clone(&profile),
             pending_count: Arc::clone(&pending_count),
@@ -1074,6 +1081,7 @@ impl<
             selection_trace,
             reject_thresholds,
             dispatch_gate,
+            actor_wake,
             _marker: PhantomData,
         }
     }
@@ -1102,18 +1110,14 @@ impl<
     ///
     /// Returns `false` when a spec is already installed.
     /// Install the request classifier's dispatch gate. Returns `false` when one is already
-    /// installed. The gate receives a recheck handle that wakes the actor for a full lane
-    /// recheck; without a queueing class nothing is ever held, so the handle is then a no-op.
+    /// installed. The gate is asked about every head, in every class, and receives a recheck
+    /// handle that wakes the actor for a full lane recheck.
     pub(crate) fn install_dispatch_gate(&self, gate: Arc<dyn DispatchGate>) -> bool {
         if self.dispatch_gate.set(Arc::clone(&gate)).is_err() {
             return false;
         }
-        let updates = self.capacity_updates.clone();
-        gate.attach(DispatchRecheck::new(Arc::new(move || {
-            if let Some(updates) = &updates {
-                updates.record(None);
-            }
-        })));
+        let wake = Arc::clone(&self.actor_wake);
+        gate.attach(DispatchRecheck::new(Arc::new(move || wake.record(None))));
         true
     }
 
@@ -2103,13 +2107,13 @@ impl<
         let gate = self.dispatch_gate.get();
         let gate_recheck_at = Cell::new(None);
         self.pending.any_ready_head(|_, class, queued| {
-            if !class.queueing_enabled() {
-                return true;
-            }
             if let Some(gate) = gate
                 && !gate_allows(gate.as_ref(), &class.name, queued, &gate_recheck_at)
             {
                 return false;
+            }
+            if !class.queueing_enabled() {
+                return true;
             }
             let available = available_ids.and_then(|ids| ids.get(&queued.request));
             let configs = workers.borrow();
@@ -2196,13 +2200,13 @@ impl<
                 let workers = &self.workers_with_configs;
                 let gate = gate.as_deref();
                 self.pending.extract_next(|_, class, queued| {
-                    if !class.queueing_enabled() {
-                        return true;
-                    }
                     if let Some(gate) = gate
                         && !gate_allows(gate, &class.name, queued, &gate_recheck_at)
                     {
                         return false;
+                    }
+                    if !class.queueing_enabled() {
+                        return true;
                     }
                     let available = available_ids.and_then(|ids| ids.get(&queued.request));
                     let configs = workers.borrow();

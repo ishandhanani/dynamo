@@ -38,6 +38,15 @@ fn worker() -> WorkerWithDpRank {
 /// One worker whose KV capacity is `kv_blocks * BLOCK_SIZE` tokens, with the ThunderAgent
 /// classifier and selector installed from router-policy YAML.
 fn scheduler(kv_blocks: u64) -> (Arc<Scheduler>, CancellationToken) {
+    scheduler_with_threshold(kv_blocks, Some(0.5))
+}
+
+/// As [`scheduler`], with the router queue's busy threshold; `None` is the documented launch,
+/// where no class queues on capacity and only the gate holds turns.
+fn scheduler_with_threshold(
+    kv_blocks: u64,
+    busy_threshold: Option<f64>,
+) -> (Arc<Scheduler>, CancellationToken) {
     let config = SimpleWorkerConfig {
         max_num_batched_tokens: Some(10_000),
         total_kv_blocks: Some(kv_blocks),
@@ -58,7 +67,7 @@ fn scheduler(kv_blocks: u64) -> (Arc<Scheduler>, CancellationToken) {
     let scheduler = Arc::new(LocalScheduler::new(
         slots,
         config_rx,
-        PolicyProfile::synthetic(Some(0.5), RouterQueuePolicy::Fcfs),
+        PolicyProfile::synthetic(busy_threshold, RouterQueuePolicy::Fcfs),
         BLOCK_SIZE,
         DefaultWorkerSelector::new(None, "test"),
         None,
@@ -254,5 +263,29 @@ async fn a_held_session_does_not_block_a_fitting_one_queued_behind_it() {
 
     harness.finish("a1");
     harness.finish("c1");
+    cancel.cancel();
+}
+
+#[tokio::test]
+async fn the_gate_holds_turns_without_a_queue_threshold() {
+    let (scheduler, cancel) = scheduler_with_threshold(8, None);
+    let mut harness = Harness {
+        scheduler,
+        lifecycles: HashMap::new(),
+    };
+
+    // One turn per session in flight: a's second turn waits for its first, and the gate's
+    // recheck releases it when a1 completes.
+    let mut a1 = harness.submit(turn("a1", "a", 200, false)).await;
+    assert_eq!(harness.admitted(&mut a1, 1).await, worker());
+    let mut a2 = harness.submit(turn("a2", "a", 50, true)).await;
+    assert!(harness.still_held(&mut a2).await);
+    assert_eq!(harness.scheduler.pending_count(), 1);
+
+    harness.finish("a1");
+    assert_eq!(harness.admitted(&mut a2, 64).await, worker());
+    assert_eq!(harness.scheduler.pending_count(), 0);
+
+    harness.finish("a2");
     cancel.cancel();
 }
