@@ -319,6 +319,21 @@ class frontend_service:
         ERROR = "error"
 
 
+class kv_hint:
+    """KV cache hint metrics (`dynamo-kvm` prefetch hints sent by the router)"""
+
+    # Queue wait the gate predicted for a hinted request, in milliseconds
+    WAIT_PREDICTED_MS = "kv_hint_wait_predicted_ms"
+    # Queue wait observed at admission for a request that received a hint, in milliseconds
+    WAIT_OBSERVED_MS = "kv_hint_wait_observed_ms"
+    # Shared-store load time predicted for the pages a hint carried, in milliseconds
+    LOAD_PREDICTED_MS = "kv_hint_load_predicted_ms"
+    # Shared-store load time the scheduler reported for a hint, in milliseconds
+    LOAD_OBSERVED_MS = "kv_hint_load_observed_ms"
+    # Gate decisions by `decision` (full, partial, skip)
+    DECISIONS_TOTAL = "kv_hint_decisions_total"
+
+
 class kv_publisher:
     """KV Publisher metrics"""
 
@@ -430,6 +445,8 @@ class labels:
     REQUEST_PHASE = "request_phase"
     # Label for router instance (discovery.instance_id() of the frontend)
     ROUTER_ID = "router_id"
+    # Label for the prefetch gate's outcome: `full`, `partial`, or `skip`
+    DECISION = "decision"
 
 
 class lifecycle:

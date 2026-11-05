@@ -78,6 +78,18 @@ With `DYN_KVM_PREFETCH_LEAD_MS` set, the router's scheduling queue tracks every 
 
 Each entry gets at most one hint and keeps its place and its class's round-robin credit. Requests carry their prompt tokens into the queue only while a trigger is installed, as a shared handle, so untouched deployments pay nothing.
 
+With `DYN_KVM_PREFETCH_ON_QUEUE` truthy, every request the router parks gets the same hint at enqueue, deadline or not: a request that is waiting anyway can have its prefix loaded while it waits.
+
+## Wait-versus-load gate
+
+A hint only saves time when its load lands before the request reaches the scheduler. If the request is admitted first, the scheduler loads the same pages itself and the hint's load is extra work on the store and the worker: on a reference deployment, hinted turns in a lightly loaded queue (waits of tens of milliseconds against loads of 100-300 ms) came out slower than unhinted ones. With `DYN_KVM_PREFETCH_GATE` truthy, the router sizes each `on_queue` hint to the wait it predicts for the request:
+
+1. **Predicted wait.** Per policy class, the router learns milliseconds per token of work ahead from every admitted request: the work ahead is the booked prefill tokens past the class's prefill threshold on every rank the request may run on, plus the scheduling cost of the requests already queued in its class. Until a class has three admissions it assumes 1 ms per 40 tokens.
+2. **Predicted load.** Per worker, the hint controller fits the load time `a + b * pages` from the `loaded_tokens` and `elapsed_ms` in every scheduler reply, assuming 40 ms plus 0.3 ms per page until a worker has three replies.
+3. **Decision.** When the predicted wait covers `DYN_KVM_PREFETCH_MARGIN` times the predicted load of the whole shared-resident prefix, the full prefix is sent. Otherwise the router sends the longest prefix whose load fits the wait, or nothing when that prefix would be shorter than `DYN_KVM_PREFETCH_MIN_PAGES`. A skipped request gets no affinity target either.
+
+Wake-up hints and deadline hints are never gated: a wake-up asked for the hint outright, and a deadline hint fires `lead` before the due time by construction. With the gate off (the default) every hint carries the full resident prefix, so the two can be compared on the same deployment. Each decision is logged at debug level with the predicted wait, the predicted full and sent load, the resident and sent page counts, and the decision; the `dynamo_router_kv_hint_*` metrics on the frontend's metrics endpoint hold the same quantities as histograms and a `decision` counter.
+
 ## Environment variables
 
 Truthy values are `1`, `true`, `yes`, or `on`, case-insensitive.
@@ -85,6 +97,10 @@ Truthy values are `1`, `true`, `yes`, or `on`, case-insensitive.
 | Variable | Default | Meaning |
 | --- | --- | --- |
 | `DYN_KVM_PREFETCH_LEAD_MS` | unset | Lead time before a queued request's due time at which its hint fires. `0` or unset disables the admission-queue trigger. |
+| `DYN_KVM_PREFETCH_ON_QUEUE` | `false` | Also hint every parked request at enqueue, deadline or not. Requires `DYN_KVM_PREFETCH_LEAD_MS`. |
+| `DYN_KVM_PREFETCH_GATE` | `false` | Size `on_queue` hints to the predicted wait: full prefix, a shorter prefix that lands in time, or nothing. Off, every hint carries the full resident prefix. |
+| `DYN_KVM_PREFETCH_MARGIN` | `1.2` | Factor of the predicted load the predicted wait must cover before a gated hint sends the full prefix. Must be positive. |
+| `DYN_KVM_PREFETCH_MIN_PAGES` | `16` | Fewest KV pages a gated partial hint may carry; a shorter one is skipped. |
 | `DYN_ENABLE_KVM_HINTS_API` | `false` | Serve `POST /v1/hints/prefetch` on the main listener. |
 | `DYN_KVM_WAKEUP_HEADER` | `false` | Honor `x-dyn-wakeup` on incoming requests. Read once at process start. |
 | `DYN_KVM_WAKEUP_DEDUP_MS` | `2000` | Window within which a second prefetch for the same wake-up tag is skipped. At most 4096 tags are remembered at once. |

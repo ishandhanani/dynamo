@@ -28,7 +28,9 @@ use super::metrics::{
 use super::worker_metrics::register_worker_metrics;
 use crate::discovery::ModelManager;
 use crate::endpoint_type::EndpointType;
-use crate::kv_router::metrics::{RoutingOverheadMetrics, register_router_queue_metrics};
+use crate::kv_router::metrics::{
+    KvHintMetrics, RoutingOverheadMetrics, register_router_queue_metrics,
+};
 use crate::local_model::runtime_config::SGLANG_GENERATE_CAPABILITY;
 use crate::reasoning_field::ReasoningField;
 use crate::request_template::RequestTemplate;
@@ -1683,6 +1685,9 @@ impl HttpServiceConfigBuilder {
             let instance_id = discovery.instance_id();
             if let Err(e) = RoutingOverheadMetrics::register(&registry, instance_id) {
                 tracing::warn!("Failed to register routing overhead metrics: {}", e);
+            }
+            if let Err(e) = KvHintMetrics::register(&registry, instance_id) {
+                tracing::warn!("Failed to register KV hint metrics: {}", e);
             }
         }
 

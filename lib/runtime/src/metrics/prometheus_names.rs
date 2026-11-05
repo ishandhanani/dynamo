@@ -146,6 +146,9 @@ pub mod labels {
 
     /// Label for router instance (discovery.instance_id() of the frontend)
     pub const ROUTER_ID: &str = "router_id";
+
+    /// Label for the prefetch gate's outcome: `full`, `partial`, or `skip`
+    pub const DECISION: &str = "decision";
 }
 
 /// Well-known component names used as values for the `dynamo_component` label.
@@ -674,6 +677,28 @@ pub mod routing_overhead {
 
     /// Total shared cache failures (query and subscriber failures)
     pub const SHARED_CACHE_ERRORS_TOTAL: &str = "shared_cache_errors_total";
+}
+
+/// KV cache hint metrics (`dynamo-kvm` prefetch hints sent by the router)
+///
+/// These constants are the suffix portions of full metric names, combined with
+/// [`name_prefix::ROUTER`] to form the complete name, e.g.
+/// `dynamo_router_kv_hint_wait_predicted_ms`.
+pub mod kv_hint {
+    /// Queue wait the gate predicted for a hinted request, in milliseconds
+    pub const WAIT_PREDICTED_MS: &str = "kv_hint_wait_predicted_ms";
+
+    /// Queue wait observed at admission for a request that received a hint, in milliseconds
+    pub const WAIT_OBSERVED_MS: &str = "kv_hint_wait_observed_ms";
+
+    /// Shared-store load time predicted for the pages a hint carried, in milliseconds
+    pub const LOAD_PREDICTED_MS: &str = "kv_hint_load_predicted_ms";
+
+    /// Shared-store load time the scheduler reported for a hint, in milliseconds
+    pub const LOAD_OBSERVED_MS: &str = "kv_hint_load_observed_ms";
+
+    /// Gate decisions by `decision` (full, partial, skip)
+    pub const DECISIONS_TOTAL: &str = "kv_hint_decisions_total";
 }
 
 /// Router request metrics (component-scoped aggregate histograms + counters)

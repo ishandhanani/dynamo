@@ -18,14 +18,18 @@ use std::time::{Duration, Instant};
 
 use axum::http::HeaderMap;
 use dynamo_kv_router::protocols::WorkerWithDpRank;
-use dynamo_kv_router::scheduling::{PrefetchHintSink, PrefetchTrigger};
+use dynamo_kv_router::scheduling::{
+    PrefetchGate, PrefetchHintSink, PrefetchObservation, PrefetchTrigger,
+};
 use dynamo_kvm::{
-    HintConfig, HintController, HintEndpointResolver, HintEndpoints, WorkerTarget, ZmqHintTransport,
+    HintConfig, HintController, HintEndpointResolver, HintEndpoints, HintReplyObserver,
+    PrefetchReply, WorkerTarget, ZmqHintTransport,
 };
 use dynamo_runtime::config::env_is_truthy;
 use dynamo_runtime::config::environment_names::llm as env_llm;
 
 use crate::discovery::RuntimeConfigWatch;
+use crate::kv_router::metrics::KvHintMetrics;
 
 /// Runtime-config key under which the SGLang sidecar (`lib/sidecar/sglang`) publishes
 /// a worker's scheduler inbound hint socket as a connectable `tcp://host:port`.
@@ -270,7 +274,25 @@ pub fn hint_controller_for(configs: RuntimeConfigWatch, block_size: u32) -> Opti
         timeout_ms = config.timeout.as_millis() as u64,
         "KV hint controller enabled (ZMQ to scheduler)"
     );
-    Some(HintController::new(config, transport))
+    Some(HintController::with_reply_observer(
+        config,
+        transport,
+        Some(Arc::new(ReplyMetrics)),
+    ))
+}
+
+/// Meters the load time each scheduler reply reports, when the hint metrics are registered.
+struct ReplyMetrics;
+
+impl HintReplyObserver for ReplyMetrics {
+    fn on_reply(&self, _worker: WorkerTarget, _hint_tokens: usize, reply: &PrefetchReply) {
+        // A reply that loaded nothing measured a lookup, not a load.
+        if reply.loaded_tokens > 0
+            && let Some(metrics) = KvHintMetrics::get()
+        {
+            metrics.load_observed_ms.observe(reply.elapsed_ms);
+        }
+    }
 }
 
 /// The wake-up header's dedup state, when `DYN_KVM_WAKEUP_HEADER` is on.
@@ -293,15 +315,61 @@ impl PrefetchHintSink for ControllerSink {
     fn load_estimate_ms(&self, worker: WorkerWithDpRank, tokens: usize) -> Option<f64> {
         Some(self.0.load_estimate_ms(worker_target(worker), tokens))
     }
+
+    fn observe(&self, observation: PrefetchObservation) {
+        let Some(metrics) = KvHintMetrics::get() else {
+            return;
+        };
+        match observation {
+            PrefetchObservation::Decision {
+                decision,
+                wait_predicted_ms,
+                load_predicted_ms,
+            } => {
+                metrics
+                    .decisions_total
+                    .with_label_values(&[decision.as_str()])
+                    .inc();
+                metrics.wait_predicted_ms.observe(wait_predicted_ms);
+                metrics.load_predicted_ms.observe(load_predicted_ms);
+            }
+            PrefetchObservation::Admitted {
+                wait_observed_ms, ..
+            } => metrics.wait_observed_ms.observe(wait_observed_ms),
+        }
+    }
+}
+
+/// The wait-versus-load gate for `on_queue` hints, when `DYN_KVM_PREFETCH_GATE` is truthy.
+fn prefetch_gate_from_env() -> Option<PrefetchGate> {
+    if !env_is_truthy(env_llm::DYN_KVM_PREFETCH_GATE) {
+        return None;
+    }
+    let defaults = PrefetchGate::default();
+    let mut margin = env_parsed(env_llm::DYN_KVM_PREFETCH_MARGIN, defaults.margin);
+    if !(margin.is_finite() && margin > 0.0) {
+        tracing::warn!(
+            env = env_llm::DYN_KVM_PREFETCH_MARGIN,
+            margin,
+            "margin must be positive; using default"
+        );
+        margin = defaults.margin;
+    }
+    Some(PrefetchGate {
+        margin,
+        min_pages: env_parsed(env_llm::DYN_KVM_PREFETCH_MIN_PAGES, defaults.min_pages),
+    })
 }
 
 /// The deadline-led prefetch trigger for `controller`, when `DYN_KVM_PREFETCH_LEAD_MS` is set;
-/// `DYN_KVM_PREFETCH_ON_QUEUE` additionally fires it for every parked request at enqueue.
+/// `DYN_KVM_PREFETCH_ON_QUEUE` additionally fires it for every parked request at enqueue, and
+/// `DYN_KVM_PREFETCH_GATE` sizes those hints to the predicted wait.
 pub fn prefetch_trigger(controller: Option<&HintController>) -> Option<PrefetchTrigger> {
     let lead = env_duration_ms(env_llm::DYN_KVM_PREFETCH_LEAD_MS)?;
     Some(PrefetchTrigger {
         lead,
         on_queue: env_is_truthy(env_llm::DYN_KVM_PREFETCH_ON_QUEUE),
+        gate: prefetch_gate_from_env(),
         sink: Arc::new(ControllerSink(controller?.clone())),
     })
 }

@@ -26,7 +26,9 @@ use super::policy_config::{
     BusyThresholds, FullRankCounts, PolicyClassConfig, PolicyProfile, RejectThresholdsProvider,
 };
 use super::policy_queue::{PolicyQueue, QueueMetadata, QueueSnapshot};
-use super::prefetch::PrefetchTrigger;
+use super::prefetch::{
+    PrefetchDecision, PrefetchObservation, PrefetchTrigger, WaitEstimator, gate_decision,
+};
 use super::prefill_load::{PrefillLoadEstimator, effective_prefill_tokens};
 use super::queue_admission::WorkerPlacement;
 use super::request_classifier::ClassificationOverrides;
@@ -68,6 +70,8 @@ struct ClassQueueCounters {
     pending_count: AtomicUsize,
     pending_isl_tokens: AtomicUsize,
     pending_cached_tokens: AtomicUsize,
+    /// Scheduling cost of the queued entries, the work ahead of the next arrival.
+    pending_cost_tokens: AtomicUsize,
     received_total: AtomicU64,
     rejected_due_time_passed_total: AtomicU64,
 }
@@ -92,6 +96,12 @@ struct QueuedRequest {
     block_hashes: Option<Vec<LocalBlockHash>>,
     /// Actor turn that received the request. Its prepared rows last only that turn.
     enqueue_turn: u64,
+    /// Prefill work ahead of this entry at enqueue, in tokens; see `tokens_ahead`.
+    /// Zero without a prefetch trigger.
+    tokens_ahead: usize,
+    /// The wait predicted when this entry's prefetch hint was sent, for the
+    /// observed-wait metric at admission.
+    hint_wait_predicted_ms: Option<f64>,
 }
 
 /// Candidate rows built on the caller task, before the request reaches the actor.
@@ -607,6 +617,8 @@ struct SchedulerQueueActor<
     reject_thresholds: Option<RejectThresholdsProvider>,
     /// Deadline-led prefetch hints, installed once by the host.
     prefetch_trigger: Arc<OnceLock<PrefetchTrigger>>,
+    /// Per-class queue-wait predictors for the prefetch gate.
+    wait_estimators: Vec<WaitEstimator>,
 }
 
 /// Queue that gates scheduling requests behind a capacity check.
@@ -741,6 +753,7 @@ impl<
                     pending_count: AtomicUsize::new(0),
                     pending_isl_tokens: AtomicUsize::new(0),
                     pending_cached_tokens: AtomicUsize::new(0),
+                    pending_cost_tokens: AtomicUsize::new(0),
                     received_total: AtomicU64::new(0),
                     rejected_due_time_passed_total: AtomicU64::new(0),
                 })
@@ -807,6 +820,7 @@ impl<
             selection_trace: Arc::clone(&selection_trace),
             reject_thresholds: reject_thresholds.clone(),
             prefetch_trigger: Arc::clone(&prefetch_trigger),
+            wait_estimators: vec![WaitEstimator::default(); profile.classes().len()],
         };
         tokio::spawn(actor.run(admission_rx));
         Self {
@@ -1528,6 +1542,11 @@ impl<
         let placement = request
             .pinned_worker
             .map_or(WorkerPlacement::Any, WorkerPlacement::Exact);
+        let tokens_ahead = if self.prefetch_trigger.get().is_some() {
+            self.tokens_ahead(class_index, &request, decay_now)
+        } else {
+            0
+        };
         let queued = QueuedRequest {
             request,
             attempt_tx,
@@ -1536,6 +1555,8 @@ impl<
             due_at: queue_metadata.due_at,
             block_hashes,
             enqueue_turn: self.turn,
+            tokens_ahead,
+            hint_wait_predicted_ms: None,
         };
         self.turn_prepared = prepared;
         let worker_count = self.workers_with_configs.borrow().len();
@@ -1595,6 +1616,7 @@ impl<
             return;
         };
         for (mut entry, placement) in self.pending.take_prefetch_due(now + trigger.lead) {
+            let class_index = entry.class_index();
             let queued = entry.payload_mut();
             if queued.request.prefetch_tokens.is_none() {
                 tracing::debug!(
@@ -1631,34 +1653,90 @@ impl<
                             .copied()
                             .unwrap_or(0) as u32;
                         let missing_blocks = resident_prefix_blocks.saturating_sub(worker_blocks);
-                        if missing_blocks > 0 {
-                            let prefix_len = (resident_prefix_blocks as usize)
-                                .saturating_mul(self.block_size as usize)
-                                .min(tokens.len());
-                            trigger.sink.prefetch(worker, &tokens[..prefix_len]);
-                            // Steer the admitted selection to the worker now loading the
-                            // prefix. Exclusive while that worker stays eligible, like
-                            // session affinity; explicit steering wins.
-                            if queued.request.pinned_worker.is_none()
-                                && queued.request.affinity_target.is_none()
-                            {
-                                queued.request.affinity_target = Some(worker.into());
-                            }
-                            tracing::debug!(
-                                request_id = queued.request.mode.request_id().unwrap_or("unknown"),
-                                worker_id = worker.worker_id,
-                                resident_prefix_blocks,
-                                worker_blocks,
-                                tokens = prefix_len,
-                                "sent prefetch hint ahead of queue deadline"
-                            );
-                        } else {
+                        if missing_blocks == 0 {
                             tracing::debug!(
                                 request_id = queued.request.mode.request_id().unwrap_or("unknown"),
                                 worker_id = worker.worker_id,
                                 resident_prefix_blocks,
                                 worker_blocks,
                                 "prefetch hint skipped: worker holds the shared-resident prefix"
+                            );
+                        } else {
+                            let block_size = self.block_size as usize;
+                            let wait_predicted_ms =
+                                self.wait_estimators[class_index].estimate_ms(queued.tokens_ahead);
+                            let load_ms = |pages: u32| {
+                                trigger.sink.load_estimate_ms(
+                                    worker,
+                                    (pages as usize).saturating_mul(block_size),
+                                )
+                            };
+                            let load_full_ms = load_ms(missing_blocks);
+                            // Only entries the `on_queue` trigger parked are gated: a wake-up
+                            // asked for its hint outright, and a deadline entry fires `lead`
+                            // before it is due, so its wait is the lead by construction.
+                            let gated = trigger.on_queue
+                                && !queued.request.prefetch_on_arrival
+                                && queued.due_at.is_none();
+                            let (decision, send_blocks, load_predicted_ms) =
+                                match (trigger.gate.filter(|_| gated), load_full_ms) {
+                                    (Some(gate), Some(load_full_ms)) => {
+                                        let (decision, pages) = gate_decision(
+                                            gate,
+                                            wait_predicted_ms,
+                                            missing_blocks,
+                                            |pages| load_ms(pages).unwrap_or(load_full_ms),
+                                        );
+                                        let load_predicted_ms = match decision {
+                                            PrefetchDecision::Partial => {
+                                                load_ms(pages).unwrap_or(load_full_ms)
+                                            }
+                                            PrefetchDecision::Full | PrefetchDecision::Skip => {
+                                                load_full_ms
+                                            }
+                                        };
+                                        trigger.sink.observe(PrefetchObservation::Decision {
+                                            decision,
+                                            wait_predicted_ms,
+                                            load_predicted_ms,
+                                        });
+                                        (decision, pages, Some(load_predicted_ms))
+                                    }
+                                    _ => (PrefetchDecision::Full, missing_blocks, load_full_ms),
+                                };
+                            let pages_sent = if decision == PrefetchDecision::Skip {
+                                0
+                            } else {
+                                worker_blocks + send_blocks
+                            };
+                            if decision != PrefetchDecision::Skip {
+                                let prefix_len = (pages_sent as usize)
+                                    .saturating_mul(block_size)
+                                    .min(tokens.len());
+                                trigger.sink.prefetch(worker, &tokens[..prefix_len]);
+                                queued.hint_wait_predicted_ms = Some(wait_predicted_ms);
+                                // Steer the admitted selection to the worker now loading the
+                                // prefix. Exclusive while that worker stays eligible, like
+                                // session affinity; explicit steering wins.
+                                if queued.request.pinned_worker.is_none()
+                                    && queued.request.affinity_target.is_none()
+                                {
+                                    queued.request.affinity_target = Some(worker.into());
+                                }
+                            }
+                            tracing::debug!(
+                                request_id = queued.request.mode.request_id().unwrap_or("unknown"),
+                                worker_id = worker.worker_id,
+                                decision = decision.as_str(),
+                                gated,
+                                wait_predicted_ms = format_args!("{wait_predicted_ms:.1}"),
+                                load_full_ms = ?load_full_ms,
+                                load_predicted_ms = ?load_predicted_ms,
+                                tokens_ahead = queued.tokens_ahead,
+                                pages_resident = resident_prefix_blocks,
+                                pages_on_worker = worker_blocks,
+                                pages_sent,
+                                "prefetch hint decided"
                             );
                         }
                     }
@@ -1945,7 +2023,18 @@ impl<
                 self.reject_due_time_passed(class_index, &mut request);
                 continue;
             }
-            let wait_ms = queued.enqueue_at.elapsed().as_millis() as u64;
+            let waited = queued.enqueue_at.elapsed();
+            let wait_ms = waited.as_millis() as u64;
+            let waited_ms = waited.as_secs_f64() * 1e3;
+            self.wait_estimators[class_index].observe(waited_ms, queued.tokens_ahead);
+            if let Some(wait_predicted_ms) = queued.hint_wait_predicted_ms
+                && let Some(trigger) = self.prefetch_trigger.get()
+            {
+                trigger.sink.observe(PrefetchObservation::Admitted {
+                    wait_predicted_ms,
+                    wait_observed_ms: waited_ms,
+                });
+            }
             // Only this turn's request has rows, and a refresh replaces the overlap
             // they were built from.
             let prepared = if queued.enqueue_turn == self.turn && refreshed.is_none() {
@@ -2383,6 +2472,38 @@ impl<
         checked_any && !has_available
     }
 
+    /// Prefill work ahead of a request parked now in `class_index`, in tokens: on every
+    /// rank it may run on, the booked prefill tokens past the class's prefill threshold
+    /// (what must drain before that rank admits again), plus the scheduling cost of the
+    /// entries already queued in its class. The class's `WaitEstimator` learns its
+    /// milliseconds per token of this sum from the waits admitted entries measured.
+    fn tokens_ahead(&self, class_index: usize, request: &SchedulingRequest, now: Instant) -> usize {
+        let limits = self.profile.class(class_index).busy_thresholds;
+        let available = self
+            .available_worker_provider
+            .as_ref()
+            .and_then(|provider| provider(request));
+        let configs = self.workers_with_configs.borrow();
+        let loads = self.slots.worker_load_reader(now);
+        let mut excess = 0usize;
+        request
+            .eligibility()
+            .with_available_workers(available.as_deref())
+            .any_eligible_worker_rank(&configs, |worker, config| {
+                let booked = loads
+                    .get(worker)
+                    .map_or(0, |load| load.active_prefill_tokens);
+                excess += booked
+                    .saturating_sub(limits.prefill_threshold_tokens(WorkerCapacity::of(config)));
+                // Visit every eligible rank.
+                false
+            });
+        excess
+            + self.class_counters[class_index]
+                .pending_cost_tokens
+                .load(AtomicOrdering::Relaxed)
+    }
+
     fn add_class_counters(&self, class_index: usize, snapshot: QueueSnapshot) {
         let counters = &self.class_counters[class_index];
         counters.pending_count.fetch_add(1, AtomicOrdering::Relaxed);
@@ -2392,6 +2513,9 @@ impl<
         counters
             .pending_cached_tokens
             .fetch_add(snapshot.cached_tokens, AtomicOrdering::Relaxed);
+        counters
+            .pending_cost_tokens
+            .fetch_add(snapshot.scheduling_cost_tokens, AtomicOrdering::Relaxed);
     }
 
     fn subtract_class_counters(&self, class_index: usize, snapshot: QueueSnapshot) {
@@ -2403,6 +2527,9 @@ impl<
         counters
             .pending_cached_tokens
             .fetch_sub(snapshot.cached_tokens, AtomicOrdering::Relaxed);
+        counters
+            .pending_cost_tokens
+            .fetch_sub(snapshot.scheduling_cost_tokens, AtomicOrdering::Relaxed);
     }
 }
 
@@ -3593,6 +3720,7 @@ policy_classes:
         assert!(queue.set_prefetch_trigger(PrefetchTrigger {
             on_queue: false,
             lead: Duration::from_secs(2),
+            gate: None,
             sink: sink.clone(),
         }));
 
@@ -3664,6 +3792,7 @@ policy_classes:
         assert!(queue.set_prefetch_trigger(PrefetchTrigger {
             on_queue: false,
             lead: Duration::from_secs(2),
+            gate: None,
             sink: sink.clone(),
         }));
 
@@ -3704,6 +3833,212 @@ policy_classes:
         queue.update().await;
         let admitted = parked_rx.await.unwrap().expect("parked request admitted");
         assert_eq!(admitted.best_worker, prefetched_worker);
+    }
+
+    /// Sink whose load model is `fixed_ms + per_page_ms * pages` over 16-token pages,
+    /// recording every hint and observation.
+    struct GateSink {
+        fixed_ms: f64,
+        per_page_ms: f64,
+        hints: Mutex<Vec<(WorkerWithDpRank, Vec<u32>)>>,
+        observations: Mutex<Vec<PrefetchObservation>>,
+    }
+
+    impl super::super::prefetch::PrefetchHintSink for GateSink {
+        fn prefetch(&self, worker: WorkerWithDpRank, tokens: &[u32]) {
+            self.hints.lock().push((worker, tokens.to_vec()));
+        }
+
+        fn load_estimate_ms(&self, _worker: WorkerWithDpRank, tokens: usize) -> Option<f64> {
+            Some(self.fixed_ms + self.per_page_ms * (tokens / 16) as f64)
+        }
+
+        fn observe(&self, observation: PrefetchObservation) {
+            self.observations.lock().push(observation);
+        }
+    }
+
+    struct GatedRun {
+        sink: Arc<GateSink>,
+        /// Worker the hint went to, when one was sent.
+        prefetched: Option<WorkerWithDpRank>,
+        /// Worker whose booking was freed to admit the parked request.
+        freed: WorkerWithDpRank,
+        admitted: WorkerWithDpRank,
+    }
+
+    /// Two workers each booked with 64 prefill tokens over a zero threshold (128 tokens
+    /// ahead, a 3.2 ms prior wait), then a parked 64-token request whose four blocks are
+    /// all shared-resident and on no device, hinted at enqueue by the `on_queue`
+    /// trigger through a gate with margin 1. A hinted request is admitted by freeing
+    /// the other worker, so affinity decides; an unhinted one by freeing worker 0.
+    async fn run_gated_prefetch(
+        fixed_ms: f64,
+        per_page_ms: f64,
+        min_pages: u32,
+        on_arrival: bool,
+    ) -> GatedRun {
+        let (queue, slots) = make_queue(2, 16, 64, Some(0.0));
+        let sink = Arc::new(GateSink {
+            fixed_ms,
+            per_page_ms,
+            hints: Mutex::new(Vec::new()),
+            observations: Mutex::new(Vec::new()),
+        });
+        assert!(queue.set_prefetch_trigger(PrefetchTrigger {
+            on_queue: true,
+            lead: Duration::from_secs(2),
+            gate: Some(super::super::prefetch::PrefetchGate {
+                margin: 1.0,
+                min_pages,
+            }),
+            sink: sink.clone(),
+        }));
+        let mut active = Vec::new();
+        for id in 0..2 {
+            let (request, rx) = make_request(&format!("active-{id}"), 64);
+            queue.enqueue(request).await;
+            active.push(rx.await.unwrap().unwrap().best_worker);
+        }
+        let (mut parked, parked_rx) = make_request("parked", 64);
+        let tokens: Arc<Vec<u32>> = Arc::new((1..=64).collect::<Vec<u32>>());
+        parked.prefetch_tokens = Some(Arc::clone(&tokens));
+        parked.prefetch_on_arrival = on_arrival;
+        parked.shared_cache_hits = Some(crate::protocols::SharedCacheHits::from_hits(&[true; 4]));
+        queue.enqueue(parked).await;
+        tokio::time::sleep(Duration::from_millis(1)).await;
+        assert_eq!(queue.pending_count(), 1, "the request parks");
+
+        let prefetched = sink.hints.lock().first().map(|(worker, _)| *worker);
+        let freed_index = prefetched.map_or(0, |worker| {
+            active
+                .iter()
+                .position(|booked| *booked != worker)
+                .expect("two distinct workers were booked")
+        });
+        slots
+            .free(&format!("active-{freed_index}"), decay_now())
+            .unwrap();
+        queue.update().await;
+        let admitted = parked_rx.await.unwrap().expect("parked request admitted");
+        GatedRun {
+            sink,
+            prefetched,
+            freed: active[freed_index],
+            admitted: admitted.best_worker,
+        }
+    }
+
+    fn decisions(run: &GatedRun) -> Vec<(PrefetchDecision, f64, f64)> {
+        run.sink
+            .observations
+            .lock()
+            .iter()
+            .filter_map(|observation| match observation {
+                PrefetchObservation::Decision {
+                    decision,
+                    wait_predicted_ms,
+                    load_predicted_ms,
+                } => Some((*decision, *wait_predicted_ms, *load_predicted_ms)),
+                PrefetchObservation::Admitted { .. } => None,
+            })
+            .collect()
+    }
+
+    fn admitted_waits(run: &GatedRun) -> Vec<f64> {
+        run.sink
+            .observations
+            .lock()
+            .iter()
+            .filter_map(|observation| match observation {
+                PrefetchObservation::Admitted {
+                    wait_predicted_ms, ..
+                } => Some(*wait_predicted_ms),
+                PrefetchObservation::Decision { .. } => None,
+            })
+            .collect()
+    }
+
+    /// 128 tokens ahead at the prior of 1 ms per 40 tokens.
+    const GATED_PRIOR_WAIT_MS: f64 = 3.2;
+
+    fn near(actual: f64, expected: f64) -> bool {
+        (actual - expected).abs() < 1e-9
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn gated_prefetch_sends_the_full_prefix_when_the_wait_covers_the_load() {
+        let run = run_gated_prefetch(1.0, 0.0, 1, false).await;
+        let hints = run.sink.hints.lock().clone();
+        assert_eq!(hints.len(), 1);
+        assert_eq!(hints[0].1.len(), 64, "all four resident blocks");
+        let decided = decisions(&run);
+        assert_eq!(decided.len(), 1);
+        assert_eq!(decided[0].0, PrefetchDecision::Full);
+        assert!(near(decided[0].1, GATED_PRIOR_WAIT_MS), "{decided:?}");
+        assert!(near(decided[0].2, 1.0), "{decided:?}");
+        // The hinted entry reports its wait at admission and follows its affinity.
+        let waits = admitted_waits(&run);
+        assert_eq!(waits.len(), 1);
+        assert!(near(waits[0], GATED_PRIOR_WAIT_MS));
+        assert_eq!(Some(run.admitted), run.prefetched);
+        assert_ne!(run.admitted, run.freed);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn gated_prefetch_trims_to_the_pages_that_land_in_time() {
+        // One millisecond per page against a 3.2 ms wait: three pages fit.
+        let run = run_gated_prefetch(0.0, 1.0, 1, false).await;
+        let hints = run.sink.hints.lock().clone();
+        assert_eq!(hints.len(), 1);
+        assert_eq!(
+            hints[0].1,
+            (1..=48).collect::<Vec<u32>>(),
+            "three 16-token pages"
+        );
+        let decided = decisions(&run);
+        assert_eq!(decided.len(), 1);
+        assert_eq!(decided[0].0, PrefetchDecision::Partial);
+        assert!(near(decided[0].2, 3.0), "load predicted for the pages sent");
+        assert_eq!(Some(run.admitted), run.prefetched);
+        assert_eq!(admitted_waits(&run).len(), 1);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn gated_prefetch_skips_when_the_hint_cannot_land_in_time() {
+        // The fixed cost alone exceeds the wait.
+        let run = run_gated_prefetch(10.0, 0.0, 1, false).await;
+        assert!(run.sink.hints.lock().is_empty(), "nothing sent");
+        let decided = decisions(&run);
+        assert_eq!(decided.len(), 1);
+        assert_eq!(decided[0].0, PrefetchDecision::Skip);
+        assert!(
+            near(decided[0].2, 10.0),
+            "the full load is what was too slow"
+        );
+        assert!(admitted_waits(&run).is_empty(), "no hint, no wait sample");
+        assert_eq!(run.prefetched, None);
+        assert_eq!(run.admitted, run.freed, "no affinity without a hint");
+
+        // Three pages would fit, below a four-page minimum.
+        let run = run_gated_prefetch(0.0, 1.0, 4, false).await;
+        assert!(run.sink.hints.lock().is_empty());
+        assert_eq!(decisions(&run)[0].0, PrefetchDecision::Skip);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn wake_up_entries_bypass_the_gate() {
+        let run = run_gated_prefetch(10.0, 0.0, 1, true).await;
+        let hints = run.sink.hints.lock().clone();
+        assert_eq!(hints.len(), 1);
+        assert_eq!(
+            hints[0].1.len(),
+            64,
+            "the full prefix, whatever the load model says"
+        );
+        assert!(decisions(&run).is_empty(), "no gate decision for a wake-up");
+        assert_eq!(admitted_waits(&run).len(), 1);
+        assert_eq!(Some(run.admitted), run.prefetched);
     }
 
     #[tokio::test(start_paused = true)]
@@ -4144,6 +4479,7 @@ policy_classes:
             selection_trace: Arc::clone(&queue.selection_trace),
             reject_thresholds: queue.reject_thresholds.clone(),
             prefetch_trigger: Arc::clone(&queue.prefetch_trigger),
+            wait_estimators: vec![WaitEstimator::default(); queue.profile.classes().len()],
         }
     }
 

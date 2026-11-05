@@ -692,6 +692,30 @@ vLLM, SGLang, and TensorRT-LLM workers report F4 on the final response chunk of 
   Total routing overhead per request.
 </ParamField>
 
+### KV Cache Hint Metrics
+
+Recorded by the router's prefetch-hint path (see [KV Cache Hints](../components/kv-cache-hints.mdx)); the wait and decision series need `DYN_KVM_PREFETCH_GATE`. They carry `router_id`.
+
+<ParamField path="dynamo_router_kv_hint_wait_predicted_ms" type="histogram">
+  Queue wait the gate predicted for a request it decided on.
+</ParamField>
+
+<ParamField path="dynamo_router_kv_hint_wait_observed_ms" type="histogram">
+  Queue wait observed at admission for a request that received a hint.
+</ParamField>
+
+<ParamField path="dynamo_router_kv_hint_load_predicted_ms" type="histogram">
+  Shared-store load time predicted for the pages a gated hint carried (the full prefix when nothing was sent).
+</ParamField>
+
+<ParamField path="dynamo_router_kv_hint_load_observed_ms" type="histogram">
+  Shared-store load time the scheduler reported for a hint that loaded pages.
+</ParamField>
+
+<ParamField path="dynamo_router_kv_hint_decisions_total" type="counter">
+  Gate decisions, labeled `decision` (`full`, `partial`, `skip`).
+</ParamField>
+
 ### Router Queue Metrics
 
 These metrics have series once a KV router starts, whether or not queueing is enabled; the queue metrics stay at zero unless queueing is enabled by `--router-queue-threshold` or a threshold in `--router-policy-config`. They carry `model`, `worker_type`, and `policy_class`. With policy-family or cache-bucket configuration, `policy_class` is the resolved physical queue.

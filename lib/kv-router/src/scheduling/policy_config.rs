@@ -111,6 +111,22 @@ impl BusyThresholds {
         !(absolute_full || fractional_full || decode_full)
     }
 
+    /// Booked prefill tokens at which a rank with `capacity` is full by its prefill
+    /// limits: the tighter of the absolute and fractional thresholds. Zero when neither
+    /// is set, so a rank not gated on prefill tokens counts all of its booked prefill
+    /// as work ahead of a parked request.
+    pub fn prefill_threshold_tokens(&self, capacity: WorkerCapacity) -> usize {
+        let fractional = self
+            .prefill_busy_threshold_frac
+            .map(|frac| (frac.max(0.0) * capacity.prefill_budget() as f64) as usize);
+        match (self.prefill_busy_threshold, fractional) {
+            (Some(absolute), Some(fractional)) => absolute.min(fractional),
+            (Some(absolute), None) => absolute,
+            (None, Some(fractional)) => fractional,
+            (None, None) => 0,
+        }
+    }
+
     /// Whether this rank's `LOAD` row exceeds any configured limit. A rank without a
     /// projection counts as idle.
     pub fn rank_is_full(
@@ -1110,6 +1126,22 @@ models:
             (crate::plugins::worker_selection::inputs::DEFAULT_MAX_BATCHED_TOKENS / 2) as usize;
         assert!(limits.has_room(&prefill_load(half_default), WorkerCapacity::default()));
         assert!(!limits.has_room(&prefill_load(half_default + 1), WorkerCapacity::default()));
+    }
+
+    #[test]
+    fn prefill_threshold_tokens_is_the_tighter_prefill_limit() {
+        let capacity = WorkerCapacity::new(Some(8_192), None);
+        let mut limits = BusyThresholds::default();
+        // No prefill limit: every booked token is work ahead.
+        assert_eq!(limits.prefill_threshold_tokens(capacity), 0);
+        limits.prefill_busy_threshold_frac = Some(0.5);
+        assert_eq!(limits.prefill_threshold_tokens(capacity), 4_096);
+        limits.prefill_busy_threshold = Some(1_000);
+        assert_eq!(limits.prefill_threshold_tokens(capacity), 1_000);
+        limits.prefill_busy_threshold = Some(5_000);
+        assert_eq!(limits.prefill_threshold_tokens(capacity), 4_096);
+        limits.prefill_busy_threshold_frac = None;
+        assert_eq!(limits.prefill_threshold_tokens(capacity), 5_000);
     }
 
     #[test]

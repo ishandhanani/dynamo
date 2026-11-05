@@ -903,9 +903,13 @@ impl KvRouter {
         let hint_controller = hints::hint_controller_for(workers_with_configs.clone(), block_size);
         if let Some(trigger) = hints::prefetch_trigger(hint_controller.as_ref()) {
             let lead_ms = trigger.lead.as_millis() as u64;
+            let on_queue = trigger.on_queue;
+            let gate = trigger.gate;
             if selection.scheduler().set_prefetch_trigger(trigger) {
                 tracing::info!(
                     lead_ms,
+                    on_queue,
+                    ?gate,
                     worker_type = metric_worker_type,
                     "deadline-led prefetch hints enabled"
                 );

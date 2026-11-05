@@ -37,7 +37,9 @@ pub use policy_config::{
 pub use policy_queue::{
     PolicyQueue, PolicyQueueEntry, QueueLimitKind, QueueRejection, QueueSnapshot,
 };
-pub use prefetch::{PrefetchHintSink, PrefetchTrigger};
+pub use prefetch::{
+    PrefetchDecision, PrefetchGate, PrefetchHintSink, PrefetchObservation, PrefetchTrigger,
+};
 pub use prefill_load::{
     InvalidEffectivePrefillTokens, PrefillLoadEstimator, effective_prefill_tokens,
     prefill_load_hint_from_effective_tokens,

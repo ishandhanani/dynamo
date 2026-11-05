@@ -480,6 +480,21 @@ pub mod llm {
     /// Requires `DYN_KVM_PREFETCH_LEAD_MS`. Disabled by default.
     pub const DYN_KVM_PREFETCH_ON_QUEUE: &str = "DYN_KVM_PREFETCH_ON_QUEUE";
 
+    /// When truthy, a hint for a request parked by `DYN_KVM_PREFETCH_ON_QUEUE` is sized
+    /// to its predicted queue wait: the full shared-resident prefix when the wait covers
+    /// the predicted load time times `DYN_KVM_PREFETCH_MARGIN`, else the longest prefix
+    /// that lands in time, or nothing below `DYN_KVM_PREFETCH_MIN_PAGES`. Wake-up and
+    /// deadline hints are not gated. Disabled by default: every hint sends the full prefix.
+    pub const DYN_KVM_PREFETCH_GATE: &str = "DYN_KVM_PREFETCH_GATE";
+
+    /// Safety factor the predicted wait must cover of the predicted load time before a
+    /// gated hint sends the full prefix. Default `1.2`; must be positive.
+    pub const DYN_KVM_PREFETCH_MARGIN: &str = "DYN_KVM_PREFETCH_MARGIN";
+
+    /// Fewest KV pages a gated partial hint may carry; a shorter one is skipped.
+    /// Default `16`.
+    pub const DYN_KVM_PREFETCH_MIN_PAGES: &str = "DYN_KVM_PREFETCH_MIN_PAGES";
+
     /// Serve `POST /v1/hints/prefetch` on the frontend. Disabled by default; truthy
     /// values enable it.
     pub const DYN_ENABLE_KVM_HINTS_API: &str = "DYN_ENABLE_KVM_HINTS_API";
@@ -1288,6 +1303,9 @@ mod tests {
             llm::DYN_FRONTEND_ADMIN_PORT,
             llm::DYN_KVM_PREFETCH_LEAD_MS,
             llm::DYN_KVM_PREFETCH_ON_QUEUE,
+            llm::DYN_KVM_PREFETCH_GATE,
+            llm::DYN_KVM_PREFETCH_MARGIN,
+            llm::DYN_KVM_PREFETCH_MIN_PAGES,
             llm::DYN_ENABLE_KVM_HINTS_API,
             llm::DYN_KVM_WAKEUP_HEADER,
             llm::DYN_KVM_WAKEUP_DEDUP_MS,

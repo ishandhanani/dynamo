@@ -51,7 +51,8 @@ use std::time::Duration;
 use dynamo_runtime::component::Component;
 use dynamo_runtime::metrics::MetricsHierarchy;
 use dynamo_runtime::metrics::prometheus_names::{
-    frontend_service, kv_publisher, labels, name_prefix, router, router_request, routing_overhead,
+    frontend_service, kv_hint, kv_publisher, labels, name_prefix, router, router_request,
+    routing_overhead,
 };
 
 /// Build a router metric name: `"router_" + frontend_service_suffix`.
@@ -998,6 +999,94 @@ impl RoutingOverheadMetrics {
     /// Increment the shared cache error counter.
     pub fn inc_shared_cache_errors(&self) {
         self.shared_cache_errors_total.inc();
+    }
+}
+
+// ---------------------------------------------------------------------------
+// KV cache hint metrics (histograms + decision counter)
+// ---------------------------------------------------------------------------
+
+/// Prefetch-hint gate metrics (milliseconds): what the router predicted against what
+/// it observed, and the gate's decisions. Fed by the router's hint sink and the hint
+/// controller's reply observer (`kv_router::hints`).
+pub struct KvHintMetrics {
+    pub wait_predicted_ms: prometheus::Histogram,
+    pub wait_observed_ms: prometheus::Histogram,
+    pub load_predicted_ms: prometheus::Histogram,
+    pub load_observed_ms: prometheus::Histogram,
+    pub decisions_total: IntCounterVec,
+}
+
+static KV_HINT_METRICS: OnceLock<Arc<KvHintMetrics>> = OnceLock::new();
+
+impl KvHintMetrics {
+    /// Register the hint metrics with the given registry and store them for later use.
+    /// Metric names: `dynamo_router_kv_hint_*` with const label `router_id=instance_id`.
+    /// Called where [`RoutingOverheadMetrics::register`] is, so these are served on the
+    /// frontend's own port and are absent in the standalone router.
+    pub fn register(
+        registry: &prometheus::Registry,
+        instance_id: u64,
+    ) -> Result<(), prometheus::Error> {
+        let m = KV_HINT_METRICS.get_or_init(|| {
+            let router_id = instance_id.to_string();
+            let make = |suffix: &str, help: &str| {
+                let name = format!("{}_{}", name_prefix::ROUTER, suffix);
+                prometheus::Histogram::with_opts(
+                    HistogramOpts::new(name, help)
+                        .const_label(labels::ROUTER_ID, &router_id)
+                        // 1 ms to ~16 s: queue waits and shared-store loads.
+                        .buckets(prometheus::exponential_buckets(1.0, 2.0, 15).unwrap()),
+                )
+            };
+            let wait_predicted_ms = make(
+                kv_hint::WAIT_PREDICTED_MS,
+                "Queue wait the prefetch gate predicted for a hinted request in milliseconds",
+            )
+            .expect("kv_hint_wait_predicted_ms");
+            let wait_observed_ms = make(
+                kv_hint::WAIT_OBSERVED_MS,
+                "Queue wait observed at admission for a request that received a prefetch hint in milliseconds",
+            )
+            .expect("kv_hint_wait_observed_ms");
+            let load_predicted_ms = make(
+                kv_hint::LOAD_PREDICTED_MS,
+                "Shared-store load time predicted for the pages a prefetch hint carried in milliseconds",
+            )
+            .expect("kv_hint_load_predicted_ms");
+            let load_observed_ms = make(
+                kv_hint::LOAD_OBSERVED_MS,
+                "Shared-store load time the scheduler reported for a prefetch hint in milliseconds",
+            )
+            .expect("kv_hint_load_observed_ms");
+            let decisions_total = IntCounterVec::new(
+                Opts::new(
+                    format!("{}_{}", name_prefix::ROUTER, kv_hint::DECISIONS_TOTAL),
+                    "Prefetch gate decisions by outcome",
+                )
+                .const_label(labels::ROUTER_ID, &router_id),
+                &[labels::DECISION],
+            )
+            .expect("kv_hint_decisions_total");
+            Arc::new(Self {
+                wait_predicted_ms,
+                wait_observed_ms,
+                load_predicted_ms,
+                load_observed_ms,
+                decisions_total,
+            })
+        });
+        registry.register(Box::new(m.wait_predicted_ms.clone()))?;
+        registry.register(Box::new(m.wait_observed_ms.clone()))?;
+        registry.register(Box::new(m.load_predicted_ms.clone()))?;
+        registry.register(Box::new(m.load_observed_ms.clone()))?;
+        registry.register(Box::new(m.decisions_total.clone()))?;
+        Ok(())
+    }
+
+    /// Returns the registered metrics if `register()` was called earlier.
+    pub fn get() -> Option<Arc<Self>> {
+        KV_HINT_METRICS.get().cloned()
     }
 }
 
