@@ -68,7 +68,9 @@ struct SglangHicacheMooncakeConfig {
     key_layout: Option<String>,
 }
 
-fn null_as_empty_string<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<String, D::Error> {
+fn null_as_empty_string<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<String, D::Error> {
     Ok(Option::<String>::deserialize(deserializer)?.unwrap_or_default())
 }
 
