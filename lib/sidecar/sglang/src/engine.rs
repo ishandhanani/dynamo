@@ -1243,7 +1243,7 @@ fn sglang_mooncake_runtime_data(discovery: &Discovery) -> Option<Value> {
     };
     Some(serde_json::json!({
         "backend": "mooncake",
-        "tenant_id": tenant_id,
+        "tenant_id": tenant_id.clone().map(|tenant| tenant.to_string()).unwrap_or_default(),
         "page_size": client::json_u32(info, "page_size").unwrap_or(1).max(1),
         "tp_size": tp_size,
         "pp_size": pp_size,

@@ -44,7 +44,8 @@ const MAX_MOONCAKE_INDEX_ENTRIES: usize = 1_000_000;
 #[derive(Debug, Clone, Deserialize, Serialize)]
 struct SglangHicacheMooncakeConfig {
     backend: String,
-    #[serde(default)]
+    /// Workers publish `null` when SGLang has no tenant; treat it as empty.
+    #[serde(default, deserialize_with = "null_as_empty_string")]
     tenant_id: String,
     page_size: u32,
     tp_size: u32,
@@ -65,6 +66,10 @@ struct SglangHicacheMooncakeConfig {
     /// `hicache` (default) or `linker` for SGLang's direct external linker.
     #[serde(default)]
     key_layout: Option<String>,
+}
+
+fn null_as_empty_string<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<String, D::Error> {
+    Ok(Option::<String>::deserialize(deserializer)?.unwrap_or_default())
 }
 
 impl SglangHicacheMooncakeConfig {
