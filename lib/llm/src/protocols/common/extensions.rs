@@ -954,7 +954,6 @@ mod tests {
         HEADER_CLAUDE_CODE_AGENT_ID, HEADER_CLAUDE_CODE_PARENT_AGENT_ID,
         HEADER_CLAUDE_CODE_SESSION_ID, HEADER_CODEX_PARENT_THREAD_ID, HEADER_CODEX_THREAD_ID,
         HEADER_DYNAMO_PARENT_SESSION_ID, HEADER_DYNAMO_SESSION_FINAL, HEADER_DYNAMO_SESSION_ID,
-        HEADER_OPENCODE_PARENT_SESSION_ID, HEADER_OPENCODE_SESSION_ID,
     };
 
     #[derive(Default)]
@@ -1572,10 +1571,10 @@ mod tests {
             (HEADER_CLAUDE_CODE_SESSION_ID, "claude-run-1", None, None),
             (HEADER_CODEX_THREAD_ID, "codex-root", None, None),
             (
-                HEADER_OPENCODE_SESSION_ID,
-                "opencode-run-1",
-                Some("parent-run-1"),
-                Some("parent-run-1"),
+                HEADER_CODEX_THREAD_ID,
+                "codex-child",
+                Some("codex-root"),
+                Some("codex-root"),
             ),
             (HEADER_DYNAMO_SESSION_ID, "generic-run-1", None, None),
         ];
@@ -1587,7 +1586,7 @@ mod tests {
                 header_value.parse().unwrap(),
             );
             if let Some(parent) = parent_header_value {
-                headers.insert(HEADER_OPENCODE_PARENT_SESSION_ID, parent.parse().unwrap());
+                headers.insert(HEADER_CODEX_PARENT_THREAD_ID, parent.parse().unwrap());
             }
 
             let agent_context = agent_context_from_headers(&headers).unwrap();
@@ -1701,12 +1700,8 @@ mod tests {
             "claude-session".parse().unwrap(),
         );
         headers.insert(HEADER_CODEX_THREAD_ID, "codex-thread".parse().unwrap());
-        headers.insert(
-            HEADER_OPENCODE_SESSION_ID,
-            "opencode-session".parse().unwrap(),
-        );
         // Without a canonical header, affinity falls back to the first matching
-        // agent mapping. Claude precedes Codex and OpenCode in AGENT_HEADER_MAPPINGS.
+        // agent mapping. Claude precedes Codex in AGENT_HEADER_MAPPINGS.
         assert_eq!(
             session_affinity_from_headers(&headers).unwrap().as_str(),
             "claude-session"

@@ -26,7 +26,6 @@ from acp import PROTOCOL_VERSION, spawn_agent_process, text_block
 COMMANDS = {
     "claude": ("npx", "-y", "@agentclientprotocol/claude-agent-acp@0.66.0"),
     "codex": ("npx", "-y", "@agentclientprotocol/codex-acp@1.1.14"),
-    "opencode": ("opencode", "acp", "--pure"),
 }
 
 MODES = {
@@ -34,8 +33,6 @@ MODES = {
     ("claude", "act"): "bypassPermissions",
     ("codex", "verify"): "read-only",
     ("codex", "act"): "agent",
-    ("opencode", "verify"): "plan",
-    ("opencode", "act"): "build",
 }
 
 
@@ -127,13 +124,12 @@ def build_config(args: argparse.Namespace) -> HarnessConfig:
         raise ValueError("--model must not be empty")
     root_url, openai_url = normalize_base_url(args.base_url)
     environment = dict(os.environ)
-    api_key = environment.get(args.api_key_env) or "dummy"
     gateway_url = None
     session_model = args.model
 
     if args.harness == "claude":
         gateway_url = root_url
-    elif args.harness == "codex":
+    else:
         gateway_url = openai_url
         codex_config_raw = environment.get("CODEX_CONFIG", "{}")
         codex_config = json.loads(codex_config_raw)
@@ -145,31 +141,6 @@ def build_config(args: argparse.Namespace) -> HarnessConfig:
         )
         environment["CODEX_CONFIG"] = json.dumps(codex_config)
         environment["NO_BROWSER"] = "1"
-    else:
-        provider = "dynamo-acp"
-        session_model = f"{provider}/{args.model}"
-        environment["OPENCODE_CONFIG_CONTENT"] = json.dumps(
-            {
-                "model": session_model,
-                "enabled_providers": [provider],
-                "provider": {
-                    provider: {
-                        "npm": "@ai-sdk/openai-compatible",
-                        "name": "Dynamo",
-                        "options": {
-                            "baseURL": openai_url,
-                            "apiKey": api_key,
-                        },
-                        "models": {
-                            args.model: {
-                                "name": args.model,
-                            }
-                        },
-                    }
-                },
-            }
-        )
-
     return HarnessConfig(
         command=COMMANDS[args.harness],
         environment=environment,

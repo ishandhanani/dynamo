@@ -16,9 +16,7 @@ sequentially against one server:
    `/v1/responses`.
 4. `claude -p` smoke — forces the Bash tool-call path through
    `/v1/messages` (Anthropic Messages API).
-5. `opencode run --command ...` smoke — forces an OpenCode subtask request
-   through `/v1/chat/completions`.
-6. Optional `claude -p` subagent smoke — collects CI signal for Claude Code
+5. Optional `claude -p` subagent smoke — collects CI signal for Claude Code
    child-agent headers without gating the suite while invocation is calibrated.
 
 All external tooling (bun, node, the OpenResponses suite, and the coding-agent
@@ -54,7 +52,6 @@ from tests.frontend.agent_smoke_inputs import (
     claude_subagent_prompt,
     codex_subagent_prompt,
     write_codex_config,
-    write_opencode_config,
 )
 from tests.serve.common import WORKSPACE_DIR
 from tests.utils.engine_process import EngineConfig, EngineProcess
@@ -68,7 +65,7 @@ sglang_dir = os.environ.get("SGLANG_DIR") or os.path.join(
 COMPLIANCE_MODEL = "Qwen/Qwen3-VL-2B-Instruct"
 
 # Pinned external-tool versions. Bun and node are pinned for reproducibility.
-# The agent CLIs (@openai/codex, @anthropic-ai/claude-code, opencode-ai) float
+# The agent CLIs (@openai/codex, @anthropic-ai/claude-code) float
 # to @latest so we automatically pick up protocol fixes — they're client-side
 # harnesses, not Dynamo surface.
 BUN_VERSION = "1.3.12"
@@ -85,7 +82,6 @@ OPENRESPONSES_SHA = "fa29df5"
 OPENRESPONSES_MAX_OUTPUT_TOKENS = 2048
 CLAUDE_SUBAGENT_NAME = "dynamo-subagent-smoke"
 CLAUDE_SUBAGENT_TIMEOUT_S = 45
-OPENCODE_SUBTASK_COMMAND = "dynamo-subagent-smoke"
 
 # Retry budget for network-touching installs. Exponential backoff starting
 # at 2s; 3 attempts caps the worst-case wait at ~6s before we surface a
@@ -452,17 +448,6 @@ def _claude_cli(_tools_cache, _node_bin) -> Path:
     )
 
 
-@pytest.fixture(scope="session")
-def _opencode_cli(_tools_cache, _node_bin) -> Path:
-    return _install_npm_cli(
-        _tools_cache,
-        _node_bin,
-        package="opencode-ai",
-        binary_name="opencode",
-        slot="opencode",
-    )
-
-
 # ---------------------------------------------------------------------------
 # Live Dynamo frontend compliance test
 # ---------------------------------------------------------------------------
@@ -478,9 +463,9 @@ def _opencode_cli(_tools_cache, _node_bin) -> Path:
 # Budget: tool-install fixtures (~30-60s first session run, near-zero on
 # cache hit) + sglang cold start (30-60s) + bun compliance (up to 180s) +
 # codex exec (up to 180s) + Codex child process (up to 210s) + claude
-# exec (up to 180s) + optional Claude subagent probe (up to 45s) + opencode run
-# (up to 180s) + inter-suite health checks + teardown.
-@pytest.mark.timeout(1095)
+# exec (up to 180s) + optional Claude subagent probe (up to 45s) +
+# inter-suite health checks + teardown.
+@pytest.mark.timeout(915)
 @pytest.mark.frontend_api_surface_compliance
 @pytest.mark.pre_merge
 @pytest.mark.flaky(reruns=2, only_rerun=["did not report the marker file"])
@@ -495,7 +480,6 @@ def test_frontend_api_surface_compliance(
     _openresponses_suite,
     _codex_cli,
     _claude_cli,
-    _opencode_cli,
 ):
     """Assert the frontend passes the upstream OpenResponses compliance suite."""
 
@@ -573,13 +557,6 @@ def test_frontend_api_surface_compliance(
     # ~/.claude during CI / local invocation.
     claude_home = tmp_path / "claude_home"
     claude_home.mkdir()
-    opencode_home = tmp_path / "opencode_home"
-    opencode_home.mkdir()
-    opencode_cwd = tmp_path / "opencode_cwd"
-    opencode_cwd.mkdir()
-    write_opencode_config(
-        opencode_cwd, frontend_port, COMPLIANCE_MODEL, OPENCODE_SUBTASK_COMMAND
-    )
 
     with EngineProcess.from_script(config, request, extra_env=merged_env):
         _run_bun_compliance(_bun_binary, _openresponses_suite, frontend_port)
@@ -612,22 +589,6 @@ def test_frontend_api_surface_compliance(
         )
         _assert_agent_context_in_trace(
             request_trace_path, "claude_code", claude_trace_start
-        )
-        _wait_for_frontend_healthy(frontend_port)
-        opencode_trace_start = _request_trace_line_count(request_trace_path)
-        _run_opencode_smoke(
-            _opencode_cli,
-            _node_bin,
-            opencode_home,
-            opencode_cwd,
-            request_trace_path,
-            opencode_trace_start,
-        )
-        _assert_agent_context_in_trace(
-            request_trace_path, "opencode", opencode_trace_start
-        )
-        _assert_agent_parent_context_in_trace(
-            request_trace_path, "opencode", opencode_trace_start
         )
         claude_subagent_trace_start = _request_trace_line_count(request_trace_path)
         _try_run_claude_subagent_smoke(
@@ -1173,9 +1134,9 @@ def _try_run_claude_subagent_smoke(
 ) -> None:
     """Best-effort Claude subagent probe.
 
-    This intentionally does not fail the suite yet. OpenCode gives us a hard
-    `subtask: true` trigger, but Claude subagent invocation is model-mediated,
-    so keep this as CI telemetry until it is stable enough to gate on.
+    This intentionally does not fail the suite yet. Claude subagent invocation
+    is model-mediated, so keep this as CI telemetry until it is stable enough
+    to gate on.
     """
     try:
         _run_claude_subagent_smoke(
@@ -1298,102 +1259,4 @@ def _run_claude_subagent_smoke(
     logger.warning(
         "Optional Claude subagent smoke did not trace child agent_context; saw %s",
         seen,
-    )
-
-
-def _run_opencode_smoke(
-    opencode_cli: Path,
-    node_bin: Path,
-    opencode_home: Path,
-    cwd: Path,
-    request_trace_path: Path,
-    trace_start_index: int,
-) -> None:
-    """Run `opencode run` until Dynamo traces its live subagent request."""
-    logger.info("Running opencode smoke test against cwd=%s", cwd)
-
-    extra_env = {
-        "HOME": str(opencode_home),
-        "DYNAMO_API_KEY": "sk-none",
-        "NO_PROXY": "127.0.0.1,localhost",
-    }
-    env = _agent_subprocess_env(extra_env, path_prepend=[node_bin])
-
-    cmd = [
-        str(opencode_cli),
-        "run",
-        "--dangerously-skip-permissions",
-        "-m",
-        f"dynamo/{COMPLIANCE_MODEL}",
-        "--dir",
-        str(cwd),
-        "--command",
-        OPENCODE_SUBTASK_COMMAND,
-    ]
-    process = subprocess.Popen(
-        cmd,
-        cwd=str(cwd),
-        env=env,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-    )
-
-    trace_seen = False
-    try:
-        deadline = time.monotonic() + 30
-        while time.monotonic() < deadline:
-            if _trace_contains_agent_parent_context(
-                _read_request_trace_records_since(request_trace_path, trace_start_index)
-            ):
-                trace_seen = True
-                break
-            if process.poll() is not None:
-                break
-            time.sleep(0.2)
-    finally:
-        if process.poll() is None:
-            process.terminate()
-            try:
-                stdout, stderr = process.communicate(timeout=10)
-            except subprocess.TimeoutExpired:
-                process.kill()
-                stdout, stderr = process.communicate()
-        else:
-            stdout, stderr = process.communicate()
-
-    trace_seen = trace_seen or _trace_contains_agent_parent_context(
-        _read_request_trace_records_since(request_trace_path, trace_start_index)
-    )
-    result = subprocess.CompletedProcess(
-        cmd,
-        process.returncode,
-        stdout,
-        stderr,
-    )
-
-    _attach_subprocess_log(
-        name="opencode_smoke.log",
-        cmd=cmd,
-        result=result,
-        extra_env=extra_env,
-        cwd=str(cwd),
-    )
-    if result.stdout:
-        logger.info("opencode stdout:\n%s", result.stdout)
-    if result.stderr:
-        logger.info("opencode stderr:\n%s", result.stderr)
-
-    if trace_seen:
-        return
-
-    if result.returncode != 0:
-        pytest.fail(
-            f"opencode run failed (exit={result.returncode}).\n"
-            f"stdout:\n{result.stdout}\n\nstderr:\n{result.stderr}"
-        )
-
-    pytest.fail(
-        "opencode run exited before Dynamo traced an opencode child agent_context "
-        "with parent_session_id"
     )

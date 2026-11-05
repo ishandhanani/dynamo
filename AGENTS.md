@@ -45,7 +45,7 @@ to it — edit only the canonical copy.
 - `dynamo-frontend-benchmark` — benchmark and profile the frontend against `dynamo.mocker` workers
 - `dynamo-kv-replay-parity` — byte-parity and paired performance campaigns for offline KV-aware replay
 - `dynamo-clone-hotpath-audit` — audit Rust hot-path `.clone()` calls
-- `dynamo-agent-harness` — drive Claude Code, Codex, or OpenCode sessions through a Dynamo endpoint over ACP
+- `dynamo-agent-harness` — drive Claude Code or Codex sessions through a Dynamo endpoint over ACP
 
 **Pull requests, review, and CI:**
 

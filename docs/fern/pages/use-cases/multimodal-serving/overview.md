@@ -164,8 +164,7 @@ scope from these headers, in precedence order:
 
 1. `x-dynamo-session-id`
 2. Recognized agent headers: Claude Code `x-claude-code-session-id` (or
-   `x-claude-code-agent-id` for a child agent), Codex `thread-id`, then OpenCode
-   `x-session-id`
+   `x-claude-code-agent-id` for a child agent), then Codex `thread-id`
 
 Use `x-dynamo-session-id` to provide an explicit Dynamo session identity.
 Dynamo normalizes it and the recognized agent headers into both an

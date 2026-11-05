@@ -1,6 +1,6 @@
 ---
 name: dynamo-agent-harness
-description: Drives persistent Claude Code, Codex, or OpenCode agent sessions through a Dynamo OpenAI/Anthropic-compatible endpoint over Agent Client Protocol (ACP). Use when an agent must delegate a bounded task to another coding-agent harness running a model served by Dynamo, continue that harness across multiple turns, exercise tool calls, or validate agent request traces.
+description: Drives persistent Claude Code or Codex agent sessions through a Dynamo OpenAI/Anthropic-compatible endpoint over Agent Client Protocol (ACP). Use when an agent must delegate a bounded task to another coding-agent harness running a model served by Dynamo, continue that harness across multiple turns, exercise tool calls, or validate agent request traces.
 license: Apache-2.0
 metadata:
   author: Ishan Dhanani <ishandhanani@gmail.com>
@@ -10,7 +10,6 @@ metadata:
     - acp
     - claude-code
     - codex
-    - opencode
 ---
 
 # Dynamo Agent Harness
@@ -28,7 +27,6 @@ Treat the [Agent Harnesses guide](https://github.com/ai-dynamo/dynamo/blob/main/
 
 - A reachable Dynamo endpoint whose `/v1/models` includes the requested model.
 - `uv` and Node.js 22+.
-- `opencode` on `PATH` only when selecting the OpenCode harness.
 - A working directory that limits the delegated agent's scope.
 - `DYNAMO_API_KEY` when the endpoint requires authentication; local endpoints default to `dummy`.
 
@@ -61,7 +59,6 @@ The `ready.session_id` is the harness conversation ID, not the executor's termin
 |---|---|---|
 | `claude` | pinned official Claude ACP adapter | Anthropic Messages |
 | `codex` | pinned official Codex ACP adapter | OpenAI Responses |
-| `opencode` | native `opencode acp --pure` | OpenAI Chat Completions |
 
 The driver hides their incompatible model, mode, gateway-auth, and environment configuration. Do not reproduce those branches in shell wrappers.
 
@@ -97,5 +94,4 @@ Return:
 ## Known behavior
 
 - Codex may warn that custom model metadata is unavailable; the driver fixes reasoning effort to `medium` so unsupported catalog defaults are not sent to Dynamo.
-- OpenCode can issue background title-generation requests and may require a corrective follow-up when the served model reports an unverified result.
 - The adapters are pinned in `scripts/drive_harness.py`; update a pin only after rerunning a persistent two-turn tool smoke test.

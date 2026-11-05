@@ -17,7 +17,7 @@ curl http://localhost:8000/v1/chat/completions \
 
 ## Use One ID Per Reasoning Chain
 
-Use one `session_id` for one agent reasoning and tool-use chain. A root agent, planner, researcher subagent, or OpenCode subtask can each have its own ID. Child sessions can also send a parent ID so traces and replay tools can rebuild the tree. Some academic papers call this a `program_id`.
+Use one `session_id` for one agent reasoning and tool-use chain. A root agent, planner, or researcher subagent can each have its own ID. Child sessions can also send a parent ID so traces and replay tools can rebuild the tree. Some academic papers call this a `program_id`.
 
 <a id="session-id-inputs"></a>
 
@@ -55,12 +55,6 @@ Dynamo also recognizes the current stable identity headers emitted by the follow
     - `thread-id` to `session_id`
     - `x-codex-parent-thread-id` to `parent_session_id` for child threads
 
-  </Tab>
-  <Tab title="OpenCode">
-    Dynamo maps:
-
-    - `x-session-id` to `session_id`
-    - `x-parent-session-id` to `parent_session_id` when present
   </Tab>
   <Tab title="Custom client">
     Send the canonical headers directly:

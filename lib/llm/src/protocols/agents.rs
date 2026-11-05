@@ -13,8 +13,6 @@ pub(crate) const HEADER_CLAUDE_CODE_AGENT_ID: &str = "x-claude-code-agent-id";
 pub(crate) const HEADER_CLAUDE_CODE_PARENT_AGENT_ID: &str = "x-claude-code-parent-agent-id";
 pub(crate) const HEADER_CODEX_THREAD_ID: &str = "thread-id";
 pub(crate) const HEADER_CODEX_PARENT_THREAD_ID: &str = "x-codex-parent-thread-id";
-pub(crate) const HEADER_OPENCODE_SESSION_ID: &str = "x-session-id";
-pub(crate) const HEADER_OPENCODE_PARENT_SESSION_ID: &str = "x-parent-session-id";
 pub const HEADER_DYNAMO_SESSION_ID: &str = "x-dynamo-session-id";
 pub(crate) const HEADER_DYNAMO_PARENT_SESSION_ID: &str = "x-dynamo-parent-session-id";
 pub(crate) const HEADER_DYNAMO_SESSION_FINAL: &str = "x-dynamo-session-final";
@@ -38,12 +36,6 @@ const AGENT_HEADER_MAPPINGS: &[AgentHeaderMapping] = &[
         root_session_header: HEADER_CODEX_THREAD_ID,
         child_session_header: None,
         parent_session_header: Some(HEADER_CODEX_PARENT_THREAD_ID),
-        infer_parent_from_session_for_child: false,
-    },
-    AgentHeaderMapping {
-        root_session_header: HEADER_OPENCODE_SESSION_ID,
-        child_session_header: None,
-        parent_session_header: Some(HEADER_OPENCODE_PARENT_SESSION_ID),
         infer_parent_from_session_for_child: false,
     },
 ];
@@ -115,12 +107,7 @@ fn is_agent_header(name: &str) -> bool {
         || name.starts_with("x-codex-")
         || matches!(
             name,
-            "session-id"
-                | HEADER_CODEX_THREAD_ID
-                | "x-openai-subagent"
-                | "x-openai-memgen-request"
-                | HEADER_OPENCODE_SESSION_ID
-                | HEADER_OPENCODE_PARENT_SESSION_ID
+            "session-id" | HEADER_CODEX_THREAD_ID | "x-openai-subagent" | "x-openai-memgen-request"
         )
 }
 
@@ -243,12 +230,10 @@ mod tests {
             "thread-id",
             "x-openai-subagent",
             "x-openai-memgen-request",
-            "x-session-id",
-            "x-parent-session-id",
         ] {
             headers.insert(name, "value".parse().unwrap());
         }
-        assert_eq!(capture_agent_headers(&headers).len(), 6);
+        assert_eq!(capture_agent_headers(&headers).len(), 4);
     }
 
     #[test]
@@ -262,7 +247,7 @@ mod tests {
             let mut headers = HeaderMap::new();
             headers.insert(HEADER_CLAUDE_CODE_SESSION_ID, "root".parse().unwrap());
             headers.insert("session-id", "unrelated".parse().unwrap());
-            headers.insert(HEADER_OPENCODE_PARENT_SESSION_ID, "parent".parse().unwrap());
+            headers.insert(HEADER_CODEX_PARENT_THREAD_ID, "parent".parse().unwrap());
             if let Some(thread_id) = thread_id {
                 headers.insert(HEADER_CODEX_THREAD_ID, thread_id);
             }
@@ -270,7 +255,7 @@ mod tests {
             assert_eq!(context.session_id, "root");
             assert!(!context.agent_headers.contains_key("session-id"));
             assert_eq!(
-                context.agent_headers[HEADER_OPENCODE_PARENT_SESSION_ID],
+                context.agent_headers[HEADER_CODEX_PARENT_THREAD_ID],
                 ["parent"]
             );
         }

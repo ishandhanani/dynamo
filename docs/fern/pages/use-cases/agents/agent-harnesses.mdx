@@ -86,42 +86,6 @@ bash examples/backends/sglang/launch/agg_agent.sh
     Dynamo uses `x-claude-code-session-id` as the Claude Code session ID. For subagents, Dynamo uses `x-claude-code-agent-id` as the child session ID. Nested subagents use `x-claude-code-parent-agent-id` as the parent; top-level subagents fall back to the root session ID.
 
   </Tab>
-  <Tab title="OpenCode">
-
-    OpenCode uses a project-local JSONC provider config; setting an endpoint environment variable alone is not enough. Create `.opencode/opencode.jsonc` in the project where you run OpenCode:
-
-    ```jsonc
-    {
-      "provider": {
-        "dynamo": {
-          "npm": "@ai-sdk/openai-compatible",
-          "name": "Dynamo",
-          "models": {
-            "zai-org/GLM-4.7-Flash": {
-              "id": "zai-org/GLM-4.7-Flash",
-              "name": "GLM 4.7 Flash"
-            }
-          },
-          "options": {
-            "baseURL": "http://localhost:8000/v1"
-          }
-        }
-      },
-      "permission": {
-        "task": "allow"
-      }
-    }
-    ```
-
-    Run OpenCode with the provider/model pair:
-
-    ```bash
-    opencode -m dynamo/zai-org/GLM-4.7-Flash
-    ```
-
-    Dynamo maps OpenCode's `x-session-id` header to `session_id` and `x-parent-session-id` to `parent_session_id`.
-
-  </Tab>
   <Tab title="OpenClaw">
 
     OpenClaw can use Dynamo through its OpenAI-compatible Responses endpoint. Install the Dynamo provider plugin:
@@ -210,7 +174,7 @@ bash examples/backends/sglang/launch/agg_agent.sh
 
 ## Drive a Harness from Another Agent
 
-Use the repository's `.agents/skills/dynamo-agent-harness` skill when an agent needs to keep a Claude Code, Codex, or OpenCode session open across multiple prompts while Dynamo serves the model. The skill uses Agent Client Protocol (ACP) and injects the provider configuration through the child process environment instead of adding harness configuration files to the delegated worktree.
+Use the repository's `.agents/skills/dynamo-agent-harness` skill when an agent needs to keep a Claude Code or Codex session open across multiple prompts while Dynamo serves the model. The skill uses Agent Client Protocol (ACP) and injects the provider configuration through the child process environment instead of adding harness configuration files to the delegated worktree.
 
 The skill pins the Claude Code and Codex ACP adapters. If a harness release changes the model, endpoint, session header, authentication, or mode configuration, update this page and the skill in the same change after running a persistent two-turn tool smoke test.
 
