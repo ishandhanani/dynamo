@@ -24,7 +24,7 @@ use tokio::time::{Duration, Instant};
 use tokio_util::sync::CancellationToken;
 
 use super::prefill_tracker::PrefillTimeLoad;
-use super::prompt_registry::{PromptRegistry, WorkerLoadSnapshot};
+use super::prompt_registry::{PromptRegistry, WorkerLoadReader, WorkerLoadSnapshot};
 use super::request_maps::{RequestBooking, RequestIndex};
 use super::sharded_lock::ShardedRwLock;
 use super::single::{
@@ -37,7 +37,7 @@ use crate::plugins::worker_selection::WorkerCapacity;
 use crate::protocols::{
     ActiveSequenceEvent, ActiveSequenceEventData, PrefillLoadHint, WorkerId, WorkerWithDpRank,
 };
-use crate::scheduling::policy_config::FullRankCounts;
+use crate::scheduling::policy_config::{BusyThresholds, FullRankCounts};
 use crate::scheduling::{AttemptId, queue::SchedulerBookingDescriptor};
 
 // How often we force expire stale requests across all workers. See the comment
@@ -1330,6 +1330,11 @@ impl<P: SequencePublisher + 'static> ActiveSequencesMultiWorker<P> {
         );
     }
 
+    /// Read ranks' loads one at a time at `decay_now`, without projecting every rank.
+    pub(crate) fn worker_load_reader(&self, decay_now: Instant) -> WorkerLoadReader<'_> {
+        self.prompt_registry.worker_load_reader(decay_now)
+    }
+
     /// Record the capacity each worker's ranks report, so the projection pass can judge a
     /// rank's load against it. Ranks outside the registered topology are ignored; a worker
     /// that reports nothing keeps unreported capacity.
@@ -1344,6 +1349,19 @@ impl<P: SequencePublisher + 'static> ActiveSequencesMultiWorker<P> {
                     .set_worker_capacity(WorkerWithDpRank::new(range.worker_id, dp_rank), capacity);
             }
         }
+    }
+
+    /// Whether any registered rank that `eligible` accepts has booked load within
+    /// `limits`, judged against the capacity recorded by [`Self::set_worker_capacities`].
+    /// True when no rank is eligible.
+    pub(crate) fn any_rank_has_room(
+        &self,
+        limits: &BusyThresholds,
+        decay_now: Instant,
+        eligible: impl FnMut(WorkerWithDpRank) -> bool,
+    ) -> bool {
+        self.prompt_registry
+            .any_rank_has_room(limits, decay_now, eligible)
     }
 
     #[cfg(feature = "bench")]

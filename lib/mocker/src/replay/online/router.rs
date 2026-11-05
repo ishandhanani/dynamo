@@ -381,6 +381,7 @@ impl KvReplayRouter {
                 pinned_worker: None,
                 allowed_worker_ids: None,
                 shared_cache_hits: None,
+                admitted_upstream: false,
             })
             .await?;
         Ok(ReplayPlacement {
@@ -864,19 +865,12 @@ mod tests {
         std::fs::write(
             &path,
             r#"
-default_policy_family: latency
-uncached_isl_buckets:
-  - min_tokens: 0
-    bucket: all
+default_policy_class: latency
 policy_classes:
   - name: latency
-    policy_family: latency
-    cache_bucket: all
     quantum: 1
     prefill_busy_threshold: 0
   - name: batch
-    policy_family: batch
-    cache_bucket: all
     quantum: 4
     prefill_busy_threshold: 1024
 "#,

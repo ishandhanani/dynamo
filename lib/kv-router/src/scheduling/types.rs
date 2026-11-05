@@ -4,8 +4,9 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
 
+use arc_swap::ArcSwapOption;
 use dynamo_tokens::SequenceHash;
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
 use serde::{Deserialize, Serialize};
 
 use super::config::RouterConfigOverride;
@@ -15,9 +16,10 @@ use super::prefill_load::effective_prefill_tokens;
 use crate::kv_hints::{KvTransferCandidates, KvTransferSourceChoice};
 pub use crate::protocols::PotentialLoad;
 use crate::protocols::{
-    LocalBlockHash, RoutingConstraints, SelectionTrace, SharedCacheHits, WorkerAffinityTarget,
-    WorkerConfigLike, WorkerId, WorkerWithDpRank,
+    LocalBlockHash, RoutingConstraints, SelectionLogFields, SelectionTrace, SharedCacheHits,
+    WorkerAffinityTarget, WorkerConfigLike, WorkerId, WorkerWithDpRank,
 };
+use crate::scheduling::policy_config::BusyThresholds;
 use crate::scheduling::policy_queue::QueueRejection;
 use crate::sequences::WorkerLoadProjection;
 
@@ -45,7 +47,7 @@ impl std::fmt::Display for AttemptId {
 }
 
 pub type OverloadedWorkerProvider =
-    Arc<dyn Fn() -> Option<HashSet<WorkerId>> + Send + Sync + 'static>;
+    Arc<dyn Fn() -> Option<Arc<HashSet<WorkerId>>> + Send + Sync + 'static>;
 
 /// Supplies the authoritative set of workers currently available for selection.
 ///
@@ -54,6 +56,64 @@ pub type OverloadedWorkerProvider =
 /// authoritative, so an empty set rejects every candidate.
 pub type WorkerAvailabilityProvider =
     Arc<dyn Fn(&SchedulingRequest) -> Option<Arc<HashSet<WorkerId>>> + Send + Sync + 'static>;
+
+/// Worker IDs hashed with Fx: eligibility probes the available set once per worker on
+/// every admission.
+pub type WorkerIdSet = FxHashSet<WorkerId>;
+
+/// A [`WorkerAvailabilityProvider`] whose sets are converted to [`WorkerIdSet`]s once per
+/// set. The frontend's provider returns the same `Arc` until membership changes; a set
+/// built per request (a LoRA filter) is converted per request.
+pub(crate) struct AvailableWorkerIds {
+    provider: WorkerAvailabilityProvider,
+    /// The last source set and its conversion. Holding the source keeps its address from
+    /// being reused, so a pointer match means the same set.
+    last: ArcSwapOption<(Arc<HashSet<WorkerId>>, Arc<WorkerIdSet>)>,
+}
+
+impl AvailableWorkerIds {
+    pub(crate) fn new(provider: WorkerAvailabilityProvider) -> Self {
+        Self {
+            provider,
+            last: ArcSwapOption::empty(),
+        }
+    }
+
+    pub(crate) fn get(&self, request: &SchedulingRequest) -> Option<Arc<WorkerIdSet>> {
+        let source = (self.provider)(request)?;
+        if let Some(last) = self.last.load().as_deref()
+            && Arc::ptr_eq(&last.0, &source)
+        {
+            return Some(Arc::clone(&last.1));
+        }
+        let converted = Arc::new(source.iter().copied().collect::<WorkerIdSet>());
+        self.last
+            .store(Some(Arc::new((source, Arc::clone(&converted)))));
+        Some(converted)
+    }
+}
+
+/// Room in the worker pool that serves a request after this scheduler admits it: in
+/// disaggregated serving, the decode pool behind a prefill router.
+///
+/// A policy-class queue with a paired pool judges each class's
+/// `decode_busy_threshold_frac` on that pool, alongside its prefill limits on its own
+/// workers, so a request waits until both pools have room. The answer is a coarse
+/// admission gate: the paired pool's own selection still enforces exact eligibility.
+pub trait PairedPoolRoom: Send + Sync + 'static {
+    /// Whether some paired-pool rank that could serve `request` is within `limits`.
+    ///
+    /// `request` is this scheduler's request, so its pin and allowed workers name this
+    /// pool's workers, not the paired pool's. The answer may depend on the request only
+    /// through its `lora_name`: the queue shares one answer per gate pass among a class's
+    /// requests that name no LoRA. Runs on the admission actor's turn, so it must not
+    /// block, await, or message the paired pool's scheduler.
+    fn has_room(&self, request: &SchedulingRequest, limits: &BusyThresholds) -> bool;
+
+    /// A signal that changes whenever the paired pool may have gained room. `None` while
+    /// the pool is not yet available; the queue asks again when it next consults the pool.
+    fn room_changed(&self) -> Option<tokio::sync::watch::Receiver<()>>;
+}
 
 #[derive(Debug, thiserror::Error)]
 pub enum WorkerSelectionPolicyError {
@@ -107,6 +167,9 @@ pub enum KvSchedulerError {
     #[error("pinned worker {worker_id} is not in allowed worker set")]
     PinnedWorkerNotAllowed { worker_id: WorkerId },
 
+    #[error("unknown policy class {0:?}")]
+    UnknownPolicyClass(String),
+
     #[error("endpoint subscriber shutdown")]
     SubscriberShutdown,
 
@@ -120,7 +183,7 @@ pub enum KvSchedulerError {
     RequestClassifierPanicked(String),
 
     #[error("request classifier failed: {0}")]
-    RequestClassifierFailed(Arc<super::ClassifierError>),
+    RequestClassifierFailed(Arc<crate::plugins::request_classifier::ClassifierError>),
 
     #[error("request classifier is already tracking request ID {0:?}")]
     DuplicateClassificationRequestId(String),
@@ -166,6 +229,9 @@ pub struct SchedulingResponse {
     /// Per-candidate costs, present only when the scheduler has a selection
     /// trace spec installed and this selection was admitted.
     pub selection_trace: Option<SelectionTrace>,
+    /// Fields the routing task logs the selection with; see
+    /// [`crate::protocols::WorkerSelectionResult::log_fields`].
+    pub log_fields: Option<SelectionLogFields>,
 }
 
 /// Internal result that pairs a public scheduling response with its attempt identity.
@@ -422,6 +488,11 @@ pub struct ScheduleRequest {
     pub kv_transfer_candidates: Option<KvTransferCandidates>,
     pub retain_kv_transfer_chain: bool,
     pub shared_cache_hits: Option<SharedCacheHits>,
+    /// An upstream hop's policy-class queue already admitted this request, as the prefill
+    /// router does for a disaggregated decode leg. The queue books it directly without
+    /// waiting on its class limits or deadline; selection still applies the host's reject
+    /// thresholds.
+    pub admitted_upstream: bool,
 }
 
 /// Actor-owned admission request.
@@ -485,10 +556,7 @@ impl<'a, C: WorkerConfigLike> SchedulingContext<'a, C> {
         self.request
     }
 
-    pub(crate) fn with_available_workers(
-        mut self,
-        available: Option<&'a HashSet<WorkerId>>,
-    ) -> Self {
+    pub(crate) fn with_available_workers(mut self, available: Option<&'a WorkerIdSet>) -> Self {
         self.eligibility = self.eligibility.with_available_workers(available);
         self
     }
@@ -718,5 +786,25 @@ mod tests {
                 expected
             );
         }
+    }
+
+    #[test]
+    fn available_worker_ids_convert_each_set_once() {
+        let source = Arc::new(ArcSwapOption::from_pointee(HashSet::from([1, 2])));
+        let ids = AvailableWorkerIds::new({
+            let source = Arc::clone(&source);
+            Arc::new(move |_: &SchedulingRequest| source.load_full())
+        });
+        let request = request_with_decode_load(16, None, 0, 0, WorkerWithDpRank::from_worker_id(1));
+
+        let first = ids.get(&request).unwrap();
+        assert_eq!(*first, WorkerIdSet::from_iter([1, 2]));
+        assert!(Arc::ptr_eq(&first, &ids.get(&request).unwrap()));
+
+        source.store(Some(Arc::new(HashSet::from([3]))));
+        assert_eq!(*ids.get(&request).unwrap(), WorkerIdSet::from_iter([3]));
+
+        source.store(None);
+        assert!(ids.get(&request).is_none());
     }
 }
