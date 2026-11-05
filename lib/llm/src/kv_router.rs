@@ -606,6 +606,8 @@ pub struct KvRouter {
     session_prefix_index: Option<Arc<SessionPrefixIndexer>>,
     /// Out-of-band KV cache hints to this router's workers, when a consumer is enabled.
     hint_controller: Option<dynamo_kvm::HintController>,
+    /// Pins a request's pages when its response calls a tool, when `DYN_KVM_PIN_ENDPOINT` is set.
+    tool_call_pinner: Option<Arc<hints::ToolCallPinner>>,
     /// Wake-up header dedup state, when `DYN_KVM_WAKEUP_HEADER` is on.
     wakeup_dedup: Option<hints::WakeupDedup>,
 }
@@ -901,6 +903,8 @@ impl KvRouter {
         .await?;
         request_leases.set_scheduler(selection.scheduler().booking_cleanup());
         let hint_controller = hints::hint_controller_for(workers_with_configs.clone(), block_size);
+        let tool_call_pinner =
+            hints::tool_call_pinner(hint_controller.as_ref(), workers_with_configs.clone());
         if let Some(trigger) = hints::prefetch_trigger(hint_controller.as_ref()) {
             let lead_ms = trigger.lead.as_millis() as u64;
             let on_queue = trigger.on_queue;
@@ -938,6 +942,7 @@ impl KvRouter {
             request_leases,
             shared_cache,
             hint_controller,
+            tool_call_pinner,
             wakeup_dedup: hints::wakeup_dedup_from_env(),
             teardown_task_guard: None,
             session_prefix_index,
@@ -1281,6 +1286,10 @@ impl KvRouter {
     /// The hint controller for this router's workers, when enabled.
     pub fn hint_controller(&self) -> Option<&dynamo_kvm::HintController> {
         self.hint_controller.as_ref()
+    }
+
+    pub(crate) fn tool_call_pinner(&self) -> Option<&Arc<hints::ToolCallPinner>> {
+        self.tool_call_pinner.as_ref()
     }
 
     /// Recent wake-up prefetches by session tag, when the wake-up header is enabled.

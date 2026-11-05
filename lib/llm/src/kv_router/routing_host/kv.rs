@@ -73,6 +73,23 @@ impl RoutingHost {
         .await?
     }
 
+    /// Let the preprocessor pin this request's pages on `worker` if the response
+    /// calls a tool; see [`crate::kv_router::hints::ToolCallPinSlot`].
+    fn arm_tool_call_pin(&self, request: &SingleIn<PreprocessedRequest>, worker: WorkerWithDpRank) {
+        let Some(pinner) = self.kv_router().tool_call_pinner() else {
+            return;
+        };
+        if let Ok(slot) = request.get::<crate::kv_router::hints::ToolCallPinSlot>(
+            crate::kv_router::hints::TOOL_CALL_PIN_CONTEXT_KEY,
+        ) {
+            pinner.arm(
+                &slot,
+                worker.worker_id,
+                Arc::from(request.token_ids.as_slice()),
+            );
+        }
+    }
+
     async fn select_request(
         &self,
         request: &SingleIn<PreprocessedRequest>,
@@ -292,6 +309,7 @@ impl RoutingHost {
             .select_with_request_lifecycle(request, phase, select)
             .await?;
         drop(route_guard);
+        self.arm_tool_call_pin(request, selection.worker);
         Ok(RoutePlan {
             phase,
             cleanup: KvRequestCleanup::new(
