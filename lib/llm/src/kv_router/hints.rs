@@ -286,11 +286,13 @@ impl PrefetchHintSink for ControllerSink {
     }
 }
 
-/// The deadline-led prefetch trigger for `controller`, when `DYN_KVM_PREFETCH_LEAD_MS` is set.
+/// The deadline-led prefetch trigger for `controller`, when `DYN_KVM_PREFETCH_LEAD_MS` is set;
+/// `DYN_KVM_PREFETCH_ON_QUEUE` additionally fires it for every parked request at enqueue.
 pub fn prefetch_trigger(controller: Option<&HintController>) -> Option<PrefetchTrigger> {
     let lead = env_duration_ms(env_llm::DYN_KVM_PREFETCH_LEAD_MS)?;
     Some(PrefetchTrigger {
         lead,
+        on_queue: env_is_truthy(env_llm::DYN_KVM_PREFETCH_ON_QUEUE),
         sink: Arc::new(ControllerSink(controller?.clone())),
     })
 }

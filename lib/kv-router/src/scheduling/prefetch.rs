@@ -5,7 +5,7 @@
 //!
 //! A queued request can have its KV pages loaded onto a worker before it is
 //! admitted: `lead` before its `due_at` (or at enqueue, for a request flagged
-//! `prefetch_on_arrival`), while the entry is still queued, the actor selects a
+//! `prefetch_on_arrival` or when the trigger fires `on_queue`), while the entry is still queued, the actor selects a
 //! worker without booking and hands the request's shared-store-resident prefix
 //! to the sink. When a hint was sent, that worker becomes the entry's
 //! `affinity_target`, with that field's usual semantics: the default selector
@@ -29,5 +29,8 @@ pub trait PrefetchHintSink: Send + Sync {
 pub struct PrefetchTrigger {
     /// How long before an entry's `due_at` the hint fires.
     pub lead: Duration,
+    /// Fire at enqueue for every parked entry, deadline or not: a request that
+    /// is waiting anyway can have its prefix loaded while it waits.
+    pub on_queue: bool,
     pub sink: Arc<dyn PrefetchHintSink>,
 }

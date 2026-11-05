@@ -475,6 +475,11 @@ pub mod llm {
     /// router sends a prefetch hint for it. `0` or unset disables the deadline trigger.
     pub const DYN_KVM_PREFETCH_LEAD_MS: &str = "DYN_KVM_PREFETCH_LEAD_MS";
 
+    /// When truthy, the router also sends a prefetch hint for every request it parks in
+    /// the admission queue, at enqueue, whether or not the request carries a due time.
+    /// Requires `DYN_KVM_PREFETCH_LEAD_MS`. Disabled by default.
+    pub const DYN_KVM_PREFETCH_ON_QUEUE: &str = "DYN_KVM_PREFETCH_ON_QUEUE";
+
     /// Serve `POST /v1/hints/prefetch` on the frontend. Disabled by default; truthy
     /// values enable it.
     pub const DYN_ENABLE_KVM_HINTS_API: &str = "DYN_ENABLE_KVM_HINTS_API";
@@ -1282,6 +1287,7 @@ mod tests {
             llm::DYN_FRONTEND_ADMIN_HOST,
             llm::DYN_FRONTEND_ADMIN_PORT,
             llm::DYN_KVM_PREFETCH_LEAD_MS,
+            llm::DYN_KVM_PREFETCH_ON_QUEUE,
             llm::DYN_ENABLE_KVM_HINTS_API,
             llm::DYN_KVM_WAKEUP_HEADER,
             llm::DYN_KVM_WAKEUP_DEDUP_MS,

@@ -1519,8 +1519,10 @@ impl<
         }
         tracing::trace!(policy_class = class.name, "ordering request");
         let mut queue_metadata = queue_metadata;
-        queue_metadata.prefetch_on_arrival =
-            request.prefetch_on_arrival && self.prefetch_trigger.get().is_some();
+        queue_metadata.prefetch_on_arrival = self
+            .prefetch_trigger
+            .get()
+            .is_some_and(|trigger| request.prefetch_on_arrival || trigger.on_queue);
         let priority_jump = request.priority_jump;
         let strict_priority = request.strict_priority;
         let placement = request
@@ -3579,6 +3581,7 @@ policy_classes:
         let (queue, slots) = make_queue(2, 16, 64, Some(0.0));
         let sink = Arc::new(RecordingSink(Mutex::new(Vec::new())));
         assert!(queue.set_prefetch_trigger(PrefetchTrigger {
+            on_queue: false,
             lead: Duration::from_secs(2),
             sink: sink.clone(),
         }));
@@ -3649,6 +3652,7 @@ policy_classes:
         let (queue, slots) = make_queue(2, 16, 64, Some(0.0));
         let sink = Arc::new(RecordingSink(Mutex::new(Vec::new())));
         assert!(queue.set_prefetch_trigger(PrefetchTrigger {
+            on_queue: false,
             lead: Duration::from_secs(2),
             sink: sink.clone(),
         }));
