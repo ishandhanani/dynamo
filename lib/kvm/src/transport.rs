@@ -320,14 +320,23 @@ pub struct ZmqStorePinSink {
 }
 
 impl ZmqStorePinSink {
-    /// `send_hwm` bounds the frames ZMQ buffers for a slow or absent store.
+    /// `send_hwm` bounds the frames ZMQ buffers for a slow or absent store. The
+    /// socket connects now, so the connection is up before the first pin: with
+    /// `ZMQ_IMMEDIATE` a send fails until it is.
     pub fn new(endpoint: impl Into<String>, send_hwm: i32) -> Self {
-        Self {
+        let sink = Self {
             endpoint: endpoint.into(),
             socket: std::sync::Mutex::new(None),
             context: zmq::Context::new(),
             send_hwm,
+        };
+        match sink.open() {
+            Ok(socket) => *sink.socket.lock().unwrap() = Some(socket),
+            Err(error) => {
+                tracing::warn!(endpoint = %sink.endpoint, %error, "store pin socket not opened; retrying on the first pin")
+            }
         }
+        sink
     }
 
     fn open(&self) -> anyhow::Result<zmq::Socket> {
