@@ -416,6 +416,7 @@ impl<Resp> RetryManager<Resp>
 where
     Resp: Data + HasTokenIds,
 {
+    #[cfg(test)]
     #[allow(clippy::too_many_arguments)]
     pub async fn build(
         context: Arc<dyn AsyncEngineContext>,
