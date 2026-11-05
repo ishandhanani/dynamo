@@ -487,6 +487,18 @@ pub mod llm {
     /// `x-dyn-wakeup` session tag is skipped. Default `2000`.
     pub const DYN_KVM_WAKEUP_DEDUP_MS: &str = "DYN_KVM_WAKEUP_DEDUP_MS";
 
+    /// Pin a request's KV pages in the shared store (Mooncake) when its response calls
+    /// a tool, so they survive while the session waits on the tool. The value is the
+    /// Mooncake master's hint socket (`--hint_zmq_endpoint`), for example
+    /// `tcp://mooncake-master:5558`; unset disables tool-call pins.
+    pub const DYN_KVM_PIN_ENDPOINT: &str = "DYN_KVM_PIN_ENDPOINT";
+
+    /// How long, in milliseconds, a tool-call pin keeps the pages. Default `120000`.
+    pub const DYN_KVM_PIN_TTL_MS: &str = "DYN_KVM_PIN_TTL_MS";
+
+    /// Eviction priority of tool-call pins; higher is kept longer. Default `1`.
+    pub const DYN_KVM_PIN_PRIORITY: &str = "DYN_KVM_PIN_PRIORITY";
+
     /// Hints waiting for a sender slot before new ones are dropped. Default `256`.
     pub const DYN_KVM_QUEUE_DEPTH: &str = "DYN_KVM_QUEUE_DEPTH";
 

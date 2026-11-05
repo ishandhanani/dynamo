@@ -65,6 +65,30 @@ struct SglangHicacheMooncakeConfig {
     /// `hicache` (default) or `linker` for SGLang's direct external linker.
     #[serde(default)]
     key_layout: Option<String>,
+    /// The worker's Mooncake objects as SGLang describes them (`hicache_object_layout`
+    /// in its server info): every pool's per-page key suffixes and which pages carry
+    /// them. Lets the router name every object of a page, for example to pin it.
+    #[serde(default)]
+    object_layout: Option<MooncakeObjectLayout>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+struct MooncakeObjectLayout {
+    pools: Vec<MooncakeObjectPool>,
+    /// Prepended as `{key_prefix}_` to every key when present, as SGLang's `_tag_keys`.
+    #[serde(default)]
+    key_prefix: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+struct MooncakeObjectPool {
+    pool: String,
+    /// Appended to `{prefix}_{page_hash}`, one object per suffix.
+    suffixes: Vec<String>,
+    /// `all_pages`, or `trailing_pages` for state kept only on a request's last pages.
+    hit_policy: String,
+    #[serde(default)]
+    trailing_pages: Option<u32>,
 }
 
 impl SglangHicacheMooncakeConfig {
@@ -81,6 +105,7 @@ impl SglangHicacheMooncakeConfig {
             && self.extra_backend_tag == other.extra_backend_tag
             && self.key_prefix == other.key_prefix
             && self.key_layout == other.key_layout
+            && self.object_layout == other.object_layout
     }
 
     fn key_layout(&self) -> MooncakeKeyLayout {
@@ -767,6 +792,40 @@ impl SharedKvCache for HicacheSharedKvCache {
     }
 }
 
+/// The tenant and every Mooncake object key under which `worker_id` stores (or will
+/// store) the full pages of `tokens`, from the object layout the worker published.
+/// `None` when the worker publishes no Mooncake config or no object layout.
+pub(crate) fn mooncake_pin_keys(
+    worker_id: WorkerId,
+    runtime_config: &ModelRuntimeConfig,
+    tokens: &[u32],
+) -> Option<(String, Vec<String>)> {
+    let config = mooncake_config_from_runtime(worker_id, runtime_config)?;
+    let layout = config.object_layout.as_ref()?;
+    let pages = logical_page_hashes(tokens, config.page_size, config.is_eagle);
+    Some((config.tenant_id().to_string(), object_keys(&pages, layout)))
+}
+
+fn object_keys(pages: &[String], layout: &MooncakeObjectLayout) -> Vec<String> {
+    let mut keys = Vec::new();
+    for (index, page_hash) in pages.iter().enumerate() {
+        let base = maybe_prefix_key(page_hash, layout.key_prefix.as_deref());
+        for pool in &layout.pools {
+            let carried = match pool.hit_policy.as_str() {
+                "trailing_pages" => {
+                    let window = pool.trailing_pages.unwrap_or(1) as usize;
+                    index + window >= pages.len()
+                }
+                _ => true,
+            };
+            if carried {
+                keys.extend(pool.suffixes.iter().map(|suffix| format!("{base}{suffix}")));
+            }
+        }
+    }
+    keys
+}
+
 fn mooncake_config_from_runtime(
     worker_id: WorkerId,
     runtime_config: &ModelRuntimeConfig,
@@ -933,6 +992,7 @@ mod tests {
             key_prefix: None,
             kv_events_endpoint: Some("tcp://127.0.0.1:5557".to_string()),
             key_layout: None,
+            object_layout: None,
         }
     }
 
@@ -2043,5 +2103,34 @@ mod tests {
 
         assert!(hits.ranges.is_empty());
         assert_eq!(hits.total_hits, 0);
+    }
+
+    #[test]
+    fn object_keys_follow_the_published_pools() {
+        let layout: MooncakeObjectLayout = serde_json::from_value(serde_json::json!({
+            "key_prefix": "deepseek-ai-DeepSeek-V4-Flash",
+            "pools": [
+                {"pool": "kv", "suffixes": ["_cp0_pp0_k"], "hit_policy": "all_pages"},
+                {"pool": "swa", "suffixes": ["_cp0_pp0_swa"], "hit_policy": "trailing_pages",
+                 "trailing_pages": 1}
+            ]
+        }))
+        .unwrap();
+        let pages = vec!["a".repeat(64), "b".repeat(64)];
+        let prefix = "deepseek-ai-DeepSeek-V4-Flash";
+        assert_eq!(
+            object_keys(&pages, &layout),
+            vec![
+                format!("{prefix}_{}_cp0_pp0_k", pages[0]),
+                format!("{prefix}_{}_cp0_pp0_k", pages[1]),
+                format!("{prefix}_{}_cp0_pp0_swa", pages[1]),
+            ]
+        );
+        // Each key names the page the router already tracks.
+        let first = object_keys(&pages, &layout)[0].clone();
+        assert_eq!(
+            mooncake_page(&first).unwrap().logical_key,
+            format!("{prefix}_{}", pages[0])
+        );
     }
 }

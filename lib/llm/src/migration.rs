@@ -326,7 +326,12 @@ where
             .get_optional::<SessionAffinityId>(SESSION_AFFINITY_CONTEXT_KEY)
             .map_err(Error::msg)?
             .map(|session_id| session_id.as_ref().clone());
-        let retry_manager = RetryManager::build(
+        let tool_call_pin = context
+            .get::<crate::kv_router::hints::ToolCallPinSlot>(
+                crate::kv_router::hints::TOOL_CALL_PIN_CONTEXT_KEY,
+            )
+            .ok();
+        let retry_manager = RetryManager::build_with_tool_call_pin(
             engine_ctx,
             context.metadata().clone(),
             preprocessed_request,
@@ -336,6 +341,7 @@ where
             self.model_name.clone(),
             self.metrics.clone(),
             session_affinity,
+            tool_call_pin,
         )
         .await?;
         let response_stream = stream::unfold(retry_manager, move |mut retry_manager| async move {
@@ -371,6 +377,8 @@ where
     metadata: BTreeMap<String, String>,
     request: PreprocessedRequest,
     session_affinity: Option<SessionAffinityId>,
+    /// The preprocessor's tool-call pin slot, carried to every attempt's context.
+    tool_call_pin: Option<Arc<crate::kv_router::hints::ToolCallPinSlot>>,
     next_generate: ServerStreamingEngine<PreprocessedRequest, Annotated<Resp>>,
     next_stream: Option<ManyOut<Annotated<Resp>>>,
     attempts: AttemptBudget,
@@ -412,6 +420,35 @@ where
     pub async fn build(
         context: Arc<dyn AsyncEngineContext>,
         metadata: BTreeMap<String, String>,
+        preprocessed_request: PreprocessedRequest,
+        next: ServerStreamingEngine<PreprocessedRequest, Annotated<Resp>>,
+        retries_left: u32,
+        max_seq_len: Option<u32>,
+        model_name: Arc<String>,
+        metrics: Arc<Metrics>,
+        session_affinity: Option<SessionAffinityId>,
+    ) -> Result<Self> {
+        Self::build_with_tool_call_pin(
+            context,
+            metadata,
+            preprocessed_request,
+            next,
+            retries_left,
+            max_seq_len,
+            model_name,
+            metrics,
+            session_affinity,
+            None,
+        )
+        .await
+    }
+
+    /// [`Self::build`], carrying the preprocessor's tool-call pin slot to every
+    /// attempt, the first included.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn build_with_tool_call_pin(
+        context: Arc<dyn AsyncEngineContext>,
+        metadata: BTreeMap<String, String>,
         mut preprocessed_request: PreprocessedRequest,
         next: ServerStreamingEngine<PreprocessedRequest, Annotated<Resp>>,
         mut retries_left: u32,
@@ -419,6 +456,7 @@ where
         model_name: Arc<String>,
         metrics: Arc<Metrics>,
         session_affinity: Option<SessionAffinityId>,
+        tool_call_pin: Option<Arc<crate::kv_router::hints::ToolCallPinSlot>>,
     ) -> Result<Self> {
         // TODO: prompt_embeds take precedence over replayed token_ids. Disable migration for
         // embedding prompts until a retry can represent an embedding-based continuation.
@@ -473,6 +511,7 @@ where
             metadata,
             request: preprocessed_request,
             session_affinity,
+            tool_call_pin,
             next_generate: next,
             next_stream: None,
             attempts: AttemptBudget::new(retries_left),
@@ -605,6 +644,12 @@ where
             );
             if let Some(session_affinity) = self.session_affinity.as_ref() {
                 request.insert(SESSION_AFFINITY_CONTEXT_KEY, session_affinity.clone());
+            }
+            if let Some(slot) = self.tool_call_pin.as_ref() {
+                request.insert_arc(
+                    crate::kv_router::hints::TOOL_CALL_PIN_CONTEXT_KEY,
+                    Arc::clone(slot),
+                );
             }
             let attempt_context = request.context();
             self.context.link_child(attempt_context.clone());

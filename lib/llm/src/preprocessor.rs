@@ -8719,7 +8719,17 @@ impl
         }
 
         // repack the common completion request
-        let common_request = context.map(|_| common_request);
+        let mut common_request = context.map(|_| common_request);
+        // An empty slot the router arms with the worker it routes to; fired below on
+        // the response's first tool call.
+        let tool_call_pin = crate::kv_router::hints::tool_call_pins_enabled()
+            .then(|| Arc::new(crate::kv_router::hints::ToolCallPinSlot::default()));
+        if let Some(slot) = &tool_call_pin {
+            common_request.insert_arc(
+                crate::kv_router::hints::TOOL_CALL_PIN_CONTEXT_KEY,
+                Arc::clone(slot),
+            );
+        }
 
         // create a stream of annotations this will be prepend to the response stream
         let annotations: Vec<Annotated<NvCreateChatCompletionStreamResponse>> = annotations
@@ -8797,6 +8807,9 @@ impl
             &self.tokenizer,
             &self.speculative_prefill_tasks,
         );
+
+        // Step 6: Pin the request's pages in the shared store on its first tool call.
+        let final_stream = crate::kv_router::hints::fire_on_tool_call(final_stream, tool_call_pin);
 
         let final_stream =
             crate::request_trace::wrap_chat_request_end_stream(final_stream, trace_state);

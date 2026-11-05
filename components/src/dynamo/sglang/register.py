@@ -558,6 +558,20 @@ def _get_mooncake_runtime_data(server_args: ServerArgs) -> Optional[dict[str, An
     }
 
 
+def _scheduler_object_layout(engine: Any) -> Optional[dict[str, Any]]:
+    """The ``hicache_object_layout`` SGLang reports at startup, when it is enabled."""
+    try:
+        info = engine._scheduler_init_result.scheduler_infos[0]
+    except (AttributeError, IndexError):
+        return None
+    layout = info.get("hicache_object_layout") or {}
+    if not layout.get("enabled"):
+        if layout.get("reason"):
+            logging.info(f"Mooncake object layout not published: {layout['reason']}")
+        return None
+    return layout.get("hicache_object_layout")
+
+
 def _eagle_enabled_for(speculative_algorithm: Optional[str]) -> bool:
     """Whether to publish ``ModelRuntimeConfig.enable_eagle`` for this speculative algorithm.
 
@@ -753,6 +767,13 @@ async def get_runtime_config(
             )
 
     mooncake_runtime_data = _get_mooncake_runtime_data(server_args)
+    if mooncake_runtime_data is not None and engine is not None:
+        # The scheduler describes its Mooncake objects (pools, per-pool key suffixes
+        # and which pages carry them) with the same key builders as its writes, so
+        # the router can name every object of a page, for example to pin it.
+        layout = _scheduler_object_layout(engine)
+        if layout is not None:
+            mooncake_runtime_data["object_layout"] = layout
     if mooncake_runtime_data is not None:
         try:
             runtime_config.set_engine_specific(

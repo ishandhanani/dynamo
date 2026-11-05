@@ -5,8 +5,10 @@
 //!
 //! A router builds one [`HintController`] over its workers when a hint consumer is
 //! enabled: `DYN_KVM_PREFETCH_LEAD_MS` (deadline-led prefetch from the admission
-//! queue), `DYN_ENABLE_KVM_HINTS_API` (the `POST /v1/hints/prefetch` route), or
-//! `DYN_KVM_WAKEUP_HEADER` (prefetch at enqueue for requests carrying `x-dyn-wakeup`).
+//! queue), `DYN_ENABLE_KVM_HINTS_API` (the `POST /v1/hints/prefetch` route),
+//! `DYN_KVM_WAKEUP_HEADER` (prefetch at enqueue for requests carrying `x-dyn-wakeup`),
+//! or `DYN_KVM_PIN_ENDPOINT` (pin a request's pages in the shared store when its
+//! response calls a tool; see [`ToolCallPinSlot`]).
 //! Hints go straight to each worker's scheduler over the ZMQ endpoint the worker
 //! publishes in its runtime config as [`HINT_ZMQ_ENDPOINT_KEY`]. Every environment
 //! knob is read here; `dynamo-kvm` itself reads none.
@@ -20,7 +22,8 @@ use axum::http::HeaderMap;
 use dynamo_kv_router::protocols::WorkerWithDpRank;
 use dynamo_kv_router::scheduling::{PrefetchHintSink, PrefetchTrigger};
 use dynamo_kvm::{
-    HintConfig, HintController, HintEndpointResolver, HintEndpoints, WorkerTarget, ZmqHintTransport,
+    HintConfig, HintController, HintEndpointResolver, HintEndpoints, PinHint, WorkerTarget,
+    ZmqHintTransport, ZmqStorePinSink,
 };
 use dynamo_runtime::config::env_is_truthy;
 use dynamo_runtime::config::environment_names::llm as env_llm;
@@ -244,7 +247,8 @@ pub(crate) fn worker_target(worker: WorkerWithDpRank) -> WorkerTarget {
 pub fn hint_controller_for(configs: RuntimeConfigWatch) -> Option<HintController> {
     let enabled = env_duration_ms(env_llm::DYN_KVM_PREFETCH_LEAD_MS).is_some()
         || env_is_truthy(env_llm::DYN_ENABLE_KVM_HINTS_API)
-        || wakeup_header_enabled();
+        || wakeup_header_enabled()
+        || pin_endpoint().is_some();
     if !enabled {
         return None;
     }
@@ -265,7 +269,155 @@ pub fn hint_controller_for(configs: RuntimeConfigWatch) -> Option<HintController
         timeout_ms = config.timeout.as_millis() as u64,
         "KV hint controller enabled (ZMQ to scheduler)"
     );
-    Some(HintController::new(config, transport))
+    let controller = HintController::new(config, transport);
+    Some(match pin_endpoint() {
+        Some(endpoint) => {
+            tracing::info!(%endpoint, "KV pin hints enabled (ZMQ to the shared store)");
+            controller.with_pin_sink(Arc::new(ZmqStorePinSink::new(endpoint, PIN_SEND_HWM)))
+        }
+        None => controller,
+    })
+}
+
+/// Frames a slow or absent store may hold before pins fail; pins are advisory.
+const PIN_SEND_HWM: i32 = 1_000;
+const DEFAULT_PIN_TTL: Duration = Duration::from_secs(120);
+const DEFAULT_PIN_PRIORITY: u32 = 1;
+
+/// The shared store's hint socket (`DYN_KVM_PIN_ENDPOINT`), read once per process.
+fn pin_endpoint() -> Option<&'static str> {
+    static ENDPOINT: OnceLock<Option<String>> = OnceLock::new();
+    ENDPOINT
+        .get_or_init(|| {
+            std::env::var(env_llm::DYN_KVM_PIN_ENDPOINT)
+                .ok()
+                .filter(|endpoint| !endpoint.trim().is_empty())
+        })
+        .as_deref()
+}
+
+/// Whether the frontend pins a request's pages when its response calls a tool.
+pub fn tool_call_pins_enabled() -> bool {
+    pin_endpoint().is_some()
+}
+
+/// Request-context key of a request's [`ToolCallPinSlot`].
+pub const TOOL_CALL_PIN_CONTEXT_KEY: &str = "kv_hint_tool_call_pin";
+
+/// One request's tool-call pin. The preprocessor puts an empty slot in the request
+/// context, the router arms it with the worker it routed to, and the preprocessor
+/// fires it when the response first carries a tool call: the session is about to
+/// wait on a tool, so its pages should outlive the wait. Keys are computed on fire,
+/// off the routing path.
+#[derive(Default)]
+pub struct ToolCallPinSlot {
+    pin: OnceLock<Box<dyn Fn() + Send + Sync>>,
+}
+
+impl ToolCallPinSlot {
+    pub(crate) fn arm(&self, pin: impl Fn() + Send + Sync + 'static) {
+        let _ = self.pin.set(Box::new(pin));
+    }
+
+    /// Send the armed pin, if the router armed one.
+    pub fn fire(&self) {
+        match self.pin.get() {
+            Some(pin) => pin(),
+            None => tracing::debug!("tool call seen; no pin armed for this request"),
+        }
+    }
+}
+
+type ChatChunk = dynamo_runtime::protocols::annotated::Annotated<
+    crate::protocols::openai::chat_completions::NvCreateChatCompletionStreamResponse,
+>;
+
+/// Fire `slot` once, on the first chunk whose delta carries a tool call.
+pub fn fire_on_tool_call<S>(
+    stream: S,
+    slot: Option<Arc<ToolCallPinSlot>>,
+) -> std::pin::Pin<Box<dyn futures::Stream<Item = ChatChunk> + Send>>
+where
+    S: futures::Stream<Item = ChatChunk> + Send + 'static,
+{
+    use futures::StreamExt;
+    let Some(slot) = slot else {
+        return Box::pin(stream);
+    };
+    let mut fired = false;
+    Box::pin(stream.inspect(move |response| {
+        if fired {
+            return;
+        }
+        let calls_tool = response.data.as_ref().is_some_and(|chunk| {
+            chunk.inner.choices.iter().any(|choice| {
+                choice
+                    .delta
+                    .tool_calls
+                    .as_ref()
+                    .is_some_and(|calls| !calls.is_empty())
+            })
+        });
+        if calls_tool {
+            fired = true;
+            slot.fire();
+        }
+    }))
+}
+
+/// Builds tool-call pins for one router's workers.
+pub struct ToolCallPinner {
+    controller: HintController,
+    configs: RuntimeConfigWatch,
+    ttl: Duration,
+    priority: u32,
+}
+
+impl ToolCallPinner {
+    /// Arm `slot` to pin the full pages of `tokens` on `worker_id`.
+    pub(crate) fn arm(
+        self: &Arc<Self>,
+        slot: &ToolCallPinSlot,
+        worker_id: u64,
+        tokens: Arc<[u32]>,
+    ) {
+        let pinner = Arc::clone(self);
+        slot.arm(move || pinner.pin(worker_id, &tokens));
+    }
+
+    fn pin(&self, worker_id: u64, tokens: &[u32]) {
+        let keys = self.configs.borrow().get(&worker_id).and_then(|runtime| {
+            crate::kv_router::shared_cache::mooncake_pin_keys(worker_id, runtime, tokens)
+        });
+        let Some((tenant, keys)) = keys else {
+            tracing::debug!(
+                worker_id,
+                "tool-call pin skipped: worker publishes no Mooncake object layout"
+            );
+            return;
+        };
+        tracing::debug!(worker_id, keys = keys.len(), "tool-call pin");
+        self.controller.pin(PinHint {
+            tenant,
+            keys: keys.into(),
+            ttl: self.ttl,
+            priority: self.priority,
+        });
+    }
+}
+
+/// The tool-call pinner for `controller`, when `DYN_KVM_PIN_ENDPOINT` is set.
+pub fn tool_call_pinner(
+    controller: Option<&HintController>,
+    configs: RuntimeConfigWatch,
+) -> Option<Arc<ToolCallPinner>> {
+    pin_endpoint()?;
+    Some(Arc::new(ToolCallPinner {
+        controller: controller?.clone(),
+        configs,
+        ttl: env_duration_ms(env_llm::DYN_KVM_PIN_TTL_MS).unwrap_or(DEFAULT_PIN_TTL),
+        priority: env_parsed(env_llm::DYN_KVM_PIN_PRIORITY, DEFAULT_PIN_PRIORITY),
+    }))
 }
 
 /// The wake-up header's dedup state, when `DYN_KVM_WAKEUP_HEADER` is on.
