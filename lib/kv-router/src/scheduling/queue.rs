@@ -808,7 +808,7 @@ struct SchedulerQueueActor<
     pending: PolicyQueue<QueuedRequest>,
     class_timers: ClassTimers,
     cleanup: Arc<AdmissionCleanup>,
-    capacity_updates: Option<Arc<CapacityUpdates>>,
+    capacity_updates: Arc<CapacityUpdates>,
     capacity_workers: FxHashSet<WorkerWithDpRank>,
     profile: Arc<PolicyProfile>,
     pending_count: Arc<AtomicUsize>,
@@ -1030,7 +1030,7 @@ impl<
             pending,
             class_timers: ClassTimers::new(profile.classes().len()),
             cleanup: Arc::clone(&cleanup),
-            capacity_updates: Some(Arc::clone(&actor_wake)),
+            capacity_updates: Arc::clone(&actor_wake),
             capacity_workers: FxHashSet::default(),
             profile: Arc::clone(&profile),
             pending_count: Arc::clone(&pending_count),
@@ -1594,42 +1594,34 @@ impl<
 {
     async fn run(mut self) {
         let mut commands_since_cleanup = 0usize;
-        let capacity_updates = self.capacity_updates.clone();
+        let capacity_updates = Arc::clone(&self.capacity_updates);
         loop {
             self.begin_turn();
             let due_at = match (self.class_timers.next_deadline(), self.gate_recheck_at) {
                 (Some(class_due), Some(gate_due)) => Some(class_due.min(gate_due)),
                 (class_due, gate_due) => class_due.or(gate_due),
             };
-            let command = if capacity_updates.is_none() && due_at.is_none() {
-                self.commands.recv().await
-            } else {
-                tokio::select! {
-                    command = self.commands.recv() => command,
-                    _ = async {
-                        if let Some(updates) = &capacity_updates {
-                            updates.notified().await;
-                        }
-                    }, if capacity_updates.is_some() => {
-                        let drain_cleanup =
-                            self.commands.is_empty() || commands_since_cleanup == 256;
-                        if drain_cleanup {
-                            commands_since_cleanup = 0;
-                        }
-                        self.handle_capacity_updates(drain_cleanup).await;
-                        continue;
+            let command = tokio::select! {
+                command = self.commands.recv() => command,
+                _ = capacity_updates.notified() => {
+                    let drain_cleanup =
+                        self.commands.is_empty() || commands_since_cleanup == 256;
+                    if drain_cleanup {
+                        commands_since_cleanup = 0;
                     }
-                    _ = async {
-                        if let Some(due_at) = due_at {
-                            tokio::time::sleep_until(due_at).await;
-                        }
-                    }, if due_at.is_some() => {
-                        if self.gate_recheck_at.is_some_and(|at| at <= Instant::now()) {
-                            self.gate_recheck_at = None;
-                        }
-                        self.handle_update(None).await;
-                        continue;
+                    self.handle_capacity_updates(drain_cleanup).await;
+                    continue;
+                }
+                _ = async {
+                    if let Some(due_at) = due_at {
+                        tokio::time::sleep_until(due_at).await;
                     }
+                }, if due_at.is_some() => {
+                    if self.gate_recheck_at.is_some_and(|at| at <= Instant::now()) {
+                        self.gate_recheck_at = None;
+                    }
+                    self.handle_update(None).await;
+                    continue;
                 }
             };
             let Some(command) = command else { break };
@@ -2141,10 +2133,8 @@ impl<
     /// lane: a blocked session head may be waiting on any of its eligible workers or on the
     /// dispatch gate, and the shared lane's head is asked again on every dispatch anyway.
     fn recheck_capacity_updates(&mut self, mut recheck_all: bool) {
-        if let Some(updates) = &self.capacity_updates {
-            recheck_all |= updates.drain_into(&mut self.capacity_workers);
-            recheck_all |= !self.capacity_workers.is_empty();
-        }
+        recheck_all |= self.capacity_updates.drain_into(&mut self.capacity_workers);
+        recheck_all |= !self.capacity_workers.is_empty();
         // Consume hints even when there is no pending work. Blocked lanes count as ready here
         // and still need their recheck.
         if recheck_all && self.pending.has_ready() {
@@ -2378,7 +2368,7 @@ impl<
             ),
         );
         tokio::pin!(refresh);
-        let capacity_updates = self.capacity_updates.clone();
+        let capacity_updates = Arc::clone(&self.capacity_updates);
         let due_at = queued.due_at;
         loop {
             let timer = self.class_timers.next_deadline();
@@ -2403,11 +2393,7 @@ impl<
                         tokio::time::sleep_until(timer).await;
                     }
                 }, if timer.is_some() => RefreshEvent::ClassTimer,
-                _ = async {
-                    if let Some(updates) = &capacity_updates {
-                        updates.notified().await;
-                    }
-                }, if capacity_updates.is_some() => RefreshEvent::Capacity,
+                _ = capacity_updates.notified() => RefreshEvent::Capacity,
                 command = self.commands.recv() => match command {
                     Some(command) => RefreshEvent::Command(command),
                     None => return RefreshEnd::Shutdown,
@@ -4536,7 +4522,7 @@ policy_classes:
             pending: PolicyQueue::with_class_budget_expiry(&queue.profile),
             class_timers: ClassTimers::new(queue.profile.classes().len()),
             cleanup: Arc::clone(&queue.cleanup),
-            capacity_updates: None,
+            capacity_updates: Arc::new(CapacityUpdates::new()),
             capacity_workers: FxHashSet::default(),
             profile: Arc::clone(&queue.profile),
             pending_count: Arc::clone(&queue.pending_count),
@@ -4954,7 +4940,7 @@ policy_classes:
             let (queue, slots) = make_queue(1, 16, 64, Some(0.0));
             let mut actor = actor_for_test(&queue, &slots);
             let updates = Arc::new(CapacityUpdates::new());
-            actor.capacity_updates = Some(Arc::clone(&updates));
+            actor.capacity_updates = Arc::clone(&updates);
             let worker = WorkerWithDpRank::new(0, 0);
 
             let (active, mut active_rx) = make_request("active", 64);
