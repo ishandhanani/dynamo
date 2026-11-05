@@ -11,6 +11,10 @@
 //! same encoding, and the tests pin the exact bytes msgspec produces.
 //!
 //! Request (5 elements): `["PrefetchReqInput", rid, http_worker_ipc, token_ids, dp_rank]`.
+//!
+//! Pins go to the shared store, not the scheduler: the Mooncake master's hint socket
+//! (`--hint_zmq_endpoint`) reads one msgpack array per message,
+//! `["Pin", tenant_id, [key, ...], ttl_ms, priority]`, and sends nothing back.
 //! Reply (7 elements): `["PrefetchReqOutput", rid, http_worker_ipc, matched_tokens,
 //! loaded_tokens, elapsed_ms, error]`.
 
@@ -63,6 +67,50 @@ pub struct PrefetchReqOutput {
     pub elapsed_ms: f64,
     /// `None` on success; otherwise why nothing (more) was loaded.
     pub error: Option<String>,
+}
+
+/// Tag of a pin message on the store's hint socket.
+pub const STORE_PIN_TAG: &str = "Pin";
+
+/// The most keys one pin message may carry; the store drops larger messages.
+pub const STORE_PIN_MAX_KEYS: usize = 4096;
+
+/// A pin for the shared store (the Mooncake master's `PinObjects`): keep `keys`
+/// soft-pinned for `ttl_ms`, applying the pin to a key not written yet when it is,
+/// and evict lower `priority` first. Fire and forget.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StorePin {
+    /// Always [`STORE_PIN_TAG`].
+    pub tag: String,
+    pub tenant_id: String,
+    /// Store object keys, at most [`STORE_PIN_MAX_KEYS`].
+    pub keys: Vec<String>,
+    /// 0 asks the store for its default soft-pin TTL.
+    pub ttl_ms: u64,
+    /// Higher is kept longer.
+    pub priority: u32,
+}
+
+impl StorePin {
+    pub fn new(
+        tenant_id: impl Into<String>,
+        keys: Vec<String>,
+        ttl_ms: u64,
+        priority: u32,
+    ) -> Self {
+        Self {
+            tag: STORE_PIN_TAG.to_string(),
+            tenant_id: tenant_id.into(),
+            keys,
+            ttl_ms,
+            priority,
+        }
+    }
+}
+
+/// Encode one pin as the single msgpack frame the store's hint socket reads.
+pub fn encode_store_pin(pin: &StorePin) -> anyhow::Result<Vec<u8>> {
+    Ok(rmp_serde::to_vec(pin)?)
 }
 
 /// Encode one request as the single msgpack frame the scheduler's hint socket reads.
@@ -192,5 +240,15 @@ mod tests {
         .unwrap();
         assert!(decode_prefetch_reply(&six_fields).is_err());
         assert!(decode_prefetch_reply(b"not msgpack").is_err());
+    }
+
+    #[test]
+    fn store_pin_matches_python_msgpack() {
+        // msgpack.packb(["Pin", "default", ["k1", "k2"], 60000, 3]).hex()
+        let expected = "95a350696ea764656661756c7492a26b31a26b32cdea6003";
+        let pin = StorePin::new("default", vec!["k1".into(), "k2".into()], 60_000, 3);
+        let bytes = encode_store_pin(&pin).unwrap();
+        let hex: String = bytes.iter().map(|b| format!("{b:02x}")).collect();
+        assert_eq!(hex, expected);
     }
 }

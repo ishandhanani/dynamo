@@ -16,6 +16,11 @@
 //! that sees no traffic for [`IDLE_TIMEOUTS`] reply timeouts closes itself, and the
 //! host calls [`ZmqHintTransport::forget`] when a worker leaves; the next hint for an
 //! endpoint opens a fresh socket.
+//!
+//! [`ZmqStorePinSink`] carries pins to the shared store instead: a ZMQ PUSH to the
+//! Mooncake master's `--hint_zmq_endpoint`, one [`StorePin`](crate::wire::StorePin)
+//! frame per message and nothing back. Sends never block: a full or unconnected
+//! socket fails the pin, which the controller counts and drops.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -26,8 +31,12 @@ use futures::{SinkExt, StreamExt};
 use tmq::{FromZmqSocket, Multipart};
 use tokio::sync::{Mutex, mpsc, oneshot};
 
+use crate::PinHint;
 use crate::WorkerTarget;
-use crate::wire::{PrefetchReqInput, decode_prefetch_reply, encode_prefetch_request};
+use crate::wire::{
+    PrefetchReqInput, STORE_PIN_MAX_KEYS, StorePin, decode_prefetch_reply, encode_prefetch_request,
+    encode_store_pin,
+};
 
 /// Milliseconds a closing socket may linger; hints are advisory, never wait on them.
 const ZMQ_LINGER_MS: i32 = 0;
@@ -292,6 +301,71 @@ async fn run_connection(
     }
 }
 
+/// Where pins go: the shared store's hint socket.
+#[async_trait::async_trait]
+pub trait PinSink: Send + Sync {
+    fn name(&self) -> &'static str;
+
+    /// Deliver one pin; `Ok` means the store's socket took every frame.
+    async fn pin(&self, hint: &PinHint) -> anyhow::Result<()>;
+}
+
+/// [`PinSink`] over a ZMQ PUSH to the Mooncake master's `--hint_zmq_endpoint`.
+pub struct ZmqStorePinSink {
+    endpoint: String,
+    // zmq::Socket is Send but not Sync; a pin is a few non-blocking sends.
+    socket: std::sync::Mutex<Option<zmq::Socket>>,
+    context: zmq::Context,
+    send_hwm: i32,
+}
+
+impl ZmqStorePinSink {
+    /// `send_hwm` bounds the frames ZMQ buffers for a slow or absent store.
+    pub fn new(endpoint: impl Into<String>, send_hwm: i32) -> Self {
+        Self {
+            endpoint: endpoint.into(),
+            socket: std::sync::Mutex::new(None),
+            context: zmq::Context::new(),
+            send_hwm,
+        }
+    }
+
+    fn open(&self) -> anyhow::Result<zmq::Socket> {
+        let socket = self.context.socket(zmq::PUSH)?;
+        socket.set_linger(ZMQ_LINGER_MS)?;
+        socket.set_sndhwm(self.send_hwm)?;
+        socket.set_immediate(true)?;
+        socket.connect(&self.endpoint)?;
+        Ok(socket)
+    }
+}
+
+#[async_trait::async_trait]
+impl PinSink for ZmqStorePinSink {
+    fn name(&self) -> &'static str {
+        "zmq-store-pin"
+    }
+
+    async fn pin(&self, hint: &PinHint) -> anyhow::Result<()> {
+        let ttl_ms = u64::try_from(hint.ttl.as_millis()).unwrap_or(u64::MAX);
+        let mut guard = self.socket.lock().unwrap();
+        if guard.is_none() {
+            *guard = Some(self.open()?);
+        }
+        let socket = guard.as_ref().unwrap();
+        for keys in hint.keys.chunks(STORE_PIN_MAX_KEYS) {
+            let frame = encode_store_pin(&StorePin::new(
+                hint.tenant.clone(),
+                keys.to_vec(),
+                ttl_ms,
+                hint.priority,
+            ))?;
+            socket.send(frame, zmq::DONTWAIT)?;
+        }
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::time::Instant;
@@ -492,5 +566,42 @@ mod tests {
             transport.open_endpoints().await.is_empty(),
             "idle connection should have closed"
         );
+    }
+
+    #[tokio::test]
+    async fn store_pin_sink_pushes_chunked_frames() {
+        let endpoint = free_tcp_endpoint();
+        let context = zmq::Context::new();
+        let pull = context.socket(zmq::PULL).unwrap();
+        pull.bind(&endpoint).unwrap();
+        pull.set_rcvtimeo(5_000).unwrap();
+        let sink = ZmqStorePinSink::new(endpoint, 1_000);
+        let keys: Vec<String> = (0..STORE_PIN_MAX_KEYS + 1)
+            .map(|i| format!("k{i}"))
+            .collect();
+        let hint = PinHint {
+            tenant: "default".into(),
+            keys: keys.clone().into(),
+            ttl: Duration::from_millis(90_000),
+            priority: 2,
+        };
+        // ZMQ_IMMEDIATE refuses frames until the connection is up.
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while sink.pin(&hint).await.is_err() {
+            assert!(Instant::now() < deadline, "store socket never connected");
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        let mut seen = Vec::new();
+        for _ in 0..2 {
+            let frame = pull.recv_bytes(0).unwrap();
+            let pin: StorePin = rmp_serde::from_slice(&frame).unwrap();
+            assert_eq!(
+                (pin.tag.as_str(), pin.tenant_id.as_str()),
+                ("Pin", "default")
+            );
+            assert_eq!((pin.ttl_ms, pin.priority), (90_000, 2));
+            seen.extend(pin.keys);
+        }
+        assert_eq!(seen, keys);
     }
 }

@@ -3,7 +3,7 @@
 
 [package]
 name = "dynamo-kvm"
-description = "KV cache hints (prefetch) from Dynamo straight to inference engine schedulers"
+description = "KV cache hints (prefetch, pin) from Dynamo straight to engine schedulers and the shared store"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
