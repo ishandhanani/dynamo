@@ -2082,16 +2082,6 @@ impl<
         made_ready || (removed_ready_head && self.has_dispatchable_ready_head())
     }
 
-    /// Keeps the earliest recheck a held head asked for during one dispatch pass.
-    fn note_gate_recheck(&mut self, requested: Option<Instant>) {
-        if let Some(requested) = requested {
-            self.gate_recheck_at = Some(
-                self.gate_recheck_at
-                    .map_or(requested, |at| at.min(requested)),
-            );
-        }
-    }
-
     fn has_dispatchable_ready_head(&self) -> bool {
         let decay_now = Instant::now();
         let slots = &self.slots;
@@ -2184,7 +2174,7 @@ impl<
             // reservation. Frees and peer bookings from other tasks can land between
             // two reads, as they can right after the gate.
             let gate = self.dispatch_gate.get().cloned();
-            let gate_recheck_at = Cell::new(None);
+            let gate_recheck_at = Cell::new(self.gate_recheck_at);
             let extracted = {
                 let slots = &self.slots;
                 let available_ids = self.available_worker_ids.as_ref();
@@ -2215,7 +2205,7 @@ impl<
                     )
                 })
             };
-            self.note_gate_recheck(gate_recheck_at.get());
+            self.gate_recheck_at = gate_recheck_at.get();
             let Some((mut candidate, charge)) = extracted else {
                 break;
             };
