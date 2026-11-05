@@ -8730,6 +8730,13 @@ impl
                 Arc::clone(slot),
             );
         }
+        let announced_tool_call = tool_call_pin.as_ref().and_then(|_| {
+            common_request
+                .get::<crate::kv_router::hints::SimToolCall>(
+                    crate::kv_router::hints::SIM_TOOL_CALL_CONTEXT_KEY,
+                )
+                .ok()
+        });
 
         // create a stream of annotations this will be prepend to the response stream
         let annotations: Vec<Annotated<NvCreateChatCompletionStreamResponse>> = annotations
@@ -8809,7 +8816,11 @@ impl
         );
 
         // Step 6: Pin the request's pages in the shared store on its first tool call.
-        let final_stream = crate::kv_router::hints::fire_on_tool_call(final_stream, tool_call_pin);
+        let final_stream = crate::kv_router::hints::fire_on_tool_call(
+            final_stream,
+            tool_call_pin,
+            announced_tool_call,
+        );
 
         let final_stream =
             crate::request_trace::wrap_chat_request_end_stream(final_stream, trace_state);
