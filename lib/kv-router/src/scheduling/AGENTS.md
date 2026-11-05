@@ -89,27 +89,28 @@ sequenceDiagram
 
 ```text
 PolicyClassQueue("agents")
-├── pending: BinaryHeap<PolicyQueueEntry>                 # WorkerPlacement::Any
-├── ready_by_worker: FxHashMap<WorkerWithDpRank, BinaryHeap<PolicyQueueEntry>>
-│   ├── Worker(7, dp_rank=0) → heap of requests pinned to that rank
-│   └── Worker(9, dp_rank=1) → heap of requests pinned to that rank
-├── blocked_workers: FxHashSet<WorkerWithDpRank>
-├── candidate_worker_heads: BTreeSet<WorkerLaneHead>       # one head per unblocked lane
+├── pending: BinaryHeap<PolicyQueueEntry>                 # the shared lane (lane: None)
+├── ready_by_lane: FxHashMap<SessionLane, BinaryHeap<PolicyQueueEntry>>
+│   ├── Session(hash a) → heap of session a's requests   (only with a dispatch gate)
+│   └── Session(hash b) → heap of session b's requests
+├── blocked_lanes: FxHashSet<SessionLane>
+├── candidate_lane_heads: BTreeSet<LaneHead>               # one head per unblocked lane
 ├── due_entries: BTreeSet<(due key, seq)>                  # explicit deadlines; empty with head expiry
 └── expiring_roots: BTreeSet<LaneRoot>                     # head expiry: every lane root with a finite
                                                            # due time, blocked lanes included
 ```
 
-- `pending` is the shared ready heap for requests where the existing selector may choose any eligible worker.
-- `ready_by_worker` contains requests pinned to a particular worker and data-parallel rank. Each worker/rank heap is removed when its last request leaves.
-- `candidate_worker_heads` tracks the highest-priority request for each worker. A worker is removed from this index while it is full, then checked again when capacity changes or when expiry or cancellation removes its lane's root.
-- A `PolicyClassQueue` does not own worker configuration, capacity, or scoring state. `WorkerWithDpRank` only identifies a queue pinned to one worker/rank; the actor and selector retain worker knowledge.
+- `pending` is the shared ready heap: every request of the class, pinned or not, when no dispatch gate is installed, and every request without a session context when one is. A pinned head whose worker is full blocks this lane until that worker frees, by design: pinned requests take no lane of their own.
+- `ready_by_lane` holds the session lanes. The actor assigns one per session while a dispatch gate is installed, so a head the gate holds, or whose eligible workers are full, blocks only its session. Each lane's heap is removed when its last request leaves.
+- `candidate_lane_heads` tracks the highest-priority request for each session lane. A lane leaves this index while its head cannot dispatch and rejoins on the next recheck: any capacity change, a gate recheck, the gate's hold timer, or expiry or cancellation of the lane's root.
+- A `PolicyClassQueue` does not own worker configuration, capacity, or scoring state. A `SessionLane` only identifies a lane; the actor and selector retain worker knowledge.
 - Every heap uses the class's configured priority ordering. `BinaryHeap::peek()` reads its highest-priority root in O(1); push and pop are O(log n).
-- `PolicyClassQueue::next_dispatchable` compares the shared root with the highest indexed worker head. It removes blocked worker heads until it finds a dispatchable one, so each blocked lane is checked once per capacity update rather than once per pop.
+- `PolicyClassQueue::next_dispatchable` compares the shared root with the highest indexed session lane head. It removes blocked lane heads until it finds a dispatchable one, so each blocked lane is checked once per recheck rather than once per pop.
+- The actor's dispatch predicate asks the request classifier's `DispatchGate`, when one is installed, before its own capacity check. A `Hold` leaves the head queued and arms the actor's recheck timer when the gate names a time; a `Go` target becomes the request's soft affinity target when it leaves the queue, and the gate's `dispatched` callback runs once, right there.
 - `round_cursor` marks which class receives the next weighted turn. `carry_class` lets a class spend its unused share before that turn, but only if `next_dispatchable` confirms that its next request can run.
 - `extract_next` returns the winning head with a `DispatchCharge`; `settle` spends that cost only for an admitted request. Expiry, cancellation, and failed selection, booking, or delivery spend no credit, and the class keeps it for its next head. `pop_next` charges at once, for callers without an admission step.
 - With head expiry, `take_expired` pops each lane's overdue prefix from `expiring_roots` in due order, O(log n) per entry. Every other class finds its expired explicit deadlines in `due_entries` and removes them with one scan of the class and a heap rebuild, as cancellation does. Any removal of a blocked lane's root, by expiry or cancellation, unblocks the lane, so its next head is checked at the next dispatch.
-- A full Worker 7 can block only Worker 7's first request. It cannot hide a ready request for Worker 9 or one that can run on any worker.
+- A held session blocks only its own next turn. It cannot hide a ready turn of another session or a request in the shared lane.
 
 ## Guardrails
 
