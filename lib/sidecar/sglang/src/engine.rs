@@ -327,6 +327,15 @@ impl LLMEngine for SglangSidecarEngine {
                 .runtime_data
                 .insert("sglang_generate".into(), true.into());
         }
+        if let Some(endpoint) = hint_zmq_endpoint(&discovery.server_info, || {
+            let local_host = dynamo_runtime::utils::local_ip_for_advertise();
+            routable_engine_host(self.endpoint.as_str(), &discovery, &local_host)
+        }) {
+            tracing::info!(%endpoint, "publishing the SGLang scheduler hint socket");
+            config
+                .runtime_data
+                .insert(HINT_ZMQ_ENDPOINT_RUNTIME_KEY.into(), endpoint.into());
+        }
         let kv_event_sources =
             discover_kv_event_sources(&discovery, &mut config, &self.endpoint, deadline).await?;
         let connection_count = pool.len();
@@ -725,13 +734,26 @@ fn resolve_bootstrap_host_with_local(
     if let Some(host) = explicit.filter(|host| !host.trim().is_empty()) {
         return Ok(Some(host.trim().to_string()));
     }
+    routable_engine_host(endpoint, discovery, local_host)
+        .map(Some)
+        .ok_or_else(|| {
+            client::invalid_arg(
+                "could not derive a routable prefill bootstrap host; set --bootstrap-host",
+            )
+        })
+}
+
+/// The address other nodes use to reach this engine: the first routable one of
+/// SGLang's `--host`, its `dist_init_addr` host, this node's advertised IP, and the
+/// gRPC endpoint host.
+fn routable_engine_host(endpoint: &str, discovery: &Discovery, local_host: &str) -> Option<String> {
     let from_server = discovery
         .server_info
         .get("host")
         .and_then(Value::as_str)
         .filter(|host| is_routable_host(host));
     if let Some(host) = from_server {
-        return Ok(Some(host.trim().to_string()));
+        return Some(host.trim().to_string());
     }
     let from_dist = discovery
         .server_info
@@ -739,21 +761,79 @@ fn resolve_bootstrap_host_with_local(
         .and_then(Value::as_str)
         .and_then(host_from_address)
         .filter(|host| is_routable_host(host));
-    if let Some(host) = from_dist {
-        return Ok(Some(host));
+    if from_dist.is_some() {
+        return from_dist;
     }
     if is_routable_host(local_host) {
-        return Ok(Some(local_host.to_string()));
+        return Some(local_host.to_string());
     }
-    let from_endpoint = url::Url::parse(endpoint)
+    url::Url::parse(endpoint)
         .ok()
         .and_then(|url| url.host_str().map(str::to_string))
-        .filter(|host| is_routable_host(host));
-    from_endpoint.map(Some).ok_or_else(|| {
-        client::invalid_arg(
-            "could not derive a routable prefill bootstrap host; set --bootstrap-host",
-        )
-    })
+        .filter(|host| is_routable_host(host))
+}
+
+/// Runtime-config key the frontend router reads for a worker's scheduler hint socket
+/// (`lib/llm/src/kv_router/hints.rs`).
+const HINT_ZMQ_ENDPOINT_RUNTIME_KEY: &str = "hint_zmq_endpoint";
+
+/// The connectable `tcp://host:port` of the scheduler's inbound hint socket, from the
+/// `--hint-zmq-endpoint` SGLang reports in its server info. A wildcard bind host
+/// (`*`, `0.0.0.0`, `::`, or none) becomes `routable_host()`; an explicit host is
+/// kept. With data parallelism SGLang binds one socket per KV cache at this port
+/// plus the DP rank; the base socket (rank 0) is what gets published. `None`,
+/// with a warning unless the flag is simply absent, when nothing usable can be
+/// published.
+fn hint_zmq_endpoint(
+    server_info: &Value,
+    routable_host: impl FnOnce() -> Option<String>,
+) -> Option<String> {
+    let value = server_info.get("hint_zmq_endpoint")?;
+    if value.is_null() {
+        return None;
+    }
+    let Some(raw) = value.as_str().map(str::trim).filter(|raw| !raw.is_empty()) else {
+        tracing::warn!(%value, "ignoring hint_zmq_endpoint: not a tcp://host:port string");
+        return None;
+    };
+    let Ok(url) = url::Url::parse(raw) else {
+        tracing::warn!(
+            endpoint = raw,
+            "ignoring hint_zmq_endpoint: not a tcp://host:port URL"
+        );
+        return None;
+    };
+    if url.scheme() != "tcp" {
+        tracing::warn!(
+            endpoint = raw,
+            "ignoring hint_zmq_endpoint: only a tcp:// socket is reachable from the frontend"
+        );
+        return None;
+    }
+    let Some(port) = url.port() else {
+        tracing::warn!(endpoint = raw, "ignoring hint_zmq_endpoint: no port");
+        return None;
+    };
+    let bound_host = url.host_str().unwrap_or_default();
+    let host = match bound_host.trim_matches(&['[', ']'][..]) {
+        "" | "*" | "0.0.0.0" | "::" => {
+            let Some(host) = routable_host() else {
+                tracing::warn!(
+                    endpoint = raw,
+                    "ignoring hint_zmq_endpoint: no routable host for its wildcard bind; \
+                     bind --hint-zmq-endpoint to the pod IP"
+                );
+                return None;
+            };
+            if host.contains(':') && !host.starts_with('[') {
+                format!("[{host}]")
+            } else {
+                host
+            }
+        }
+        _ => bound_host.to_string(),
+    };
+    Some(format!("tcp://{host}:{port}"))
 }
 
 fn host_from_address(address: &str) -> Option<String> {
@@ -1260,8 +1340,9 @@ mod tests {
     use super::{
         Args, DisaggregationMode, DiscoveredKvEventSource, Discovery, EngineConfig,
         SglangSidecarEngine, build_engine_config, combined_token_limit, discover_kv_event_sources,
-        discovery_bootstrap_port, hicache_native_offloading_capacity, kv_event_connect_host,
-        omitted_max_tokens_default, resolve_bootstrap_host_with_local, sglang_eagle_enabled,
+        discovery_bootstrap_port, hicache_native_offloading_capacity, hint_zmq_endpoint,
+        kv_event_connect_host, omitted_max_tokens_default, resolve_bootstrap_host_with_local,
+        sglang_eagle_enabled,
     };
 
     fn discovery(server_info: serde_json::Value) -> Discovery {
@@ -1955,6 +2036,94 @@ mod tests {
         )
         .unwrap_err();
         assert!(error.to_string().contains("--bootstrap-host"));
+    }
+
+    #[test]
+    fn hint_socket_wildcard_host_becomes_the_routable_host() {
+        for endpoint in [
+            "tcp://*:5558",
+            "tcp://0.0.0.0:5558",
+            "tcp://[::]:5558",
+            " tcp://*:5558 ",
+        ] {
+            let published = hint_zmq_endpoint(&json!({"hint_zmq_endpoint": endpoint}), || {
+                Some("10.0.0.7".into())
+            });
+            assert_eq!(
+                published.as_deref(),
+                Some("tcp://10.0.0.7:5558"),
+                "{endpoint}"
+            );
+        }
+        // An IPv6 advertise address is bracketed for the authority.
+        let published = hint_zmq_endpoint(&json!({"hint_zmq_endpoint": "tcp://*:5558"}), || {
+            Some("2001:db8::7".into())
+        });
+        assert_eq!(published.as_deref(), Some("tcp://[2001:db8::7]:5558"));
+        // No routable host: nothing is published rather than an unreachable wildcard.
+        assert_eq!(
+            hint_zmq_endpoint(&json!({"hint_zmq_endpoint": "tcp://*:5558"}), || None),
+            None
+        );
+    }
+
+    #[test]
+    fn hint_socket_explicit_host_is_kept() {
+        for endpoint in [
+            "tcp://10.1.2.3:5558",
+            "tcp://hint.worker.svc:5558",
+            "tcp://[2001:db8::1]:5558",
+            "tcp://127.0.0.1:5558",
+        ] {
+            let published = hint_zmq_endpoint(&json!({"hint_zmq_endpoint": endpoint}), || {
+                panic!("an explicit host is not resolved")
+            });
+            assert_eq!(published.as_deref(), Some(endpoint));
+        }
+    }
+
+    #[test]
+    fn hint_socket_publishes_the_dp_rank_zero_base() {
+        // SGLang binds the socket of DP rank r at the base port plus r. The router
+        // reads one endpoint per worker and names the rank inside the frame, so the
+        // base (rank 0) is published whatever the DP size.
+        let published = hint_zmq_endpoint(
+            &json!({
+                "hint_zmq_endpoint": "tcp://*:5558",
+                "dp_size": 1,
+                "attn_dp_size": 4,
+                "enable_dp_attention": true,
+            }),
+            || Some("10.0.0.7".into()),
+        );
+        assert_eq!(published.as_deref(), Some("tcp://10.0.0.7:5558"));
+    }
+
+    #[test]
+    fn hint_socket_is_skipped_when_absent_or_unusable() {
+        assert_eq!(hint_zmq_endpoint(&json!({}), || unreachable!()), None);
+        assert_eq!(
+            hint_zmq_endpoint(&json!({"hint_zmq_endpoint": null}), || unreachable!()),
+            None
+        );
+        for value in [
+            json!(""),
+            json!("   "),
+            json!(5558),
+            json!("ipc:///tmp/hints"),
+            json!("tcp://*"),
+            json!("tcp://10.0.0.1"),
+            json!("10.0.0.1:5558"),
+            json!("not a url"),
+        ] {
+            assert_eq!(
+                hint_zmq_endpoint(&json!({"hint_zmq_endpoint": value}), || Some(
+                    "10.0.0.7".into()
+                )),
+                None,
+                "{value}"
+            );
+        }
     }
 
     #[test]
