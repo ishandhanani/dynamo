@@ -1610,14 +1610,17 @@ impl<
                 match selected {
                     Ok(selected) => {
                         let worker = selected.selection.worker;
-                        // The prefetch set is the L3-resident prefix (shared-cache hits
-                        // from block 0) minus what this worker already holds on device.
+                        // The prefetch set runs to the last block the shared cache is known
+                        // to hold, minus what this worker already holds on device. The
+                        // tracker learns residency from the store's event stream, so pages
+                        // stored before it connected are unknown and the first hit range
+                        // need not start at block 0; the scheduler's own lookup is exact and
+                        // loads only what the worker misses, so send through the last hit.
                         let resident_prefix_blocks = queued
                             .request
                             .shared_cache_hits
                             .as_ref()
-                            .and_then(|hits| hits.ranges.first())
-                            .filter(|range| range.start == 0)
+                            .and_then(|hits| hits.ranges.last())
                             .map_or(0, |range| range.end);
                         let worker_blocks = queued
                             .request
