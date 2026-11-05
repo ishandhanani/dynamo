@@ -22,6 +22,12 @@ use crate::protocols::WorkerWithDpRank;
 /// return immediately: the call runs on the scheduler actor.
 pub trait PrefetchHintSink: Send + Sync {
     fn prefetch(&self, worker: WorkerWithDpRank, tokens: &[u32]);
+
+    /// Expected milliseconds for `worker` to load a `tokens`-long hint from the
+    /// shared store, when the sink can tell. `None` means unknown.
+    fn load_estimate_ms(&self, _worker: WorkerWithDpRank, _tokens: usize) -> Option<f64> {
+        None
+    }
 }
 
 /// Installed once per scheduler; see the module docs.

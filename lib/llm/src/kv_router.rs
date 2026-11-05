@@ -900,7 +900,7 @@ impl KvRouter {
         )
         .await?;
         request_leases.set_scheduler(selection.scheduler().booking_cleanup());
-        let hint_controller = hints::hint_controller_for(workers_with_configs.clone());
+        let hint_controller = hints::hint_controller_for(workers_with_configs.clone(), block_size);
         if let Some(trigger) = hints::prefetch_trigger(hint_controller.as_ref()) {
             let lead_ms = trigger.lead.as_millis() as u64;
             if selection.scheduler().set_prefetch_trigger(trigger) {

@@ -13,9 +13,14 @@
 //! talks straight to the SGLang scheduler's inbound hint socket, the inverse of the
 //! KV-event stream. The frame layout is in [`wire`].
 //!
+//! Replies also feed a per-worker [`load::LoadModel`], so the host can ask
+//! [`HintController::load_estimate_ms`] how long a hint of a given size will take to
+//! land and decide whether a waiting request can still benefit from it.
+//!
 //! This crate reads no configuration itself: the host builds a [`HintConfig`] and a
 //! [`HintEndpoints`] and passes them in.
 
+pub mod load;
 pub mod transport;
 pub mod wire;
 
@@ -25,6 +30,7 @@ use std::time::Duration;
 
 use tokio::sync::{Semaphore, mpsc};
 
+pub use load::{LoadFit, LoadModel};
 pub use transport::{
     HintEndpointResolver, HintEndpoints, HintTransport, PrefetchReply, ZmqHintTransport,
 };
@@ -33,7 +39,7 @@ pub use transport::{
 const DROP_WARN_EVERY: u64 = 1000;
 
 /// The worker a prefetch hint targets. `worker_id` is the Dynamo instance id.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct WorkerTarget {
     pub worker_id: u64,
     pub dp_rank: Option<u32>,
@@ -54,6 +60,9 @@ pub struct HintConfig {
     pub concurrency: usize,
     /// How long to wait for a scheduler reply before counting a hint as failed.
     pub timeout: Duration,
+    /// Tokens per KV page on the engine, the unit the load model counts in. Hosts pass
+    /// the router's block size, which must equal the engine's page size.
+    pub page_tokens: usize,
 }
 
 impl Default for HintConfig {
@@ -62,8 +71,16 @@ impl Default for HintConfig {
             queue_depth: 256,
             concurrency: 4,
             timeout: Duration::from_millis(2_000),
+            page_tokens: 64,
         }
     }
+}
+
+/// Sees every successful scheduler reply, off the request path, after the load model
+/// has learned from it. For metrics; implementations must not block.
+pub trait HintReplyObserver: Send + Sync {
+    /// `hint_tokens` is the length of the hint that was sent.
+    fn on_reply(&self, worker: WorkerTarget, hint_tokens: usize, reply: &PrefetchReply);
 }
 
 /// Hint outcome counters; read with [`HintController::counters`].
@@ -97,6 +114,7 @@ pub struct HintController {
     transport: Arc<dyn HintTransport>,
     config: Arc<HintConfig>,
     counters: Arc<HintCounters>,
+    loads: Arc<LoadModel>,
 }
 
 impl HintController {
@@ -104,21 +122,41 @@ impl HintController {
     ///
     /// Panics outside a runtime context, like `tokio::spawn`.
     pub fn new(config: HintConfig, transport: Arc<dyn HintTransport>) -> Self {
+        Self::with_reply_observer(config, transport, None)
+    }
+
+    /// [`Self::new`], with `observer` told about every successful reply.
+    pub fn with_reply_observer(
+        config: HintConfig,
+        transport: Arc<dyn HintTransport>,
+        observer: Option<Arc<dyn HintReplyObserver>>,
+    ) -> Self {
         let (tx, rx) = mpsc::channel(config.queue_depth.max(1));
         let config = Arc::new(config);
         let counters = Arc::new(HintCounters::default());
+        let loads = Arc::new(LoadModel::new(config.page_tokens));
         tokio::spawn(run_sender(
             rx,
             Arc::clone(&transport),
             config.concurrency.max(1),
             Arc::clone(&counters),
+            Arc::clone(&loads),
+            observer,
         ));
         Self {
             tx,
             transport,
             config,
             counters,
+            loads,
         }
+    }
+
+    /// Expected milliseconds for `worker` to load a `tokens`-long hint from the shared
+    /// store: its fitted `L(n) = a + b * n` over pages, or the prior while it has fewer
+    /// than [`load::MIN_SAMPLES`] replies.
+    pub fn load_estimate_ms(&self, worker: WorkerTarget, tokens: usize) -> f64 {
+        self.loads.estimate_ms(worker, tokens)
     }
 
     /// Ask `worker` to load the KV pages for `tokens` from the shared store.
@@ -169,6 +207,8 @@ async fn run_sender(
     transport: Arc<dyn HintTransport>,
     concurrency: usize,
     counters: Arc<HintCounters>,
+    loads: Arc<LoadModel>,
+    observer: Option<Arc<dyn HintReplyObserver>>,
 ) {
     let permits = Arc::new(Semaphore::new(concurrency));
     while let Some(hint) = rx.recv().await {
@@ -177,10 +217,17 @@ async fn run_sender(
         };
         let transport = Arc::clone(&transport);
         let counters = Arc::clone(&counters);
+        let loads = Arc::clone(&loads);
+        let observer = observer.clone();
         tokio::spawn(async move {
+            let hint_tokens = hint.tokens.len();
             match transport.prefetch(hint.worker, hint.tokens).await {
                 Ok(reply) => {
                     counters.prefetch_sent.fetch_add(1, Ordering::Relaxed);
+                    loads.observe(hint.worker, reply.loaded_tokens, reply.elapsed_ms);
+                    if let Some(observer) = &observer {
+                        observer.on_reply(hint.worker, hint_tokens, &reply);
+                    }
                     tracing::debug!(
                         worker_id = hint.worker.worker_id,
                         matched_tokens = reply.matched_tokens,
@@ -214,6 +261,8 @@ mod tests {
         prefetch: Mutex<Vec<(WorkerTarget, Vec<u32>)>>,
         hang: bool,
         unreachable_worker: Option<u64>,
+        /// Reported load time per reply.
+        elapsed_ms: f64,
     }
 
     #[async_trait::async_trait]
@@ -243,7 +292,7 @@ mod tests {
                 rid: String::new(),
                 matched_tokens: count,
                 loaded_tokens: count,
-                elapsed_ms: 0.0,
+                elapsed_ms: self.elapsed_ms,
             })
         }
     }
@@ -313,5 +362,50 @@ mod tests {
         controller.prefetch(WorkerTarget::new(1, None), tokens(&[4]));
         assert_eq!(controller.counters().dropped, 1);
         assert_eq!(transport.prefetch.lock().unwrap().len(), 1);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn replies_train_the_load_model_and_reach_the_observer() {
+        struct Replies(Mutex<Vec<(WorkerTarget, usize, u64)>>);
+        impl HintReplyObserver for Replies {
+            fn on_reply(&self, worker: WorkerTarget, hint_tokens: usize, reply: &PrefetchReply) {
+                self.0
+                    .lock()
+                    .unwrap()
+                    .push((worker, hint_tokens, reply.loaded_tokens));
+            }
+        }
+        let transport = Arc::new(Recording {
+            elapsed_ms: 400.0,
+            ..Recording::default()
+        });
+        let replies = Arc::new(Replies(Mutex::new(Vec::new())));
+        let controller = HintController::with_reply_observer(
+            HintConfig {
+                page_tokens: 16,
+                ..HintConfig::default()
+            },
+            transport.clone(),
+            Some(replies.clone()),
+        );
+        let worker = WorkerTarget::new(7, Some(0));
+        let hint: Arc<[u32]> = Arc::from(vec![0u32; 128 * 16]);
+        let prior = controller.load_estimate_ms(worker, hint.len());
+        assert_eq!(prior, load::LoadFit::PRIOR.estimate_ms(128));
+
+        for _ in 0..3 {
+            controller.prefetch(worker, Arc::clone(&hint));
+        }
+        wait_until(|| controller.counters().prefetch_sent == 3).await;
+        assert_eq!(replies.0.lock().unwrap().len(), 3);
+        assert_eq!(replies.0.lock().unwrap()[0], (worker, 128 * 16, 128 * 16));
+        // Three 400 ms replies for 128 pages pull the estimate well above the prior.
+        let learned = controller.load_estimate_ms(worker, hint.len());
+        assert!(learned > prior, "{learned} <= {prior}");
+        // Another worker still answers with the prior.
+        assert_eq!(
+            controller.load_estimate_ms(WorkerTarget::new(8, Some(0)), hint.len()),
+            prior
+        );
     }
 }

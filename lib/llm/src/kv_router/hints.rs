@@ -172,6 +172,7 @@ fn hint_config_from_env() -> HintConfig {
         queue_depth: env_parsed(env_llm::DYN_KVM_QUEUE_DEPTH, defaults.queue_depth).max(1),
         concurrency: env_parsed(env_llm::DYN_KVM_CONCURRENCY, defaults.concurrency).max(1),
         timeout: env_duration_ms(env_llm::DYN_KVM_TIMEOUT_MS).unwrap_or(defaults.timeout),
+        page_tokens: defaults.page_tokens,
     }
 }
 
@@ -241,14 +242,18 @@ pub(crate) fn worker_target(worker: WorkerWithDpRank) -> WorkerTarget {
 }
 
 /// Build the controller for the workers in `configs` when a hint consumer is enabled.
-pub fn hint_controller_for(configs: RuntimeConfigWatch) -> Option<HintController> {
+/// `block_size` is the router's KV block size, the page unit its load model counts in.
+pub fn hint_controller_for(configs: RuntimeConfigWatch, block_size: u32) -> Option<HintController> {
     let enabled = env_duration_ms(env_llm::DYN_KVM_PREFETCH_LEAD_MS).is_some()
         || env_is_truthy(env_llm::DYN_ENABLE_KVM_HINTS_API)
         || wakeup_header_enabled();
     if !enabled {
         return None;
     }
-    let config = hint_config_from_env();
+    let config = HintConfig {
+        page_tokens: (block_size as usize).max(1),
+        ..hint_config_from_env()
+    };
     let endpoints = hint_endpoints(&configs);
     let per_worker = matches!(endpoints, HintEndpoints::PerWorker(_));
     let transport = Arc::new(ZmqHintTransport::new(
@@ -283,6 +288,10 @@ struct ControllerSink(HintController);
 impl PrefetchHintSink for ControllerSink {
     fn prefetch(&self, worker: WorkerWithDpRank, tokens: &[u32]) {
         self.0.prefetch(worker_target(worker), Arc::from(tokens));
+    }
+
+    fn load_estimate_ms(&self, worker: WorkerWithDpRank, tokens: usize) -> Option<f64> {
+        Some(self.0.load_estimate_ms(worker_target(worker), tokens))
     }
 }
 
