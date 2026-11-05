@@ -1106,12 +1106,10 @@ impl<
             .is_ok()
     }
 
-    /// Install per-candidate cost capture for admitted selections.
-    ///
-    /// Returns `false` when a spec is already installed.
     /// Install the request classifier's dispatch gate. Returns `false` when one is already
-    /// installed. The gate is asked about every head, in every class, and receives a recheck
-    /// handle that wakes the actor for a full lane recheck.
+    /// installed. The gate is asked about every queued head and receives a recheck handle that
+    /// wakes the actor for a full lane recheck. A class with a zero queue limit never queues, so
+    /// its requests are admitted without asking the gate; the classifier sees them at `Sent`.
     pub(crate) fn install_dispatch_gate(&self, gate: Arc<dyn DispatchGate>) -> bool {
         if self.dispatch_gate.set(Arc::clone(&gate)).is_err() {
             return false;
@@ -1121,6 +1119,9 @@ impl<
         true
     }
 
+    /// Install per-candidate cost capture for admitted selections.
+    ///
+    /// Returns `false` when a spec is already installed.
     pub fn set_selection_trace(&self, spec: SelectionTraceSpec) -> bool {
         self.selection_trace.set(spec).is_ok()
     }
