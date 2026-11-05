@@ -324,7 +324,7 @@ impl DispatchGate for SessionGate {
 - `check` runs inside the router's dispatch loop and may be asked more than once about the same head: keep it a read, with no waiting.
 - `Hold` keeps the request queued. Dynamo asks again when a worker's capacity changes, when the gate calls `notify` on the handle it received in `attach`, and no later than `until`. A held request still spends its policy class's waiting budget.
 - `Go` lets the request through Dynamo's own capacity checks; `target` becomes its soft worker preference unless it carries a hard pin. `dispatched` runs once when Dynamo takes the request out of the queue, before selection. Admission can still fail, and the request's lifecycle then ends with `Aborted`.
-- With a gate installed, a request that has a session context and no hard pin waits in a lane of its own session, so a held session never blocks other sessions in its class. A held request without a session blocks the class's shared lane.
+- With a gate installed, a request that has a session context waits in a lane of its own session, so a held session never blocks other sessions in its class. A held request without a session blocks the class's shared lane.
 
 Implement `on_event` when the classifier tracks active requests or session capacity. For example, use completion or abort events to release capacity and wake waiting requests:
 

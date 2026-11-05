@@ -366,9 +366,8 @@ pub trait RequestClassifier: Send + 'static {
 
     /// The classifier's dispatch gate, read once at install. With a gate installed, the router
     /// asks it about each queue head before dispatch and keeps a held head queued; a request
-    /// that has a session context and no hard pin waits in a per-session lane, so a hold
-    /// blocks only that session. `None` dispatches every head the host's own capacity checks
-    /// allow.
+    /// that has a session context waits in a per-session lane, so a hold blocks only that
+    /// session. `None` dispatches every head the host's own capacity checks allow.
     fn dispatch_gate(&self) -> Option<Arc<dyn DispatchGate>> {
         None
     }

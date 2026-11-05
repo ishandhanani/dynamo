@@ -26,7 +26,7 @@ use dynamo_kv_router::protocols::{
 };
 use dynamo_kv_router::scheduling::{
     OverlapAnalysis, OverlapSignals, PolicyClassConfig, PolicyProfile, PolicyQueue, QueueMetadata,
-    QueueSnapshot, ScheduleMode, SchedulingContext, WorkerPlacement,
+    QueueSnapshot, ScheduleMode, SchedulingContext,
 };
 use dynamo_kv_router::sequences::topology::WorkerDpRange;
 use dynamo_kv_router::services::selection::affinity::{
@@ -1036,16 +1036,6 @@ impl OfflineReplayRouter {
 
         if should_queue {
             let snapshot = self.snapshot_for(&mut pending);
-            let placement = pending
-                .affinity_hold
-                .as_ref()
-                .and_then(Hold::target)
-                .and_then(|target| {
-                    target
-                        .dp_rank
-                        .map(|rank| WorkerWithDpRank::new(target.worker_id, rank))
-                })
-                .map_or(WorkerPlacement::Any, WorkerPlacement::Exact);
             let metadata = QueueMetadata {
                 class_index,
                 snapshot,
@@ -1066,7 +1056,8 @@ impl OfflineReplayRouter {
                         .saturating_mul(self.dp_size as usize),
                     priority_jump,
                     strict_priority,
-                    placement,
+                    // Replay keeps every request in the class's shared lane.
+                    None,
                     pending,
                 )
                 .map_err(|(rejection, _)| anyhow::Error::new(rejection))?;
@@ -1511,7 +1502,7 @@ impl OfflineReplayRouter {
     fn drain_pending(&mut self, decay_now: Instant) -> Result<Vec<WorkerAdmission>> {
         self.needs_drain = false;
         let mut admissions = Vec::new();
-        self.pending.recheck_all_workers();
+        self.pending.recheck_blocked_lanes();
         loop {
             // Most completions find an empty queue, which never consults the
             // predicate, so only snapshot worker loads once one is needed.

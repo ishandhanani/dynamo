@@ -313,10 +313,10 @@ per-worker `CACHE` rows. Cached tokens also set each request's default
 scheduling cost and queue accounting, and prefix overlap still guides worker
 selection.
 
-Each class owns a shared heap plus one heap for each exact-worker lane, all
-ordered by the class's queue policy, along with its busy thresholds, queue
-limits, quantum, deficit, and counters. Arbitration compares the shared head with the currently dispatchable
-exact-worker lane heads. Absolute and fractional busy thresholds use OR
+Each class owns a shared heap plus, while a dispatch gate is installed, one heap
+per session lane, all ordered by the class's queue policy, along with its busy
+thresholds, queue limits, quantum, deficit, and counters. Arbitration compares the shared head with the currently dispatchable
+session lane heads. Absolute and fractional busy thresholds use OR
 semantics. The absolute `prefill_busy_threshold` is deprecated and will be
 removed in v1.7; use `prefill_busy_threshold_frac`.
 `decode_busy_threshold_frac` also marks a worker busy when the KV

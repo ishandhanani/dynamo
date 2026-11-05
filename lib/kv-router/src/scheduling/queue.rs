@@ -18,7 +18,7 @@ use tokio::time::Instant;
 use self::capacity::CapacityUpdates;
 #[cfg(test)]
 use super::config::RouterQueuePolicy;
-use super::filter::{RoutingEligibility, worker_config_for_rank};
+use super::filter::RoutingEligibility;
 use super::overlap::SelectedWorkerTierSnapshot;
 use super::overlap_refresh::{
     NoopOverlapScoresRefresh, OVERLAP_REFRESH_TIMEOUT, OverlapScoresRefresh, RefreshedOverlap,
@@ -29,7 +29,7 @@ use super::policy_config::{
 };
 use super::policy_queue::{PolicyQueue, QueueMetadata, QueueSnapshot};
 use super::prefill_load::{PrefillLoadEstimator, effective_prefill_tokens};
-use super::queue_admission::{SessionLane, WorkerPlacement};
+use super::queue_admission::SessionLane;
 use super::request_classifier::ClassificationOverrides;
 use super::selector::{
     CandidatePreparer, PreparedCandidates, WorkerSelectionInput, WorkerSelector, worker_input_rows,
@@ -379,9 +379,9 @@ enum Admission {
 enum Drain {
     /// Nothing made work ready.
     None,
-    /// An arrival entered the queue or was booked. Only lanes of workers with recorded
-    /// capacity changes are rechecked, so an older blocked pinned lane competes with later
-    /// shared arrivals.
+    /// An arrival entered the queue or was booked. Blocked lanes are rechecked only when a
+    /// capacity change was recorded, so an older held session competes with later shared
+    /// arrivals once anything changed.
     Enqueued,
     /// Every blocked lane is rechecked.
     Full,
@@ -1880,17 +1880,12 @@ impl<
         let priority_jump = queued.request.priority_jump;
         let strict_priority = queued.request.strict_priority;
         // With a dispatch gate installed, a session's requests wait in their own lane so a hold
-        // on one session blocks only that session.
-        let placement = match (
-            queued.request.pinned_worker,
-            &queued.request.session_context,
-        ) {
-            (Some(worker), _) => WorkerPlacement::Exact(worker),
-            (None, Some(session)) if self.dispatch_gate.get().is_some() => {
-                WorkerPlacement::Session(SessionLane::new(session.session_id()))
-            }
-            (None, _) => WorkerPlacement::Any,
-        };
+        // on one session blocks only that session. Everything else shares the class lane.
+        let lane = self
+            .dispatch_gate
+            .get()
+            .and(queued.request.session_context.as_ref())
+            .map(|session| SessionLane::new(session.session_id()));
         let worker_count = self.workers_with_configs.borrow().len();
         loop {
             if due_at.is_some_and(|due_at| due_at <= Instant::now()) {
@@ -1902,7 +1897,7 @@ impl<
                 worker_count,
                 priority_jump,
                 strict_priority,
-                placement,
+                lane,
                 queued,
             ) {
                 Ok(()) => return Insertion::Queued,
@@ -2137,29 +2132,18 @@ impl<
         self.subtract_class_counters(class_index, snapshot);
     }
 
-    /// Consume recorded capacity changes before choosing among shared and pinned lanes.
+    /// Consume recorded capacity changes before draining. Any change rechecks every blocked
+    /// lane: a blocked session head may be waiting on any of its eligible workers or on the
+    /// dispatch gate, and the shared lane's head is asked again on every dispatch anyway.
     fn recheck_capacity_updates(&mut self, mut recheck_all: bool) {
         if let Some(updates) = &self.capacity_updates {
             recheck_all |= updates.drain_into(&mut self.capacity_workers);
+            recheck_all |= !self.capacity_workers.is_empty();
         }
-        // Consume hints even when there is no pending work. Blocked pinned lanes
-        // count as ready here and still need their capacity rechecked.
-        if !self.pending.has_ready() {
-            return;
-        }
-        if !recheck_all {
-            let configs = self.workers_with_configs.borrow();
-            recheck_all = self
-                .capacity_workers
-                .iter()
-                .any(|&worker| worker_config_for_rank(&configs, worker).is_err());
-        }
-        if recheck_all {
-            self.pending.recheck_all_workers();
-        } else {
-            for &worker in &self.capacity_workers {
-                self.pending.recheck_worker(worker);
-            }
+        // Consume hints even when there is no pending work. Blocked lanes count as ready here
+        // and still need their recheck.
+        if recheck_all && self.pending.has_ready() {
+            self.pending.recheck_blocked_lanes();
         }
     }
 
@@ -2181,7 +2165,7 @@ impl<
     }
 
     /// Recheck recorded capacity changes before an enqueue drains the queue, so
-    /// an older blocked pinned lane competes with later shared arrivals.
+    /// an older blocked session lane competes with later shared arrivals.
     async fn handle_enqueued(&mut self, reply: Option<CommandReply>) {
         self.expire_due_classes(Instant::now());
         self.recheck_capacity_updates(false);
@@ -4495,6 +4479,31 @@ policy_classes:
 
     // The caller drives this actor directly. Its hints are separate from the
     // idle actor spawned by make_queue, so tests control notification ordering.
+    /// A gate that lets every head go. Installing it turns session lanes on, so tests of lane
+    /// behavior put each session in its own lane.
+    struct OpenGate;
+
+    impl DispatchGate for OpenGate {
+        fn check(&self, _head: &DispatchHead<'_>) -> DispatchDecision {
+            DispatchDecision::Go { target: None }
+        }
+    }
+
+    fn install_open_gate(
+        queue: &SchedulerQueue<NoopSequencePublisher, SimpleWorkerConfig, DefaultWorkerSelector>,
+    ) {
+        assert!(queue.install_dispatch_gate(Arc::new(OpenGate)));
+    }
+
+    fn in_session(request: &mut SchedulingRequest, session_id: &str) {
+        request.session_context = Some(crate::scheduling::SessionContext::new(
+            session_id.into(),
+            None,
+            None,
+            None,
+        ));
+    }
+
     fn actor_for_test(
         queue: &SchedulerQueue<NoopSequencePublisher, SimpleWorkerConfig, DefaultWorkerSelector>,
         slots: &Arc<ActiveSequencesMultiWorker<NoopSequencePublisher>>,
@@ -4548,7 +4557,7 @@ policy_classes:
             ),
             selection_trace: Arc::clone(&queue.selection_trace),
             reject_thresholds: queue.reject_thresholds.clone(),
-            dispatch_gate: Arc::new(OnceLock::new()),
+            dispatch_gate: Arc::clone(&queue.dispatch_gate),
             gate_recheck_at: None,
         }
     }
@@ -6419,7 +6428,7 @@ policy_classes:
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn edf_blocked_pinned_lane_does_not_block_other_worker() {
+    async fn edf_blocked_session_lane_does_not_block_other_worker() {
         let profile = policy_profile(
             r#"
 policy_classes:
@@ -6431,16 +6440,19 @@ policy_classes:
         );
         let (queue, slots) = make_queue_with_profile(2, 16, 256, profile);
         assert_eq!(queue.profile.class(0).queue_policy, RouterQueuePolicy::Edf);
+        install_open_gate(&queue);
 
         let (mut first, first_rx) = make_request("pinned-1", 256);
         first.pinned_worker = Some(WorkerWithDpRank::new(1, 0));
+        in_session(&mut first, "a");
         queue.enqueue(first).await;
         let first_resp = first_rx.await.unwrap().unwrap();
         assert_eq!(first_resp.best_worker, WorkerWithDpRank::new(1, 0));
 
-        // The earliest-due request waits for its full pinned worker.
+        // The earliest-due request waits in its session's lane for its full pinned worker.
         let (mut second, mut second_rx) = make_request("pinned-2", 256);
         second.pinned_worker = Some(WorkerWithDpRank::new(1, 0));
+        in_session(&mut second, "b");
         queue.enqueue(second).await;
         assert_eq!(queue.pending_count(), 1);
         assert!(
@@ -6448,9 +6460,10 @@ policy_classes:
             "request should remain queued"
         );
 
-        // A later request pinned to the idle worker does not wait behind it.
+        // A later session pinned to the idle worker does not wait behind it.
         let (mut other_worker, mut other_worker_rx) = make_request("pinned-0", 256);
         other_worker.pinned_worker = Some(WorkerWithDpRank::new(0, 0));
+        in_session(&mut other_worker, "c");
         queue.enqueue(other_worker).await;
         assert_eq!(queue.pending_count(), 1);
         let other_worker_resp = other_worker_rx
@@ -6923,17 +6936,20 @@ policy_classes:
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn test_blocked_pinned_lane_does_not_block_other_worker() {
+    async fn blocked_session_lane_does_not_block_other_worker() {
         let (queue, slots) = make_queue(2, 16, 256, Some(0.0));
+        install_open_gate(&queue);
 
         let (mut first, first_rx) = make_request("pinned-1", 256);
         first.pinned_worker = Some(WorkerWithDpRank::new(1, 0));
+        in_session(&mut first, "a");
         queue.enqueue(first).await;
         let first_resp = first_rx.await.unwrap().unwrap();
         assert_eq!(first_resp.best_worker, WorkerWithDpRank::new(1, 0));
 
         let (mut second, mut second_rx) = make_request("pinned-2", 256);
         second.pinned_worker = Some(WorkerWithDpRank::new(1, 0));
+        in_session(&mut second, "b");
         queue.enqueue(second).await;
         assert_eq!(queue.pending_count(), 1);
         assert!(
@@ -6943,6 +6959,7 @@ policy_classes:
 
         let (mut other_worker, mut other_worker_rx) = make_request("pinned-0", 256);
         other_worker.pinned_worker = Some(WorkerWithDpRank::new(0, 0));
+        in_session(&mut other_worker, "c");
         queue.enqueue(other_worker).await;
         assert_eq!(queue.pending_count(), 1);
         let other_worker_resp = other_worker_rx
@@ -9079,12 +9096,12 @@ policy_classes:
         }
     }
 
-    /// An arrival whose enqueue expires the root of a blocked exact lane drains that lane's next
-    /// head, though no capacity change was recorded for the lane's worker and the expiry left no
-    /// class timer armed. Otherwise the successor would wait for a capacity change on its worker
-    /// or for a full recheck, which the scheduler's periodic queue update runs.
+    /// An arrival whose enqueue expires the root of a blocked session lane drains that lane's
+    /// next head, though no capacity change was recorded and the expiry left no class timer
+    /// armed. Otherwise the successor would wait for a capacity change or for a full recheck,
+    /// which the scheduler's periodic queue update runs.
     #[tokio::test(start_paused = true)]
-    async fn an_arrival_drains_the_exact_lane_its_expiry_unblocked() {
+    async fn an_arrival_drains_the_session_lane_its_expiry_unblocked() {
         // One worker: a 64-token limit refuses the arrival once the successor alone fills it, and
         // a 128-token limit admits it to the lane behind the successor.
         for (case, queue_limit) in [("refused", 64), ("accepted", 128)] {
@@ -9100,12 +9117,15 @@ policy_classes:
 "#
             ));
             let (queue, slots) = make_queue_with_profile(1, 16, 64, profile);
+            install_open_gate(&queue);
             let mut actor = actor_for_test(&queue, &slots);
             let start = Instant::now();
             let worker = WorkerWithDpRank::new(0, 0);
+            // One session: its turns share a lane, pinned to the only worker.
             let pinned = |id: &str, isl_tokens| {
                 let (mut request, response_rx) = make_request(id, isl_tokens);
                 request.pinned_worker = Some(worker);
+                in_session(&mut request, "s");
                 (request, response_rx)
             };
             let (active, mut active_rx) = pinned("active", 16);
@@ -9115,8 +9135,8 @@ policy_classes:
             actor.handle_update(None).await;
             active_rx.try_recv().unwrap().unwrap();
 
-            // The busy worker blocks its exact lane at the head, due at 100 ms. The successor,
-            // with no due time, waits behind it.
+            // The busy worker blocks the session's lane at the head, due at 100 ms. The
+            // successor, with no due time, waits behind it.
             let (head, mut head_rx) = pinned("head", 16);
             let head_due = start + Duration::from_millis(100);
             assert!(enqueue_request_into_actor(
