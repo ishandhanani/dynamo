@@ -22,6 +22,7 @@
 //! This crate reads no configuration itself: the host builds a [`HintConfig`] and a
 //! [`HintEndpoints`] and passes them in.
 
+pub mod policy;
 pub mod transport;
 pub mod wire;
 
