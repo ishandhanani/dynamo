@@ -26,6 +26,7 @@
 //! [`HintEndpoints`] and passes them in.
 
 pub mod load;
+pub mod policy;
 pub mod transport;
 pub mod wire;
 
