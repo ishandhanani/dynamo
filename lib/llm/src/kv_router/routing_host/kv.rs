@@ -84,7 +84,11 @@ impl RoutingHost {
         ) {
             pinner.arm(
                 &slot,
-                worker.worker_id,
+                worker,
+                request
+                    .agent_context
+                    .as_ref()
+                    .map(|context| context.session_id.clone()),
                 Arc::from(request.token_ids.as_slice()),
             );
         }

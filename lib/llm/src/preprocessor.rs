@@ -8737,6 +8737,14 @@ impl
                 )
                 .ok()
         });
+        let pin_weight = tool_call_pin.as_ref().and_then(|_| {
+            common_request
+                .get::<crate::kv_router::hints::PinWeight>(
+                    crate::kv_router::hints::PIN_WEIGHT_CONTEXT_KEY,
+                )
+                .ok()
+                .map(|weight| weight.0)
+        });
 
         // create a stream of annotations this will be prepend to the response stream
         let annotations: Vec<Annotated<NvCreateChatCompletionStreamResponse>> = annotations
@@ -8750,6 +8758,8 @@ impl
         let response_stream = next.generate(common_request).await?;
         // Extract context once
         let context = response_stream.context();
+        let response_stream =
+            crate::kv_router::hints::collect_output_tokens(response_stream, tool_call_pin.clone());
 
         // transform the postprocessor stream (no boxing yet) - detokenize
         let stream = Self::transform_postprocessor_stream_with_image_tokens(
@@ -8820,6 +8830,7 @@ impl
             final_stream,
             tool_call_pin,
             announced_tool_call,
+            pin_weight,
         );
 
         let final_stream =

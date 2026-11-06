@@ -499,6 +499,11 @@ pub mod llm {
     /// Eviction priority of tool-call pins; higher is kept longer. Default `1`.
     pub const DYN_KVM_PIN_PRIORITY: &str = "DYN_KVM_PIN_PRIORITY";
 
+    /// With a tool-call pin that carries the client's expected tool time, also
+    /// prefetch the pinned pages to the worker this many milliseconds before the
+    /// tool should end, so the continuation finds them on device. Unset disables it.
+    pub const DYN_KVM_PIN_PREFETCH_LEAD_MS: &str = "DYN_KVM_PIN_PREFETCH_LEAD_MS";
+
     /// Hints waiting for a sender slot before new ones are dropped. Default `256`.
     pub const DYN_KVM_QUEUE_DEPTH: &str = "DYN_KVM_QUEUE_DEPTH";
 
