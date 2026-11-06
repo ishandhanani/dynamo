@@ -767,10 +767,15 @@ async def get_runtime_config(
             )
 
     mooncake_runtime_data = _get_mooncake_runtime_data(server_args)
-    if mooncake_runtime_data is not None and engine is not None:
-        # The scheduler describes its Mooncake objects (pools, per-pool key suffixes
-        # and which pages carry them) with the same key builders as its writes, so
-        # the router can name every object of a page, for example to pin it.
+    if (
+        mooncake_runtime_data is not None
+        and mooncake_runtime_data.get("key_layout") == "linker"
+        and engine is not None
+    ):
+        # The direct linker's scheduler describes its Mooncake objects (pools,
+        # per-pool key suffixes and which pages carry them) with the same key builders
+        # as its writes, so the router can name every object of a page to pin it in
+        # the Mooncake store.
         layout = _scheduler_object_layout(engine)
         if layout is not None:
             mooncake_runtime_data["object_layout"] = layout
