@@ -470,6 +470,8 @@ impl ListenerLoop {
     }
 }
 
+/// Spawn one listener attempt; the handle lets its deregistration wait for the task to stop
+/// admitting events before the worker's removal is issued.
 pub fn spawn_zmq_listener(
     worker_id: WorkerId,
     dp_rank: u32,
@@ -477,7 +479,7 @@ pub fn spawn_zmq_listener(
     ready: watch::Receiver<bool>,
     generation: u64,
     cancel: CancellationToken,
-) {
+) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
         if let Err(error) = run_listener(
             worker_id,
@@ -492,7 +494,7 @@ pub fn spawn_zmq_listener(
             tracing::error!(worker_id, dp_rank, error = %error, "ZMQ listener failed");
             record.try_mark_failed(generation, error);
         }
-    });
+    })
 }
 
 async fn run_listener(
@@ -554,6 +556,25 @@ async fn run_listener(
     )
     .run()
     .await
+}
+
+/// Engine-framed batch payloads for the listener and registry tests.
+#[cfg(test)]
+pub(super) mod test_frames {
+    /// One batch holding a `BlockStored` of `token` repeated over a block of four, chained
+    /// under `parent` when given, in the positional layout the engines publish.
+    pub fn store_payload(block_hash: u64, parent: Option<u64>, token: u32) -> Vec<u8> {
+        let event = (
+            "BlockStored",
+            vec![block_hash],
+            parent,
+            vec![token; 4],
+            4_usize,
+            Option::<u64>::None,
+            "GPU",
+        );
+        rmp_serde::to_vec(&(0.0_f64, vec![event], Some(0_i32))).unwrap()
+    }
 }
 
 #[cfg(test)]
