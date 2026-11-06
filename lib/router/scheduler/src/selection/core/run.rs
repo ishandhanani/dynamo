@@ -33,7 +33,8 @@
 //!   the request routes unpinned rather than waiting on a request queued
 //!   behind this booking. A rejected
 //!   commit frees the booking
-//!   (`two_phase_replay_rejects_a_worker_the_session_left`).
+//!   (`two_phase_replay_rejects_a_worker_the_session_left`,
+//!   `hard_mode_keeps_the_binding_when_the_host_sheds_the_bound_worker`).
 //! - A `Lease` admission installs no index row and records no routing hashes
 //!   in the core; the host owns both
 //!   (`lease_admission_installs_no_index_row_and_records_nothing`).
@@ -407,6 +408,13 @@ impl SelectionCore {
             ),
             None => allowed_worker_ids,
         };
+        // Whether the request's own worker set still admits the held binding;
+        // the commit below reads it after `allowed_worker_ids` moves.
+        let binding_allowed = affinity_hold
+            .as_ref()
+            .and_then(Hold::target)
+            .zip(allowed_worker_ids.as_ref())
+            .is_none_or(|(target, ids)| ids.contains(&target.worker_id));
         // Bookings (now, or later via the pending-selection cache) are recorded
         // into an approximate indexer; keep the public hashes for that.
         let routing_hashes = (entry.indexer.records_routing_decisions()
@@ -516,6 +524,28 @@ impl SelectionCore {
             // so the booking is freed and nothing below is recorded.
             let affinity_lease = match (affinity_hold, managed_session) {
                 (Some(hold), Some((table, session_id))) => {
+                    if table.mode() == SessionAffinityMode::Hard
+                        && binding_allowed
+                        && let Some(target) = hold.target()
+                        && validate_dispatch_target(
+                            session_id,
+                            target,
+                            WorkerAffinityTarget::from(response.best_worker),
+                        )
+                        .is_err()
+                        && self.catalog.is_schedulable(target, &key)
+                    {
+                        // The scheduler steered a Hard session off a worker this
+                        // partition still schedules and the request did not
+                        // exclude: the host's load, capacity, or reachability made
+                        // it ineligible. Report it as the frontend reports its
+                        // pinned binding and keep the binding: dropping the hold
+                        // releases the lease, the armed handle frees the booking.
+                        return Err(KvSchedulerError::PinnedWorkerOverloaded {
+                            worker_id: target.worker_id,
+                        }
+                        .into());
+                    }
                     self.commit_session(table, hold, session_id, response.best_worker, &key)?
                 }
                 _ => None,
