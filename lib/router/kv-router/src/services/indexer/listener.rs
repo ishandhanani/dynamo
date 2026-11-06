@@ -3,6 +3,7 @@
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::Duration;
 
 use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
@@ -18,6 +19,11 @@ use crate::services::common::zmq::{
 };
 
 const WATERMARK_UNSET: u64 = u64::MAX;
+
+/// Longest silence tolerated from the engine's replay socket per reply: a ROUTER that accepts
+/// the connection but never answers would otherwise park the rank's listener for good. Same
+/// bound as the worker-side recovery listener's inactivity timeout.
+const REPLAY_INACTIVITY_TIMEOUT: Duration = Duration::from_secs(5);
 
 fn cursor_from_watermark(watermark: u64) -> CursorState {
     if watermark == WATERMARK_UNSET {
@@ -235,13 +241,24 @@ impl ListenerLoop {
 
         let mut replay_progress = ReplayRecoveryProgress::new(start_seq, end_seq);
         loop {
+            // A silent peer ends the replay like a recv error: the gap is logged as incomplete
+            // below and the listener goes back to the live socket.
             let msg = tokio::select! {
                 _ = self.cancel.cancelled() => break,
-                result = replay_socket.recv_multipart() => {
+                result = tokio::time::timeout(REPLAY_INACTIVITY_TIMEOUT, replay_socket.recv_multipart()) => {
                     match result {
-                        Ok(msg) => msg,
-                        Err(error) => {
+                        Ok(Ok(msg)) => msg,
+                        Ok(Err(error)) => {
                             tracing::error!(worker_id, dp_rank, error = %error, "Replay recv error");
+                            break;
+                        }
+                        Err(_) => {
+                            tracing::warn!(
+                                worker_id,
+                                dp_rank,
+                                timeout_ms = REPLAY_INACTIVITY_TIMEOUT.as_millis() as u64,
+                                "Replay peer silent; giving up on this gap"
+                            );
                             break;
                         }
                     }
@@ -542,9 +559,9 @@ async fn run_listener(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::services::common::zmq::create_sub_socket;
     use crate::services::indexer::backend::create_indexer;
     use dynamo_kv_hashing::routing::compute_block_hash_for_seq;
-    use std::time::Duration;
 
     #[rstest::rstest]
     #[case::sglang(false)]
@@ -618,6 +635,60 @@ mod tests {
         let hashes = compute_block_hash_for_seq(&[1, 1, 1, 1, 2, 2, 2, 2], 4, Default::default());
         let matches = indexer.find_matches(hashes).await.unwrap();
         assert_eq!(matches.scores.get(&WorkerWithDpRank::new(1, 0)), Some(&2));
+        cancel.cancel();
+    }
+
+    /// A replay ROUTER that accepts the request and never answers must not park the
+    /// rank's listener: the live SUB socket would go unread while the status stays
+    /// `Active`. The peer runs on a plain thread so the paused clock still auto-advances.
+    #[tokio::test]
+    async fn replay_gives_up_on_a_silent_peer() {
+        let context = zmq::Context::new();
+        let router = context.socket(zmq::ROUTER).unwrap();
+        router.set_linger(0).unwrap();
+        router.set_rcvtimeo(5000).unwrap();
+        router.bind("tcp://127.0.0.1:*").unwrap();
+        let endpoint = router.get_last_endpoint().unwrap().unwrap();
+        let (got_request_tx, got_request_rx) = tokio::sync::oneshot::channel::<()>();
+        let (done_tx, done_rx) = std::sync::mpsc::channel::<()>();
+        let server = std::thread::spawn(move || {
+            if router.recv_multipart(0).is_ok() {
+                let _ = got_request_tx.send(());
+            }
+            // Hold the connection open without ever replying.
+            let _ = done_rx.recv();
+        });
+        let indexer = create_indexer(4, 1);
+        let watermark = Arc::new(AtomicU64::new(WATERMARK_UNSET));
+        let cancel = CancellationToken::new();
+        let mut listener = ListenerLoop::new(
+            1,
+            0,
+            4,
+            false,
+            indexer,
+            cancel.clone(),
+            create_sub_socket(b"").unwrap(),
+            Some(endpoint),
+            watermark.clone(),
+        );
+
+        let replay = listener.replay_gap(0, 2);
+        tokio::pin!(replay);
+        tokio::select! {
+            result = &mut replay => panic!("replay finished before the peer received the request: {result:?}"),
+            received = got_request_rx => received.expect("replay peer should receive the request"),
+        }
+        // The peer holds the request and stays silent; the wait is virtual from here on.
+        tokio::time::pause();
+        let replayed = tokio::time::timeout(2 * REPLAY_INACTIVITY_TIMEOUT, replay)
+            .await
+            .expect("a silent replay peer must not park the listener")
+            .unwrap();
+        done_tx.send(()).unwrap();
+        server.join().unwrap();
+        assert_eq!(replayed, 0);
+        assert_eq!(watermark.load(Ordering::Acquire), WATERMARK_UNSET);
         cancel.cancel();
     }
 }
