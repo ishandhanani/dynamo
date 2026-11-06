@@ -641,22 +641,31 @@ impl RoutingHost {
 
     /// The prefill leg: book a prefill worker, let `prepare` rewrite the request
     /// for it, then send. A failed `prepare` gives the booking back.
+    ///
+    /// `request` carries the prefill context, which is independent of the
+    /// client's so a dispatched prefill outlives a disconnect (NVBugs 5969206).
+    /// Nothing is staged while the request waits for admission, so that wait
+    /// ends with `client` instead: dropping the plan future retracts a queued
+    /// admission, or releases a booking that was never dispatched.
     pub(super) async fn select_and_dispatch_kv_prefill<M, F>(
         &self,
         mut request: SingleIn<PreprocessedRequest>,
+        client: &dyn AsyncEngineContext,
         prepare: F,
     ) -> Result<PrefillDispatch<M>, Error>
     where
         F: FnOnce(&mut PreprocessedRequest, AffinityTarget) -> Result<M, Error>,
     {
-        let plan = self
-            .plan_kv_route(
+        let plan = cancellation::cancel_on_stop(
+            client,
+            std::pin::pin!(self.plan_kv_route(
                 &request,
                 RequestPhase::Prefill,
                 None,
                 CleanupBudget::default(),
-            )
-            .await?;
+            )),
+        )
+        .await??;
         let metadata = match prepare(&mut request, route_target(plan.worker())) {
             Ok(metadata) => metadata,
             Err(error) => {

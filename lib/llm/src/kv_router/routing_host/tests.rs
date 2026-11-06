@@ -4897,8 +4897,10 @@ async fn hard_parent_group_recovers_when_the_bound_worker_leaves() {
 async fn prefill_prepare_failure_releases_the_booking_before_the_request_counts() {
     let (router, runtime) = router(None).await;
     let started_before = router.request_metrics.requests_started_total.get();
+    let request = Context::new(request());
+    let client = request.context();
     let error = router
-        .select_and_dispatch_prefill(Context::new(request()), |_, _| -> Result<(), Error> {
+        .select_and_dispatch_prefill(request, client.as_ref(), |_, _| -> Result<(), Error> {
             Err(anyhow::anyhow!("prepare failed"))
         })
         .await
