@@ -2486,22 +2486,41 @@ impl<
         let configs = self.workers_with_configs.borrow();
         let loads = self.slots.worker_load_reader(now);
         let mut excess = 0usize;
+        let mut booked_total = 0usize;
+        let mut threshold_total = 0usize;
+        let mut ranks = 0usize;
+        let mut unobserved = 0usize;
         request
             .eligibility()
             .with_available_workers(available.as_deref())
             .any_eligible_worker_rank(&configs, |worker, config| {
-                let booked = loads
-                    .get(worker)
-                    .map_or(0, |load| load.active_prefill_tokens);
-                excess += booked
-                    .saturating_sub(limits.prefill_threshold_tokens(WorkerCapacity::of(config)));
+                let load = loads.get(worker);
+                if load.is_none() {
+                    unobserved += 1;
+                }
+                let booked = load.map_or(0, |load| load.active_prefill_tokens);
+                let threshold = limits.prefill_threshold_tokens(WorkerCapacity::of(config));
+                ranks += 1;
+                booked_total += booked;
+                threshold_total += threshold;
+                excess += booked.saturating_sub(threshold);
                 // Visit every eligible rank.
                 false
             });
-        excess
-            + self.class_counters[class_index]
-                .pending_cost_tokens
-                .load(AtomicOrdering::Relaxed)
+        let pending_cost = self.class_counters[class_index]
+            .pending_cost_tokens
+            .load(AtomicOrdering::Relaxed);
+        tracing::debug!(
+            request_id = request.mode.request_id().unwrap_or("unknown"),
+            ranks,
+            unobserved,
+            booked_total,
+            threshold_total,
+            excess,
+            pending_cost,
+            "prefetch work ahead at enqueue"
+        );
+        excess + pending_cost
     }
 
     fn add_class_counters(&self, class_index: usize, snapshot: QueueSnapshot) {
