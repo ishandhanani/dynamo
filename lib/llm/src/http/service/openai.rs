@@ -1244,6 +1244,9 @@ where
     if let Some(call) = crate::kv_router::hints::sim_tool_call_from_headers(headers) {
         request.insert(crate::kv_router::hints::SIM_TOOL_CALL_CONTEXT_KEY, call);
     }
+    if let Some(weight) = crate::kv_router::hints::pin_weight_from_headers(headers) {
+        request.insert(crate::kv_router::hints::PIN_WEIGHT_CONTEXT_KEY, weight);
+    }
     Ok(request)
 }
 

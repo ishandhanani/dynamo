@@ -377,64 +377,139 @@ pub fn sim_tool_call_from_headers(headers: &HeaderMap) -> Option<SimToolCall> {
     SimToolCall::parse(headers.get(SIM_TOOL_CALL_HEADER)?.to_str().ok()?)
 }
 
-/// What fired a request's pin: the tool's name and the client's own estimate.
+/// Request header carrying a session's weight for pin priority, for example an RL
+/// rollout's value or a tenant class: `x-dynamo-pin-weight: <float>`.
+pub const PIN_WEIGHT_HEADER: &str = "x-dynamo-pin-weight";
+/// Request-context key carrying the parsed [`PIN_WEIGHT_HEADER`].
+pub const PIN_WEIGHT_CONTEXT_KEY: &str = "kv_hint_pin_weight";
+
+/// The session weight on a request, when tool-call pins are enabled.
+pub fn pin_weight_from_headers(headers: &HeaderMap) -> Option<PinWeight> {
+    if !tool_call_pins_enabled() {
+        return None;
+    }
+    let weight: f64 = headers
+        .get(PIN_WEIGHT_HEADER)?
+        .to_str()
+        .ok()?
+        .trim()
+        .parse()
+        .ok()?;
+    (weight.is_finite() && weight >= 0.0).then_some(PinWeight(weight))
+}
+
+/// The [`PIN_WEIGHT_HEADER`] value.
+#[derive(Debug, Clone, Copy)]
+pub struct PinWeight(pub f64);
+
+/// What fired a request's pin: the tool's name, the client's own estimate, and the
+/// session's weight.
 #[derive(Debug, Clone, Default)]
 pub struct FiredToolCall {
     pub tool: Option<String>,
     pub expected: Option<Duration>,
+    pub weight: Option<f64>,
 }
 
-type ArmedPin = Box<dyn Fn(&FiredToolCall) + Send + Sync>;
+/// The armed pin: the call that fired it and the response tokens to pin beyond the
+/// prompt (empty for the early, prompt-only pin).
+type ArmedPin = Box<dyn Fn(&FiredToolCall, &[u32]) + Send + Sync>;
 
 /// One request's tool-call pin. The preprocessor puts an empty slot in the request
 /// context, the router arms it with the worker it routed to, and the preprocessor
-/// fires it when the response first carries a tool call (or, for a request carrying
-/// [`SIM_TOOL_CALL_HEADER`], when the response ends): the session is about to wait
-/// on a tool, so its pages should outlive the wait. Keys are computed on fire, off
-/// the routing path.
+/// fires it: on the response's first tool call it pins the prompt's pages; when the
+/// response ends it pins the prompt and the response's pages, which the engine
+/// writes only then, so the store holds those pins until the pages show up. A
+/// request announcing a tool call ([`SIM_TOOL_CALL_HEADER`]) pins once, at the end.
+/// Keys are computed on fire, off the routing path.
 #[derive(Default)]
 pub struct ToolCallPinSlot {
     pin: OnceLock<ArmedPin>,
+    call: std::sync::Mutex<Option<FiredToolCall>>,
+    output: std::sync::Mutex<Vec<u32>>,
 }
 
 impl ToolCallPinSlot {
-    pub(crate) fn arm(&self, pin: impl Fn(&FiredToolCall) + Send + Sync + 'static) {
+    pub(crate) fn arm(&self, pin: impl Fn(&FiredToolCall, &[u32]) + Send + Sync + 'static) {
         let _ = self.pin.set(Box::new(pin));
     }
 
-    /// Send the armed pin, if the router armed one.
-    pub fn fire(&self, call: &FiredToolCall) {
+    /// The response called a tool: pin the prompt's pages now.
+    pub fn fire(&self, call: FiredToolCall) {
         match self.pin.get() {
-            Some(pin) => pin(call),
+            Some(pin) => pin(&call, &[]),
             None => tracing::debug!("tool call seen; no pin armed for this request"),
         }
+        *self.call.lock().unwrap() = Some(call);
+    }
+
+    /// Record tokens the response generated, for the pin at its end.
+    pub fn push_output(&self, tokens: &[u32]) {
+        self.output.lock().unwrap().extend_from_slice(tokens);
+    }
+
+    /// The response ended: if it called a tool, or `announced` says one follows,
+    /// pin the prompt and the response's pages.
+    pub fn finish(&self, announced: Option<FiredToolCall>) {
+        let call = self.call.lock().unwrap().take().or(announced);
+        let Some(call) = call else {
+            return;
+        };
+        let Some(pin) = self.pin.get() else {
+            tracing::debug!("tool call ended a response; no pin armed for this request");
+            return;
+        };
+        let output = std::mem::take(&mut *self.output.lock().unwrap());
+        pin(&call, &output);
     }
 }
 
 type ChatChunk = dynamo_runtime::protocols::annotated::Annotated<
     crate::protocols::openai::chat_completions::NvCreateChatCompletionStreamResponse,
 >;
+type BackendChunk = dynamo_runtime::protocols::annotated::Annotated<
+    crate::protocols::common::llm_backend::BackendOutput,
+>;
 
-/// Fire `slot` once: on the first chunk whose delta carries a tool call, or, when
-/// the client announced one with [`SIM_TOOL_CALL_HEADER`], at the response's end.
+/// Copy the engine's output token ids into `slot`, for the pin at the response's end.
+pub fn collect_output_tokens<S>(
+    stream: S,
+    slot: Option<Arc<ToolCallPinSlot>>,
+) -> std::pin::Pin<Box<dyn futures::Stream<Item = BackendChunk> + Send>>
+where
+    S: futures::Stream<Item = BackendChunk> + Send + 'static,
+{
+    use futures::StreamExt;
+    let Some(slot) = slot else {
+        return Box::pin(stream);
+    };
+    Box::pin(stream.inspect(move |response| {
+        if let Some(output) = response.data.as_ref() {
+            slot.push_output(&output.token_ids);
+        }
+    }))
+}
+
+/// Fire `slot` on the first chunk whose delta carries a tool call, and finish it
+/// when the response ends (with `announced` when the client said a tool call
+/// follows). `weight` is the session's [`PIN_WEIGHT_HEADER`].
 pub fn fire_on_tool_call<S>(
     stream: S,
     slot: Option<Arc<ToolCallPinSlot>>,
     announced: Option<Arc<SimToolCall>>,
+    weight: Option<f64>,
 ) -> std::pin::Pin<Box<dyn futures::Stream<Item = ChatChunk> + Send>>
 where
     S: futures::Stream<Item = ChatChunk> + Send + 'static,
 {
     use futures::StreamExt;
-    use std::sync::atomic::{AtomicBool, Ordering};
     let Some(slot) = slot else {
         return Box::pin(stream);
     };
-    let fired = Arc::new(AtomicBool::new(false));
-    let on_chunk = Arc::clone(&fired);
-    let on_chunk_slot = Arc::clone(&slot);
+    let mut fired = false;
+    let on_chunk = Arc::clone(&slot);
     let chunks = stream.inspect(move |response| {
-        if on_chunk.load(Ordering::Relaxed) {
+        if fired {
             return;
         }
         let tool = response.data.as_ref().and_then(|chunk| {
@@ -443,55 +518,83 @@ where
                 Some(call.function.as_ref().and_then(|f| f.name.clone()))
             })
         });
-        if let Some(tool) = tool
-            && !on_chunk.swap(true, Ordering::Relaxed)
-        {
-            on_chunk_slot.fire(&FiredToolCall {
+        if let Some(tool) = tool {
+            fired = true;
+            on_chunk.fire(FiredToolCall {
                 tool,
                 expected: None,
+                weight,
             });
         }
     });
-    let Some(announced) = announced else {
-        return Box::pin(chunks);
-    };
     let end = futures::stream::once(async move {
-        if !fired.swap(true, Ordering::Relaxed) {
-            slot.fire(&FiredToolCall {
-                tool: Some(announced.tool.clone()),
-                expected: announced.expected,
-            });
-        }
+        slot.finish(announced.map(|call| FiredToolCall {
+            tool: Some(call.tool.clone()),
+            expected: call.expected,
+            weight,
+        }));
     })
     .filter_map(|()| async { None });
     Box::pin(chunks.chain(end))
 }
 
-/// Builds tool-call pins for one router's workers.
+/// Sessions with a pin out, for measuring their tool's duration; past this many the
+/// map is cleared.
+const MAX_OPEN_TOOL_CALLS: usize = 65_536;
+
+/// Builds tool-call pins for one router's workers, and learns tool durations: the
+/// time from a session's pin to its next routed request.
 pub struct ToolCallPinner {
     controller: HintController,
     configs: RuntimeConfigWatch,
     policy: dynamo_kvm::policy::DefaultPinPolicy,
     /// `DYN_KVM_PIN_PRIORITY`, when set, instead of the policy's score.
     fixed_priority: Option<u32>,
+    /// `DYN_KVM_PIN_PREFETCH_LEAD_MS`: prefetch this long before an expected tool end.
+    prefetch_lead: Option<Duration>,
+    /// Session to (duration key, when its pin fired).
+    open_calls: std::sync::Mutex<HashMap<String, (Option<String>, Instant)>>,
 }
 
 impl ToolCallPinner {
-    /// Arm `slot` to pin the full pages of `tokens` on `worker_id`.
+    /// Arm `slot` to pin `tokens` (and the response's) on `worker`. A request from
+    /// a session with a pin out ends that session's tool call.
     pub(crate) fn arm(
         self: &Arc<Self>,
         slot: &ToolCallPinSlot,
-        worker_id: u64,
+        worker: WorkerWithDpRank,
+        session: Option<String>,
         tokens: Arc<[u32]>,
     ) {
+        if let Some(session) = session.as_deref() {
+            self.tool_returned(session);
+        }
         let pinner = Arc::clone(self);
-        slot.arm(move |call| pinner.pin(worker_id, &tokens, call));
+        slot.arm(move |call, output| pinner.pin(worker, session.as_deref(), &tokens, output, call));
     }
 
-    fn pin(&self, worker_id: u64, tokens: &[u32], call: &FiredToolCall) {
+    fn tool_returned(&self, session: &str) {
+        let Some((key, fired_at)) = self.open_calls.lock().unwrap().remove(session) else {
+            return;
+        };
+        let duration = fired_at.elapsed();
+        tracing::debug!(session, tool = ?key, duration_ms = duration.as_millis() as u64, "tool call returned");
+        self.policy.tool_ended(key.as_deref(), duration);
+    }
+
+    fn pin(
+        &self,
+        worker: WorkerWithDpRank,
+        session: Option<&str>,
+        prompt: &[u32],
+        output: &[u32],
+        call: &FiredToolCall,
+    ) {
         use dynamo_kvm::policy::{PinPolicy, SessionSignals, ToolCallInfo};
+        let tokens: Vec<u32> = prompt.iter().chain(output).copied().collect();
+        let worker_id = worker.worker_id;
         let keys = self.configs.borrow().get(&worker_id).and_then(|runtime| {
-            crate::kv_router::shared_cache::mooncake_pin_keys(worker_id, runtime, tokens)
+            crate::kv_router::shared_cache::mooncake_pin_keys(worker_id, runtime, &tokens)
         });
         let Some((tenant, keys)) = keys else {
             tracing::debug!(
@@ -500,21 +603,25 @@ impl ToolCallPinner {
             );
             return;
         };
+        let info = ToolCallInfo {
+            name: call.tool.as_deref(),
+            arguments: None,
+            expected_duration: call.expected,
+        };
         let decision = self.policy.decide(
-            &ToolCallInfo {
-                name: call.tool.as_deref(),
-                arguments: None,
-                expected_duration: call.expected,
-            },
+            &info,
             &SessionSignals {
                 recompute_tokens: Some(tokens.len() as u64),
+                weight: call.weight,
                 ..SessionSignals::default()
             },
         );
         let priority = self.fixed_priority.unwrap_or(decision.priority);
+        let final_pin = !output.is_empty() || call.expected.is_some();
         tracing::debug!(
             worker_id,
             keys = keys.len(),
+            output_tokens = output.len(),
             tool = ?call.tool,
             ttl_ms = decision.ttl.as_millis() as u64,
             priority,
@@ -526,6 +633,25 @@ impl ToolCallPinner {
             ttl: decision.ttl,
             priority,
         });
+        if let Some(session) = session {
+            let mut open = self.open_calls.lock().unwrap();
+            if open.len() >= MAX_OPEN_TOOL_CALLS {
+                open.clear();
+            }
+            open.insert(
+                session.to_string(),
+                (self.policy.tool_started(&info), Instant::now()),
+            );
+        }
+        if let (true, Some(lead), Some(expected)) = (final_pin, self.prefetch_lead, call.expected) {
+            let controller = self.controller.clone();
+            let tokens: Arc<[u32]> = tokens.into();
+            let wait = expected.saturating_sub(lead);
+            tokio::spawn(async move {
+                tokio::time::sleep(wait).await;
+                controller.prefetch(worker_target(worker), tokens);
+            });
+        }
     }
 }
 
@@ -555,6 +681,8 @@ pub fn tool_call_pinner(
         fixed_priority: std::env::var(env_llm::DYN_KVM_PIN_PRIORITY)
             .ok()
             .and_then(|value| value.trim().parse().ok()),
+        prefetch_lead: env_duration_ms(env_llm::DYN_KVM_PIN_PREFETCH_LEAD_MS),
+        open_calls: std::sync::Mutex::new(HashMap::new()),
     }))
 }
 
@@ -678,21 +806,34 @@ mod tests {
         .unwrap()
     }
 
-    fn recording_slot() -> (
-        Arc<ToolCallPinSlot>,
-        Arc<std::sync::Mutex<Vec<FiredToolCall>>>,
-    ) {
+    fn tool_chunk() -> ChatChunk {
+        serde_json::from_value(serde_json::json!({
+            "data": {
+                "id": "c", "object": "chat.completion.chunk", "created": 0, "model": "m",
+                "choices": [{"index": 0, "delta": {"tool_calls": [{
+                    "index": 0, "id": "call_1", "type": "function",
+                    "function": {"name": "Bash", "arguments": "{}"}
+                }]}}]
+            }
+        }))
+        .unwrap()
+    }
+
+    type Fired = Arc<std::sync::Mutex<Vec<(FiredToolCall, Vec<u32>)>>>;
+
+    fn recording_slot() -> (Arc<ToolCallPinSlot>, Fired) {
         let slot = Arc::new(ToolCallPinSlot::default());
-        let fired = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let fired: Fired = Arc::default();
         let seen = Arc::clone(&fired);
-        slot.arm(move |call| seen.lock().unwrap().push(call.clone()));
+        slot.arm(move |call, output| seen.lock().unwrap().push((call.clone(), output.to_vec())));
         (slot, fired)
     }
 
     #[tokio::test]
-    async fn an_announced_tool_call_fires_once_at_the_end() {
+    async fn an_announced_tool_call_pins_once_at_the_end_with_the_output() {
         use futures::StreamExt;
         let (slot, fired) = recording_slot();
+        slot.push_output(&[7, 8, 9]);
         let announced = Arc::new(SimToolCall {
             tool: "shell".into(),
             expected: Some(Duration::from_secs(20)),
@@ -701,24 +842,55 @@ mod tests {
             futures::stream::iter(vec![text_chunk(), text_chunk()]),
             Some(slot),
             Some(announced),
+            Some(2.0),
         )
         .collect()
         .await;
         assert_eq!(out.len(), 2, "the stream passes through unchanged");
         let fired = fired.lock().unwrap();
         assert_eq!(fired.len(), 1);
-        assert_eq!(fired[0].tool.as_deref(), Some("shell"));
-        assert_eq!(fired[0].expected, Some(Duration::from_secs(20)));
+        assert_eq!(fired[0].0.tool.as_deref(), Some("shell"));
+        assert_eq!(fired[0].0.expected, Some(Duration::from_secs(20)));
+        assert_eq!(fired[0].0.weight, Some(2.0));
+        assert_eq!(fired[0].1, vec![7, 8, 9]);
+    }
+
+    #[tokio::test]
+    async fn a_parsed_tool_call_pins_the_prompt_then_the_response() {
+        use futures::StreamExt;
+        let (slot, fired) = recording_slot();
+        let stream_slot = Arc::clone(&slot);
+        let _: Vec<_> = fire_on_tool_call(
+            futures::stream::iter(vec![text_chunk(), tool_chunk(), tool_chunk()])
+                .inspect(move |_| stream_slot.push_output(&[1])),
+            Some(slot),
+            None,
+            None,
+        )
+        .collect()
+        .await;
+        let fired = fired.lock().unwrap();
+        assert_eq!(fired.len(), 2, "one early pin, one at the end");
+        assert_eq!(fired[0].0.tool.as_deref(), Some("Bash"));
+        assert!(
+            fired[0].1.is_empty(),
+            "the early pin covers the prompt only"
+        );
+        assert_eq!(fired[1].1, vec![1, 1, 1], "the final pin adds the response");
     }
 
     #[tokio::test]
     async fn plain_text_without_an_announcement_does_not_fire() {
         use futures::StreamExt;
         let (slot, fired) = recording_slot();
-        let _: Vec<_> =
-            fire_on_tool_call(futures::stream::iter(vec![text_chunk()]), Some(slot), None)
-                .collect()
-                .await;
+        let _: Vec<_> = fire_on_tool_call(
+            futures::stream::iter(vec![text_chunk()]),
+            Some(slot),
+            None,
+            None,
+        )
+        .collect()
+        .await;
         assert!(fired.lock().unwrap().is_empty());
     }
     use crate::local_model::runtime_config::ModelRuntimeConfig;
