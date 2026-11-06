@@ -12,6 +12,7 @@ use dashmap::mapref::one::Ref;
 use parking_lot::Mutex;
 use serde::Serialize;
 use tokio::sync::watch;
+use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
 use dynamo_kv_indexer::metrics::KvIndexerMetrics;
@@ -138,6 +139,8 @@ struct ListenerRuntime {
     status: ListenerStatus,
     last_error: Option<String>,
     cancel_token: Option<CancellationToken>,
+    /// The current attempt's task, joined by deregistration after its token is cancelled.
+    task: Option<JoinHandle<()>>,
     generation: u64,
 }
 
@@ -171,6 +174,7 @@ impl ListenerRecord {
                 status: ListenerStatus::Pending,
                 last_error: None,
                 cancel_token: None,
+                task: None,
                 generation: 0,
             }),
         }
@@ -293,6 +297,30 @@ impl ListenerRecord {
 
     fn take_cancel(&self) -> Option<CancellationToken> {
         self.runtime.lock().cancel_token.take()
+    }
+
+    /// Record the spawned task of attempt `generation`; a stale attempt's handle is dropped.
+    fn set_task(&self, generation: u64, task: JoinHandle<()>) {
+        let mut runtime = self.runtime.lock();
+        if runtime.generation == generation {
+            runtime.task = Some(task);
+        }
+    }
+
+    fn take_task(&self) -> Option<JoinHandle<()>> {
+        self.runtime.lock().task.take()
+    }
+
+    /// Cancel the attempt and wait for its task to exit, so nothing it still holds is
+    /// admitted after the removal that follows (the indexer removes a worker whose source
+    /// has stopped; it does not fence events admitted after the removal was issued).
+    async fn stop(&self) {
+        if let Some(cancel_token) = self.take_cancel() {
+            cancel_token.cancel();
+        }
+        if let Some(task) = self.take_task() {
+            let _ = task.await;
+        }
     }
 
     fn snapshot(&self) -> ListenerInfo {
@@ -505,13 +533,11 @@ impl WorkerRegistry {
         }
 
         if let Some((_, entry)) = self.workers.remove(&instance_id) {
-            for record in entry.listeners.values() {
-                if let Some(cancel_token) = record.take_cancel() {
-                    cancel_token.cancel();
-                }
-            }
             for &dp_rank in entry.listeners.keys() {
                 self.watermarks.remove(&(instance_id, dp_rank));
+            }
+            for record in entry.listeners.values() {
+                record.stop().await;
             }
         }
 
@@ -554,16 +580,16 @@ impl WorkerRegistry {
             (record, remove_worker)
         };
 
-        if let Some(cancel_token) = record.take_cancel() {
-            cancel_token.cancel();
-        }
         self.watermarks.remove(&(instance_id, dp_rank));
-
-        if remove_worker {
-            let actually_removed = self
+        // The entry leaves the map before the join so registry state never waits on the task.
+        let actually_removed = remove_worker
+            && self
                 .workers
                 .remove_if(&instance_id, |_, entry| entry.listeners.is_empty())
                 .is_some();
+        record.stop().await;
+
+        if remove_worker {
             if actually_removed {
                 let indexer = self.index.indexer(&key);
                 if let Some(indexer) = indexer {
@@ -600,13 +626,11 @@ impl WorkerRegistry {
         };
 
         if let Some((_, entry)) = self.workers.remove(&instance_id) {
-            for record in entry.listeners.values() {
-                if let Some(cancel_token) = record.take_cancel() {
-                    cancel_token.cancel();
-                }
-            }
             for &dp_rank in entry.listeners.keys() {
                 self.watermarks.remove(&(instance_id, dp_rank));
+            }
+            for record in entry.listeners.values() {
+                record.stop().await;
             }
         }
 
@@ -797,14 +821,15 @@ impl WorkerRegistry {
         (generation, cancel_token): (u64, CancellationToken),
         record: Arc<ListenerRecord>,
     ) {
-        spawn_zmq_listener(
+        let task = spawn_zmq_listener(
             instance_id,
             dp_rank,
-            record,
+            record.clone(),
             self.ready_rx(),
             generation,
             cancel_token.child_token(),
         );
+        record.set_task(generation, task);
     }
 
     /// Drop the partition's indexer once no registered worker names it (unless the
@@ -822,6 +847,7 @@ impl WorkerRegistry {
 mod tests {
     use super::*;
     use crate::services::indexer::backend::test_util::store_event;
+    use crate::services::indexer::listener::test_frames::store_payload;
     use dynamo_kv_events::residency::StorageTier;
     use dynamo_kv_hashing::LocalBlockHash;
     use dynamo_router_protocol::worker::WorkerWithDpRank;
@@ -1085,6 +1111,99 @@ mod tests {
             !registry.watermarks.contains_key(&(1, 1)),
             "watermark for dp_rank 1 should be removed"
         );
+    }
+
+    /// Deregistration must stop the rank's listener before the worker's removal is issued.
+    /// The listener here is parked in a replay (its first live batch is seq 5, the replay
+    /// peer never answers), so it still holds a batch when the cancel lands; that batch must
+    /// not be admitted after the removal barrier, or the worker reappears in the index.
+    #[tokio::test]
+    async fn deregister_waits_for_the_listener_before_removing_the_worker() {
+        let context = zmq::Context::new();
+        let router = context.socket(zmq::ROUTER).unwrap();
+        router.set_linger(0).unwrap();
+        router.set_rcvtimeo(5000).unwrap();
+        router.bind("tcp://127.0.0.1:*").unwrap();
+        let replay_endpoint = router.get_last_endpoint().unwrap().unwrap();
+        let publisher = context.socket(zmq::PUB).unwrap();
+        publisher.set_linger(0).unwrap();
+        publisher.bind("tcp://127.0.0.1:*").unwrap();
+        let endpoint = publisher.get_last_endpoint().unwrap().unwrap();
+        let (got_request_tx, got_request_rx) = tokio::sync::oneshot::channel::<()>();
+        let (done_tx, done_rx) = std::sync::mpsc::channel::<()>();
+        let server = std::thread::spawn(move || {
+            if router.recv_multipart(0).is_ok() {
+                let _ = got_request_tx.send(());
+            }
+            let _ = done_rx.recv();
+        });
+
+        let key = RoutingPartitionId::new("test-model", "default");
+        let registry = WorkerRegistry::with_index(
+            Arc::new(
+                IndexRegistry::new(2, Arc::new(KvIndexerMetrics::new_unregistered()))
+                    .with_retained_indexers(),
+            ),
+            CancellationToken::new(),
+        );
+        registry.signal_ready();
+        registry
+            .register(
+                7,
+                endpoint,
+                0,
+                "test-model".into(),
+                "default".into(),
+                4,
+                Some(replay_endpoint),
+                false,
+            )
+            .await
+            .unwrap();
+        let indexer = registry.index().indexer(&key).expect("claimed indexer");
+        // Lanes are assigned in order of first event, and the tree sweep runs on lane 0:
+        // park another worker there so worker 7's lookups live on a lane the sweep never
+        // touches, as for every worker but the first in a real pool.
+        indexer
+            .apply_event_routed(store_event(1, 0, 0, &[], &[11], StorageTier::Device))
+            .await
+            .unwrap();
+
+        // Publish seq 5 until the listener, once subscribed, asks the peer to replay [0, 5).
+        let frames = vec![
+            b"kv-events".to_vec(),
+            5_u64.to_be_bytes().to_vec(),
+            store_payload(100, None, 1),
+        ];
+        tokio::pin!(got_request_rx);
+        tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                publisher.send_multipart(frames.clone(), 0).unwrap();
+                tokio::select! {
+                    received = &mut got_request_rx => {
+                        break received.expect("replay peer should receive the request");
+                    }
+                    _ = tokio::time::sleep(Duration::from_millis(10)) => {}
+                }
+            }
+        })
+        .await
+        .expect("listener should request a replay");
+
+        registry
+            .deregister(7, "test-model", "default")
+            .await
+            .unwrap();
+        done_tx.send(()).unwrap();
+        server.join().unwrap();
+
+        indexer.flush().await;
+        let Indexer::Concurrent { primary, .. } = &indexer else {
+            unreachable!("two lanes build a thread-pool indexer");
+        };
+        assert!(!registry.has_worker(7));
+        assert_eq!(primary.get_workers().await, vec![1]);
+        registry.root_cancel_token.cancel();
     }
 
     #[tokio::test]

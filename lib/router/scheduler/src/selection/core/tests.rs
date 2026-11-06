@@ -3225,6 +3225,71 @@ async fn hard_mode_rejects_dispatch_away_from_a_live_binding() {
     assert_eq!(bound_worker(&core, "s"), Some(other));
 }
 
+/// A Hard binding the host sheds (overloaded, full, unreachable) is reported
+/// like the frontend's pinned binding and kept; only the request's own worker
+/// set moving off the bound worker is a client fault.
+#[tokio::test]
+async fn hard_mode_keeps_the_binding_when_the_host_sheds_the_bound_worker() {
+    let overloaded: Arc<parking_lot::Mutex<Option<Arc<HashSet<WorkerId>>>>> =
+        Arc::new(parking_lot::Mutex::new(None));
+    let provider_state = Arc::clone(&overloaded);
+    let core = core_with(
+        test_config(false),
+        SelectionHost {
+            load: HostLoad {
+                overloaded_workers: Some(Arc::new(move || provider_state.lock().clone())),
+                ..HostLoad::default()
+            },
+            ..SelectionHost::default()
+        },
+        None,
+        WorkerType::Aggregated,
+        Some(
+            SessionAffinityConfig::new(Duration::from_secs(10))
+                .with_mode(SessionAffinityMode::Hard),
+        ),
+    );
+    core.upsert_worker(worker(1)).await.expect("worker upsert");
+    core.upsert_worker(worker(2)).await.expect("worker upsert");
+    let first = core
+        .select_and_reserve(session_reservation("r1", "s"))
+        .await
+        .expect("first booking");
+    core.free_reservation("r1").await.expect("free");
+    let bound = first.worker_id;
+    assert_eq!(bound_worker(&core, "s"), Some(bound));
+
+    // The host sheds the bound worker; the request constrains nothing.
+    *overloaded.lock() = Some(Arc::new(HashSet::from([bound])));
+    let err = core
+        .select_and_reserve(session_reservation("r2", "s"))
+        .await
+        .expect_err("a shed bound worker is not a client fault");
+    assert!(
+        matches!(
+            err,
+            SelectionError::Scheduler(KvSchedulerError::PinnedWorkerOverloaded { worker_id })
+                if worker_id == bound
+        ),
+        "{err:?}"
+    );
+    let entry = core.entry(&default_key()).expect("entry");
+    wait_until("rejected booking release", || {
+        !entry.scheduler.has_request("r2")
+    })
+    .await;
+    assert!(core.reservation_index.read().is_empty());
+    assert_eq!(bound_worker(&core, "s"), Some(bound), "binding survives");
+
+    // The session returns to its worker once the host stops shedding it.
+    *overloaded.lock() = None;
+    let third = core
+        .select_and_reserve(session_reservation("r3", "s"))
+        .await
+        .expect("rebound");
+    assert_eq!(third.worker_id, bound);
+}
+
 #[tokio::test]
 async fn soft_mode_follows_the_dispatch() {
     let (core, first) = bound_session(SessionAffinityMode::Soft).await;

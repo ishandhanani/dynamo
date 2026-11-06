@@ -3,12 +3,13 @@
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::Duration;
 
 use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
 
 use dynamo_kv_events::cursor::{CursorObservation, CursorState};
-use dynamo_kv_events::zmq_wire::{ZmqEventNormalizer, decode_event_batch};
+use dynamo_kv_events::zmq_wire::{RawKvEvent, ZmqEventNormalizer, decode_event_batch};
 use dynamo_router_protocol::worker::{WorkerId, WorkerWithDpRank};
 
 use super::backend::Indexer;
@@ -18,6 +19,11 @@ use crate::services::common::zmq::{
 };
 
 const WATERMARK_UNSET: u64 = u64::MAX;
+
+/// Longest silence tolerated from the engine's replay socket per reply: a ROUTER that accepts
+/// the connection but never answers would otherwise park the rank's listener for good. Same
+/// bound as the worker-side recovery listener's inactivity timeout.
+const REPLAY_INACTIVITY_TIMEOUT: Duration = Duration::from_secs(5);
 
 fn cursor_from_watermark(watermark: u64) -> CursorState {
     if watermark == WATERMARK_UNSET {
@@ -153,6 +159,11 @@ struct ListenerLoop {
     /// source for its whole life, while replays only happen at startup and on gaps.
     replay_endpoint: Option<String>,
     watermark: Arc<AtomicU64>,
+    /// The live seq that opened the last replay. Live frames queued behind it arrive after
+    /// the replay already applied them, so a stale seq at or above it is a duplicate; a stale
+    /// seq below it (or any stale seq once the stream moved past the replay) is an engine
+    /// that restarted its sequence.
+    replay_trigger: Option<u64>,
     normalizer: ZmqEventNormalizer,
     messages_processed: u64,
 }
@@ -178,6 +189,7 @@ impl ListenerLoop {
             live_socket,
             replay_endpoint,
             watermark,
+            replay_trigger: None,
             normalizer: ZmqEventNormalizer::new(block_size)
                 .with_engine_owned_mm_identity(engine_owned_mm_identity),
             messages_processed: 0,
@@ -235,13 +247,24 @@ impl ListenerLoop {
 
         let mut replay_progress = ReplayRecoveryProgress::new(start_seq, end_seq);
         loop {
+            // A silent peer ends the replay like a recv error: the gap is logged as incomplete
+            // below and the listener goes back to the live socket.
             let msg = tokio::select! {
                 _ = self.cancel.cancelled() => break,
-                result = replay_socket.recv_multipart() => {
+                result = tokio::time::timeout(REPLAY_INACTIVITY_TIMEOUT, replay_socket.recv_multipart()) => {
                     match result {
-                        Ok(msg) => msg,
-                        Err(error) => {
+                        Ok(Ok(msg)) => msg,
+                        Ok(Err(error)) => {
                             tracing::error!(worker_id, dp_rank, error = %error, "Replay recv error");
+                            break;
+                        }
+                        Err(_) => {
+                            tracing::warn!(
+                                worker_id,
+                                dp_rank,
+                                timeout_ms = REPLAY_INACTIVITY_TIMEOUT.as_millis() as u64,
+                                "Replay peer silent; giving up on this gap"
+                            );
                             break;
                         }
                     }
@@ -325,6 +348,7 @@ impl ListenerLoop {
                     got,
                     "Gap detected: expected seq 0, got {got}"
                 );
+                self.replay_trigger = Some(got);
                 self.replay_gap(0, got).await?;
             }
             CursorObservation::Gap { expected, got } => {
@@ -335,6 +359,7 @@ impl ListenerLoop {
                     got,
                     "Gap detected: expected seq {expected}, got {got}"
                 );
+                self.replay_trigger = Some(got);
                 self.replay_gap(expected, got).await?;
             }
             CursorObservation::Initial { .. }
@@ -342,6 +367,41 @@ impl ListenerLoop {
             | CursorObservation::Stale { .. } => {}
         }
         Ok(())
+    }
+
+    /// The engine behind this rank restarted its sequence: drop the previous epoch's coverage
+    /// and start over as on a cold start, so the restarted engine's history is replayed.
+    async fn restart_epoch(&mut self, seq: u64) -> Result<(), String> {
+        tracing::warn!(
+            self.worker_id,
+            self.dp_rank,
+            got = seq,
+            watermark = self.watermark.load(Ordering::Acquire),
+            "Sequence regression: engine restarted; clearing the rank's coverage"
+        );
+        let worker = WorkerWithDpRank::new(self.worker_id, self.dp_rank);
+        // Through the normalizer so its per-worker state restarts with the index.
+        let clear = self
+            .normalizer
+            .normalize(
+                RawKvEvent::AllBlocksCleared { ownership: None },
+                seq,
+                worker,
+            )
+            .expect("synthetic clear event is always accepted")
+            .into_router_event()
+            .expect("local worker placement must convert to router event");
+        self.indexer
+            .apply_event_routed(clear)
+            .await
+            .map_err(|error| {
+                format!(
+                    "failed to clear worker {} dp_rank {} after a sequence regression: {error}",
+                    self.worker_id, self.dp_rank
+                )
+            })?;
+        self.watermark.store(WATERMARK_UNSET, Ordering::Release);
+        self.handle_gap(seq).await
     }
 
     async fn apply_live_batch(&mut self, seq: u64, payload: &[u8]) -> Result<(), String> {
@@ -409,8 +469,17 @@ impl ListenerLoop {
         }
 
         let seq = u64::from_be_bytes(seq_bytes[..8].try_into().expect("length checked above"));
-        self.handle_gap(seq).await?;
+        if matches!(self.cursor().observe(seq), CursorObservation::Stale { .. }) {
+            if self.replay_trigger.is_some_and(|trigger| seq >= trigger) {
+                return Ok(());
+            }
+            self.restart_epoch(seq).await?;
+        } else {
+            self.replay_trigger = None;
+            self.handle_gap(seq).await?;
+        }
 
+        // The replay (this batch's own, or the restarted epoch's) may have covered this seq.
         if matches!(self.cursor().observe(seq), CursorObservation::Stale { .. }) {
             return Ok(());
         }
@@ -453,6 +522,8 @@ impl ListenerLoop {
     }
 }
 
+/// Spawn one listener attempt; the handle lets its deregistration wait for the task to stop
+/// admitting events before the worker's removal is issued.
 pub fn spawn_zmq_listener(
     worker_id: WorkerId,
     dp_rank: u32,
@@ -460,7 +531,7 @@ pub fn spawn_zmq_listener(
     ready: watch::Receiver<bool>,
     generation: u64,
     cancel: CancellationToken,
-) {
+) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
         if let Err(error) = run_listener(
             worker_id,
@@ -475,7 +546,7 @@ pub fn spawn_zmq_listener(
             tracing::error!(worker_id, dp_rank, error = %error, "ZMQ listener failed");
             record.try_mark_failed(generation, error);
         }
-    });
+    })
 }
 
 async fn run_listener(
@@ -539,12 +610,52 @@ async fn run_listener(
     .await
 }
 
+/// Engine-framed batch payloads for the listener and registry tests.
+#[cfg(test)]
+pub(super) mod test_frames {
+    /// One batch holding a `BlockStored` of `token` repeated over a block of four, chained
+    /// under `parent` when given, in the positional layout the engines publish.
+    pub fn store_payload(block_hash: u64, parent: Option<u64>, token: u32) -> Vec<u8> {
+        let event = (
+            "BlockStored",
+            vec![block_hash],
+            parent,
+            vec![token; 4],
+            4_usize,
+            Option::<u64>::None,
+            "GPU",
+        );
+        rmp_serde::to_vec(&(0.0_f64, vec![event], Some(0_i32))).unwrap()
+    }
+
+    /// One batch holding an `AllBlocksCleared`.
+    pub fn clear_payload() -> Vec<u8> {
+        rmp_serde::to_vec(&(0.0_f64, vec![("AllBlocksCleared",)], Some(0_i32))).unwrap()
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    use super::test_frames::{clear_payload, store_payload};
     use super::*;
+    use crate::services::common::zmq::create_sub_socket;
     use crate::services::indexer::backend::create_indexer;
     use dynamo_kv_hashing::routing::compute_block_hash_for_seq;
-    use std::time::Duration;
+
+    fn frame(seq: u64, payload: Vec<u8>) -> MultipartMessage {
+        vec![b"kv-events".to_vec(), seq.to_be_bytes().to_vec(), payload]
+    }
+
+    async fn score(indexer: &Indexer, tokens: &[u32]) -> Option<u32> {
+        let hashes = compute_block_hash_for_seq(tokens, 4, Default::default());
+        indexer
+            .find_matches(hashes)
+            .await
+            .unwrap()
+            .scores
+            .get(&WorkerWithDpRank::new(1, 0))
+            .copied()
+    }
 
     #[rstest::rstest]
     #[case::sglang(false)]
@@ -618,6 +729,184 @@ mod tests {
         let hashes = compute_block_hash_for_seq(&[1, 1, 1, 1, 2, 2, 2, 2], 4, Default::default());
         let matches = indexer.find_matches(hashes).await.unwrap();
         assert_eq!(matches.scores.get(&WorkerWithDpRank::new(1, 0)), Some(&2));
+        cancel.cancel();
+    }
+
+    /// A replay ROUTER that accepts the request and never answers must not park the
+    /// rank's listener: the live SUB socket would go unread while the status stays
+    /// `Active`. The peer runs on a plain thread so the paused clock still auto-advances.
+    #[tokio::test]
+    async fn replay_gives_up_on_a_silent_peer() {
+        let context = zmq::Context::new();
+        let router = context.socket(zmq::ROUTER).unwrap();
+        router.set_linger(0).unwrap();
+        router.set_rcvtimeo(5000).unwrap();
+        router.bind("tcp://127.0.0.1:*").unwrap();
+        let endpoint = router.get_last_endpoint().unwrap().unwrap();
+        let (got_request_tx, got_request_rx) = tokio::sync::oneshot::channel::<()>();
+        let (done_tx, done_rx) = std::sync::mpsc::channel::<()>();
+        let server = std::thread::spawn(move || {
+            if router.recv_multipart(0).is_ok() {
+                let _ = got_request_tx.send(());
+            }
+            // Hold the connection open without ever replying.
+            let _ = done_rx.recv();
+        });
+        let indexer = create_indexer(4, 1);
+        let watermark = Arc::new(AtomicU64::new(WATERMARK_UNSET));
+        let cancel = CancellationToken::new();
+        let mut listener = ListenerLoop::new(
+            1,
+            0,
+            4,
+            false,
+            indexer,
+            cancel.clone(),
+            create_sub_socket(b"").unwrap(),
+            Some(endpoint),
+            watermark.clone(),
+        );
+
+        let replay = listener.replay_gap(0, 2);
+        tokio::pin!(replay);
+        tokio::select! {
+            result = &mut replay => panic!("replay finished before the peer received the request: {result:?}"),
+            received = got_request_rx => received.expect("replay peer should receive the request"),
+        }
+        // The peer holds the request and stays silent; the wait is virtual from here on.
+        tokio::time::pause();
+        let replayed = tokio::time::timeout(2 * REPLAY_INACTIVITY_TIMEOUT, replay)
+            .await
+            .expect("a silent replay peer must not park the listener")
+            .unwrap();
+        done_tx.send(()).unwrap();
+        server.join().unwrap();
+        assert_eq!(replayed, 0);
+        assert_eq!(watermark.load(Ordering::Acquire), WATERMARK_UNSET);
+        cancel.cancel();
+    }
+
+    /// An engine that restarts behind an unchanged registration counts from 0 again. Its
+    /// batches must be indexed as a new epoch and the dead engine's blocks must go.
+    #[tokio::test]
+    async fn sequence_regression_starts_a_new_epoch() {
+        let indexer = create_indexer(4, 1);
+        let watermark = Arc::new(AtomicU64::new(WATERMARK_UNSET));
+        let cancel = CancellationToken::new();
+        let mut listener = ListenerLoop::new(
+            1,
+            0,
+            4,
+            false,
+            indexer.clone(),
+            cancel.clone(),
+            create_sub_socket(b"").unwrap(),
+            None,
+            watermark.clone(),
+        );
+
+        listener
+            .handle_message(frame(0, store_payload(100, None, 1)))
+            .await
+            .unwrap();
+        listener
+            .handle_message(frame(1, store_payload(101, Some(100), 2)))
+            .await
+            .unwrap();
+        // The engine restarts: its publisher counts from 0 again and clears first.
+        listener
+            .handle_message(frame(0, clear_payload()))
+            .await
+            .unwrap();
+        listener
+            .handle_message(frame(1, store_payload(200, None, 3)))
+            .await
+            .unwrap();
+        indexer.flush().await;
+
+        assert_eq!(score(&indexer, &[3, 3, 3, 3]).await, Some(1));
+        assert_eq!(score(&indexer, &[1, 1, 1, 1, 2, 2, 2, 2]).await, None);
+        assert_eq!(watermark.load(Ordering::Acquire), 1);
+        cancel.cancel();
+    }
+
+    /// Live frames queued behind the batch that opened a gap arrive after the replay already
+    /// applied them. They are duplicates, not a restart: dropped, with the index untouched.
+    #[tokio::test]
+    async fn live_frames_the_replay_covered_are_dropped_not_reset() {
+        let context = zmq::Context::new();
+        let router = context.socket(zmq::ROUTER).unwrap();
+        router.set_linger(0).unwrap();
+        router.set_rcvtimeo(5000).unwrap();
+        router.set_sndtimeo(5000).unwrap();
+        router.bind("tcp://127.0.0.1:*").unwrap();
+        let endpoint = router.get_last_endpoint().unwrap().unwrap();
+        let (done_tx, done_rx) = std::sync::mpsc::channel::<()>();
+        let server = std::thread::spawn(move || {
+            let request = router.recv_multipart(0).unwrap();
+            assert_eq!(&request[1..], &[vec![], 0_u64.to_be_bytes().to_vec()]);
+            // Asked for [0, 2), the engine replays everything it has: seq 0 through 3.
+            for seq in 0_u64..=3 {
+                let mut frames = vec![request[0].clone(), vec![]];
+                frames.extend([
+                    seq.to_be_bytes().to_vec(),
+                    store_payload(100 + seq, None, 10 + seq as u32),
+                ]);
+                router.send_multipart(frames, 0).unwrap();
+            }
+            router
+                .send_multipart(
+                    vec![
+                        request[0].clone(),
+                        vec![],
+                        u64::MAX.to_be_bytes().to_vec(),
+                        vec![],
+                    ],
+                    0,
+                )
+                .unwrap();
+            let _ = done_rx.recv();
+        });
+        let indexer = create_indexer(4, 1);
+        let watermark = Arc::new(AtomicU64::new(WATERMARK_UNSET));
+        let cancel = CancellationToken::new();
+        let mut listener = ListenerLoop::new(
+            1,
+            0,
+            4,
+            false,
+            indexer.clone(),
+            cancel.clone(),
+            create_sub_socket(b"").unwrap(),
+            Some(endpoint),
+            watermark.clone(),
+        );
+
+        // Seq 2 opens the gap; the replay overshoots to 3, so the live 2 and 3 are duplicates
+        // and seq 4 continues the stream.
+        for (seq, payload) in [
+            (2, store_payload(900, None, 20)),
+            (3, store_payload(901, None, 21)),
+            (4, store_payload(104, None, 14)),
+        ] {
+            tokio::time::timeout(
+                Duration::from_secs(5),
+                listener.handle_message(frame(seq, payload)),
+            )
+            .await
+            .expect("replay completion marker")
+            .unwrap();
+        }
+        done_tx.send(()).unwrap();
+        server.join().unwrap();
+        indexer.flush().await;
+
+        for token in 10..=14 {
+            assert_eq!(score(&indexer, &[token; 4]).await, Some(1), "token {token}");
+        }
+        assert_eq!(score(&indexer, &[20; 4]).await, None);
+        assert_eq!(score(&indexer, &[21; 4]).await, None);
+        assert_eq!(watermark.load(Ordering::Acquire), 4);
         cancel.cancel();
     }
 }

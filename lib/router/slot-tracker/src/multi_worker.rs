@@ -910,7 +910,9 @@ impl<P: SequencePublisher + 'static> ActiveSequencesMultiWorker<P> {
     /// Free all blocks associated with a request.
     ///
     /// Note: This operation is idempotent. Calling it multiple times for the same request
-    /// is a silent no-op (double free is allowed).
+    /// is a silent no-op (double free is allowed). A free that lands while an add for the
+    /// same id is still installing its sequence state is also a no-op: that booking belongs
+    /// to the add, whose own fenced rollback or a later free releases it.
     ///
     /// This also performs the underlying prefill-complete cleanup via
     /// `ActiveSequences::free`, so callers do not need to call
@@ -932,23 +934,30 @@ impl<P: SequencePublisher + 'static> ActiveSequencesMultiWorker<P> {
         worker: WorkerWithDpRank,
         decay_now: Instant,
     ) -> Result<LifecycleMutationOutcome, SequenceError> {
-        let state_changed = match self.mutate_request_worker_prompt_state_local(
+        match self.mutate_request_worker_prompt_state_local(
             worker,
             request_id,
             decay_now,
             |seqs, rid, decay_now| seqs.free(rid, decay_now),
         ) {
-            Ok(outcome) => outcome,
+            Ok(LifecycleMutationOutcome::Applied) => {}
+            // A mapped id whose rank holds no state is an add between installing its
+            // index entry and its sequence state (or an expired id whose caller is about
+            // to drop the mapping). Removing the mapping here would strand the state the
+            // add installs next, with nothing left to release it.
+            Ok(LifecycleMutationOutcome::NoChange) => {
+                return Ok(LifecycleMutationOutcome::NoChange);
+            }
             Err(SequenceError::RequestNotFound { .. }) => {
                 return Ok(LifecycleMutationOutcome::Applied);
             }
             Err(error) => return Err(error),
-        };
+        }
         let Some(removed) = self
             .request_index
             .remove_request_if_worker(request_id, worker)
         else {
-            return Ok(state_changed);
+            return Ok(LifecycleMutationOutcome::Applied);
         };
         self.enqueue_publish_event(|| ActiveSequenceEvent {
             request_id: request_id.clone(),
@@ -4094,6 +4103,81 @@ mod tests {
         sequences.free(&request_id, Instant::now()).unwrap();
 
         assert!(sequences.request_index.is_empty());
+    }
+
+    #[test]
+    fn unfenced_free_racing_in_flight_add_does_not_strand_sequence_state() {
+        let (sequences, state) = make_recording_sequences(HashMap::from([(1, (0, 1))]));
+        let worker = WorkerWithDpRank::new(1, 0);
+        let request_id = "in-flight".to_string();
+        let now = Instant::now();
+
+        // First half of `add_request_local`: the index entry is installed while the rank
+        // holds no sequence state yet and the add has not taken the sequence lock.
+        let attempt_id = sequences
+            .request_index
+            .try_insert_request(request_id.clone(), worker, None)
+            .unwrap();
+
+        // An unfenced free for the same id wins the sequence lock first.
+        let free_outcome = sequences.free(&request_id, now).unwrap();
+
+        // Second half of `add_request_local`: the add lands on the rank.
+        {
+            let table = sequences.workers.read();
+            let idx = table.index[&worker];
+            let mut seq = table.slots[idx].sequences.write();
+            let outcome = seq.add_request_with_prefill_tracking(
+                request_id.clone(),
+                Some(vec![1, 2, 3]),
+                None,
+                true,
+                tracking_hint(12),
+                now,
+            );
+            let load = seq.worker_load_snapshot();
+            sequences.prompt_registry.apply_membership_delta_and_load(
+                worker,
+                outcome.membership_delta,
+                load,
+            );
+        }
+
+        // Either the booking is gone together with the rank's state, or the booking is
+        // live and the add's own fenced rollback releases it. State without a booking
+        // could never be released again.
+        match sequences.request_booking(&request_id) {
+            None => {
+                assert_eq!(free_outcome, LifecycleMutationOutcome::Applied);
+                assert_eq!(
+                    (
+                        sequences.active_blocks()[&worker],
+                        sequences.active_tokens(now)[&worker],
+                    ),
+                    (0, 0),
+                    "no booking, but the rank still holds (blocks, tokens)"
+                );
+            }
+            Some(booking) => {
+                assert_eq!(free_outcome, LifecycleMutationOutcome::NoChange);
+                assert_eq!(booking.attempt_id, attempt_id);
+                assert!(
+                    state.events.lock().unwrap().is_empty(),
+                    "no Free may be published for a booking that stays live"
+                );
+                assert_eq!(
+                    sequences
+                        .free_if_booking(&request_id, worker, attempt_id, now)
+                        .unwrap(),
+                    LifecycleMutationOutcome::Applied
+                );
+                assert!(matches!(
+                    state.events.lock().unwrap().as_slice(),
+                    [ActiveSequenceEventData::Free]
+                ));
+            }
+        }
+        sequences.assert_completely_drained(now);
     }
 
     #[test]

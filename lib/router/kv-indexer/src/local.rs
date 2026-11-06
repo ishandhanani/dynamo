@@ -13,7 +13,7 @@ use tokio_util::sync::CancellationToken;
 
 use super::{
     GetWorkersRequest, KvEventSender, KvIndexer, KvIndexerInterface, KvIndexerMetrics,
-    KvRouterError, LowerTierIndexer, ThreadPoolIndexer, WorkerKvQueryResponse,
+    KvRouterError, LowerTierIndexer, MutationRequest, ThreadPoolIndexer, WorkerKvQueryResponse,
     record_unsupported_residency_event,
 };
 use crate::prelude::*;
@@ -644,8 +644,8 @@ impl LocalKvIndexer {
         self.indexer.snapshot_event_sender()
     }
 
-    /// Get a sender for worker removal requests.
-    pub fn remove_worker_sender(&self) -> mpsc::Sender<WorkerId> {
+    /// Get the FIFO mutation sender that worker removals share with events.
+    pub fn remove_worker_sender(&self) -> mpsc::Sender<MutationRequest> {
         self.indexer.remove_worker_sender()
     }
 
@@ -751,7 +751,11 @@ impl KvIndexerInterface for LocalKvIndexer {
         for indexer in self.all_lower_tier_indexers() {
             indexer.remove_worker(worker).await;
         }
-        let _ = self.indexer.remove_worker_sender().send(worker).await;
+        let _ = self
+            .indexer
+            .remove_worker_sender()
+            .send(MutationRequest::RemoveWorker(worker))
+            .await;
     }
 
     async fn remove_worker_dp_rank(&self, worker: WorkerId, dp_rank: DpRank) {

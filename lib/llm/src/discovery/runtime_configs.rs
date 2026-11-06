@@ -192,6 +192,50 @@ pub async fn runtime_config_watch(
     Ok(rx)
 }
 
+/// `configs` restricted to `admitted_ids`: the WorkerSet admission contract
+/// applied to the kernel's candidate map, so a worker outside the admission set
+/// that shares the endpoint never becomes a candidate. The task ends with
+/// `lifecycle` or when every receiver is gone; a closed admission watch freezes
+/// the last value, as the admitted `Client` view does.
+pub(crate) fn admitted_runtime_config_watch(
+    mut configs: RuntimeConfigWatch,
+    mut admitted_ids: watch::Receiver<Vec<WorkerId>>,
+    lifecycle: CancellationToken,
+) -> RuntimeConfigWatch {
+    fn admitted(
+        configs: &HashMap<WorkerId, ModelRuntimeConfig>,
+        admitted_ids: &[WorkerId],
+    ) -> HashMap<WorkerId, ModelRuntimeConfig> {
+        admitted_ids
+            .iter()
+            .filter_map(|id| configs.get(id).map(|config| (*id, config.clone())))
+            .collect()
+    }
+
+    let (tx, rx) = watch::channel(admitted(&configs.borrow(), &admitted_ids.borrow()));
+    tokio::spawn(async move {
+        loop {
+            tokio::select! {
+                _ = lifecycle.cancelled() => break,
+                _ = tx.closed() => break,
+                result = configs.changed() => { if result.is_err() { break; } }
+                result = admitted_ids.changed() => { if result.is_err() { break; } }
+            }
+            let next = admitted(
+                &configs.borrow_and_update(),
+                &admitted_ids.borrow_and_update(),
+            );
+            if *tx.borrow() == next {
+                continue;
+            }
+            if tx.send(next).is_err() {
+                break;
+            }
+        }
+    });
+    rx
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

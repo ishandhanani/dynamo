@@ -1329,8 +1329,10 @@ mod tests {
 
     /// Holds each prefill in flight after bootstrap until the worker context is
     /// stopped, reporting that cancellation, or until the test releases it.
+    /// Reports every request it receives on `received`.
     struct HeldPrefillWorker {
         cancelled: tokio::sync::mpsc::UnboundedSender<String>,
+        received: tokio::sync::mpsc::UnboundedSender<String>,
         held: tokio_util::sync::CancellationToken,
     }
 
@@ -1347,6 +1349,7 @@ mod tests {
             request: SingleIn<PreprocessedRequest>,
         ) -> Result<ManyOut<Annotated<LLMEngineOutput>>> {
             let context = request.context();
+            let _ = self.received.send(context.id().to_string());
             let worker_context = context.clone();
             let cancelled = self.cancelled.clone();
             let held = self.held.clone();
@@ -1527,12 +1530,14 @@ mod tests {
             .unwrap()
             .endpoint("prefill");
         let (cancelled, mut cancellations) = tokio::sync::mpsc::unbounded_channel();
+        let (received, _receipts) = tokio::sync::mpsc::unbounded_channel();
         let held = tokio_util::sync::CancellationToken::new();
         let worker = worker_endpoint
             .endpoint_builder()
             .handler(
                 Ingress::for_engine(Arc::new(HeldPrefillWorker {
                     cancelled,
+                    received,
                     held: held.clone(),
                 }))
                 .unwrap(),
@@ -1656,6 +1661,219 @@ mod tests {
             "a transport failure must not cancel the remote prefill"
         );
         held.cancel();
+        drop(router);
+        worker.shutdown().await.unwrap();
+        frontend_runtime.shutdown();
+        worker_runtime.shutdown();
+    }
+
+    /// A client that disconnects while its request waits for prefill admission
+    /// leaves the queue instead of being admitted, booked and dispatched to a
+    /// prefill worker later. The prefill context is independent of the client's
+    /// only once a prefill is dispatched, when staged KV depends on it.
+    #[tokio::test]
+    async fn client_disconnect_during_prefill_queue_hold_retracts_the_request() {
+        // Isolate the process-global TCP request server, as in the routing-hop test above.
+        const TEST: &str = concat!(
+            module_path!(),
+            "::client_disconnect_during_prefill_queue_hold_retracts_the_request"
+        );
+        let test_name = TEST.split_once("::").unwrap().1;
+        if std::env::var("DYNAMO_ROUTING_HOP_TEST").as_deref() != Ok(test_name) {
+            let mut child = tokio::process::Command::new(std::env::current_exe().unwrap());
+            child
+                .args(["--exact", test_name, "--nocapture"])
+                .env("DYNAMO_ROUTING_HOP_TEST", test_name)
+                .env("RUST_MIN_STACK", (4 * 1024 * 1024).to_string())
+                .env("DYN_TCP_RPC_HOST", "127.0.0.1")
+                .env("DYN_TCP_RPC_PORT", "0")
+                .env("DYN_TCP_RESPONSE_STREAM_HOST", "127.0.0.1")
+                .env("DYN_TCP_RESPONSE_STREAM_PORT", "0")
+                .kill_on_drop(true);
+            let output = tokio::time::timeout(Duration::from_secs(30), child.output())
+                .await
+                .unwrap()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "{}\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            return;
+        }
+
+        let runtime = Runtime::from_current().unwrap();
+        let store = tempfile::tempdir().unwrap();
+        let config = || DistributedConfig {
+            discovery_backend: DiscoveryBackend::KvStore(kv::Selector::File(store.path().into())),
+            nats_config: None,
+            request_plane: RequestPlaneMode::Tcp,
+            response_plane: None,
+            event_transport_kind: EventTransportKind::Zmq,
+        };
+        let namespace = format!("prefill-queue-hold-{}", uuid::Uuid::new_v4());
+        let worker_runtime = DistributedRuntime::new(runtime.clone(), config())
+            .await
+            .unwrap();
+        let worker_endpoint = worker_runtime
+            .namespace(namespace.clone())
+            .unwrap()
+            .component("workers")
+            .unwrap()
+            .endpoint("prefill");
+        let (cancelled, mut cancellations) = tokio::sync::mpsc::unbounded_channel();
+        let (received, mut receipts) = tokio::sync::mpsc::unbounded_channel();
+        let held = tokio_util::sync::CancellationToken::new();
+        let worker = worker_endpoint
+            .endpoint_builder()
+            .handler(
+                Ingress::for_engine(Arc::new(HeldPrefillWorker {
+                    cancelled,
+                    received,
+                    held: held.clone(),
+                }))
+                .unwrap(),
+            )
+            .start_with_registration()
+            .await
+            .unwrap();
+        // One booked prefill makes the only prefill worker busy, so the next
+        // request waits in the prefill admission queue until it is released.
+        let kv_config = KvRouterConfig {
+            use_kv_events: false,
+            router_track_active_blocks: false,
+            router_queue_threshold: Some(0.0),
+            ..Default::default()
+        };
+        let mut advertised = card(Some(RouterConfig::new(RouterMode::KV, kv_config)));
+        advertised.kv_cache_block_size = 64;
+        worker_runtime
+            .discovery()
+            .register(
+                DiscoverySpec::from_model(
+                    namespace.clone(),
+                    "workers".into(),
+                    "prefill".into(),
+                    &advertised,
+                )
+                .unwrap(),
+            )
+            .await
+            .unwrap();
+        let frontend_runtime = DistributedRuntime::new(runtime, config()).await.unwrap();
+        let endpoint = frontend_runtime
+            .namespace(namespace.clone())
+            .unwrap()
+            .component("workers")
+            .unwrap()
+            .endpoint("prefill");
+        let router = PrefillRouter::new_with_selection_policy(
+            None,
+            Arc::new(ModelManager::new()),
+            RouterMode::KV,
+            false,
+            64,
+            None,
+            SelectionPolicySource::Registry,
+            None,
+            None,
+            SessionAffinityMode::Hard,
+            "test-model".into(),
+            namespace,
+            LoadThresholdHandle::new(Default::default()),
+            frontend_runtime.child_token(),
+            None,
+        );
+        let (_admissions, admitted_ids) = watch::channel(vec![worker.instance().id()]);
+        router.set_target(Some(WorkerSetTarget::Committed(CommittedWorkerSetTarget {
+            group: endpoint.id().to_string(),
+            endpoint,
+            generation: 1,
+            card: Arc::new(advertised),
+            admitted_ids,
+        })));
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while router.lifecycle_state() != PrefillLifecycleState::Active {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("prefill target must activate");
+
+        // The first request is dispatched and held on the worker; its prefill
+        // booking keeps the class busy.
+        let held_request = {
+            let router = router.clone();
+            tokio::spawn(async move {
+                router
+                    .generate(SingleIn::new(request()), Arc::new(PrefillWorker(7)))
+                    .await
+            })
+        };
+        let held_id = tokio::time::timeout(Duration::from_secs(5), receipts.recv())
+            .await
+            .expect("the held prefill must reach the worker")
+            .unwrap();
+
+        // The second request parks in the prefill admission queue behind it.
+        let queued = dynamo_runtime::pipeline::Context::with_id_and_metadata(
+            request(),
+            "queued-behind-held-prefill".to_string(),
+            Default::default(),
+        );
+        let queued_id = queued.id().to_string();
+        let client = queued.context();
+        let queued_request = {
+            let router = router.clone();
+            tokio::spawn(async move { router.generate(queued, Arc::new(PrefillWorker(7))).await })
+        };
+        let prefill_chooser = router
+            .binding
+            .load_full()
+            .expect("active prefill binding")
+            .router
+            .kv_router()
+            .clone();
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while prefill_chooser.pending_count() != 1 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("the second request must wait in the prefill queue");
+
+        // The client goes away while its request is still queued.
+        client.kill();
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while prefill_chooser.pending_count() != 0 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("a disconnected client's request stayed in the prefill queue");
+        let error = tokio::time::timeout(Duration::from_secs(5), queued_request)
+            .await
+            .expect("the queued request must settle once its client disconnects")
+            .unwrap()
+            .expect_err("the queued request must fail, not reach a worker");
+        assert!(
+            match_error_chain(error.as_ref(), &[ErrorType::Cancelled], &[]),
+            "expected Cancelled, got: {error:#}"
+        );
+        assert!(
+            receipts.try_recv().is_err(),
+            "the worker received {queued_id} after its client disconnected"
+        );
+        // Independence after dispatch is untouched: the held prefill of the
+        // live request was not cancelled by the other client's disconnect.
+        assert!(
+            cancellations.try_recv().is_err(),
+            "the dispatched prefill {held_id} must survive another client's disconnect"
+        );
+
+        held.cancel();
+        drop(held_request);
         drop(router);
         worker.shutdown().await.unwrap();
         frontend_runtime.shutdown();

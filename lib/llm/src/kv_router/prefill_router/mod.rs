@@ -616,24 +616,29 @@ impl
                 stream: prefill_stream,
                 booking,
             } = router
-                .select_and_dispatch_prefill(prefill_context, |request, target| {
-                    let prepared = self.prepare_prefill_dispatch(request, target, endpoint_id)?;
-                    let prefill_supports_cancellation =
-                        self.model_manager.worker_supports_runtime_capability(
-                            endpoint_id,
-                            prepared.worker_id,
-                            DISAGG_PREFILL_CANCEL_ANYTIME_V1,
-                        );
-                    if let Some(guard) = cancellation::arm_for(
-                        prefill_supports_cancellation,
-                        self.decode_supports_prefill_cancellation,
-                        engine_ctx.clone(),
-                        Arc::downgrade(&prefill_ctx),
-                    ) {
-                        prefill_ctx.retain(guard);
-                    }
-                    Ok(prepared)
-                })
+                .select_and_dispatch_prefill(
+                    prefill_context,
+                    engine_ctx.as_ref(),
+                    |request, target| {
+                        let prepared =
+                            self.prepare_prefill_dispatch(request, target, endpoint_id)?;
+                        let prefill_supports_cancellation =
+                            self.model_manager.worker_supports_runtime_capability(
+                                endpoint_id,
+                                prepared.worker_id,
+                                DISAGG_PREFILL_CANCEL_ANYTIME_V1,
+                            );
+                        if let Some(guard) = cancellation::arm_for(
+                            prefill_supports_cancellation,
+                            self.decode_supports_prefill_cancellation,
+                            engine_ctx.clone(),
+                            Arc::downgrade(&prefill_ctx),
+                        ) {
+                            prefill_ctx.retain(guard);
+                        }
+                        Ok(prepared)
+                    },
+                )
                 .await?;
             if let (Some(state), Some(booking)) = (req.migration_state.as_ref(), booking) {
                 state.store_prefill_release(booking);
