@@ -2658,11 +2658,31 @@ impl<
         }
         let request_id = sequence_request.request_id.clone();
         let worker = sequence_request.worker;
-        let attempt_id = match self
-            .slots
-            .add_request_admitted(sequence_request, admitted_at)
-        {
+        // A worker the configuration still lists may be registered lazily: its
+        // slot can lag the publish that added it. One the configuration no longer
+        // lists was removed since selection and must not be recreated.
+        let listed = self
+            .workers_with_configs
+            .borrow()
+            .contains_key(&worker.worker_id);
+        let booked = if listed {
+            self.slots
+                .add_request_admitted(sequence_request, admitted_at)
+        } else {
+            self.slots
+                .add_request_if_registered_admitted(sequence_request, admitted_at)
+        };
+        let attempt_id = match booked {
             Ok(attempt_id) => attempt_id,
+            Err(SequenceError::WorkerNotFound { .. }) => {
+                tracing::debug!(
+                    %request_id,
+                    ?worker,
+                    "Selected worker left the topology before booking"
+                );
+                request.respond(Err(KvSchedulerError::NoEndpoints));
+                return Admission::Refused;
+            }
             Err(error) => {
                 tracing::warn!(%request_id, %error, "Failed to book scheduler state");
                 request.respond(Err(KvSchedulerError::BookingFailed(error.to_string())));
@@ -4506,6 +4526,74 @@ mod tests {
         let selected = rx.try_recv().unwrap().unwrap().best_worker;
         assert_eq!(selected, WorkerWithDpRank::new(1, 0));
         assert_eq!(prepared_queue.prepared_selections(), 0);
+    }
+
+    /// A worker reconciled away between selection and booking (its removal was
+    /// published and the slot table reconciled) is not recreated as a phantom
+    /// slot by the booking; the request gets the outcome a vanished worker has.
+    #[tokio::test]
+    async fn booking_does_not_recreate_a_worker_reconciled_away_after_selection() {
+        let (queue, slots, cfg_tx) = make_queue_with_sender(1, 16, 64, None, None);
+        let mut actor = actor_for_test(&queue, &slots);
+        let worker = WorkerWithDpRank::new(0, 0);
+        let (request, mut rx) = make_request("raced", 64);
+
+        let admission = actor.with_projected_loads(request, Instant::now(), |actor, request| {
+            let selected = actor
+                .select_worker_for_request(request, true, None)
+                .expect("worker 0 is selectable");
+            assert_eq!(selected.selection.worker, worker);
+            // The publisher removes the worker and the slot table is reconciled to
+            // the new topology before the actor books: the state a removal racing
+            // this admission leaves behind.
+            cfg_tx.send_modify(|configs| configs.clear());
+            slots
+                .reconcile_workers(std::iter::empty::<WorkerDpRange>())
+                .expect("reconcile");
+            let response = SchedulingResponse {
+                best_worker: selected.selection.worker,
+                effective_overlap_blocks: selected.selection.effective_overlap_blocks,
+                cached_tokens: selected.selection.cached_tokens,
+                max_raw_cached_tokens: selected.selection.max_raw_cached_tokens,
+                selected_raw_cached_tokens: selected.selection.selected_raw_cached_tokens,
+                selected_worker_tiers: selected.selected_worker_tiers,
+                kv_transfer_source: selected.selection.kv_transfer_source,
+                kv_transfer_candidates: None,
+                potential_decode_blocks: selected.selection.potential_decode_blocks,
+                selection_trace: selected.selection_trace,
+                log_fields: selected.selection.log_fields,
+            };
+            let sequence_request = SequenceRequest {
+                request_id: "raced".to_string(),
+                token_sequence: request.token_seq.take(),
+                track_prefill_tokens: request.track_prefill_tokens,
+                expected_output_tokens: None,
+                prefill_load_hint: None,
+                worker,
+                lora_name: None,
+            };
+            actor.book_and_respond(
+                AdmissionContext::untracked(0, None),
+                request,
+                sequence_request,
+                response,
+                None,
+            )
+        });
+
+        assert_eq!(
+            slots.active_request_counts().get(&worker),
+            None,
+            "the booking must not recreate the removed worker's slot"
+        );
+        assert_eq!(slots.request_worker("raced"), None);
+        assert!(slots.worker_ranges().is_empty());
+        assert_eq!(admission, Admission::Refused);
+        let outcome = rx.try_recv().expect("the actor answered the request");
+        assert!(
+            matches!(outcome, Err(KvSchedulerError::NoEndpoints)),
+            "{outcome:?}"
+        );
     }
 
     #[tokio::test]
