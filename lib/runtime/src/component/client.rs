@@ -530,6 +530,10 @@ pub struct Client {
     /// This ensures instances removed via `report_instance_down` are eventually restored.
     /// A zero value disables local worker inhibition.
     reconcile_interval: Duration,
+    /// The admission set this view is restricted to, when built by
+    /// [`Self::with_admitted_instances`]. A client built on endpoint discovery
+    /// alone has none.
+    admitted_ids: Option<tokio::sync::watch::Receiver<Vec<u64>>>,
 }
 
 impl Client {
@@ -604,6 +608,7 @@ impl Client {
             routing_instances: Arc::new(routing_instances),
             instance_avail_owner: Arc::new(instance_avail_owner),
             reconcile_interval,
+            admitted_ids: None,
         };
         client.monitor_instance_source_with_cancellation(cancel_token, true);
         Ok(client)
@@ -667,6 +672,13 @@ impl Client {
         self.instance_avail_owner.as_ref().clone()
     }
 
+    /// The admission set this view is restricted to, when it was created by
+    /// [`Self::with_admitted_instances`]. `None` for a client built on endpoint
+    /// discovery alone, whose membership is discovery itself.
+    pub fn admitted_ids(&self) -> Option<&tokio::sync::watch::Receiver<Vec<u64>>> {
+        self.admitted_ids.as_ref()
+    }
+
     /// Create a client view whose routable instances are restricted by a caller-owned
     /// admission set.
     ///
@@ -699,6 +711,7 @@ impl Client {
         );
         let initial_ids = initial.iter().map(Instance::id).collect::<Vec<_>>();
         let (instance_tx, instance_rx) = tokio::sync::watch::channel(initial);
+        let admission = admitted_ids.clone();
         let updater_cancel = cancel_token.clone();
 
         tokio::spawn(async move {
@@ -737,6 +750,7 @@ impl Client {
             routing_instances: Arc::new(routing_instances),
             instance_avail_owner: Arc::new(instance_avail_owner),
             reconcile_interval: self.reconcile_interval,
+            admitted_ids: Some(admission),
         };
         client.monitor_instance_source_with_cancellation(cancel_token, false);
         client
@@ -1289,6 +1303,7 @@ mod tests {
             routing_instances: Arc::new(routing),
             instance_avail_owner: Arc::new(available),
             reconcile_interval: Duration::ZERO,
+            admitted_ids: None,
         };
 
         // Discovery publishes first; the routing monitor has not consumed it yet.

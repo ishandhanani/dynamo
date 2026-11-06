@@ -775,6 +775,17 @@ impl KvRouter {
         // All chooser tasks are children of the routing load context owner.
         let cancellation_token = parent_token.child_token();
         let cancellation_guard = cancellation_token.clone().drop_guard();
+        // A client view restricted by WorkerSet admission restricts the candidate
+        // map the same way: endpoint discovery intersected with the admitted ids.
+        // A client built on endpoint discovery alone keeps the map as is.
+        let workers_with_configs = match client.admitted_ids() {
+            Some(admitted_ids) => crate::discovery::runtime_configs::admitted_runtime_config_watch(
+                workers_with_configs,
+                admitted_ids.clone(),
+                cancellation_token.clone(),
+            ),
+            None => workers_with_configs,
+        };
         let min_initial_workers = min_initial_workers_from_env()?;
         let session_prefix_index = kv_router_config
             .enable_session_prefix_index
@@ -3732,5 +3743,137 @@ mod tests {
         prefill.override_discovered_instances(vec![PREFILL_WORKER, PREFILL_PEER]);
         let available = prefill.available_instance_ids().unwrap();
         assert!(validate(available.as_ref(), PREFILL_WORKER).is_ok());
+    }
+
+    /// The kernel's candidate map is endpoint discovery intersected with the
+    /// WorkerSet's admitted ids. While no admitted worker has been discovered, the
+    /// admitted view's availability probe is uninitialized (`None`: no hard
+    /// filter), so a rejected-cohort worker that shares the endpoint must never
+    /// enter the candidate map in the first place.
+    #[tokio::test]
+    async fn admitted_view_without_discovered_members_yields_no_candidates() {
+        const ADMITTED: u64 = 1;
+        const REJECTED: u64 = 2;
+
+        let component = make_test_component("admission-candidates").await;
+        let endpoint = component.endpoint("backend");
+        let raw = endpoint.client().await.unwrap();
+        raw.override_discovered_instances(vec![REJECTED]);
+        let (_admission, admitted_ids) = watch::channel(vec![ADMITTED]);
+        let view =
+            raw.with_admitted_instances_and_cancellation(admitted_ids, CancellationToken::new());
+        assert!(
+            view.available_instance_ids().is_none(),
+            "no admitted worker is discovered: the availability probe is uninitialized"
+        );
+
+        let (configs, workers) =
+            watch::channel(HashMap::from([(REJECTED, ModelRuntimeConfig::default())]));
+        let router = KvRouter::new(
+            endpoint,
+            view,
+            workers,
+            None,
+            2,
+            SelectionPolicySource::Registry,
+            Some(KvRouterConfig {
+                use_kv_events: false,
+                router_track_active_blocks: false,
+                skip_initial_worker_wait: true,
+                ..Default::default()
+            }),
+            None,
+            "decode",
+            None,
+            false,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+        let route = |id: &'static str| {
+            router.find_best_match_details_with_policy_class(
+                Some(id),
+                &[1, 2],
+                None,
+                None,
+                true,
+                false,
+                None,
+                None,
+                0.0,
+                0,
+                None,
+                None,
+                None,
+                None,
+                None,
+                RoutingConstraints::default(),
+            )
+        };
+
+        match route("outside-admission").await {
+            Ok(FindBestMatchOutcome::Routed { worker, .. }) => {
+                panic!(
+                    "booked worker {} outside the admission set",
+                    worker.worker_id
+                )
+            }
+            Ok(_) => panic!("a request was admitted without an admitted worker"),
+            Err(error) => assert!(
+                matches!(
+                    error.downcast_ref::<KvSchedulerError>(),
+                    Some(KvSchedulerError::NoEndpoints)
+                ),
+                "expected NoEndpoints, got {error:#}"
+            ),
+        }
+        assert!(
+            !router.workers_with_configs.borrow().contains_key(&REJECTED),
+            "a worker outside the admission set reached the kernel's candidate map"
+        );
+
+        // Once the admitted worker's card arrives it is the only candidate.
+        configs
+            .send(HashMap::from([
+                (ADMITTED, ModelRuntimeConfig::default()),
+                (REJECTED, ModelRuntimeConfig::default()),
+            ]))
+            .unwrap();
+        let mut candidates = router.workers_with_configs.clone();
+        tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            candidates.wait_for(|workers| workers.contains_key(&ADMITTED)),
+        )
+        .await
+        .expect("the admitted worker must reach the candidate map")
+        .unwrap();
+        assert_eq!(
+            router
+                .workers_with_configs
+                .borrow()
+                .keys()
+                .copied()
+                .collect::<Vec<_>>(),
+            vec![ADMITTED]
+        );
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            loop {
+                let loads = router
+                    .get_potential_loads(&[1, 2], None, None, None, None)
+                    .await
+                    .unwrap();
+                if loads.iter().any(|load| load.worker_id == ADMITTED) {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("the admitted worker never became routable");
+        assert!(matches!(
+            route("inside-admission").await.unwrap(),
+            FindBestMatchOutcome::Routed { worker, .. } if worker.worker_id == ADMITTED
+        ));
     }
 }
