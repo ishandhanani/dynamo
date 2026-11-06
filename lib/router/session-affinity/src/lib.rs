@@ -426,6 +426,24 @@ impl SessionAffinity {
     ) -> Result<AcquireStep, AffinityError> {
         self.validate_session_id(session_id)?;
         let now = self.inner.now();
+        match self.try_acquire_at(session_id, requested_target, now) {
+            // The limit counts expired bindings the reaper has not collected
+            // yet. Collect them now that the shard is released and retry, so
+            // only live bindings refuse a new session.
+            Err(AffinityError::ResourceExhausted(_)) => {
+                self.inner.expire_idle(now);
+                self.try_acquire_at(session_id, requested_target, now)
+            }
+            result => result,
+        }
+    }
+
+    fn try_acquire_at(
+        &self,
+        session_id: &str,
+        requested_target: Option<AffinityTarget>,
+        now: Instant,
+    ) -> Result<AcquireStep, AffinityError> {
         match self.inner.entries.entry(session_id.to_string()) {
             Entry::Vacant(entry) => {
                 self.reserve_entry()?;
@@ -773,10 +791,31 @@ impl Inner {
         self.observe_replica_sequence(version.sequence);
 
         let now = self.now();
+        match self.apply_replica_update_at(session_id, target, version, now) {
+            Ok(outcome) => outcome,
+            // Same limit as `try_acquire`: collect expired bindings once the
+            // shard is released and retry before rejecting for capacity.
+            Err(session_id) => {
+                self.expire_idle(now);
+                self.apply_replica_update_at(session_id, target, version, now)
+                    .unwrap_or(ReplicaApplyOutcome::RejectedCapacity)
+            }
+        }
+    }
+
+    /// One pass over the entry. `Err` hands the key back when the table is at
+    /// its limit, with the shard released.
+    fn apply_replica_update_at(
+        &self,
+        session_id: String,
+        target: AffinityTarget,
+        version: AffinityVersion,
+        now: Instant,
+    ) -> Result<ReplicaApplyOutcome, String> {
         match self.entries.entry(session_id) {
             Entry::Vacant(entry) => {
                 if !self.reserve_entry() {
-                    return ReplicaApplyOutcome::RejectedCapacity;
+                    return Err(entry.into_key());
                 }
                 let revision = self.next_revision.fetch_add(1, Ordering::Relaxed);
                 entry.insert(AffinityEntry::Bound {
@@ -786,9 +825,9 @@ impl Inner {
                     active_leases: 0,
                     idle_deadline: now + self.ttl,
                 });
-                ReplicaApplyOutcome::Inserted
+                Ok(ReplicaApplyOutcome::Inserted)
             }
-            Entry::Occupied(mut entry) => match entry.get_mut() {
+            Entry::Occupied(mut entry) => Ok(match entry.get_mut() {
                 AffinityEntry::Initializing { .. } => ReplicaApplyOutcome::IgnoredInitializing,
                 AffinityEntry::Bound {
                     active_leases,
@@ -827,7 +866,7 @@ impl Inner {
                     ReplicaApplyOutcome::ReplacedNewer
                 }
                 AffinityEntry::Bound { .. } => ReplicaApplyOutcome::IgnoredConflict,
-            },
+            }),
         }
     }
 }
@@ -1218,6 +1257,62 @@ mod tests {
             .advance_clock(epoch + ttl * 2 + Duration::from_secs(1))
             .unwrap();
         assert_eq!(table.entry_count(), 0);
+    }
+
+    /// A full table whose only binding idled past its TTL before the next reap:
+    /// `entry_count` still counts it, `query_target` already does not.
+    fn full_table_with_an_expired_binding() -> SessionAffinity {
+        let epoch = Instant::now();
+        let ttl = Duration::from_secs(60);
+        let config = SessionAffinityConfig {
+            max_entries: 1,
+            ..SessionAffinityConfig::new(ttl)
+        };
+        let table = SessionAffinity::with_manual_clock(config, epoch).unwrap();
+        table.advance_clock(epoch + Duration::from_secs(1)).unwrap();
+        drop(
+            initialize(&table)
+                .commit(AffinityTarget::new(7, Some(5)))
+                .unwrap(),
+        );
+        // The reap at `epoch + 60s` finds the binding one second short of its deadline.
+        table.advance_clock(epoch + ttl).unwrap();
+        table
+            .advance_clock(epoch + ttl + Duration::from_secs(1))
+            .unwrap();
+        assert_eq!(table.entry_count(), 1);
+        assert_eq!(table.query_target("s", None).unwrap(), None);
+        table
+    }
+
+    /// The entry limit counts live bindings: a new session reclaims an expired
+    /// binding the reaper has not collected yet instead of being refused.
+    #[test]
+    fn expired_binding_does_not_count_against_the_entry_limit() {
+        let table = full_table_with_an_expired_binding();
+
+        let step = table
+            .try_acquire("s2", None)
+            .expect("an expired binding does not fill the table");
+        assert!(
+            matches!(step, AcquireStep::Held(Hold::Initialize(_))),
+            "new session initializes"
+        );
+        assert_eq!(table.entry_count(), 1, "the expired binding was collected");
+        drop(step);
+        assert_eq!(table.entry_count(), 0);
+    }
+
+    /// Same limit on the replica path: a peer's binding is inserted, not rejected.
+    #[test]
+    fn expired_binding_does_not_reject_a_replica_binding_for_capacity() {
+        let table = full_table_with_an_expired_binding();
+        let target = AffinityTarget::new(8, Some(6));
+
+        let outcome = table.apply_replica_update("s2".to_string(), target, table.next_version());
+        assert_eq!(outcome, ReplicaApplyOutcome::Inserted);
+        assert_eq!(table.entry_count(), 1);
+        assert_eq!(table.query_target("s2", None).unwrap(), Some(target));
     }
 
     /// Aborts unblock initialization; invalidation fences old leases from a replacement binding.
