@@ -632,6 +632,12 @@ mod race_tests {
     mod cleanup {
         use super::super::*;
 
+        /// A sweep racing a store under the same parent is best-effort: it gives up on
+        /// that parent after four `try_write` attempts while the store holds the shape
+        /// gate for reads (README, Dead Leaf Reclamation), so it may leave the untouched
+        /// dead sibling linked. The design guarantees no corruption, full coverage on the
+        /// restored or replaced child, and that the next uncontended sweep reclaims
+        /// whatever the racing one skipped.
         #[test]
         fn race_cleanup_with_dead_child_reuse_keeps_restored_child() {
             let index = Arc::new(ConcurrentRadixTreeCompressed::new());
@@ -687,12 +693,22 @@ mod race_tests {
             cleanup.join().unwrap();
             let _lookup = store.join().unwrap();
 
+            // The parent [1, 2, 3] is internal (sticky) and is never re-extended to one
+            // five-block edge. Either the sweep unlinked both dead children and the store
+            // re-covered or replaced [4, 5] ([2, 3]), or the sweep yielded to the store's
+            // gate holds and left [6, 7] for the next sweep ([2, 2, 3]).
             let edge_lengths = index.edge_lengths_for_test();
             assert!(
-                edge_lengths == vec![5] || edge_lengths == vec![2, 3],
+                edge_lengths == vec![2, 3] || edge_lengths == vec![2, 2, 3],
                 "unexpected edge lengths: {edge_lengths:?}"
             );
             assert_eq!(index.raw_child_edge_count(), edge_lengths.len());
+            assert_direct_score(&index, &[1, 2, 3, 4, 5], worker, 5);
+
+            // An uncontended sweep reclaims whatever the racing one skipped.
+            index.run_cleanup_for_test();
+            assert_edge_lengths(&index, &[2, 3]);
+            assert_eq!(index.raw_child_edge_count(), 2);
             assert_direct_score(&index, &[1, 2, 3, 4, 5], worker, 5);
         }
     }
