@@ -5,10 +5,11 @@
 //!
 //! The same routed pipeline the discovery-driven frontend builds per WorkerSet
 //! (preprocessing, migration, prefill hop, KV routing) is assembled once here
-//! from a static worker list. Membership comes from
+//! from a caller-owned worker list. Membership comes from
 //! [`DistributedRuntime::register_static_endpoint_instances`], the selection
-//! catalog from a seeded runtime-config watch, and the final hop from the
-//! caller's [`LlmDispatch`].
+//! catalog from a runtime-config watch, and the final hop from the caller's
+//! [`LlmDispatch`]. All three follow the list as engines come and go; whether
+//! the deployment is disaggregated is fixed by the list at startup.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -50,13 +51,14 @@ pub async fn register_direct_model(
     manager: Arc<ModelManager>,
     metrics: Arc<Metrics>,
     model: &LocalModel,
-    workers: Vec<DirectWorker>,
+    workers: watch::Receiver<Vec<DirectWorker>>,
     dispatch: LlmDispatch,
 ) -> anyhow::Result<()> {
-    anyhow::ensure!(!workers.is_empty(), "direct mode needs at least one engine");
+    let initial = workers.borrow().clone();
+    anyhow::ensure!(!initial.is_empty(), "direct mode needs at least one engine");
     manager.set_direct_dispatch(dispatch)?;
 
-    let (prefill, decode): (Vec<_>, Vec<_>) = workers
+    let (prefill, decode): (Vec<_>, Vec<_>) = initial
         .into_iter()
         .partition(|worker| worker.worker_type == WorkerType::Prefill);
     anyhow::ensure!(
@@ -82,7 +84,14 @@ pub async fn register_direct_model(
         .namespace(&endpoint_id.namespace)?
         .component(&endpoint_id.component)?
         .endpoint(&endpoint_id.name);
-    install_static_workers(drt, &manager, &decode_endpoint, &decode, &cancellation);
+    install_workers(
+        drt,
+        &manager,
+        &decode_endpoint,
+        &workers,
+        Role::Serving,
+        &cancellation,
+    );
     let client = decode_endpoint.client().await?;
 
     let load_thresholds = LoadThresholdHandle::new(router_config.load_threshold_config.clone());
@@ -126,7 +135,14 @@ pub async fn register_direct_model(
             .namespace(&endpoint_id.namespace)?
             .component(PREFILL_COMPONENT)?
             .endpoint(&endpoint_id.name);
-        install_static_workers(drt, &manager, &prefill_endpoint, &prefill, &cancellation);
+        install_workers(
+            drt,
+            &manager,
+            &prefill_endpoint,
+            &workers,
+            Role::Prefill,
+            &cancellation,
+        );
 
         let mut prefill_config = router_config.kv_router_config.clone();
         prefill_config.router_track_active_blocks = false;
@@ -151,10 +167,12 @@ pub async fn register_direct_model(
         let mut prefill_card = card.clone();
         prefill_card.worker_type = Some(WorkerType::Prefill);
         prefill_card.runtime_config = prefill[0].runtime_config.clone();
-        let admitted = keep_alive(
-            &cancellation,
-            prefill.iter().map(|worker| worker.instance.id()).collect(),
-        );
+        let admitted = follow(&cancellation, workers.clone(), |workers| {
+            Role::Prefill
+                .select(workers)
+                .map(|worker| worker.instance.id())
+                .collect::<Vec<_>>()
+        });
         router.set_target(Some(WorkerSetTarget::Committed(CommittedWorkerSetTarget {
             endpoint: prefill_endpoint,
             group: "direct-prefill".to_string(),
@@ -223,35 +241,143 @@ pub async fn register_direct_model(
     Ok(())
 }
 
-/// Make `workers` the complete membership of `endpoint` for routing and for
-/// the selection catalog.
-fn install_static_workers(
+/// Which engines of the list an endpoint serves.
+#[derive(Clone, Copy, Debug)]
+enum Role {
+    /// Prefill engines, on [`PREFILL_COMPONENT`].
+    Prefill,
+    /// Aggregated or decode engines, on the model's own component.
+    Serving,
+}
+
+impl Role {
+    fn select(self, workers: &[DirectWorker]) -> impl Iterator<Item = &DirectWorker> {
+        workers.iter().filter(move |worker| {
+            (worker.worker_type == WorkerType::Prefill) == matches!(self, Role::Prefill)
+        })
+    }
+}
+
+/// Make the `role` engines of `workers` the membership of `endpoint` for
+/// routing and for the selection catalog, following every change to the list.
+fn install_workers(
     drt: &DistributedRuntime,
     manager: &ModelManager,
     endpoint: &dynamo_runtime::component::Endpoint,
-    workers: &[DirectWorker],
+    workers: &watch::Receiver<Vec<DirectWorker>>,
+    role: Role,
     cancellation: &CancellationToken,
 ) {
-    let instances: Vec<Instance> = workers.iter().map(|w| w.instance.clone()).collect();
-    drt.register_static_endpoint_instances(endpoint, keep_alive(cancellation, instances));
-    let configs: HashMap<WorkerId, ModelRuntimeConfig> = workers
-        .iter()
-        .map(|w| (w.instance.id(), w.runtime_config.clone()))
-        .collect();
-    manager.insert_runtime_config_watcher(endpoint, keep_alive(cancellation, configs));
+    let instances = follow(cancellation, workers.clone(), move |workers| {
+        role.select(workers)
+            .map(|worker| worker.instance.clone())
+            .collect::<Vec<Instance>>()
+    });
+    drt.register_static_endpoint_instances(endpoint, instances);
+    let configs = follow(cancellation, workers.clone(), move |workers| {
+        role.select(workers)
+            .map(|worker| (worker.instance.id(), worker.runtime_config.clone()))
+            .collect::<HashMap<WorkerId, ModelRuntimeConfig>>()
+    });
+    manager.insert_runtime_config_watcher(endpoint, configs);
 }
 
-/// A watch whose sender lives until `cancellation` fires, so receivers see a
-/// stable value rather than a closed channel.
-fn keep_alive<T: Send + Sync + 'static>(
+/// A watch of `project(workers)` that follows `workers` until `cancellation`
+/// fires, publishing only when the projection changes. Receivers see a stable
+/// value rather than a closed channel: when the list's owner drops its sender,
+/// the last projection stays until `cancellation`.
+fn follow<T: PartialEq + Send + Sync + 'static>(
     cancellation: &CancellationToken,
-    value: T,
+    mut workers: watch::Receiver<Vec<DirectWorker>>,
+    project: impl Fn(&[DirectWorker]) -> T + Send + 'static,
 ) -> watch::Receiver<T> {
-    let (tx, rx) = watch::channel(value);
+    let (tx, rx) = watch::channel(project(&workers.borrow_and_update()));
     let cancellation = cancellation.clone();
     tokio::spawn(async move {
-        cancellation.cancelled().await;
+        loop {
+            tokio::select! {
+                _ = cancellation.cancelled() => break,
+                changed = workers.changed() => {
+                    if changed.is_err() {
+                        cancellation.cancelled().await;
+                        break;
+                    }
+                    let next = project(&workers.borrow_and_update());
+                    tx.send_if_modified(|current| {
+                        let modified = *current != next;
+                        if modified {
+                            *current = next;
+                        }
+                        modified
+                    });
+                }
+            }
+        }
         drop(tx);
     });
     rx
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use dynamo_runtime::component::TransportType;
+
+    fn worker(instance_id: u64, worker_type: WorkerType) -> DirectWorker {
+        DirectWorker {
+            instance: Instance {
+                namespace: "ns".to_string(),
+                component: "backend".to_string(),
+                endpoint: "generate".to_string(),
+                instance_id,
+                transport: TransportType::Grpc(format!("http://h:{instance_id}")),
+                device_type: None,
+                request_plane_codec: None,
+            },
+            runtime_config: ModelRuntimeConfig::default(),
+            worker_type,
+        }
+    }
+
+    fn ids(workers: &[DirectWorker], role: Role) -> Vec<u64> {
+        role.select(workers).map(|w| w.instance.id()).collect()
+    }
+
+    #[tokio::test]
+    async fn follow_tracks_additions_and_removals_per_role() {
+        let cancellation = CancellationToken::new();
+        let (tx, rx) = watch::channel(vec![
+            worker(1, WorkerType::Decode),
+            worker(2, WorkerType::Prefill),
+        ]);
+        let mut serving = follow(&cancellation, rx.clone(), |w| ids(w, Role::Serving));
+        let mut prefill = follow(&cancellation, rx, |w| ids(w, Role::Prefill));
+        assert_eq!(*serving.borrow_and_update(), vec![1]);
+        assert_eq!(*prefill.borrow_and_update(), vec![2]);
+
+        tx.send_modify(|w| w.push(worker(3, WorkerType::Decode)));
+        serving.changed().await.unwrap();
+        assert_eq!(*serving.borrow_and_update(), vec![1, 3]);
+
+        tx.send_modify(|w| w.retain(|w| w.instance.id() != 2));
+        prefill.changed().await.unwrap();
+        assert!(prefill.borrow_and_update().is_empty());
+        // The prefill-only change left the serving projection untouched.
+        assert!(!serving.has_changed().unwrap());
+        cancellation.cancel();
+    }
+
+    #[tokio::test]
+    async fn follow_keeps_the_last_list_when_its_owner_goes_away() {
+        let cancellation = CancellationToken::new();
+        let (tx, rx) = watch::channel(vec![worker(1, WorkerType::Aggregated)]);
+        let mut serving = follow(&cancellation, rx, |w| ids(w, Role::Serving));
+        drop(tx);
+        tokio::task::yield_now().await;
+        assert_eq!(*serving.borrow_and_update(), vec![1]);
+        assert!(!serving.has_changed().unwrap());
+
+        cancellation.cancel();
+        assert!(serving.changed().await.is_err());
+    }
 }
