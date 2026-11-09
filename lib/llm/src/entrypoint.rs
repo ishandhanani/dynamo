@@ -121,7 +121,10 @@ pub enum EngineConfig {
     /// never consulted for these workers.
     Direct {
         model: Box<LocalModel>,
-        workers: Vec<DirectWorker>,
+        /// Every engine, prefill and serving alike. The sender's owner adds and
+        /// removes engines; routing follows. Dropping the sender freezes the
+        /// list at its last value.
+        workers: tokio::sync::watch::Receiver<Vec<DirectWorker>>,
         dispatch: crate::kv_router::LlmDispatch,
     },
 }
