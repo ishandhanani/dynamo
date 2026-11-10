@@ -5,13 +5,15 @@
 //!
 //! A stock engine pod runs no Dynamo code and registers nothing, so the
 //! frontend watches the pods matching a label selector and keeps one engine
-//! per serving pod in a [`DirectMembership`]:
+//! per serving pod in an [`EngineSet`]: a [`DirectMembership`], or the
+//! frontend's discovery through an
+//! [`EngineRegistrar`](super::discovery::EngineRegistrar):
 //!
 //! - a pod serves once it is `Ready` and has no deletion timestamp;
 //! - its engine URL is `http://<pod IP>:<port>`, the port from the pod's
 //!   [`PORT_ANNOTATION`] or else the selector's pool-wide port;
 //! - its role comes from the selector, so prefill and serving pools are two
-//!   selectors over one membership.
+//!   selectors over one engine set.
 //!
 //! A pod that stops serving, is deleted, or is missing from a relist is
 //! withdrawn. Each serving pod is probed by its own task, retrying with
@@ -22,14 +24,13 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::Duration;
 
+use async_trait::async_trait;
+use dynamo_backend_common::DynamoError;
 use futures::StreamExt;
 use k8s_openapi::api::core::v1::Pod;
 use kube::runtime::{WatchStreamExt, watcher};
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
-
-use dynamo_llm::entrypoint::EngineConfig;
-use dynamo_llm::local_model::LocalModel;
 
 use super::{DirectBackend, DirectFleet, DirectMembership, RoleHint};
 
@@ -38,6 +39,53 @@ pub const PORT_ANNOTATION: &str = "nvidia.com/dynamo-engine-grpc-port";
 
 /// Longest wait between attempts to reach a pod's engine.
 const MAX_RETRY: Duration = Duration::from_secs(30);
+
+/// Where a pod watch keeps the engines it finds.
+#[async_trait]
+pub trait EngineSet: Send + Sync + 'static {
+    /// Probe the engine `pod` serves at `url` and make it routable; returns
+    /// its instance id. Adding an engine that is already routable is a no-op.
+    async fn add(&self, pod: &str, url: &str, role: RoleHint) -> Result<u64, DynamoError>;
+    /// Withdraw the engine at `url`. Returns whether it was routable.
+    async fn remove(&self, url: &str) -> bool;
+}
+
+#[async_trait]
+impl<B: DirectBackend> EngineSet for DirectMembership<B> {
+    async fn add(&self, _pod: &str, url: &str, role: RoleHint) -> Result<u64, DynamoError> {
+        DirectMembership::add(self, url, role).await
+    }
+
+    async fn remove(&self, url: &str) -> bool {
+        DirectMembership::remove(self, url)
+    }
+}
+
+/// A Kubernetes client from the pod's service account, or from the local
+/// kubeconfig outside a cluster.
+pub async fn client() -> anyhow::Result<kube::Client> {
+    Ok(kube::Client::try_default().await?)
+}
+
+/// Keep `engines` in step with the serving pods of each selector, one watch
+/// task per selector, until `cancel` fires.
+pub fn spawn_watches<S: EngineSet>(
+    engines: Arc<S>,
+    client: kube::Client,
+    selectors: impl IntoIterator<Item = PodSelector>,
+    cancel: CancellationToken,
+) {
+    for selector in selectors {
+        let pods = PodEngines::new(engines.clone(), selector);
+        let client = client.clone();
+        let cancel = cancel.clone();
+        tokio::spawn(async move {
+            if let Err(error) = pods.watch(client, cancel).await {
+                tracing::error!(%error, "engine pod watch stopped");
+            }
+        });
+    }
+}
 
 /// Which pods are engines of one role, and where their gRPC servers listen.
 #[derive(Clone, Debug)]
@@ -84,63 +132,33 @@ pub fn pod_url(pod: &Pod, default_port: Option<u16>) -> Option<String> {
     Some(format!("http://{host}:{port}"))
 }
 
-/// A Kubernetes client from the pod's service account, or from the local
-/// kubeconfig outside a cluster.
-pub async fn client() -> anyhow::Result<kube::Client> {
-    Ok(kube::Client::try_default().await?)
-}
-
 /// The fleet a pod-driven frontend starts from, and the pods it came from.
 pub struct FirstPods<B: DirectBackend> {
     pub fleet: DirectFleet<B>,
     pub serving_url: String,
     pub prefill_url: Option<String>,
-    client: kube::Client,
-    serving: PodSelector,
-    prefill: Option<PodSelector>,
-}
-
-impl<B: DirectBackend> FirstPods<B> {
-    /// The frontend's engine configuration for `model`, kept in step with the
-    /// selected pods by one [`PodEngines`] per selector until `cancel` fires.
-    pub fn serve(self, model: LocalModel, cancel: CancellationToken) -> EngineConfig {
-        let (config, membership) = self.fleet.into_membership(model);
-        let membership = Arc::new(membership);
-        let pools = std::iter::once((self.serving, self.serving_url))
-            .chain(self.prefill.zip(self.prefill_url));
-        for (selector, url) in pools {
-            let engines = PodEngines::new(membership.clone(), selector).adopting([url]);
-            let client = self.client.clone();
-            let cancel = cancel.clone();
-            tokio::spawn(async move {
-                if let Err(error) = engines.watch(client, cancel).await {
-                    tracing::error!(%error, "engine pod watch stopped");
-                }
-            });
-        }
-        config
-    }
 }
 
 /// Probe the first serving pod of each selector into a fleet, waiting until
 /// one answers. The fleet seeds the model card and fixes whether the
-/// deployment is disaggregated; [`FirstPods::serve`] adds the remaining pods.
+/// deployment is disaggregated; [`PodEngines`] adds the remaining pods and
+/// should [adopt](PodEngines::adopting) these.
 ///
 /// Returns `None` if `cancel` fires first.
 pub async fn probe_first_pods<B: DirectBackend>(
     backend: Arc<B>,
-    client: kube::Client,
-    serving: PodSelector,
-    prefill: Option<PodSelector>,
+    client: &kube::Client,
+    serving: &PodSelector,
+    prefill: Option<&PodSelector>,
     cancel: &CancellationToken,
 ) -> anyhow::Result<Option<FirstPods<B>>> {
     let mut delay = Duration::from_secs(1);
     loop {
-        let Some(serving_url) = first_serving_url(&client, &serving, cancel).await? else {
+        let Some(serving_url) = first_serving_url(client, serving, cancel).await? else {
             return Ok(None);
         };
-        let prefill_url = match &prefill {
-            Some(selector) => match first_serving_url(&client, selector, cancel).await? {
+        let prefill_url = match prefill {
+            Some(selector) => match first_serving_url(client, selector, cancel).await? {
                 Some(url) => Some(url),
                 None => return Ok(None),
             },
@@ -159,9 +177,6 @@ pub async fn probe_first_pods<B: DirectBackend>(
                     fleet,
                     serving_url,
                     prefill_url,
-                    client,
-                    serving,
-                    prefill,
                 }));
             }
             Err(error) => {
@@ -205,10 +220,9 @@ async fn first_serving_url(
     }
 }
 
-/// Keeps a [`DirectMembership`] in step with the serving pods of one
-/// selector.
-pub struct PodEngines<B: DirectBackend> {
-    membership: Arc<DirectMembership<B>>,
+/// Keeps an [`EngineSet`] in step with the serving pods of one selector.
+pub struct PodEngines<S: EngineSet> {
+    engines: Arc<S>,
     selector: PodSelector,
     retry: Duration,
     pods: tokio::sync::Mutex<HashMap<String, Tracked>>,
@@ -221,10 +235,10 @@ struct Tracked {
     task: JoinHandle<()>,
 }
 
-impl<B: DirectBackend> PodEngines<B> {
-    pub fn new(membership: Arc<DirectMembership<B>>, selector: PodSelector) -> Self {
+impl<S: EngineSet> PodEngines<S> {
+    pub fn new(engines: Arc<S>, selector: PodSelector) -> Self {
         Self {
-            membership,
+            engines,
             selector,
             retry: Duration::from_secs(1),
             pods: Default::default(),
@@ -232,7 +246,7 @@ impl<B: DirectBackend> PodEngines<B> {
         }
     }
 
-    /// Engines of this selector already in the membership, such as the
+    /// Engines of this selector already in the engine set, such as the
     /// [`FirstPods`]. The first relist withdraws any that no pod serves.
     pub fn adopting(self, urls: impl IntoIterator<Item = String>) -> Self {
         Self {
@@ -350,7 +364,7 @@ impl<B: DirectBackend> PodEngines<B> {
                 .filter_map(|pod| pod_url(pod, self.selector.port))
                 .collect();
             for url in adopted.iter().filter(|url| !served.contains(*url)) {
-                if self.membership.remove(url) {
+                if self.engines.remove(url).await {
                     tracing::info!(%url, "engine pod withdrawn");
                 }
             }
@@ -362,12 +376,12 @@ impl<B: DirectBackend> PodEngines<B> {
 
     /// Probe and add `url`, retrying until it serves.
     fn host(&self, pod: String, url: String) -> JoinHandle<()> {
-        let membership = self.membership.clone();
+        let engines = self.engines.clone();
         let role = self.selector.role;
         let mut delay = self.retry;
         tokio::spawn(async move {
             loop {
-                match membership.add(&url, role).await {
+                match engines.add(&pod, &url, role).await {
                     Ok(instance_id) => {
                         tracing::info!(
                             %pod,
@@ -391,7 +405,7 @@ impl<B: DirectBackend> PodEngines<B> {
     async fn retire(&self, pod: &str, tracked: Tracked) {
         tracked.task.abort();
         let _ = tracked.task.await;
-        if self.membership.remove(&tracked.url) {
+        if self.engines.remove(&tracked.url).await {
             tracing::info!(%pod, url = %tracked.url, "engine pod withdrawn");
         }
     }

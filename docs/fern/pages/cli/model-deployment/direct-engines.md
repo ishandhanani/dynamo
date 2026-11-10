@@ -59,8 +59,10 @@ curl -s localhost:8000/v1/chat/completions \
 ## Run on Kubernetes
 
 On Kubernetes the frontend can find the engines itself. It watches the pods that match a
-label selector, adds a pod's engine once the pod is `Ready`, and withdraws it when the pod
-stops being `Ready` or is deleted:
+label selector and, once a pod is `Ready`, registers its engine in the frontend's own
+in-memory discovery with the model card a sidecar would publish. From there the frontend
+serves it exactly as it serves sidecar workers. The engine is withdrawn when the pod stops
+being `Ready` or is deleted:
 
 ```bash
 python3 -m dynamo.frontend --direct --direct-backend sglang \
@@ -84,8 +86,8 @@ operator.
 1. Connects, waits for `HealthCheck`, and calls `GetModelInfo` and `GetServerInfo`.
 2. Derives the worker's role, KV block size, context length, data-parallel ranks,
    bootstrap host and port for prefill, and the ZMQ KV-event endpoints.
-3. Registers the engine as a routable instance with a stable id derived from the URL,
-   so every frontend replica agrees on worker ids.
+3. Registers the engine as a routable instance with a stable id derived from the URL, or
+   from the pod name with `kubernetes-pods`, so every frontend replica agrees on worker ids.
 4. Subscribes to the engine's KV events directly and feeds the router's index.
 5. Dispatches each request over a gRPC `Generate` stream; a lost engine surfaces as a
    transport fault, so the router stops sending to it and in-flight requests migrate.
@@ -102,7 +104,7 @@ override whatever the engine reported.
 - SGLang only.
 - The HTTP frontend only. `--interactive` and `--kserve-grpc-server` reject `--direct`.
 - With `--engine-url`, the engine list is fixed at startup. Scale-out means restarting the
-  frontend. With `--discovery-backend kubernetes-pods`, engines join and leave with their
-  pods, but whether the deployment is disaggregated is still fixed at startup.
+  frontend. With `--discovery-backend kubernetes-pods`, prefill and decode engines join and
+  leave with their pods.
 - No KV-event replay: SGLang does not advertise a replay socket, so a frontend restart
   warms the index from live events, with no snapshot of the engine's current cache.

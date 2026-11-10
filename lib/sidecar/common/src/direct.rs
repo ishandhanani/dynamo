@@ -7,10 +7,13 @@
 //! engines it registered; [`DirectFleet`] probes a URL list through it and
 //! turns the result into the frontend's [`EngineConfig::Direct`]. A
 //! [`DirectMembership`] adds and removes engines after startup, and
-//! [`pods`] drives one from Kubernetes pods. Each engine crate supplies the
+//! [`pods`] drives one from Kubernetes pods. Alternatively, an
+//! [`EngineRegistrar`](discovery::EngineRegistrar) registers each engine in
+//! the frontend's discovery as a sidecar would. Each engine crate supplies the
 //! backend; roles, instance identity and transport-fault mapping live here
 //! once.
 
+pub mod discovery;
 pub mod pods;
 
 use std::collections::HashMap;

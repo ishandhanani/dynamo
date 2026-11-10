@@ -508,6 +508,29 @@ pub async fn register_model_card(
     Ok(())
 }
 
+/// [`register_model_card`] for a worker this process does not run, such as an
+/// engine the frontend dials directly: the card is published under that
+/// worker's `instance_id`. Returns the instance to unregister when it leaves.
+pub async fn register_model_card_as(
+    endpoint: &Endpoint,
+    card: &ModelDeploymentCard,
+    instance_id: u64,
+) -> anyhow::Result<DiscoveryInstance> {
+    let lora_name = card.lora.as_ref().map(|info| info.name.as_str());
+    let spec = DiscoverySpec::from_model_with_suffix(
+        endpoint.component().namespace().name().to_string(),
+        endpoint.component().name().to_string(),
+        endpoint.name().to_string(),
+        &card.for_mdc_wire(),
+        derive_lora_suffix(lora_name),
+    )?;
+    endpoint
+        .drt()
+        .discovery()
+        .register_as(spec, instance_id)
+        .await
+}
+
 /// Replace the caller-managed taints on this worker's existing model card.
 pub async fn update_model_taints(
     endpoint: &Endpoint,

@@ -1562,6 +1562,80 @@ fn model_with_updated_taints(
     Ok(candidate)
 }
 
+/// [`Discovery::register`] and [`Discovery::register_as`]: a model card may not
+/// join an endpoint that already serves a different model.
+async fn register_checked<D: Discovery + ?Sized>(
+    discovery: &D,
+    spec: DiscoverySpec,
+    instance_id: Option<u64>,
+) -> Result<DiscoveryInstance> {
+    let (namespace, component, endpoint, requested_identity) = match &spec {
+        DiscoverySpec::Model {
+            namespace,
+            component,
+            endpoint,
+            card_json,
+            model_suffix,
+            ..
+        } => (
+            namespace.clone(),
+            component.clone(),
+            endpoint.clone(),
+            extract_model_registration_identity(card_json, model_suffix.as_deref())?,
+        ),
+        _ => return register_raw(discovery, spec, instance_id).await,
+    };
+
+    let query = DiscoveryQuery::EndpointModels {
+        namespace: namespace.clone(),
+        component: component.clone(),
+        endpoint: endpoint.clone(),
+    };
+
+    if let Some(conflicting_name) =
+        find_conflicting_model_name(&discovery.list(query.clone()).await?, &requested_identity)?
+    {
+        let requested_name = &requested_identity.display_name;
+        anyhow::bail!(
+            "Cannot register model '{requested_name}' on endpoint '{namespace}/{component}/{endpoint}': a different model '{conflicting_name}' is already registered there"
+        );
+    }
+
+    let instance = register_raw(discovery, spec, instance_id).await?;
+
+    if let Some(conflicting_name) =
+        find_conflicting_model_name(&discovery.list(query).await?, &requested_identity)?
+    {
+        let requested_name = &requested_identity.display_name;
+        if let Err(unregister_err) = discovery.unregister(instance.clone()).await {
+            return Err(anyhow::anyhow!(
+                    "Cannot register model '{requested_name}' on endpoint '{namespace}/{component}/{endpoint}': a different model '{conflicting_name}' is already registered there"
+                ))
+                .context(format!(
+                    "failed to roll back conflicting model registration for instance {instance_id}: {unregister_err}",
+                    instance_id = instance.instance_id()
+                ));
+        }
+
+        anyhow::bail!(
+            "Cannot register model '{requested_name}' on endpoint '{namespace}/{component}/{endpoint}': a different model '{conflicting_name}' is already registered there"
+        );
+    }
+
+    Ok(instance)
+}
+
+async fn register_raw<D: Discovery + ?Sized>(
+    discovery: &D,
+    spec: DiscoverySpec,
+    instance_id: Option<u64>,
+) -> Result<DiscoveryInstance> {
+    match instance_id {
+        Some(instance_id) => discovery.register_internal_as(spec, instance_id).await,
+        None => discovery.register_internal(spec).await,
+    }
+}
+
 /// Discovery trait for service discovery across different backends
 #[async_trait]
 pub trait Discovery: Send + Sync {
@@ -1580,64 +1654,33 @@ pub trait Discovery: Send + Sync {
 
     /// Registers an object in the discovery plane with the instance id
     async fn register(&self, spec: DiscoverySpec) -> Result<DiscoveryInstance> {
-        let (namespace, component, endpoint, requested_identity) = match &spec {
-            DiscoverySpec::Model {
-                namespace,
-                component,
-                endpoint,
-                card_json,
-                model_suffix,
-                ..
-            } => (
-                namespace.clone(),
-                component.clone(),
-                endpoint.clone(),
-                extract_model_registration_identity(card_json, model_suffix.as_deref())?,
-            ),
-            _ => return self.register_internal(spec).await,
-        };
+        register_checked(self, spec, None).await
+    }
 
-        let query = DiscoveryQuery::EndpointModels {
-            namespace: namespace.clone(),
-            component: component.clone(),
-            endpoint: endpoint.clone(),
-        };
-
-        if let Some(conflicting_name) =
-            find_conflicting_model_name(&self.list(query.clone()).await?, &requested_identity)?
-        {
-            let requested_name = &requested_identity.display_name;
-            anyhow::bail!(
-                "Cannot register model '{requested_name}' on endpoint '{namespace}/{component}/{endpoint}': a different model '{conflicting_name}' is already registered there"
-            );
-        }
-
-        let instance = self.register_internal(spec).await?;
-
-        if let Some(conflicting_name) =
-            find_conflicting_model_name(&self.list(query).await?, &requested_identity)?
-        {
-            let requested_name = &requested_identity.display_name;
-            if let Err(unregister_err) = self.unregister(instance.clone()).await {
-                return Err(anyhow::anyhow!(
-                    "Cannot register model '{requested_name}' on endpoint '{namespace}/{component}/{endpoint}': a different model '{conflicting_name}' is already registered there"
-                ))
-                .context(format!(
-                    "failed to roll back conflicting model registration for instance {instance_id}: {unregister_err}",
-                    instance_id = instance.instance_id()
-                ));
-            }
-
-            anyhow::bail!(
-                "Cannot register model '{requested_name}' on endpoint '{namespace}/{component}/{endpoint}': a different model '{conflicting_name}' is already registered there"
-            );
-        }
-
-        Ok(instance)
+    /// Registers `spec` under `instance_id` instead of this client's own id.
+    ///
+    /// For a process that publishes instances it does not run, such as a frontend
+    /// registering the engines it dials directly. Model specs get the same conflict
+    /// checks as [`register`](Self::register).
+    async fn register_as(
+        &self,
+        spec: DiscoverySpec,
+        instance_id: u64,
+    ) -> Result<DiscoveryInstance> {
+        register_checked(self, spec, Some(instance_id)).await
     }
 
     /// Backend-specific raw registration implementation.
     async fn register_internal(&self, spec: DiscoverySpec) -> Result<DiscoveryInstance>;
+
+    /// Backend-specific raw registration under an explicit instance id.
+    async fn register_internal_as(
+        &self,
+        _spec: DiscoverySpec,
+        _instance_id: u64,
+    ) -> Result<DiscoveryInstance> {
+        anyhow::bail!("this discovery backend registers instances only under its own id")
+    }
 
     /// Replace the caller-managed taints of this worker's existing base model card.
     async fn update_model_taints(

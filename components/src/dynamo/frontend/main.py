@@ -408,8 +408,8 @@ async def async_main():
     # the CLI flags are silently ignored (unlike the lazily-dialed TCP planes).
     _export_transport_tls_env(config)
     warn_if_frontend_cpu_affinity_spans_numa_nodes(logger)
-    # Direct engine pods are watched by the engine, not registered with the
-    # runtime, so the runtime itself keeps discovery in memory.
+    # The frontend registers direct engine pods in its own discovery, so the
+    # runtime keeps that discovery in memory.
     discovery_backend = (
         "mem"
         if config.discovery_backend == "kubernetes-pods"

@@ -43,6 +43,12 @@ pub async fn run(
             anyhow::bail!("direct engines are only served by the HTTP frontend");
         }
         EngineConfig::Dynamic {
+            direct_dispatch: Some(_),
+            ..
+        } => {
+            anyhow::bail!("direct engines are only served by the HTTP frontend");
+        }
+        EngineConfig::Dynamic {
             ref model,
             ref prefill_load_estimator,
             ..
@@ -214,6 +220,7 @@ mod tests {
                     model,
                     chat_engine_factory: None,
                     prefill_load_estimator: None,
+                    direct_dispatch: None,
                 }
             } else {
                 EngineConfig::InProcessText {

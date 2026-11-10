@@ -79,19 +79,22 @@ python3 -m dynamo.frontend --direct \
 | `--engine-grpc-port` | gRPC port of the engines. A pod's `nvidia.com/dynamo-engine-grpc-port` annotation overrides it. |
 
 - An engine's URL is `http://<pod IP>:<port>`.
-- At startup the frontend waits for the first `Ready` pod of each selector and
-  probes it for the model card.
-- Each later pod is probed when it becomes `Ready`, retrying with backoff until
-  its engine answers. Pods must serve the same model as the first pod.
+- Each pod is probed when it becomes `Ready`, retrying with backoff until its
+  engine answers. The frontend then registers the engine in its own in-memory
+  discovery, with the model card a sidecar would publish, and serves it as it
+  serves sidecar workers. `/v1/models` is empty until the first engine
+  registers.
+- A pod that stops being `Ready` or is deleted is withdrawn from discovery.
+- All engines must serve one model. A pod serving a different model is not
+  registered.
 - The frontend's service account needs `get`, `list`, and `watch` on pods in the
   engine namespace. The manifests grant exactly that with a `Role`.
 
 ## Limitations
 
-- Whether the deployment is disaggregated is fixed at startup by
-  `--prefill-engine-selector`.
-- Engine ids derive from the pod's URL. A pod that comes back on a new IP is a new
-  engine, and its KV index entries start empty.
+- Engine ids derive from the pod name, as with the `kubernetes` discovery backend.
+  A pod is withdrawn while it is not `Ready`, so its KV index entries start empty
+  when it returns.
 - A KV-aware frontend reaches each engine's KV-event socket on port 5557 of the pod
   IP. Network policies must allow it, and the gRPC and bootstrap ports.
 - Several frontend replicas each route independently with their own KV index.
