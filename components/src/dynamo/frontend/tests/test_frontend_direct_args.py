@@ -17,6 +17,11 @@ def clear_direct_environment(monkeypatch: pytest.MonkeyPatch) -> None:
         "DYN_DIRECT_BACKEND",
         "DYN_ENGINE_URLS",
         "DYN_PREFILL_ENGINE_URLS",
+        "DYN_ENGINE_SELECTOR",
+        "DYN_PREFILL_ENGINE_SELECTOR",
+        "DYN_ENGINE_NAMESPACE",
+        "DYN_ENGINE_GRPC_PORT",
+        "DYN_DISCOVERY_BACKEND",
         "DYN_TOOL_CALL_PARSER",
         "DYN_REASONING_PARSER",
     ):
@@ -87,4 +92,66 @@ def test_direct_rejects_the_interactive_frontend() -> None:
     with pytest.raises(ValueError, match="--interactive"):
         parse_frontend_config(
             ["--direct", "--engine-url", "http://127.0.0.1:30001", "--interactive"]
+        )
+
+
+def test_direct_engines_from_kubernetes_pods() -> None:
+    config = parse_frontend_config(
+        [
+            "--direct",
+            "--discovery-backend",
+            "kubernetes-pods",
+            "--engine-selector",
+            "app=sglang,role=decode",
+            "--prefill-engine-selector",
+            "app=sglang,role=prefill",
+            "--engine-namespace",
+            "llm",
+            "--engine-grpc-port",
+            "30001",
+        ]
+    )
+
+    assert config.discovery_backend == "kubernetes-pods"
+    assert config.engine_selector == "app=sglang,role=decode"
+    assert config.prefill_engine_selector == "app=sglang,role=prefill"
+    assert config.engine_namespace == "llm"
+    assert config.engine_grpc_port == 30001
+    assert config.engine_urls == []
+
+
+def test_kubernetes_pods_requires_an_engine_selector() -> None:
+    with pytest.raises(ValueError, match="--engine-selector"):
+        parse_frontend_config(["--direct", "--discovery-backend", "kubernetes-pods"])
+
+
+def test_kubernetes_pods_requires_direct() -> None:
+    with pytest.raises(ValueError, match="require --direct"):
+        parse_frontend_config(
+            [
+                "--discovery-backend",
+                "kubernetes-pods",
+                "--engine-selector",
+                "app=sglang",
+            ]
+        )
+
+
+def test_engine_selector_requires_kubernetes_pods() -> None:
+    with pytest.raises(ValueError, match="kubernetes-pods"):
+        parse_frontend_config(["--direct", "--engine-selector", "app=sglang"])
+
+
+def test_kubernetes_pods_rejects_engine_urls() -> None:
+    with pytest.raises(ValueError, match="--engine-url"):
+        parse_frontend_config(
+            [
+                "--direct",
+                "--discovery-backend",
+                "kubernetes-pods",
+                "--engine-selector",
+                "app=sglang",
+                "--engine-url",
+                "http://127.0.0.1:30001",
+            ]
         )

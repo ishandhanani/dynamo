@@ -2587,6 +2587,8 @@ dependencies = [
  "dynamo-runtime",
  "futures",
  "hyper-util",
+ "k8s-openapi",
+ "kube",
  "prost-types 0.13.5",
  "prost-types 0.14.4",
  "serde_json",

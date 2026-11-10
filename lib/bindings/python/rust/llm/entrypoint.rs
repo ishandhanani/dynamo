@@ -495,6 +495,18 @@ pub(crate) struct EntrypointArgs {
     prefill_engine_urls: Vec<String>,
     /// `EngineType::Direct` only: which engine family the URLs speak.
     direct_backend: DirectBackendKind,
+    /// `EngineType::Direct` only: engine pods to follow instead of fixed URLs.
+    engine_pods: Option<EnginePods>,
+}
+
+/// Engine pods chosen by label, as `--discovery-backend kubernetes-pods`.
+#[derive(Clone, Debug)]
+struct EnginePods {
+    selector: String,
+    prefill_selector: Option<String>,
+    /// The frontend's own namespace when unset.
+    namespace: Option<String>,
+    port: Option<u16>,
 }
 
 /// Engine families the frontend can dial directly.
@@ -521,7 +533,7 @@ impl std::str::FromStr for DirectBackendKind {
 impl EntrypointArgs {
     #[allow(clippy::too_many_arguments)]
     #[new]
-    #[pyo3(signature = (engine_type, model_path=None, model_name=None, endpoint_id=None, template_file=None, router_config=None, kv_cache_block_size=None, http_host=None, http_port=None, http_metrics_port=None, tls_cert_path=None, tls_key_path=None, extra_engine_args=None, mocker_engine_args=None, runtime_config=None, namespace=None, namespace_prefix=None, is_prefill=false, is_decode=false, migration_limit=0, migration_max_seq_len=None, chat_engine_factory=None, ais_perf_config=None, *, tls_client_ca_cert_path=None, metrics_prefix=None, enable_anthropic_api=None, strip_anthropic_preamble=None, enable_streaming_tool_dispatch=None, enable_streaming_reasoning_dispatch=None, reasoning_field_name=None, tokenizer_backend=None, tokenizer_fallback=None, batch_gateway_url=None, engine_urls=None, prefill_engine_urls=None, direct_backend=None))]
+    #[pyo3(signature = (engine_type, model_path=None, model_name=None, endpoint_id=None, template_file=None, router_config=None, kv_cache_block_size=None, http_host=None, http_port=None, http_metrics_port=None, tls_cert_path=None, tls_key_path=None, extra_engine_args=None, mocker_engine_args=None, runtime_config=None, namespace=None, namespace_prefix=None, is_prefill=false, is_decode=false, migration_limit=0, migration_max_seq_len=None, chat_engine_factory=None, ais_perf_config=None, *, tls_client_ca_cert_path=None, metrics_prefix=None, enable_anthropic_api=None, strip_anthropic_preamble=None, enable_streaming_tool_dispatch=None, enable_streaming_reasoning_dispatch=None, reasoning_field_name=None, tokenizer_backend=None, tokenizer_fallback=None, batch_gateway_url=None, engine_urls=None, prefill_engine_urls=None, direct_backend=None, engine_selector=None, prefill_engine_selector=None, engine_namespace=None, engine_grpc_port=None))]
     pub fn new(
         py: Python<'_>,
         engine_type: EngineType,
@@ -560,6 +572,10 @@ impl EntrypointArgs {
         engine_urls: Option<Vec<String>>,
         prefill_engine_urls: Option<Vec<String>>,
         direct_backend: Option<String>,
+        engine_selector: Option<String>,
+        prefill_engine_selector: Option<String>,
+        engine_namespace: Option<String>,
+        engine_grpc_port: Option<u16>,
     ) -> PyResult<Self> {
         let endpoint_id_obj: Option<EndpointId> = endpoint_id.as_deref().map(EndpointId::from);
         if (tls_cert_path.is_some() && tls_key_path.is_none())
@@ -663,6 +679,12 @@ impl EntrypointArgs {
                 .transpose()
                 .map_err(PyValueError::new_err)?
                 .unwrap_or_default(),
+            engine_pods: engine_selector.map(|selector| EnginePods {
+                selector,
+                prefill_selector: prefill_engine_selector,
+                namespace: engine_namespace,
+                port: engine_grpc_port,
+            }),
         })
     }
 }
@@ -716,6 +738,24 @@ pub fn make_engine<'p>(
         .namespace_prefix(args.namespace_prefix.clone());
     crate::future_into_py(py, async move {
         let mut args = args;
+        // Engine pods register in discovery as they become ready, each with
+        // the card a sidecar would publish, and the ordinary watcher serves
+        // them; nothing is probed before the frontend starts.
+        if matches!(args.engine_type, EngineType::Direct)
+            && let Some(engine_pods) = args.engine_pods.clone()
+        {
+            let direct_dispatch = serve_engine_pods(&distributed_runtime.inner, &args, engine_pods)
+                .await
+                .map_err(to_pyerr)?;
+            let local_model = builder.build().await.map_err(to_pyerr)?;
+            let inner = RsEngineConfig::Dynamic {
+                model: Box::new(local_model),
+                chat_engine_factory: None,
+                prefill_load_estimator: None,
+                direct_dispatch: Some(direct_dispatch),
+            };
+            return Ok(EngineConfig { inner });
+        }
         // Direct engines are probed first so the model path, KV block size and
         // runtime config can come from the engines themselves.
         let direct_fleet = if matches!(args.engine_type, EngineType::Direct) {
@@ -787,9 +827,69 @@ pub fn make_engine<'p>(
     })
 }
 
+/// Register the engine pods `engine_pods` selects in the frontend's discovery
+/// and follow them until shutdown. Returns the final hop that dials them.
+async fn serve_engine_pods(
+    drt: &dynamo_runtime::DistributedRuntime,
+    args: &EntrypointArgs,
+    engine_pods: EnginePods,
+) -> anyhow::Result<dynamo_llm::kv_router::LlmDispatch> {
+    use dynamo_sidecar_common::direct::RoleHint;
+    use dynamo_sidecar_common::direct::discovery::{CardOverrides, EngineRegistrar};
+    use dynamo_sidecar_common::direct::pods::{self, PodSelector};
+
+    let client = pods::client().await?;
+    let namespace = engine_pods
+        .namespace
+        .unwrap_or_else(|| client.default_namespace().to_string());
+    let selector = |labels: String, role| PodSelector {
+        namespace: namespace.clone(),
+        labels,
+        port: engine_pods.port,
+        role,
+    };
+    let disaggregated = engine_pods.prefill_selector.is_some();
+    let selectors: Vec<PodSelector> =
+        std::iter::once(selector(engine_pods.selector, RoleHint::Serving))
+            .chain(
+                engine_pods
+                    .prefill_selector
+                    .map(|labels| selector(labels, RoleHint::Prefill)),
+            )
+            .collect();
+    // Where a sidecar with default flags would register.
+    let endpoint = EndpointId {
+        namespace: args
+            .namespace
+            .clone()
+            .unwrap_or_else(|| "dynamo".to_string()),
+        component: "backend".to_string(),
+        name: "generate".to_string(),
+    };
+    let overrides = CardOverrides {
+        model_name: args.model_name.clone(),
+        tool_call_parser: args.runtime_config.inner.tool_call_parser.clone(),
+        reasoning_parser: args.runtime_config.inner.reasoning_parser.clone(),
+    };
+    let transport = dynamo_sidecar_common::GrpcTransportConfig::default();
+    Ok(match args.direct_backend {
+        DirectBackendKind::Sglang => {
+            let backend = dynamo_sglang_sidecar::direct::SglangDirectDispatch::new(transport);
+            let registrar =
+                EngineRegistrar::new(drt, backend.clone(), &endpoint, disaggregated, overrides)?;
+            pods::spawn_watches(Arc::new(registrar), client, selectors, drt.primary_token());
+            backend as dynamo_llm::kv_router::LlmDispatch
+        }
+    })
+}
+
 /// A probed direct fleet of one supported engine family.
 enum DirectFleetKind {
-    Sglang(dynamo_sidecar_common::direct::DirectFleet<dynamo_sglang_sidecar::direct::SglangDirectDispatch>),
+    Sglang(
+        dynamo_sidecar_common::direct::DirectFleet<
+            dynamo_sglang_sidecar::direct::SglangDirectDispatch,
+        >,
+    ),
 }
 
 impl DirectFleetKind {
@@ -913,6 +1013,7 @@ async fn select_engine(
                 model: Box::new(local_model),
                 chat_engine_factory,
                 prefill_load_estimator,
+                direct_dispatch: None,
             }
         }
         EngineType::Direct => {

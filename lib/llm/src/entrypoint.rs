@@ -95,6 +95,10 @@ pub enum EngineConfig {
         model: Box<LocalModel>,
         chat_engine_factory: Option<ChatEngineFactoryCallback>,
         prefill_load_estimator: Option<Arc<dyn PrefillLoadEstimator>>,
+        /// The final hop to discovered workers when the frontend dials stock
+        /// engines over their native API instead of the request plane. Whoever
+        /// registers those engines in discovery also registers them here.
+        direct_dispatch: Option<crate::kv_router::LlmDispatch>,
     },
 
     /// A Text engine receives text, does it's own tokenization and prompt formatting.
@@ -121,7 +125,10 @@ pub enum EngineConfig {
     /// never consulted for these workers.
     Direct {
         model: Box<LocalModel>,
-        workers: Vec<DirectWorker>,
+        /// Every engine, prefill and serving alike. The sender's owner adds and
+        /// removes engines; routing follows. Dropping the sender freezes the
+        /// list at its last value.
+        workers: tokio::sync::watch::Receiver<Vec<DirectWorker>>,
         dispatch: crate::kv_router::LlmDispatch,
     },
 }

@@ -210,6 +210,10 @@ class FrontendConfig(RouterConfigBase, KvRouterConfigBase, AisPerfConfigBase):
     direct_backend: str
     engine_urls: list[str]
     prefill_engine_urls: list[str]
+    engine_selector: Optional[str]
+    prefill_engine_selector: Optional[str]
+    engine_namespace: Optional[str]
+    engine_grpc_port: Optional[int]
     dyn_tool_call_parser: Optional[str]
     dyn_reasoning_parser: Optional[str]
     response_plane: str = "tcp"
@@ -274,9 +278,27 @@ class FrontendConfig(RouterConfigBase, KvRouterConfigBase, AisPerfConfigBase):
             raise ValueError(
                 f"--migration-limit must be between 0 and {_U32_MAX} (0=disabled)"
             )
+        pods = self.discovery_backend == "kubernetes-pods"
+        if pods and not self.engine_selector:
+            raise ValueError(
+                "--discovery-backend kubernetes-pods requires --engine-selector"
+            )
+        if not pods and (self.engine_selector or self.prefill_engine_selector):
+            raise ValueError(
+                "--engine-selector and --prefill-engine-selector require "
+                "--discovery-backend kubernetes-pods"
+            )
+        if pods and (self.engine_urls or self.prefill_engine_urls):
+            raise ValueError(
+                "--discovery-backend kubernetes-pods finds the engines itself; "
+                "drop --engine-url and --prefill-engine-url"
+            )
         if self.direct:
-            if not self.engine_urls:
-                raise ValueError("--direct requires at least one --engine-url")
+            if not self.engine_urls and not pods:
+                raise ValueError(
+                    "--direct requires at least one --engine-url, or "
+                    "--discovery-backend kubernetes-pods with --engine-selector"
+                )
             if self.interactive or self.kserve_grpc_server:
                 mode_flag = (
                     "--interactive" if self.interactive else "--kserve-grpc-server"
@@ -285,8 +307,11 @@ class FrontendConfig(RouterConfigBase, KvRouterConfigBase, AisPerfConfigBase):
                     f"--direct is only supported by the HTTP frontend, "
                     f"so it cannot be combined with {mode_flag}"
                 )
-        elif self.engine_urls or self.prefill_engine_urls:
-            raise ValueError("--engine-url and --prefill-engine-url require --direct")
+        elif self.engine_urls or self.prefill_engine_urls or pods:
+            raise ValueError(
+                "--engine-url, --prefill-engine-url and --discovery-backend "
+                "kubernetes-pods require --direct"
+            )
         if not self.direct and (self.dyn_tool_call_parser or self.dyn_reasoning_parser):
             raise ValueError(
                 "--dyn-tool-call-parser and --dyn-reasoning-parser require --direct; "
@@ -726,6 +751,49 @@ class FrontendArgGroup(ArgGroup):
         )
         add_argument(
             g,
+            flag_name="--engine-selector",
+            env_var="DYN_ENGINE_SELECTOR",
+            default=None,
+            help=(
+                "Kubernetes label selector for the engine pods to route to with "
+                "--discovery-backend kubernetes-pods, e.g. app=sglang. Aggregated "
+                "engines, or the decode engines when --prefill-engine-selector is also "
+                "given. Pods join once Ready and leave when they stop being Ready."
+            ),
+        )
+        add_argument(
+            g,
+            flag_name="--prefill-engine-selector",
+            env_var="DYN_PREFILL_ENGINE_SELECTOR",
+            default=None,
+            help=(
+                "Kubernetes label selector for the engine pods that run the prefill leg "
+                "with --discovery-backend kubernetes-pods."
+            ),
+        )
+        add_argument(
+            g,
+            flag_name="--engine-namespace",
+            env_var="DYN_ENGINE_NAMESPACE",
+            default=None,
+            help=(
+                "Namespace of the engine pods for --discovery-backend kubernetes-pods. "
+                "Defaults to the frontend's own namespace."
+            ),
+        )
+        add_argument(
+            g,
+            flag_name="--engine-grpc-port",
+            env_var="DYN_ENGINE_GRPC_PORT",
+            default=None,
+            arg_type=int,
+            help=(
+                "gRPC port of the engine pods for --discovery-backend kubernetes-pods. "
+                "A pod's nvidia.com/dynamo-engine-grpc-port annotation overrides it."
+            ),
+        )
+        add_argument(
+            g,
             flag_name="--dyn-tool-call-parser",
             env_var="DYN_TOOL_CALL_PARSER",
             default=None,
@@ -752,10 +820,11 @@ class FrontendArgGroup(ArgGroup):
             default="etcd",
             help=(
                 "Discovery backend: kubernetes (K8s API), etcd (distributed KV), file (local filesystem), "
-                "mem (in-memory). Etcd uses the ETCD_* env vars (e.g. ETCD_ENDPOINTS) for connection details. "
+                "mem (in-memory), kubernetes-pods (--direct only: stock engine pods chosen by "
+                "--engine-selector). Etcd uses the ETCD_* env vars (e.g. ETCD_ENDPOINTS) for connection details. "
                 "File uses root dir from env var DYN_FILE_KV or defaults to $TMPDIR/dynamo_store_kv."
             ),
-            choices=["kubernetes", "etcd", "file", "mem"],
+            choices=["kubernetes", "etcd", "file", "mem", "kubernetes-pods"],
         )
         add_argument(
             g,

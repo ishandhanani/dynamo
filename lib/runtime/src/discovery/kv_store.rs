@@ -404,7 +404,15 @@ impl Discovery for KVStoreDiscovery {
     }
 
     async fn register_internal(&self, spec: DiscoverySpec) -> Result<DiscoveryInstance> {
-        let instance = spec.into_instance(self.instance_id());
+        self.register_internal_as(spec, self.instance_id()).await
+    }
+
+    async fn register_internal_as(
+        &self,
+        spec: DiscoverySpec,
+        instance_id: u64,
+    ) -> Result<DiscoveryInstance> {
+        let instance = spec.into_instance(instance_id);
         let instance_id = instance.instance_id();
         let is_event_source = matches!(&instance, DiscoveryInstance::EventSource { .. });
         let is_model = matches!(&instance, DiscoveryInstance::Model { .. });
@@ -1215,6 +1223,42 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(comp1.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn register_as_publishes_several_instances_from_one_client() {
+        let client = KVStoreDiscovery::new(kv::Manager::memory(), CancellationToken::new());
+        let spec = |port: u16| DiscoverySpec::Endpoint {
+            namespace: "ns".to_string(),
+            component: "backend".to_string(),
+            endpoint: "generate".to_string(),
+            device_type: None,
+            request_plane_codec: None,
+            transport: TransportType::Grpc(format!("http://10.0.0.1:{port}")),
+        };
+        let a = client.register_as(spec(30001), 0xa).await.unwrap();
+        let b = client.register_as(spec(30002), 0xb).await.unwrap();
+        assert_eq!((a.instance_id(), b.instance_id()), (0xa, 0xb));
+
+        let query = DiscoveryQuery::Endpoint {
+            namespace: "ns".to_string(),
+            component: "backend".to_string(),
+            endpoint: "generate".to_string(),
+        };
+        let mut ids: Vec<u64> = client
+            .list(query.clone())
+            .await
+            .unwrap()
+            .iter()
+            .map(DiscoveryInstance::instance_id)
+            .collect();
+        ids.sort();
+        assert_eq!(ids, [0xa, 0xb]);
+
+        client.unregister(a).await.unwrap();
+        let left = client.list(query).await.unwrap();
+        assert_eq!(left.len(), 1);
+        assert_eq!(left[0].instance_id(), 0xb);
     }
 
     #[tokio::test]

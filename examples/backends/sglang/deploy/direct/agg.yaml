@@ -1,0 +1,152 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# EXPERIMENTAL: a Dynamo frontend routing to stock SGLang engine pods.
+# Plain Kubernetes: no operator, no CRDs, no etcd, no NATS, no sidecar.
+# The frontend watches the pods labeled app=sglang-engine; scale the engine
+# Deployment and the frontend follows.
+
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: dynamo-direct-frontend
+---
+# The frontend only reads pods in its own namespace.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: dynamo-direct-frontend
+rules:
+- apiGroups: [""]
+  resources: ["pods"]
+  verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: dynamo-direct-frontend
+subjects:
+- kind: ServiceAccount
+  name: dynamo-direct-frontend
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: dynamo-direct-frontend
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: sglang-engine
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: sglang-engine
+  template:
+    metadata:
+      labels:
+        app: sglang-engine
+    spec:
+      containers:
+      - name: engine
+        image: lmsysorg/sglang:v0.5.22
+        command: ["python3", "-m", "sglang.launch_server"]
+        args:
+        - --model-path
+        - Qwen/Qwen3-0.6B
+        - --host
+        - 0.0.0.0
+        - --port
+        - "30000"
+        - --grpc-port
+        - "30001"
+        - --incremental-streaming-output
+        - --page-size
+        - "16"
+        - --kv-events-config
+        - '{"publisher":"zmq","endpoint":"tcp://*:5557","topic":"kv-events"}'
+        ports:
+        - {name: grpc, containerPort: 30001}
+        - {name: kv-events, containerPort: 5557}
+        # The frontend routes to a pod only while it is Ready. HealthCheckResponse
+        # has one bool field: healthy=true encodes as 0x08 0x01.
+        startupProbe:
+          exec:
+            command:
+            - python3
+            - -c
+            - import grpc; r=grpc.insecure_channel('127.0.0.1:30001').unary_unary('/sglang.runtime.v1.SglangService/HealthCheck')(b'', timeout=3); raise SystemExit(0 if r == b'\x08\x01' else 1)
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 180
+        readinessProbe:
+          exec:
+            command:
+            - python3
+            - -c
+            - import grpc; r=grpc.insecure_channel('127.0.0.1:30001').unary_unary('/sglang.runtime.v1.SglangService/HealthCheck')(b'', timeout=3); raise SystemExit(0 if r == b'\x08\x01' else 1)
+          periodSeconds: 5
+          timeoutSeconds: 5
+          failureThreshold: 3
+        envFrom:
+        - secretRef:
+            name: hf-token-secret
+            optional: true
+        resources:
+          limits:
+            nvidia.com/gpu: "1"
+          requests:
+            ephemeral-storage: 2Gi
+        volumeMounts:
+        - {name: dshm, mountPath: /dev/shm}
+      volumes:
+      - name: dshm
+        emptyDir: {medium: Memory, sizeLimit: 10Gi}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: dynamo-direct-frontend
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: dynamo-direct-frontend
+  template:
+    metadata:
+      labels:
+        app: dynamo-direct-frontend
+    spec:
+      serviceAccountName: dynamo-direct-frontend
+      containers:
+      - name: frontend
+        image: <your-registry>/dynamo-frontend:<tag>
+        command: ["python3", "-m", "dynamo.frontend"]
+        args:
+        - --direct
+        - --discovery-backend
+        - kubernetes-pods
+        - --engine-selector
+        - app=sglang-engine
+        - --engine-grpc-port
+        - "30001"
+        - --router-mode
+        - kv
+        - --http-port
+        - "8000"
+        ports:
+        - {name: http, containerPort: 8000}
+        envFrom:
+        - secretRef:
+            name: hf-token-secret
+            optional: true
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: dynamo-direct-frontend
+spec:
+  selector:
+    app: dynamo-direct-frontend
+  ports:
+  - {name: http, port: 8000, targetPort: http}

@@ -56,13 +56,38 @@ curl -s localhost:8000/v1/chat/completions \
   -d '{"model":"Qwen/Qwen3-0.6B","messages":[{"role":"user","content":"Hello"}],"max_tokens":32}'
 ```
 
+## Run on Kubernetes
+
+On Kubernetes the frontend can find the engines itself. It watches the pods that match a
+label selector and, once a pod is `Ready`, registers its engine in the frontend's own
+in-memory discovery with the model card a sidecar would publish. From there the frontend
+serves it exactly as it serves sidecar workers. The engine is withdrawn when the pod stops
+being `Ready` or is deleted:
+
+```bash
+python3 -m dynamo.frontend --direct --direct-backend sglang \
+  --discovery-backend kubernetes-pods \
+  --engine-selector app=sglang-engine \
+  --engine-grpc-port 30001 \
+  --router-mode kv
+```
+
+`--prefill-engine-selector` selects the prefill pods of a disaggregated deployment.
+`--engine-namespace` defaults to the frontend's own namespace. A pod's
+`nvidia.com/dynamo-engine-grpc-port` annotation overrides `--engine-grpc-port`. The
+frontend's service account needs `get`, `list`, and `watch` on pods.
+
+The [direct SGLang manifests](https://github.com/ai-dynamo/dynamo/tree/main/examples/backends/sglang/deploy/direct)
+deploy the engines, the frontend, and its RBAC with one `kubectl apply`, without the Dynamo
+operator.
+
 ## What the frontend does with each URL
 
 1. Connects, waits for `HealthCheck`, and calls `GetModelInfo` and `GetServerInfo`.
 2. Derives the worker's role, KV block size, context length, data-parallel ranks,
    bootstrap host and port for prefill, and the ZMQ KV-event endpoints.
-3. Registers the engine as a routable instance with a stable id derived from the URL,
-   so every frontend replica agrees on worker ids.
+3. Registers the engine as a routable instance with a stable id derived from the URL, or
+   from the pod name with `kubernetes-pods`, so every frontend replica agrees on worker ids.
 4. Subscribes to the engine's KV events directly and feeds the router's index.
 5. Dispatches each request over a gRPC `Generate` stream; a lost engine surfaces as a
    transport fault, so the router stops sending to it and in-flight requests migrate.
@@ -78,6 +103,8 @@ override whatever the engine reported.
 
 - SGLang only.
 - The HTTP frontend only. `--interactive` and `--kserve-grpc-server` reject `--direct`.
-- The engine list is fixed at startup. Scale-out means restarting the frontend.
+- With `--engine-url`, the engine list is fixed at startup. Scale-out means restarting the
+  frontend. With `--discovery-backend kubernetes-pods`, prefill and decode engines join and
+  leave with their pods.
 - No KV-event replay: SGLang does not advertise a replay socket, so a frontend restart
   warms the index from live events, with no snapshot of the engine's current cache.
