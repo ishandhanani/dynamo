@@ -1011,19 +1011,13 @@ impl State {
     }
 
     fn schedule_retention_expiry(&mut self, session_id: &str) {
-        if self.session_has_request(session_id) {
-            return;
-        }
-        let Some(program) = self.programs.get(session_id) else {
-            return;
-        };
-        let Some(since) = (program.status == ProgramStatus::Acting)
-            .then_some(program.acting_since)
-            .flatten()
+        let Some(deadline) = self
+            .programs
+            .get(session_id)
+            .and_then(|program| self.retention_deadline(session_id, program))
         else {
             return;
         };
-        let deadline = since + self.config.session_retention();
         self.next_retention_expiry = Some(
             self.next_retention_expiry
                 .map_or(deadline, |next| next.min(deadline)),
