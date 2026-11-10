@@ -65,6 +65,10 @@ Upgrading? Pick the version you run today to see the dependency migration and th
 
   > **Migrate:** Choose another `--router-mode`, and restart workers that pass `--router-mode power-of-two` with another mode before upgrading the frontend. If a policy file names the `power-of-two` type, name another worker-selection type there.
 
+<span className="dynref-badge dynref-badge--red">Removed</span> **Removed the ThunderAgent `scheduler_interval_seconds` parameter** ([#18443](https://github.com/ai-dynamo/dynamo/pull/18443)). The native ThunderAgent plugin no longer runs a periodic scheduler: its dispatch gate is asked again when a turn ends, a worker's capacity changes, a program's retention expires, or a held turn reaches its forced-dispatch time. A router policy file that still sets the parameter fails at startup with an unknown-field error. The Python `dynamo.thunderagent_router` keeps its own `scheduler_interval_seconds`.
+
+  > **Migrate:** Remove `scheduler_interval_seconds` from `request_classifier.parameters` in router policy files that select the ThunderAgent plugin.
+
 <span className="dynref-badge dynref-badge--red">Removed</span> **Removed the compatibility import paths and names for Router plugins** in the `dynamo-kv-router` and `dynamo-llm` Rust crates.
 
 | Removed | Replacement |
