@@ -441,7 +441,9 @@ pub enum DispatchDecision {
     /// `Sent` reports the result.
     Go { target: Option<WorkerWithDpRank> },
     /// Keep the head queued. The host asks again when a worker's capacity changes, when
-    /// [`DispatchRecheck::notify`] is called, and no later than `until` when it is set.
+    /// [`DispatchRecheck::notify`] is called, and no later than `until` when it is set. An
+    /// `until` that is not in the future arms no timer: the head waits for a capacity change or
+    /// a `notify`.
     Hold { until: Option<Instant> },
 }
 

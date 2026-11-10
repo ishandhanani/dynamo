@@ -123,7 +123,7 @@ impl QueuedRequest {
 }
 
 /// Asks the dispatch gate about one head inside a dispatch predicate: `false` holds the head
-/// and records the earliest requested recheck; `true` stores the gate's target on the head.
+/// and records the earliest requested recheck still in the future; `true` stores the gate's target on the head.
 fn gate_allows(
     gate: &dyn DispatchGate,
     policy_class: &str,
@@ -136,7 +136,9 @@ fn gate_allows(
             true
         }
         DispatchDecision::Hold { until } => {
-            if let Some(until) = until {
+            // A deadline that already passed arms nothing: re-arming it would wake the actor
+            // again at once while the gate still holds.
+            if let Some(until) = until.filter(|until| *until > Instant::now()) {
                 recheck_at.set(Some(recheck_at.get().map_or(until, |at| at.min(until))));
             }
             false

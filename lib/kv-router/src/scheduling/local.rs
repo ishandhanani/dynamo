@@ -1389,6 +1389,10 @@ mod tests {
     struct TestGate {
         held: parking_lot::Mutex<std::collections::HashSet<String>>,
         hold_until: parking_lot::Mutex<Option<Instant>>,
+        /// Keep holding with `hold_until` after it passes, as a gate that names a stale
+        /// deadline would.
+        hold_past_until: std::sync::atomic::AtomicBool,
+        checks: AtomicUsize,
         target: Option<WorkerWithDpRank>,
         dispatched: parking_lot::Mutex<Vec<(String, Option<WorkerWithDpRank>)>>,
         recheck: std::sync::OnceLock<DispatchRecheck>,
@@ -1399,6 +1403,8 @@ mod tests {
             Arc::new(Self {
                 held: parking_lot::Mutex::new(sessions.iter().map(|s| (*s).to_owned()).collect()),
                 hold_until: parking_lot::Mutex::new(None),
+                hold_past_until: std::sync::atomic::AtomicBool::new(false),
+                checks: AtomicUsize::new(0),
                 target,
                 dispatched: parking_lot::Mutex::new(Vec::new()),
                 recheck: std::sync::OnceLock::new(),
@@ -1416,12 +1422,15 @@ mod tests {
 
     impl DispatchGate for TestGate {
         fn check(&self, head: &DispatchHead<'_>) -> DispatchDecision {
+            self.checks.fetch_add(1, Ordering::Relaxed);
             let held = head
                 .session_context()
                 .is_some_and(|session| self.held.lock().contains(session.session_id()));
             if held {
                 let until = *self.hold_until.lock();
-                if until.is_none_or(|until| Instant::now() < until) {
+                if self.hold_past_until.load(Ordering::Relaxed)
+                    || until.is_none_or(|until| Instant::now() < until)
+                {
                     return DispatchDecision::Hold { until };
                 }
             }
@@ -1577,6 +1586,30 @@ mod tests {
         }
         assert!(admitted.is_some(), "the hold timer must wake the queue");
         assert_eq!(gate.dispatched_ids(), ["a1"]);
+        cancel.cancel();
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn dispatch_gate_hold_until_in_the_past_arms_no_timer() {
+        let gate = TestGate::holding(&["a"], None);
+        *gate.hold_until.lock() = Some(Instant::now());
+        gate.hold_past_until.store(true, Ordering::Relaxed);
+        let (scheduler, cancel) = gated_scheduler(&gate);
+
+        let mut a1 = submit(&scheduler, session_request("a1", "a")).await;
+        assert_eq!(admitted_worker(&mut a1), None);
+
+        // A re-armed past deadline would wake the actor at once, ask the gate again, and loop.
+        let checks = gate.checks.load(Ordering::Relaxed);
+        for _ in 0..64 {
+            tokio::task::yield_now().await;
+        }
+        tokio::time::advance(Duration::from_secs(5)).await;
+        for _ in 0..64 {
+            tokio::task::yield_now().await;
+        }
+        assert_eq!(gate.checks.load(Ordering::Relaxed), checks);
+        assert_eq!(admitted_worker(&mut a1), None);
         cancel.cancel();
     }
 
