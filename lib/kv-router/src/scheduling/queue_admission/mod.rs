@@ -4,13 +4,19 @@
 use std::hash::{BuildHasher, RandomState};
 use std::sync::OnceLock;
 
-/// Key of one per-session queue lane, derived from the session identifier.
+fn keys() -> &'static RandomState {
+    static KEYS: OnceLock<RandomState> = OnceLock::new();
+    KEYS.get_or_init(RandomState::new)
+}
+
+/// Key of one queue lane, derived from a session identifier or a classifier-named lane.
 ///
-/// A class queue has one shared lane plus one lane per session that has queued requests. Lanes
-/// share one order: the best head across every lane of a class dispatches first. A lane whose
+/// A class queue has one shared lane plus one lane per session, or per classifier-named lane,
+/// that has queued requests. Lanes share one order: the best head across every lane of a class dispatches first. A lane whose
 /// head cannot dispatch, because the dispatch gate holds it or its eligible workers are full,
 /// holds only that lane; the shared lane and the other sessions keep draining. The actor
-/// assigns a session lane to every request that carries a session context.
+/// assigns a session lane to every request that carries a session context; a request without
+/// one waits in the lane its classifier named, if any, else in the shared lane.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct SessionLane(u64);
 
@@ -20,7 +26,12 @@ impl SessionLane {
     /// identifier that lands in another session's lane. Two identifiers that still collide
     /// share a lane, its order and its holds.
     pub fn new(session_id: &str) -> Self {
-        static KEYS: OnceLock<RandomState> = OnceLock::new();
-        Self(KEYS.get_or_init(RandomState::new).hash_one(session_id))
+        Self(keys().hash_one(session_id))
+    }
+
+    /// Derive the key of a lane a request classifier names. Classifier lanes hash in their own
+    /// domain, so a lane name never shares a key with a session identifier on purpose.
+    pub fn named(lane: &str) -> Self {
+        Self(keys().hash_one(("dynamo.classifier.lane", lane)))
     }
 }

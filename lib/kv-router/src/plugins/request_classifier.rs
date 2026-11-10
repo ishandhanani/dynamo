@@ -18,6 +18,7 @@ pub use registry::{
     RequestClassifierProviderError, RequestClassifierRegistryError,
 };
 
+use std::collections::HashSet;
 use std::error::Error;
 use std::sync::Arc;
 
@@ -26,9 +27,9 @@ use dynamo_tokens::SequenceHash;
 use tokio::time::Instant;
 
 use crate::plugins::worker_selection::{WorkerCandidates, WorkerInputs};
-use crate::protocols::{WorkerAffinityTarget, WorkerWithDpRank};
+use crate::protocols::{WorkerAffinityTarget, WorkerId, WorkerWithDpRank};
 use crate::scheduling::{
-    BusyThresholds, PolicyProfile, SessionContext, policy_queue::QueueSnapshot,
+    BusyThresholds, PolicyProfile, SessionContext, SessionLane, policy_queue::QueueSnapshot,
 };
 
 #[derive(Debug)]
@@ -61,6 +62,8 @@ pub(crate) struct ClassificationOverrides {
     pub(crate) due_at: Option<Instant>,
     pub(crate) scheduling_cost_tokens: Option<usize>,
     pub(crate) worker_selection_target: Option<Option<WorkerAffinityTarget>>,
+    pub(crate) allowed_workers: Option<HashSet<WorkerId>>,
+    pub(crate) lane: Option<SessionLane>,
 }
 
 impl ClassifyRequest {
@@ -195,6 +198,12 @@ impl ClassifyRequest {
         self.input_tokens
     }
 
+    /// Best cached prefix, in tokens, over the request's eligible workers when it was
+    /// classified. `isl_tokens() - cached_tokens()` is its best effective prefill.
+    pub fn cached_tokens(&self) -> usize {
+        self.initial_cached_tokens
+    }
+
     /// Return the request's ordered active-tracking sequence hashes.
     ///
     /// This is an owned snapshot of the host's existing scheduling input, taken
@@ -256,6 +265,20 @@ impl ClassifyRequest {
     }
 
     /// Clear this request's soft affinity preference without changing hard pins.
+    /// Narrow the workers this request may use to `workers`, intersected with the caller's own
+    /// allowed workers. The queue's capacity check and worker selection both honor it. An empty
+    /// intersection leaves the caller's set unchanged.
+    pub fn set_allowed_workers(&mut self, workers: HashSet<WorkerId>) {
+        self.overrides.allowed_workers = Some(workers);
+    }
+
+    /// Queue a request that has no session in its own lane, named by the classifier, instead of
+    /// its class's shared lane. A head that cannot dispatch then holds only its lane. Requests
+    /// with a session keep their session lane while a dispatch gate is installed.
+    pub fn set_lane(&mut self, lane: &str) {
+        self.overrides.lane = Some(SessionLane::named(lane));
+    }
+
     pub fn clear_worker_selection_target(&mut self) {
         self.overrides.worker_selection_target = Some(None);
     }

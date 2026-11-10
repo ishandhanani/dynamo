@@ -107,6 +107,8 @@ struct QueuedRequest {
     /// The dispatch gate's last `Go` target for this head, written by the dispatch predicate
     /// and taken when the head leaves the queue. Only the actor touches it.
     gate_target: Cell<Option<WorkerWithDpRank>>,
+    /// The lane the classifier named, used when the request has no session lane.
+    classifier_lane: Option<SessionLane>,
 }
 
 impl QueuedRequest {
@@ -480,6 +482,7 @@ enum AdmissionCommand {
         block_hashes: Option<Vec<LocalBlockHash>>,
         prepared: Option<Box<PreparedAdmission>>,
         queue_metadata: QueueMetadata,
+        classifier_lane: Option<SessionLane>,
         lease: Option<Box<RequestLifecycleLease>>,
         ack_tx: oneshot::Sender<Option<Box<RequestLifecycleLease>>>,
     },
@@ -1224,6 +1227,9 @@ impl<
             return None;
         }
 
+        let classifier_lane = classified_request
+            .as_ref()
+            .and_then(|classified| classified.overrides.lane);
         let queue_metadata = match classified_request {
             Some(classified) => self.validate_classification(&mut request, classified, ingress_at),
             None => self.default_queue_metadata(&request, ingress_at),
@@ -1255,6 +1261,7 @@ impl<
             block_hashes: self.prepare_block_hashes_for_refresh(block_hashes),
             prepared,
             queue_metadata,
+            classifier_lane,
             lease,
             ack_tx,
         });
@@ -1334,6 +1341,7 @@ impl<
             block_hashes: None,
             prepared: None,
             queue_metadata,
+            classifier_lane: None,
             lease: None,
             ack_tx,
         };
@@ -1402,6 +1410,8 @@ impl<
             due_at,
             scheduling_cost_tokens,
             worker_selection_target,
+            allowed_workers,
+            lane: _,
         } = classified_request.into_queue_inputs();
 
         if scheduling_cost_tokens == Some(0) {
@@ -1418,6 +1428,18 @@ impl<
             && let Some(target) = worker_selection_target
         {
             request.affinity_target = target;
+        }
+
+        // A classifier may only narrow the caller's allowed workers. An empty intersection would
+        // leave nothing to route to, so it keeps the caller's own set instead.
+        if let Some(allowed) = allowed_workers {
+            let narrowed: HashSet<WorkerId> = match request.allowed_worker_ids.as_ref() {
+                Some(caller) => allowed.intersection(caller).copied().collect(),
+                None => allowed,
+            };
+            if !narrowed.is_empty() {
+                request.allowed_worker_ids = Some(narrowed);
+            }
         }
 
         // Queue inputs are recomputed from the current workers, exactly as the
@@ -1733,6 +1755,7 @@ impl<
                 block_hashes,
                 prepared,
                 queue_metadata,
+                classifier_lane,
                 lease,
                 ack_tx,
             } => {
@@ -1748,6 +1771,7 @@ impl<
                     block_hashes,
                     prepared,
                     queue_metadata,
+                    classifier_lane,
                 );
                 let drain = if cleanup_ready {
                     Drain::Full
@@ -1796,6 +1820,7 @@ impl<
 
     /// Returns whether ready work may have changed: the request entered the queue or was booked,
     /// or the expiry it ran exposed a class head.
+    #[allow(clippy::too_many_arguments)]
     fn handle_enqueue(
         &mut self,
         mut request: SchedulingRequest,
@@ -1804,6 +1829,7 @@ impl<
         block_hashes: Option<Vec<LocalBlockHash>>,
         prepared: Option<Box<PreparedAdmission>>,
         queue_metadata: QueueMetadata,
+        classifier_lane: Option<SessionLane>,
     ) -> bool {
         let class_index = queue_metadata.class_index;
         self.class_counters[class_index]
@@ -1880,6 +1906,7 @@ impl<
             block_hashes,
             enqueue_turn: self.turn,
             gate_target: Cell::new(None),
+            classifier_lane,
         };
         self.turn_prepared = prepared;
         if let Insertion::Refused { exposed } =
@@ -1921,13 +1948,15 @@ impl<
         let priority_jump = queued.request.priority_jump;
         let strict_priority = queued.request.strict_priority;
         // A session's requests wait in their own lane, so a head that cannot dispatch, because
-        // a gate holds it or its bound worker is full, blocks only that session. Requests
-        // without a session share the class lane.
+        // a gate holds it or its bound worker is full, blocks only that session. A request
+        // without a session waits in the lane its classifier named, if any; everything else
+        // shares the class lane.
         let lane = queued
             .request
             .session_context
             .as_ref()
-            .map(|session| SessionLane::new(session.session_id()));
+            .map(|session| SessionLane::new(session.session_id()))
+            .or(queued.classifier_lane);
         let worker_count = self.workers_with_configs.borrow().len();
         loop {
             if due_at.is_some_and(|due_at| due_at <= Instant::now()) {
@@ -4193,6 +4222,7 @@ policy_classes:
                 block_hashes: Some(vec![LocalBlockHash(42)]),
                 prepared: None,
                 queue_metadata,
+                classifier_lane: None,
                 lease: None,
                 ack_tx,
             })
@@ -4597,11 +4627,12 @@ policy_classes:
             None,
             None,
             head_metadata,
+            None,
         );
         let (mut next, _next_rx) = make_request("next", 64);
         in_session(&mut next, "a");
         let next_metadata = metadata(&next);
-        actor.handle_enqueue(next, None, None, None, None, next_metadata);
+        actor.handle_enqueue(next, None, None, None, None, next_metadata, None);
         actor.handle_update(None).await;
         assert_eq!(actor.gate_recheck_at, None);
 
@@ -4854,6 +4885,7 @@ policy_classes:
                 block_hashes: None,
                 prepared,
                 queue_metadata,
+                classifier_lane: None,
                 lease: None,
                 ack_tx,
             })
@@ -5069,7 +5101,7 @@ policy_classes:
             let metadata = queue
                 .default_queue_metadata(&active, Instant::now())
                 .unwrap();
-            assert!(actor.handle_enqueue(active, None, None, None, None, metadata));
+            assert!(actor.handle_enqueue(active, None, None, None, None, metadata, None));
             actor.handle_enqueued(None).await;
             assert_eq!(active_rx.try_recv().unwrap().unwrap().best_worker, worker);
 
@@ -5078,7 +5110,7 @@ policy_classes:
             let metadata = queue
                 .default_queue_metadata(&older, Instant::now())
                 .unwrap();
-            assert!(actor.handle_enqueue(older, None, None, None, None, metadata));
+            assert!(actor.handle_enqueue(older, None, None, None, None, metadata, None));
             actor.handle_enqueued(None).await;
             assert!(older_rx.try_recv().is_err());
 
@@ -5090,7 +5122,7 @@ policy_classes:
             let metadata = queue
                 .default_queue_metadata(&later, Instant::now())
                 .unwrap();
-            assert!(actor.handle_enqueue(later, None, None, None, None, metadata));
+            assert!(actor.handle_enqueue(later, None, None, None, None, metadata, None));
             // Force enqueue processing before the capacity select branch.
             actor.handle_enqueued(None).await;
             assert_eq!(older_rx.try_recv().unwrap().unwrap().best_worker, worker);
@@ -7564,6 +7596,7 @@ policy_classes:
                 block_hashes: None,
                 prepared: None,
                 queue_metadata,
+                classifier_lane: None,
                 lease,
                 ack_tx,
             })
@@ -7761,7 +7794,15 @@ policy_classes:
         let now = Instant::now();
         let mut metadata = queue.default_queue_metadata(&request, now).unwrap();
         metadata.due_at = due_at;
-        actor.handle_enqueue(request, None, lifecycle_transfer, None, None, metadata)
+        actor.handle_enqueue(
+            request,
+            None,
+            lifecycle_transfer,
+            None,
+            None,
+            metadata,
+            None,
+        )
     }
 
     /// Applies an enqueue of `request` as the actor loop applies a command, with an optional
@@ -7789,6 +7830,7 @@ policy_classes:
                 block_hashes: None,
                 prepared: None,
                 queue_metadata,
+                classifier_lane: None,
                 lease: None,
                 ack_tx,
             },
@@ -7995,7 +8037,7 @@ policy_classes:
 
         let (active, mut active_rx) = make_request("active", 64);
         let active_metadata = metadata(&active);
-        assert!(actor.handle_enqueue(active, None, None, None, None, active_metadata));
+        assert!(actor.handle_enqueue(active, None, None, None, None, active_metadata, None));
         actor.handle_update(None).await;
         active_rx.try_recv().unwrap().unwrap();
         assert_eq!(actor.class_timers.armed[0], None);
@@ -8009,13 +8051,14 @@ policy_classes:
             Some(Arc::clone(&head_transfer)),
             None,
             None,
-            head_metadata
+            head_metadata,
+            None
         ));
         assert_eq!(actor.class_timers.armed[0], at(100));
         tokio::time::advance(Duration::from_millis(50)).await;
         let (later, mut later_rx) = make_request("later", 64);
         let later_metadata = metadata(&later);
-        assert!(actor.handle_enqueue(later, None, None, None, None, later_metadata));
+        assert!(actor.handle_enqueue(later, None, None, None, None, later_metadata, None));
         assert_eq!(actor.class_timers.armed[0], at(100));
 
         // Cancelling the head moves the timer to its successor's due time.
@@ -8046,7 +8089,7 @@ policy_classes:
 
         let (refill, _refill_rx) = make_request("refill", 64);
         let refill_metadata = metadata(&refill);
-        assert!(actor.handle_enqueue(refill, None, None, None, None, refill_metadata));
+        assert!(actor.handle_enqueue(refill, None, None, None, None, refill_metadata, None));
         assert_eq!(actor.class_timers.armed[0], at(250));
         // The cancelled head was never counted as a rejection.
         assert_eq!(class_outcomes(&queue, 0), (4, 1, 0));
