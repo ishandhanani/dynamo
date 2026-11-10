@@ -2105,14 +2105,16 @@ impl<
         made_ready || (removed_ready_head && self.has_dispatchable_ready_head())
     }
 
-    fn has_dispatchable_ready_head(&self) -> bool {
+    /// Whether a lane head can dispatch now. A hold this asks about still arms the gate's
+    /// recheck, so a newly exposed root is woken at its own deadline.
+    fn has_dispatchable_ready_head(&mut self) -> bool {
         let decay_now = Instant::now();
         let slots = &self.slots;
         let available_ids = self.available_worker_ids.as_ref();
         let workers = &self.workers_with_configs;
         let gate = self.dispatch_gate.get();
-        let gate_recheck_at = Cell::new(None);
-        self.pending.any_ready_head(|_, class, queued| {
+        let gate_recheck_at = Cell::new(self.gate_recheck_at);
+        let dispatchable = self.pending.any_ready_head(|_, class, queued| {
             if let Some(gate) = gate
                 && !gate_allows(gate.as_ref(), &class.name, queued, &gate_recheck_at)
             {
@@ -2132,7 +2134,9 @@ impl<
                     .eligibility()
                     .with_available_workers(available.as_deref()),
             )
-        })
+        });
+        self.gate_recheck_at = gate_recheck_at.get();
+        dispatchable
     }
 
     fn subtract_pending_counters(&self, class_index: usize, snapshot: QueueSnapshot) {
@@ -4534,6 +4538,59 @@ policy_classes:
             None,
             None,
         ));
+    }
+
+    /// A gate that holds every head until a test-set instant; `None` holds with no deadline.
+    struct DeadlineGate(parking_lot::Mutex<Option<Instant>>);
+
+    impl DispatchGate for DeadlineGate {
+        fn check(&self, _head: &DispatchHead<'_>) -> DispatchDecision {
+            DispatchDecision::Hold {
+                until: *self.0.lock(),
+            }
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn cleanup_that_exposes_a_held_root_arms_its_gate_deadline() {
+        let (queue, slots) = make_queue(1, 16, 256, Some(0.5));
+        let gate = Arc::new(DeadlineGate(parking_lot::Mutex::new(None)));
+        assert!(queue.install_dispatch_gate(Arc::clone(&gate) as Arc<dyn DispatchGate>));
+        let mut actor = actor_for_test(&queue, &slots);
+        let metadata = |request: &SchedulingRequest| {
+            queue
+                .default_queue_metadata(request, Instant::now())
+                .unwrap()
+        };
+
+        // Session a's lane is held with no deadline: nothing is armed.
+        let head_transfer = Arc::new(AdmissionLifecycleTransfer::new("head".to_string()));
+        let (mut head, _head_rx) = make_request("head", 64);
+        in_session(&mut head, "a");
+        let head_metadata = metadata(&head);
+        actor.handle_enqueue(
+            head,
+            None,
+            Some(Arc::clone(&head_transfer)),
+            None,
+            None,
+            head_metadata,
+        );
+        let (mut next, _next_rx) = make_request("next", 64);
+        in_session(&mut next, "a");
+        let next_metadata = metadata(&next);
+        actor.handle_enqueue(next, None, None, None, None, next_metadata);
+        actor.handle_update(None).await;
+        assert_eq!(actor.gate_recheck_at, None);
+
+        // Cancelling the head exposes `next`, which the gate now holds until a deadline.
+        let until = Instant::now() + Duration::from_secs(5);
+        *gate.0.lock() = Some(until);
+        actor.cleanup.enqueue(AdmissionCleanupEntry {
+            target: SchedulerCleanupTarget::AdmissionLifecycle(head_transfer),
+        });
+        assert!(!actor.drain_cleanup());
+        assert_eq!(actor.gate_recheck_at, Some(until));
     }
 
     // The caller drives this actor directly. Its hints are separate from the
