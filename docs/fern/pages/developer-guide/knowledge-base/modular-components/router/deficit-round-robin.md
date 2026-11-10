@@ -8,7 +8,7 @@ subtitle: Weighted arbitration across router policy classes
 The router uses a Deficit Round Robin (DRR) variant that is work-conserving
 across dispatchable policy classes. DRR determines which class can
 dispatch next; the class's queue policy, EDF by default for configured classes,
-determines request order within that class's shared lane and, when a dispatch gate is installed, its per-session lanes.
+determines request order within that class's shared lane and its per-session lanes.
 
 This separation provides:
 
@@ -41,8 +41,8 @@ amounts of credit.
 
 The scheduler maintains the following state for each class:
 
-- A shared pending heap for requests that can use any eligible worker.
-- One pending heap per exact-worker target, ordered by the same queue policy.
+- A shared pending heap for requests without a session context.
+- One pending heap per session with queued requests, ordered by the same queue policy.
 - A deficit containing earned but unspent credit.
 - A quantum controlling how quickly the deficit grows.
 
@@ -172,8 +172,8 @@ dispatchable, but each individual selection is bounded and continuation
 draining remains local to the actor.
 
 With only the synthetic no-YAML `default` class, the ring contains one class.
-DRR reduces to single-class arbitration, but exact-worker requests still use
-their separate lanes.
+DRR reduces to single-class arbitration, but session requests still use their
+separate lanes.
 
 ## Configuration
 

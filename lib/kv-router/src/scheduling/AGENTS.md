@@ -91,7 +91,7 @@ sequenceDiagram
 PolicyClassQueue("agents")
 ├── pending: BinaryHeap<PolicyQueueEntry>                 # the shared lane (lane: None)
 ├── ready_by_lane: FxHashMap<SessionLane, BinaryHeap<PolicyQueueEntry>>
-│   ├── Session(hash a) → heap of session a's requests   (only with a dispatch gate)
+│   ├── Session(hash a) → heap of session a's requests
 │   └── Session(hash b) → heap of session b's requests
 ├── blocked_lanes: FxHashSet<SessionLane>
 ├── candidate_lane_heads: BTreeSet<LaneHead>               # one head per unblocked lane
