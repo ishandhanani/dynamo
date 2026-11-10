@@ -8,6 +8,7 @@
 //! itself uses the same public candidate inputs and scorer/picker dispatch as external policies.
 //! Sequence tracking, eligibility, and admission remain in dynamo-kv-router.
 
+mod cold_pool;
 mod default;
 pub mod router_modes;
 mod sticky_min_load;
@@ -42,6 +43,7 @@ use dynamo_kv_router::plugins::{RouterPluginRegistry, RouterPluginRegistryError}
 /// than overriding it.
 pub fn register(registry: &mut RouterPluginRegistry) -> Result<(), RouterPluginRegistryError> {
     default::register(registry)?;
+    cold_pool::register(registry)?;
     sticky_min_load::register(registry)?;
     two_tier_cost_fn::register(registry)?;
     thunderagent::register(registry)?;

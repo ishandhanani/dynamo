@@ -1537,6 +1537,89 @@ mod tests {
         }
     }
 
+    /// Holds every request whose ID starts with `hold`; names a lane for them when `lane` is set.
+    struct LaneClassifier {
+        lane: bool,
+        gate: Arc<HoldPrefixGate>,
+    }
+
+    struct HoldPrefixGate;
+
+    impl DispatchGate for HoldPrefixGate {
+        fn check(&self, head: &DispatchHead<'_>) -> DispatchDecision {
+            if head.request_id().is_some_and(|id| id.starts_with("hold")) {
+                DispatchDecision::Hold { until: None }
+            } else {
+                DispatchDecision::Go { target: None }
+            }
+        }
+    }
+
+    impl RequestClassifier for LaneClassifier {
+        fn classify(
+            &mut self,
+            mut request: ClassifyRequest,
+            _workers: crate::plugins::worker_selection::WorkerCandidates<'_>,
+        ) -> Result<ClassifyRequest, Box<crate::plugins::request_classifier::ClassifierError>>
+        {
+            if self.lane
+                && request
+                    .request_id()
+                    .is_some_and(|id| id.starts_with("hold"))
+            {
+                request.set_lane("held");
+            }
+            Ok(request)
+        }
+
+        fn dispatch_gate(&self) -> Option<Arc<dyn DispatchGate>> {
+            Some(Arc::clone(&self.gate) as Arc<dyn DispatchGate>)
+        }
+    }
+
+    async fn sessionless_request_behind_a_held_head(lane: bool) -> bool {
+        let roomy = SimpleWorkerConfig {
+            max_num_batched_tokens: Some(10_000),
+            ..Default::default()
+        };
+        let (scheduler, _slots, _configs, cancel) =
+            make_scheduler(HashMap::from([(0, roomy)]), Some(0.5), false, None);
+        assert!(scheduler.install_request_classifier(
+            Box::new(LaneClassifier {
+                lane,
+                gate: Arc::new(HoldPrefixGate),
+            }),
+            cancel.clone(),
+        ));
+        let tracked = |id: &str| {
+            request(ScheduleMode::TrackedWithLifecycle {
+                request_id: id.into(),
+            })
+        };
+        // Only requests with a registered lifecycle are classified.
+        let _lifecycles = ["hold-1", "next-1"].map(|id| {
+            scheduler
+                .begin_request_lifecycle(id)
+                .unwrap()
+                .expect("lifecycle registered")
+        });
+        let mut held = submit(&scheduler, tracked("hold-1")).await;
+        let mut behind = submit(&scheduler, tracked("next-1")).await;
+        scheduler.admission_barrier().await.unwrap();
+        assert_eq!(admitted_worker(&mut held), None);
+        let admitted = admitted_worker(&mut behind).is_some();
+        cancel.cancel();
+        admitted
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_classifier_lane_keeps_a_held_head_out_of_the_shared_lane() {
+        // Without a lane, the held head blocks the class's shared lane.
+        assert!(!sessionless_request_behind_a_held_head(false).await);
+        // In its own named lane it holds only that lane.
+        assert!(sessionless_request_behind_a_held_head(true).await);
+    }
+
     #[tokio::test(start_paused = true)]
     async fn dispatch_gate_holds_one_session_lane_and_releases_on_notify() {
         let target = WorkerWithDpRank::new(1, 0);
