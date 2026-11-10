@@ -43,6 +43,7 @@ use super::replay::{
 use dynamo_mocker::config::MockerConfig;
 use dynamo_runtime::discovery::ModelCardInstanceId as RsModelCardInstanceId;
 use dynamo_runtime::protocols::EndpointId;
+use tokio_util::sync::CancellationToken;
 
 use super::local_model::ModelRuntimeConfig;
 use super::model_card::ModelDeploymentCard;
@@ -495,6 +496,18 @@ pub(crate) struct EntrypointArgs {
     prefill_engine_urls: Vec<String>,
     /// `EngineType::Direct` only: which engine family the URLs speak.
     direct_backend: DirectBackendKind,
+    /// `EngineType::Direct` only: engine pods to follow instead of fixed URLs.
+    engine_pods: Option<EnginePods>,
+}
+
+/// Engine pods chosen by label, as `--discovery-backend kubernetes-pods`.
+#[derive(Clone, Debug)]
+struct EnginePods {
+    selector: String,
+    prefill_selector: Option<String>,
+    /// The frontend's own namespace when unset.
+    namespace: Option<String>,
+    port: Option<u16>,
 }
 
 /// Engine families the frontend can dial directly.
@@ -521,7 +534,7 @@ impl std::str::FromStr for DirectBackendKind {
 impl EntrypointArgs {
     #[allow(clippy::too_many_arguments)]
     #[new]
-    #[pyo3(signature = (engine_type, model_path=None, model_name=None, endpoint_id=None, template_file=None, router_config=None, kv_cache_block_size=None, http_host=None, http_port=None, http_metrics_port=None, tls_cert_path=None, tls_key_path=None, extra_engine_args=None, mocker_engine_args=None, runtime_config=None, namespace=None, namespace_prefix=None, is_prefill=false, is_decode=false, migration_limit=0, migration_max_seq_len=None, chat_engine_factory=None, ais_perf_config=None, *, tls_client_ca_cert_path=None, metrics_prefix=None, enable_anthropic_api=None, strip_anthropic_preamble=None, enable_streaming_tool_dispatch=None, enable_streaming_reasoning_dispatch=None, reasoning_field_name=None, tokenizer_backend=None, tokenizer_fallback=None, batch_gateway_url=None, engine_urls=None, prefill_engine_urls=None, direct_backend=None))]
+    #[pyo3(signature = (engine_type, model_path=None, model_name=None, endpoint_id=None, template_file=None, router_config=None, kv_cache_block_size=None, http_host=None, http_port=None, http_metrics_port=None, tls_cert_path=None, tls_key_path=None, extra_engine_args=None, mocker_engine_args=None, runtime_config=None, namespace=None, namespace_prefix=None, is_prefill=false, is_decode=false, migration_limit=0, migration_max_seq_len=None, chat_engine_factory=None, ais_perf_config=None, *, tls_client_ca_cert_path=None, metrics_prefix=None, enable_anthropic_api=None, strip_anthropic_preamble=None, enable_streaming_tool_dispatch=None, enable_streaming_reasoning_dispatch=None, reasoning_field_name=None, tokenizer_backend=None, tokenizer_fallback=None, batch_gateway_url=None, engine_urls=None, prefill_engine_urls=None, direct_backend=None, engine_selector=None, prefill_engine_selector=None, engine_namespace=None, engine_grpc_port=None))]
     pub fn new(
         py: Python<'_>,
         engine_type: EngineType,
@@ -560,6 +573,10 @@ impl EntrypointArgs {
         engine_urls: Option<Vec<String>>,
         prefill_engine_urls: Option<Vec<String>>,
         direct_backend: Option<String>,
+        engine_selector: Option<String>,
+        prefill_engine_selector: Option<String>,
+        engine_namespace: Option<String>,
+        engine_grpc_port: Option<u16>,
     ) -> PyResult<Self> {
         let endpoint_id_obj: Option<EndpointId> = endpoint_id.as_deref().map(EndpointId::from);
         if (tls_cert_path.is_some() && tls_key_path.is_none())
@@ -663,6 +680,12 @@ impl EntrypointArgs {
                 .transpose()
                 .map_err(PyValueError::new_err)?
                 .unwrap_or_default(),
+            engine_pods: engine_selector.map(|selector| EnginePods {
+                selector,
+                prefill_selector: prefill_engine_selector,
+                namespace: engine_namespace,
+                port: engine_grpc_port,
+            }),
         })
     }
 }
@@ -719,13 +742,9 @@ pub fn make_engine<'p>(
         // Direct engines are probed first so the model path, KV block size and
         // runtime config can come from the engines themselves.
         let direct_fleet = if matches!(args.engine_type, EngineType::Direct) {
-            let fleet = DirectFleetKind::probe(
-                args.direct_backend,
-                &args.engine_urls,
-                &args.prefill_engine_urls,
-            )
-            .await
-            .map_err(to_pyerr)?;
+            let fleet = DirectFleetKind::probe(&args, distributed_runtime.inner.primary_token())
+                .await
+                .map_err(to_pyerr)?;
             let primary = fleet.primary();
             if args.model_path.is_none() {
                 args.model_path = Some(PathBuf::from(&primary.model_path));
@@ -789,23 +808,18 @@ pub fn make_engine<'p>(
 
 /// A probed direct fleet of one supported engine family.
 enum DirectFleetKind {
-    Sglang(dynamo_sidecar_common::direct::DirectFleet<dynamo_sglang_sidecar::direct::SglangDirectDispatch>),
+    Sglang(DirectStart<dynamo_sglang_sidecar::direct::SglangDirectDispatch>),
 }
 
 impl DirectFleetKind {
-    async fn probe(
-        backend: DirectBackendKind,
-        urls: &[String],
-        prefill_urls: &[String],
-    ) -> Result<Self, dynamo_runtime::error::DynamoError> {
-        use dynamo_sidecar_common::direct::DirectFleet;
+    async fn probe(args: &EntrypointArgs, cancel: CancellationToken) -> anyhow::Result<Self> {
         let transport = dynamo_sidecar_common::GrpcTransportConfig::default();
-        Ok(match backend {
+        Ok(match args.direct_backend {
             DirectBackendKind::Sglang => Self::Sglang(
-                DirectFleet::probe(
+                DirectStart::probe(
                     dynamo_sglang_sidecar::direct::SglangDirectDispatch::new(transport),
-                    urls,
-                    prefill_urls,
+                    args,
+                    cancel,
                 )
                 .await?,
             ),
@@ -814,13 +828,73 @@ impl DirectFleetKind {
 
     fn primary(&self) -> &dynamo_sidecar_common::direct::DirectEngineFacts {
         match self {
-            Self::Sglang(fleet) => fleet.primary(),
+            Self::Sglang(start) => start.primary(),
         }
     }
 
     fn into_engine_config(self, model: LocalModel) -> RsEngineConfig {
         match self {
-            Self::Sglang(fleet) => fleet.into_engine_config(model),
+            Self::Sglang(start) => start.into_engine_config(model),
+        }
+    }
+}
+
+/// The engines a direct frontend starts with: a fixed list of URLs, or the
+/// first engine pods, followed until shutdown.
+enum DirectStart<B: dynamo_sidecar_common::direct::DirectBackend> {
+    Urls(dynamo_sidecar_common::direct::DirectFleet<B>),
+    Pods(
+        Box<dynamo_sidecar_common::direct::pods::FirstPods<B>>,
+        CancellationToken,
+    ),
+}
+
+impl<B: dynamo_sidecar_common::direct::DirectBackend> DirectStart<B> {
+    async fn probe(
+        backend: Arc<B>,
+        args: &EntrypointArgs,
+        cancel: CancellationToken,
+    ) -> anyhow::Result<Self> {
+        use dynamo_sidecar_common::direct::pods::{self, PodSelector};
+        use dynamo_sidecar_common::direct::{DirectFleet, RoleHint};
+        let Some(engine_pods) = &args.engine_pods else {
+            let fleet =
+                DirectFleet::probe(backend, &args.engine_urls, &args.prefill_engine_urls).await?;
+            return Ok(Self::Urls(fleet));
+        };
+        let client = pods::client().await?;
+        let namespace = engine_pods
+            .namespace
+            .clone()
+            .unwrap_or_else(|| client.default_namespace().to_string());
+        let selector = |labels: &str, role| PodSelector {
+            namespace: namespace.clone(),
+            labels: labels.to_string(),
+            port: engine_pods.port,
+            role,
+        };
+        let serving = selector(&engine_pods.selector, RoleHint::Serving);
+        let prefill = engine_pods
+            .prefill_selector
+            .as_deref()
+            .map(|labels| selector(labels, RoleHint::Prefill));
+        match pods::probe_first_pods(backend, client, serving, prefill, &cancel).await? {
+            Some(first) => Ok(Self::Pods(Box::new(first), cancel)),
+            None => anyhow::bail!("shut down before an engine pod served"),
+        }
+    }
+
+    fn primary(&self) -> &dynamo_sidecar_common::direct::DirectEngineFacts {
+        match self {
+            Self::Urls(fleet) => fleet.primary(),
+            Self::Pods(first, _) => first.fleet.primary(),
+        }
+    }
+
+    fn into_engine_config(self, model: LocalModel) -> RsEngineConfig {
+        match self {
+            Self::Urls(fleet) => fleet.into_engine_config(model),
+            Self::Pods(first, cancel) => first.serve(model, cancel),
         }
     }
 }

@@ -28,6 +28,9 @@ use kube::runtime::{WatchStreamExt, watcher};
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
+use dynamo_llm::entrypoint::EngineConfig;
+use dynamo_llm::local_model::LocalModel;
+
 use super::{DirectBackend, DirectFleet, DirectMembership, RoleHint};
 
 /// Per-pod override of the selector's pool-wide gRPC port.
@@ -81,33 +84,63 @@ pub fn pod_url(pod: &Pod, default_port: Option<u16>) -> Option<String> {
     Some(format!("http://{host}:{port}"))
 }
 
+/// A Kubernetes client from the pod's service account, or from the local
+/// kubeconfig outside a cluster.
+pub async fn client() -> anyhow::Result<kube::Client> {
+    Ok(kube::Client::try_default().await?)
+}
+
 /// The fleet a pod-driven frontend starts from, and the pods it came from.
 pub struct FirstPods<B: DirectBackend> {
     pub fleet: DirectFleet<B>,
     pub serving_url: String,
     pub prefill_url: Option<String>,
+    client: kube::Client,
+    serving: PodSelector,
+    prefill: Option<PodSelector>,
+}
+
+impl<B: DirectBackend> FirstPods<B> {
+    /// The frontend's engine configuration for `model`, kept in step with the
+    /// selected pods by one [`PodEngines`] per selector until `cancel` fires.
+    pub fn serve(self, model: LocalModel, cancel: CancellationToken) -> EngineConfig {
+        let (config, membership) = self.fleet.into_membership(model);
+        let membership = Arc::new(membership);
+        let pools = std::iter::once((self.serving, self.serving_url))
+            .chain(self.prefill.zip(self.prefill_url));
+        for (selector, url) in pools {
+            let engines = PodEngines::new(membership.clone(), selector).adopting([url]);
+            let client = self.client.clone();
+            let cancel = cancel.clone();
+            tokio::spawn(async move {
+                if let Err(error) = engines.watch(client, cancel).await {
+                    tracing::error!(%error, "engine pod watch stopped");
+                }
+            });
+        }
+        config
+    }
 }
 
 /// Probe the first serving pod of each selector into a fleet, waiting until
 /// one answers. The fleet seeds the model card and fixes whether the
-/// deployment is disaggregated; [`PodEngines`] adds the remaining pods and
-/// should [adopt](PodEngines::adopting) these.
+/// deployment is disaggregated; [`FirstPods::serve`] adds the remaining pods.
 ///
 /// Returns `None` if `cancel` fires first.
 pub async fn probe_first_pods<B: DirectBackend>(
     backend: Arc<B>,
-    client: &kube::Client,
-    serving: &PodSelector,
-    prefill: Option<&PodSelector>,
+    client: kube::Client,
+    serving: PodSelector,
+    prefill: Option<PodSelector>,
     cancel: &CancellationToken,
 ) -> anyhow::Result<Option<FirstPods<B>>> {
     let mut delay = Duration::from_secs(1);
     loop {
-        let Some(serving_url) = first_serving_url(client, serving, cancel).await? else {
+        let Some(serving_url) = first_serving_url(&client, &serving, cancel).await? else {
             return Ok(None);
         };
-        let prefill_url = match prefill {
-            Some(selector) => match first_serving_url(client, selector, cancel).await? {
+        let prefill_url = match &prefill {
+            Some(selector) => match first_serving_url(&client, selector, cancel).await? {
                 Some(url) => Some(url),
                 None => return Ok(None),
             },
@@ -126,6 +159,9 @@ pub async fn probe_first_pods<B: DirectBackend>(
                     fleet,
                     serving_url,
                     prefill_url,
+                    client,
+                    serving,
+                    prefill,
                 }));
             }
             Err(error) => {

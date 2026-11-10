@@ -12,11 +12,11 @@ use dynamo_llm::endpoint_type::EndpointType;
 use dynamo_llm::entrypoint::input::direct::register_direct_model;
 use dynamo_llm::entrypoint::{EngineConfig, RouterConfig};
 use dynamo_llm::http::service::service_v2::HttpService;
-use dynamo_llm::local_model::LocalModelBuilder;
+use dynamo_llm::local_model::{LocalModel, LocalModelBuilder};
 use dynamo_runtime::pipeline::RouterMode;
 use dynamo_runtime::protocols::EndpointId;
 use dynamo_sidecar_common::GrpcTransportConfig;
-use dynamo_sidecar_common::direct::{DirectBackend, DirectFleet};
+use dynamo_sidecar_common::direct::{DirectBackend, DirectEngineFacts, DirectFleet, RoleHint};
 use dynamo_sidecar_testkit::{
     bounded,
     control::{Controller, Event, OpenAction, RequestPlan},
@@ -65,7 +65,15 @@ impl DirectFrontend {
         let fleet = DirectFleet::probe(F::backend(), urls, prefill_urls)
             .await
             .expect("probe mocker engines");
-        let primary = fleet.primary();
+        let local_model = Self::local_model(env, fleet.primary(), router_mode).await;
+        Self::serve(env, fleet.into_engine_config(local_model)).await
+    }
+
+    async fn local_model(
+        env: &Environment,
+        primary: &DirectEngineFacts,
+        router_mode: RouterMode,
+    ) -> LocalModel {
         assert_eq!(primary.model_path, env.model);
         let mut builder = LocalModelBuilder::default();
         builder
@@ -82,12 +90,15 @@ impl DirectFrontend {
                 router_mode,
                 ..Default::default()
             }));
-        let local_model = builder.build().await.expect("local model");
+        builder.build().await.expect("local model")
+    }
+
+    async fn serve(env: &Environment, config: EngineConfig) -> Self {
         let EngineConfig::Direct {
             model,
             workers,
             dispatch,
-        } = fleet.into_engine_config(local_model)
+        } = config
         else {
             unreachable!("fleet builds a direct engine config");
         };
@@ -288,6 +299,223 @@ async fn prefill_decode<F: DirectFixture>() {
     decode_peer.shutdown().await;
 }
 
+/// Engine pods in a throwaway namespace of the cluster `KUBECONFIG` names.
+///
+/// The pods name no scheduler that exists, so no kubelet runs them; the test
+/// writes their status itself, pointing each at a local mocker.
+mod engine_pods {
+    use k8s_openapi::api::core::v1::{Namespace, Pod};
+    use kube::api::{Api, DeleteParams, Patch, PatchParams, PostParams};
+    use serde_json::json;
+
+    pub struct Cluster {
+        pub client: kube::Client,
+        pub namespace: String,
+        pods: Api<Pod>,
+    }
+
+    impl Cluster {
+        pub async fn new() -> Self {
+            let client = kube::Client::try_default()
+                .await
+                .expect("KUBECONFIG cluster");
+            let namespace = format!("dyn-direct-pods-{:08x}", rand::random::<u32>());
+            let namespaces: Api<Namespace> = Api::all(client.clone());
+            namespaces
+                .create(
+                    &PostParams::default(),
+                    &serde_json::from_value(json!({"metadata": {"name": namespace}})).unwrap(),
+                )
+                .await
+                .expect("create test namespace");
+            let pods = Api::namespaced(client.clone(), &namespace);
+            Self {
+                client,
+                namespace,
+                pods,
+            }
+        }
+
+        /// An engine pod of `app`, serving the mocker at `endpoint` once ready.
+        pub async fn engine(&self, name: &str, app: &str, endpoint: &str) {
+            let port = endpoint.rsplit(':').next().unwrap();
+            let pod = json!({
+                "metadata": {
+                    "name": name,
+                    "labels": {"app": app},
+                    "annotations": {"nvidia.com/dynamo-engine-grpc-port": port},
+                },
+                "spec": {
+                    "schedulerName": "dynamo-test-unscheduled",
+                    "containers": [{"name": "engine", "image": "none"}],
+                },
+            });
+            self.pods
+                .create(
+                    &PostParams::default(),
+                    &serde_json::from_value(pod).unwrap(),
+                )
+                .await
+                .expect("create engine pod");
+        }
+
+        pub async fn ready(&self, name: &str, ready: bool) {
+            let status = json!({"status": {
+                "phase": "Running",
+                "podIP": "127.0.0.1",
+                "podIPs": [{"ip": "127.0.0.1"}],
+                "conditions": [{"type": "Ready", "status": if ready { "True" } else { "False" }}],
+            }});
+            self.pods
+                .patch_status(name, &PatchParams::default(), &Patch::Merge(status))
+                .await
+                .expect("patch engine pod status");
+        }
+
+        pub async fn delete(self) {
+            let namespaces: Api<Namespace> = Api::all(self.client);
+            let _ = namespaces
+                .delete(&self.namespace, &DeleteParams::default())
+                .await;
+        }
+    }
+}
+
+/// Send completions until `want` engines' pattern holds `times` in a row.
+async fn until_served_by<F: DirectFixture>(
+    frontend: &DirectFrontend,
+    model: &str,
+    controls: &[&Controller<F::Protocol>],
+    index: &mut usize,
+    want: &[bool],
+    times: usize,
+) {
+    let mut streak = 0;
+    for _ in 0..40 {
+        *index += 1;
+        if served_by::<F>(frontend, model, controls, *index).await == want {
+            streak += 1;
+            if streak == times {
+                return;
+            }
+        } else {
+            streak = 0;
+            tokio::time::sleep(Duration::from_millis(250)).await;
+        }
+    }
+    panic!("engines never served as {want:?}");
+}
+
+/// Send one completion; return which engines received it, by controller.
+async fn served_by<F: DirectFixture>(
+    frontend: &DirectFrontend,
+    model: &str,
+    controls: &[&Controller<F::Protocol>],
+    index: usize,
+) -> Vec<bool> {
+    let id = format!("00000000-0000-4000-8000-{:012}", 500 + index);
+    let handles: Vec<_> = controls
+        .iter()
+        .map(|control| control.request(&id, RequestPlan::default()))
+        .collect();
+    let body = frontend.complete(model, &id).await;
+    assert_eq!(body["choices"][0]["finish_reason"], "length", "{body}");
+    let served: Vec<bool> = handles
+        .iter()
+        .map(|handle| handle.reached(Event::Received))
+        .collect();
+    assert_eq!(served.iter().filter(|s| **s).count(), 1, "{served:?}");
+    served
+}
+
+/// A frontend started from `--discovery-backend kubernetes-pods` follows its
+/// engine pods: the first Ready pod seeds it, a second joins when Ready, and
+/// the first leaves when it stops being Ready.
+async fn engines_follow_pods<F: DirectFixture>() {
+    use dynamo_sidecar_common::direct::pods::{PodSelector, probe_first_pods};
+
+    let env = Environment::new().await;
+    let cluster = engine_pods::Cluster::new().await;
+    let (control_a, control_b) = (Controller::default(), Controller::default());
+    let config = || FixtureConfig {
+        model: env.model.clone(),
+        ..Default::default()
+    };
+    let mut peer_a = F::start(control_a.clone(), config()).await;
+    let mut peer_b = F::start(control_b.clone(), config()).await;
+
+    cluster
+        .engine("engine-a", "engine", &peer_a.endpoint())
+        .await;
+    cluster.ready("engine-a", true).await;
+    let cancel = CancellationToken::new();
+    let selector = PodSelector {
+        namespace: cluster.namespace.clone(),
+        labels: "app=engine".to_string(),
+        port: None,
+        role: RoleHint::Serving,
+    };
+    let first = bounded(
+        "first engine pod",
+        probe_first_pods(
+            F::backend(),
+            cluster.client.clone(),
+            selector,
+            None,
+            &cancel,
+        ),
+    )
+    .await
+    .expect("probe first engine pod")
+    .expect("not cancelled");
+    let local_model =
+        DirectFrontend::local_model(&env, first.fleet.primary(), RouterMode::RoundRobin).await;
+    let frontend = DirectFrontend::serve(&env, first.serve(local_model, cancel.clone())).await;
+
+    let controls = [&control_a, &control_b];
+    let mut index = 0;
+    until_served_by::<F>(
+        &frontend,
+        &env.model,
+        &controls,
+        &mut index,
+        &[true, false],
+        2,
+    )
+    .await;
+
+    cluster
+        .engine("engine-b", "engine", &peer_b.endpoint())
+        .await;
+    cluster.ready("engine-b", true).await;
+    until_served_by::<F>(
+        &frontend,
+        &env.model,
+        &controls,
+        &mut index,
+        &[false, true],
+        1,
+    )
+    .await;
+
+    cluster.ready("engine-a", false).await;
+    until_served_by::<F>(
+        &frontend,
+        &env.model,
+        &controls,
+        &mut index,
+        &[false, true],
+        4,
+    )
+    .await;
+
+    cancel.cancel();
+    frontend.shutdown().await;
+    cluster.delete().await;
+    peer_a.shutdown().await;
+    peer_b.shutdown().await;
+}
+
 macro_rules! direct_tests {
     ($prefix:ident, $fixture:ty) => {
         mod $prefix {
@@ -311,6 +539,14 @@ macro_rules! direct_tests {
                 )
                 .await
                 .expect("test completes");
+            }
+
+            #[tokio::test]
+            #[ignore = "needs a Kubernetes cluster from KUBECONFIG"]
+            async fn engines_follow_kubernetes_pods() {
+                tokio::time::timeout(Duration::from_secs(90), engines_follow_pods::<$fixture>())
+                    .await
+                    .expect("test completes");
             }
 
             #[tokio::test]

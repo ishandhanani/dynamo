@@ -408,9 +408,16 @@ async def async_main():
     # the CLI flags are silently ignored (unlike the lazily-dialed TCP planes).
     _export_transport_tls_env(config)
     warn_if_frontend_cpu_affinity_spans_numa_nodes(logger)
+    # Direct engine pods are watched by the engine, not registered with the
+    # runtime, so the runtime itself keeps discovery in memory.
+    discovery_backend = (
+        "mem"
+        if config.discovery_backend == "kubernetes-pods"
+        else config.discovery_backend
+    )
     runtime = DistributedRuntime(
         loop,
-        config.discovery_backend,
+        discovery_backend,
         config.request_plane,
         event_plane=config.event_plane,
         response_plane=config.response_plane,
@@ -492,6 +499,11 @@ async def async_main():
         kwargs["engine_urls"] = list(config.engine_urls)
         kwargs["prefill_engine_urls"] = list(config.prefill_engine_urls)
         kwargs["direct_backend"] = config.direct_backend
+        if config.discovery_backend == "kubernetes-pods":
+            kwargs["engine_selector"] = config.engine_selector
+            kwargs["prefill_engine_selector"] = config.prefill_engine_selector
+            kwargs["engine_namespace"] = config.engine_namespace
+            kwargs["engine_grpc_port"] = config.engine_grpc_port
         if config.dyn_tool_call_parser or config.dyn_reasoning_parser:
             runtime_config = ModelRuntimeConfig()
             runtime_config.tool_call_parser = config.dyn_tool_call_parser

@@ -56,6 +56,29 @@ curl -s localhost:8000/v1/chat/completions \
   -d '{"model":"Qwen/Qwen3-0.6B","messages":[{"role":"user","content":"Hello"}],"max_tokens":32}'
 ```
 
+## Run on Kubernetes
+
+On Kubernetes the frontend can find the engines itself. It watches the pods that match a
+label selector, adds a pod's engine once the pod is `Ready`, and withdraws it when the pod
+stops being `Ready` or is deleted:
+
+```bash
+python3 -m dynamo.frontend --direct --direct-backend sglang \
+  --discovery-backend kubernetes-pods \
+  --engine-selector app=sglang-engine \
+  --engine-grpc-port 30001 \
+  --router-mode kv
+```
+
+`--prefill-engine-selector` selects the prefill pods of a disaggregated deployment.
+`--engine-namespace` defaults to the frontend's own namespace. A pod's
+`nvidia.com/dynamo-engine-grpc-port` annotation overrides `--engine-grpc-port`. The
+frontend's service account needs `get`, `list`, and `watch` on pods.
+
+The [direct SGLang manifests](https://github.com/ai-dynamo/dynamo/tree/main/examples/backends/sglang/deploy/direct)
+deploy the engines, the frontend, and its RBAC with one `kubectl apply`, without the Dynamo
+operator.
+
 ## What the frontend does with each URL
 
 1. Connects, waits for `HealthCheck`, and calls `GetModelInfo` and `GetServerInfo`.
@@ -78,6 +101,8 @@ override whatever the engine reported.
 
 - SGLang only.
 - The HTTP frontend only. `--interactive` and `--kserve-grpc-server` reject `--direct`.
-- The engine list is fixed at startup. Scale-out means restarting the frontend.
+- With `--engine-url`, the engine list is fixed at startup. Scale-out means restarting the
+  frontend. With `--discovery-backend kubernetes-pods`, engines join and leave with their
+  pods, but whether the deployment is disaggregated is still fixed at startup.
 - No KV-event replay: SGLang does not advertise a replay socket, so a frontend restart
   warms the index from live events, with no snapshot of the engine's current cache.
