@@ -10,6 +10,7 @@
 //! settle the ledger. Every path that can release a held head reports `true` so the caller can
 //! wake the queue.
 
+use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 use std::time::Duration;
 
@@ -245,10 +246,13 @@ impl State {
                 .filter(|worker| capacities.is_live(*worker)));
         }
         let forced_at = request.registered_at + self.config.resume_timeout();
-        let hold = || DispatchDecision::Hold {
-            until: Some(forced_at),
-        };
         let forced = now >= forced_at;
+        // Programs past retention count as gone, and a hold wakes at the next expiry: room can
+        // come from an expiry with no turn starting or ending.
+        let (usage, next_expiry) = self.usage_after_retention(now);
+        let hold = || DispatchDecision::Hold {
+            until: Some(next_expiry.map_or(forced_at, |expiry| expiry.min(forced_at))),
+        };
 
         if let Some(program) = program
             && program.lifecycle == ProgramLifecycle::Active
@@ -264,7 +268,7 @@ impl State {
                 && capacities.is_live(pin)
                 && let Some(capacity) = capacities.capacity(pin)
             {
-                let used = self.normal_usage.get(&pin).copied().unwrap_or(0);
+                let used = usage.get(&pin).copied().unwrap_or(0);
                 let current_charge = (assigned == Some(pin))
                     .then(|| self.program_charge(program))
                     .flatten()
@@ -292,7 +296,8 @@ impl State {
             // A new program fits wherever its first turn fits.
             None => (self.request_cost(request.input_tokens), 1.0),
         };
-        if let Some(worker) = self.fit_worker(required, request.pinned_worker, capacities, ceiling)
+        if let Some(worker) =
+            self.fit_worker(required, request.pinned_worker, capacities, ceiling, &usage)
         {
             return go(Some(worker));
         }
@@ -527,6 +532,7 @@ impl State {
         pinned: Option<WorkerWithDpRank>,
         capacities: &WorkerCapacitySnapshot,
         ceiling: f64,
+        usage: &HashMap<WorkerWithDpRank, usize>,
     ) -> Option<WorkerWithDpRank> {
         capacities
             .iter()
@@ -534,7 +540,7 @@ impl State {
             .filter(|(worker, _)| pinned.is_none_or(|pinned| pinned == *worker))
             .filter_map(|(worker, capacity)| {
                 let limit = scale_tokens(capacity, ceiling);
-                let used = self.normal_usage.get(&worker).copied().unwrap_or(0);
+                let used = usage.get(&worker).copied().unwrap_or(0);
                 limit
                     .checked_sub(used)
                     .is_some_and(|remaining| remaining >= required)
@@ -928,6 +934,46 @@ impl State {
         !removed.is_empty()
     }
 
+    /// The idle program's retention deadline, when it is one retention can expire.
+    fn retention_deadline(&self, session_id: &str, program: &Program) -> Option<Instant> {
+        if self.session_has_request(session_id) || program.status != ProgramStatus::Acting {
+            return None;
+        }
+        Some(program.acting_since? + self.config.session_retention())
+    }
+
+    /// The per-rank charges without the programs whose retention has passed by `now`, and the
+    /// next retention deadline after `now`. Reads only: the next settle removes those programs.
+    fn usage_after_retention(
+        &self,
+        now: Instant,
+    ) -> (Cow<'_, HashMap<WorkerWithDpRank, usize>>, Option<Instant>) {
+        match self.next_retention_expiry {
+            None => return (Cow::Borrowed(&self.normal_usage), None),
+            Some(deadline) if now < deadline => {
+                return (Cow::Borrowed(&self.normal_usage), Some(deadline));
+            }
+            Some(_) => {}
+        }
+        let mut usage = Cow::Borrowed(&self.normal_usage);
+        let mut next_expiry: Option<Instant> = None;
+        for (session_id, program) in &self.programs {
+            let Some(deadline) = self.retention_deadline(session_id, program) else {
+                continue;
+            };
+            if now < deadline {
+                next_expiry = Some(next_expiry.map_or(deadline, |next| next.min(deadline)));
+                continue;
+            }
+            if let Some((worker, tokens)) = self.program_charge(program)
+                && let Some(used) = usage.to_mut().get_mut(&worker)
+            {
+                *used = used.saturating_sub(tokens);
+            }
+        }
+        (usage, next_expiry)
+    }
+
     fn expire_retained_programs(&mut self, now: Instant) -> bool {
         if self
             .next_retention_expiry
@@ -936,18 +982,12 @@ impl State {
             return false;
         }
 
-        let retention = self.config.session_retention();
         let mut expired = Vec::new();
         let mut next_expiry = None;
         for (session_id, program) in &self.programs {
-            let Some(since) = (!self.session_has_request(session_id)
-                && program.status == ProgramStatus::Acting)
-                .then_some(program.acting_since)
-                .flatten()
-            else {
+            let Some(deadline) = self.retention_deadline(session_id, program) else {
                 continue;
             };
-            let deadline = since + retention;
             if now >= deadline {
                 expired.push(session_id.clone());
             } else {
@@ -1206,6 +1246,39 @@ mod tests {
         // Past the timeout b goes anyway, onto the rank with the most decayed room.
         let later = now + Duration::from_secs(60);
         assert_eq!(state.check("b1", &caps, later), go(Some(worker(1))));
+    }
+
+    #[test]
+    fn retention_expiry_makes_room_for_a_held_session_without_an_event() {
+        let mut state = state(ThunderAgentConfig {
+            session_retention_seconds: 30.0,
+            ..config()
+        });
+        let caps = capacities(&[(1, 400)]);
+        let now = Instant::now();
+        register(&mut state, "a1", "a", 200, now);
+        state.dispatched("a1", Some(worker(1)), &caps, now);
+        complete(&mut state, "a1", worker(1), 220, &caps, now);
+        assert_eq!(state.normal_usage[&worker(1)], 320);
+
+        // The idle program fills the rank; the held session wakes when its retention ends,
+        // before its own forced-dispatch time.
+        let registered = now + Duration::from_secs(10);
+        register(&mut state, "b1", "b", 200, registered);
+        let expiry = now + Duration::from_secs(30);
+        assert_eq!(
+            state.check("b1", &caps, registered),
+            DispatchDecision::Hold {
+                until: Some(expiry)
+            }
+        );
+
+        // With no event in between, the expired program no longer counts.
+        assert_eq!(state.check("b1", &caps, expiry), go(Some(worker(1))));
+        assert!(state.programs.contains_key("a"));
+        state.dispatched("b1", Some(worker(1)), &caps, expiry);
+        assert!(!state.programs.contains_key("a"));
+        assert_eq!(state.normal_usage[&worker(1)], 300);
     }
 
     #[test]
