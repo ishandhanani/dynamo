@@ -147,6 +147,19 @@ fn gate_allows(
     }
 }
 
+/// The channel a capacity change wakes the actor on: the capacity channel when a class queues
+/// on capacity, else the actor's wake channel once a dispatch gate is installed, since a held
+/// gate head may be waiting for room. `None` when nothing waits on capacity.
+fn capacity_wake<'a>(
+    capacity_updates: &'a Option<Arc<CapacityUpdates>>,
+    actor_wake: &'a Arc<CapacityUpdates>,
+    dispatch_gate: &OnceLock<Arc<dyn DispatchGate>>,
+) -> Option<&'a Arc<CapacityUpdates>> {
+    capacity_updates
+        .as_ref()
+        .or_else(|| dispatch_gate.get().map(|_| actor_wake))
+}
+
 /// Candidate rows built on the caller task, before the request reaches the actor.
 ///
 /// The actor selects from them only when it would build the same rows: the worker
@@ -1020,12 +1033,14 @@ impl<
         let start_time = Instant::now();
         // The actor always listens for wakes: a dispatch gate installed later holds heads even
         // when no class queues on capacity, and its rechecks arrive here. Capacity changes
-        // wake it only when a class queues on them.
+        // wake it when a class queues on them or a gate is installed.
         let actor_wake = Arc::new(CapacityUpdates::new());
         let capacity_updates = queueing_enabled.then(|| Arc::clone(&actor_wake));
         let direct_release: DirectBookingRelease = {
             let slots = Arc::clone(&slots);
             let capacity_updates = capacity_updates.clone();
+            let actor_wake = Arc::clone(&actor_wake);
+            let dispatch_gate = Arc::clone(&dispatch_gate);
             Arc::new(move |booking| {
                 let outcome = slots.free_if_booking(
                     &booking.request_id,
@@ -1034,7 +1049,8 @@ impl<
                     Instant::now(),
                 )?;
                 if outcome.is_applied()
-                    && let Some(updates) = &capacity_updates
+                    && let Some(updates) =
+                        capacity_wake(&capacity_updates, &actor_wake, &dispatch_gate)
                 {
                     updates.record(Some(booking.worker));
                 }
@@ -1516,7 +1532,11 @@ impl<
 
     /// Notify pending admission after the authoritative mutation is complete.
     pub(crate) fn capacity_changed(&self, worker: Option<WorkerWithDpRank>) {
-        if let Some(updates) = &self.capacity_updates {
+        if let Some(updates) = capacity_wake(
+            &self.capacity_updates,
+            &self.actor_wake,
+            &self.dispatch_gate,
+        ) {
             updates.record(worker);
         }
     }

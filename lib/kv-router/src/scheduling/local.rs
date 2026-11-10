@@ -1477,13 +1477,25 @@ mod tests {
         Arc<LocalScheduler<NoopSequencePublisher, SimpleWorkerConfig, DefaultWorkerSelector>>,
         CancellationToken,
     ) {
+        gated_scheduler_with_threshold(gate, Some(0.5))
+    }
+
+    /// As [`gated_scheduler`]; `None` leaves every class without busy thresholds, so only the
+    /// gate holds heads.
+    fn gated_scheduler_with_threshold(
+        gate: &Arc<TestGate>,
+        threshold_frac: Option<f64>,
+    ) -> (
+        Arc<LocalScheduler<NoopSequencePublisher, SimpleWorkerConfig, DefaultWorkerSelector>>,
+        CancellationToken,
+    ) {
         let roomy = SimpleWorkerConfig {
             max_num_batched_tokens: Some(10_000),
             ..Default::default()
         };
         let (scheduler, _slots, _configs, cancel) = make_scheduler(
             HashMap::from([(0, roomy.clone()), (1, roomy)]),
-            Some(0.5),
+            threshold_frac,
             false,
             None,
         );
@@ -1586,6 +1598,41 @@ mod tests {
         }
         assert!(admitted.is_some(), "the hold timer must wake the queue");
         assert_eq!(gate.dispatched_ids(), ["a1"]);
+        cancel.cancel();
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn dispatch_gate_is_asked_again_on_a_capacity_change_without_busy_thresholds() {
+        let gate = TestGate::holding(&["a"], None);
+        let (scheduler, cancel) = gated_scheduler_with_threshold(&gate, None);
+
+        let mut b1 = submit(&scheduler, session_request("b1", "b")).await;
+        assert!(admitted_worker(&mut b1).is_some());
+        let mut a1 = submit(&scheduler, session_request("a1", "a")).await;
+        assert_eq!(admitted_worker(&mut a1), None);
+
+        // The gate would now let a go, but nothing has asked it: no notify, no timer. Only
+        // yields, so the actor runs without a barrier's full recheck.
+        gate.held.lock().clear();
+        for _ in 0..64 {
+            tokio::task::yield_now().await;
+        }
+        assert_eq!(admitted_worker(&mut a1), None);
+
+        // b1 frees its worker. No class queues on capacity, yet the change rechecks the gate.
+        scheduler.free("b1").await.unwrap();
+        let mut admitted = None;
+        for _ in 0..64 {
+            tokio::task::yield_now().await;
+            admitted = admitted_worker(&mut a1);
+            if admitted.is_some() {
+                break;
+            }
+        }
+        assert!(
+            admitted.is_some(),
+            "a capacity change must recheck the gate"
+        );
         cancel.cancel();
     }
 
