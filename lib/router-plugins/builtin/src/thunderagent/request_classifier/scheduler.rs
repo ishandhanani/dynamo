@@ -378,6 +378,16 @@ impl State {
         now: Instant,
     ) -> bool {
         let changed = match event {
+            ClassifyEvent::Sent { request_id, worker }
+                if self
+                    .requests
+                    .get(&request_id)
+                    .is_some_and(|request| request.phase == RequestPhase::Queued) =>
+            {
+                // The host dispatched without asking the gate (a class that never queues):
+                // commit as if it had, with the worker it chose.
+                return self.dispatched(&request_id, Some(worker), capacities, now);
+            }
             ClassifyEvent::Sent { request_id, worker } => self.sent(&request_id, worker),
             ClassifyEvent::Completed {
                 request_id,
@@ -419,25 +429,15 @@ impl State {
         self.pause_until_safe(capacities, &mut usage, now);
     }
 
+    /// Records the worker the selector chose for a dispatched turn.
     fn sent(&mut self, request_id: &str, worker: WorkerWithDpRank) -> bool {
         let Some(request) = self.requests.get(request_id) else {
             return false;
         };
+        if request.session_final {
+            return false;
+        }
         let session_id = request.session_id.clone();
-        let ungated = request.phase == RequestPhase::Queued;
-        if ungated {
-            // The host dispatched without asking the gate (a class that never queues): commit
-            // as if it had, with the worker it chose.
-            self.leave_queue(&session_id);
-            self.in_flight
-                .insert(session_id.clone(), request_id.to_owned());
-            if let Some(request) = self.requests.get_mut(request_id) {
-                request.phase = RequestPhase::Dispatched;
-            }
-        }
-        if self.requests[request_id].session_final {
-            return ungated;
-        }
         // The selector usually honors the gate's target, which leaves the ledger as it was.
         let reassigned = self
             .programs
@@ -446,7 +446,7 @@ impl State {
         if reassigned {
             self.set_assignment(&session_id, Some(worker));
         }
-        ungated || reassigned
+        reassigned
     }
 
     fn finish_request(
@@ -1291,6 +1291,57 @@ mod tests {
         state.dispatched("b1", Some(worker(1)), &caps, expiry);
         assert!(!state.programs.contains_key("a"));
         assert_eq!(state.normal_usage[&worker(1)], 300);
+    }
+
+    #[test]
+    fn sent_without_a_gate_check_commits_like_a_gated_dispatch() {
+        let mut state = state(config());
+        let caps = capacities(&[(1, 1_000)]);
+        let now = Instant::now();
+        let sent = |request_id: &str| ClassifyEvent::Sent {
+            request_id: request_id.into(),
+            worker: worker(1),
+        };
+
+        // A class that never queues admits a1 without asking the gate; `Sent` is the first
+        // the ledger hears of it. The program is created and charged on the chosen worker.
+        register(&mut state, "a1", "a", 200, now);
+        assert!(state.on_event(sent("a1"), &caps, now));
+        assert_eq!(state.programs["a"].assigned_worker, Some(worker(1)));
+        assert_eq!(state.normal_usage[&worker(1)], 300);
+        register(&mut state, "a2", "a", 50, now);
+        assert_eq!(
+            state.check("a2", &caps, now),
+            DispatchDecision::Hold { until: None }
+        );
+        complete(&mut state, "a1", worker(1), 220, &caps, now);
+        assert_eq!(state.programs["a"].status, ProgramStatus::Acting);
+
+        // An ungated final turn ends the program, as a gated one does.
+        state.on_event(
+            ClassifyEvent::Aborted {
+                request_id: "a2".into(),
+                worker: None,
+                error: None,
+            },
+            &caps,
+            now,
+        );
+        state
+            .register(
+                RequestRegistration::new(
+                    "a3".into(),
+                    "a".into(),
+                    1,
+                    RequestProgress::new(1).0,
+                    true,
+                ),
+                now,
+            )
+            .unwrap();
+        assert!(state.on_event(sent("a3"), &caps, now));
+        assert!(!state.programs.contains_key("a"));
+        assert!(state.normal_usage.is_empty());
     }
 
     #[test]
