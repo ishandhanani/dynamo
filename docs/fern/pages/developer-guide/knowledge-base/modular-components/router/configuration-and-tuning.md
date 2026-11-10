@@ -320,10 +320,15 @@ per-worker `CACHE` rows. Cached tokens also set each request's default
 scheduling cost and queue accounting, and prefix overlap still guides worker
 selection.
 
-Each class owns a shared heap plus, while a dispatch gate is installed, one heap
-per session lane, all ordered by the class's queue policy, along with its busy
-thresholds, queue limits, quantum, deficit, and counters. Arbitration compares the shared head with the currently dispatchable
-session lane heads. Outside a session lane, a pinned request, including one under hard session affinity or with an explicit worker target, waits in the shared lane: while its worker is full it holds every later request in that lane, pinned or not, until that worker frees. Absolute and fractional busy thresholds use OR
+Each class owns a shared heap plus one heap per session lane, all ordered by
+the class's queue policy, along with its busy thresholds, queue limits, quantum,
+deficit, and counters. Every request with a session context waits in its
+session's lane, so a session bound to a busy rank, whether by hard session
+affinity or by a dispatch gate's hold, delays only its own later turns.
+Arbitration compares the shared head with the currently dispatchable session
+lane heads. A pinned request without a session, such as one with an explicit
+worker target, waits in the shared lane: while its worker is full it holds
+every later request in that lane until that worker frees. Absolute and fractional busy thresholds use OR
 semantics. The absolute `prefill_busy_threshold` is deprecated and will be
 removed in v1.7; use `prefill_busy_threshold_frac`.
 `decode_busy_threshold_frac` also marks a worker busy when the KV

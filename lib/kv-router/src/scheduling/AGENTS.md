@@ -100,8 +100,8 @@ PolicyClassQueue("agents")
                                                            # due time, blocked lanes included
 ```
 
-- `pending` is the shared ready heap: every request of the class, pinned or not, when no dispatch gate is installed, and every request without a session context when one is. A pinned head whose worker is full blocks this lane until that worker frees, by design: pinned requests take no lane of their own.
-- `ready_by_lane` holds the session lanes. The actor assigns one per session while a dispatch gate is installed, so a head the gate holds, or whose eligible workers are full, blocks only its session. Each lane's heap is removed when its last request leaves.
+- `pending` is the shared ready heap: every request of the class without a session context. A sessionless pinned head whose worker is full blocks this lane until that worker frees, by design: pinned requests take no lane of their own. A session-bound pin waits in its session lane instead, so a binding to a busy rank holds only that session.
+- `ready_by_lane` holds the session lanes. The actor assigns one per session that has queued requests, gate or not, so a head the gate holds, or whose eligible workers are full, blocks only its session. Each lane's heap is removed when its last request leaves.
 - `candidate_lane_heads` tracks the highest-priority request for each session lane. A lane leaves this index while its head cannot dispatch and rejoins on the next recheck: any capacity change, a gate recheck, the gate's hold timer, or expiry or cancellation of the lane's root.
 - A `PolicyClassQueue` does not own worker configuration, capacity, or scoring state. A `SessionLane` only identifies a lane; the actor and selector retain worker knowledge.
 - Every heap uses the class's configured priority ordering. `BinaryHeap::peek()` reads its highest-priority root in O(1); push and pop are O(log n).

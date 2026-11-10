@@ -1919,12 +1919,13 @@ impl<
         let mut exposed = self.expire_due_classes(now);
         let priority_jump = queued.request.priority_jump;
         let strict_priority = queued.request.strict_priority;
-        // With a dispatch gate installed, a session's requests wait in their own lane so a hold
-        // on one session blocks only that session. Everything else shares the class lane.
-        let lane = self
-            .dispatch_gate
-            .get()
-            .and(queued.request.session_context.as_ref())
+        // A session's requests wait in their own lane, so a head that cannot dispatch, because
+        // a gate holds it or its bound worker is full, blocks only that session. Requests
+        // without a session share the class lane.
+        let lane = queued
+            .request
+            .session_context
+            .as_ref()
             .map(|session| SessionLane::new(session.session_id()));
         let worker_count = self.workers_with_configs.borrow().len();
         loop {

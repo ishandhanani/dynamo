@@ -26,7 +26,7 @@ use dynamo_kv_router::protocols::{
 };
 use dynamo_kv_router::scheduling::{
     OverlapAnalysis, OverlapSignals, PolicyClassConfig, PolicyProfile, PolicyQueue, QueueMetadata,
-    QueueSnapshot, ScheduleMode, SchedulingContext,
+    QueueSnapshot, ScheduleMode, SchedulingContext, SessionLane,
 };
 use dynamo_kv_router::sequences::topology::WorkerDpRange;
 use dynamo_kv_router::services::selection::affinity::{
@@ -1048,6 +1048,9 @@ impl OfflineReplayRouter {
             };
             let priority_jump = pending.priority_jump;
             let strict_priority = pending.strict_priority;
+            // As in the live router, a session's requests wait in their own lane, so a
+            // session bound to a busy rank holds only itself.
+            let lane = pending.session_id.as_deref().map(SessionLane::new);
             self.pending
                 .enqueue_with_due_at(
                     metadata,
@@ -1056,8 +1059,7 @@ impl OfflineReplayRouter {
                         .saturating_mul(self.dp_size as usize),
                     priority_jump,
                     strict_priority,
-                    // Replay keeps every request in the class's shared lane.
-                    None,
+                    lane,
                     pending,
                 )
                 .map_err(|(rejection, _)| anyhow::Error::new(rejection))?;

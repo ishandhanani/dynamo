@@ -9,7 +9,7 @@ use std::hash::{Hash, Hasher};
 /// share one order: the best head across every lane of a class dispatches first. A lane whose
 /// head cannot dispatch, because the dispatch gate holds it or its eligible workers are full,
 /// holds only that lane; the shared lane and the other sessions keep draining. The actor
-/// assigns session lanes only while a dispatch gate is installed.
+/// assigns a session lane to every request that carries a session context.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct SessionLane(u64);
 
