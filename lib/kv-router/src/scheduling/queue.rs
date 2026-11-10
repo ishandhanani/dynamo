@@ -1498,10 +1498,11 @@ impl<
             .map_err(|_| KvSchedulerError::SubscriberShutdown)?
     }
 
-    /// Wait for a full admission recheck when queueing is enabled and the actor is running.
-    /// With queueing disabled, return immediately without an admission barrier.
+    /// Wait for a full admission recheck when a class queues on capacity or a dispatch gate is
+    /// installed, and the actor is running. Otherwise nothing can be held: return immediately
+    /// without an admission barrier.
     pub async fn update(&self) {
-        if self.capacity_updates.is_none() {
+        if self.capacity_updates.is_none() && self.dispatch_gate.get().is_none() {
             return;
         }
 

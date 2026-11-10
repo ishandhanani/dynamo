@@ -839,9 +839,9 @@ where
         self.slots.publish_prefill_completed_if_booking(booking)
     }
 
-    /// Wait for an admission recheck when queueing is enabled and the actor is running.
-    /// This does not wait for blocked requests to finish or for the queue to empty.
-    /// With queueing disabled, return immediately without an admission barrier.
+    /// Wait for an admission recheck when a class queues on capacity or a dispatch gate is
+    /// installed, and the actor is running. This does not wait for blocked requests to finish
+    /// or for the queue to empty. Otherwise return immediately without an admission barrier.
     pub async fn update_queue(&self) {
         self.queue.update().await;
     }
@@ -1633,6 +1633,22 @@ mod tests {
             admitted.is_some(),
             "a capacity change must recheck the gate"
         );
+        cancel.cancel();
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn queue_update_rechecks_a_gate_without_busy_thresholds() {
+        let gate = TestGate::holding(&["a"], None);
+        let (scheduler, cancel) = gated_scheduler_with_threshold(&gate, None);
+
+        let mut a1 = submit(&scheduler, session_request("a1", "a")).await;
+        assert_eq!(admitted_worker(&mut a1), None);
+
+        // The gate would now let a go. The periodic and worker-config updates still recheck
+        // held heads when no class queues on capacity.
+        gate.held.lock().clear();
+        scheduler.update_queue().await;
+        assert!(admitted_worker(&mut a1).is_some());
         cancel.cancel();
     }
 
