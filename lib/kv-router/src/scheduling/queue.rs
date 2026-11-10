@@ -1018,12 +1018,11 @@ impl<
         let selection_trace = Arc::new(OnceLock::new());
         let dispatch_gate = Arc::new(OnceLock::new());
         let start_time = Instant::now();
-        let capacity_updates = queueing_enabled.then(|| Arc::new(CapacityUpdates::new()));
         // The actor always listens for wakes: a dispatch gate installed later holds heads even
-        // when no class queues on capacity, and its rechecks arrive here.
-        let actor_wake = capacity_updates
-            .clone()
-            .unwrap_or_else(|| Arc::new(CapacityUpdates::new()));
+        // when no class queues on capacity, and its rechecks arrive here. Capacity changes
+        // wake it only when a class queues on them.
+        let actor_wake = Arc::new(CapacityUpdates::new());
+        let capacity_updates = queueing_enabled.then(|| Arc::clone(&actor_wake));
         let direct_release: DirectBookingRelease = {
             let slots = Arc::clone(&slots);
             let capacity_updates = capacity_updates.clone();
