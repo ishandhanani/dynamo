@@ -424,7 +424,8 @@ impl State {
             return false;
         };
         let session_id = request.session_id.clone();
-        if request.phase == RequestPhase::Queued {
+        let ungated = request.phase == RequestPhase::Queued;
+        if ungated {
             // The host dispatched without asking the gate (a class that never queues): commit
             // as if it had, with the worker it chose.
             self.leave_queue(&session_id);
@@ -435,10 +436,17 @@ impl State {
             }
         }
         if self.requests[request_id].session_final {
-            return true;
+            return ungated;
         }
-        self.set_assignment(&session_id, Some(worker));
-        true
+        // The selector usually honors the gate's target, which leaves the ledger as it was.
+        let reassigned = self
+            .programs
+            .get(&session_id)
+            .is_some_and(|program| program.assigned_worker != Some(worker));
+        if reassigned {
+            self.set_assignment(&session_id, Some(worker));
+        }
+        ungated || reassigned
     }
 
     fn finish_request(
@@ -1204,6 +1212,16 @@ mod tests {
         assert_eq!(program.lifecycle, ProgramLifecycle::Active);
         assert_eq!(program.assigned_worker, Some(worker(1)));
         assert_eq!(state.normal_usage[&worker(1)], 300);
+        // `Sent` on the target the gate named changes nothing, so it wakes nothing.
+        let sent = |worker| ClassifyEvent::Sent {
+            request_id: "a1".into(),
+            worker,
+        };
+        assert!(!state.on_event(sent(worker(1)), &caps, now));
+        assert!(state.on_event(sent(worker(2)), &caps, now));
+        assert_eq!(state.programs["a"].assigned_worker, Some(worker(2)));
+        // A different worker moves the program; moving it back restores the ledger.
+        assert!(state.on_event(sent(worker(1)), &caps, now));
 
         // The next new session lands on the other rank.
         register(&mut state, "b1", "b", 200, now);
