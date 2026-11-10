@@ -106,7 +106,7 @@ struct QueuedRequest {
     enqueue_turn: u64,
     /// The dispatch gate's last `Go` target for this head, written by the dispatch predicate
     /// and taken when the head leaves the queue. Only the actor touches it.
-    gate_target: Cell<Option<Option<WorkerWithDpRank>>>,
+    gate_target: Cell<Option<WorkerWithDpRank>>,
 }
 
 impl QueuedRequest {
@@ -123,7 +123,8 @@ impl QueuedRequest {
 }
 
 /// Asks the dispatch gate about one head inside a dispatch predicate: `false` holds the head
-/// and records the earliest requested recheck still in the future; `true` stores the gate's target on the head.
+/// and records the earliest requested recheck still in the future; `true` stores the gate's
+/// target on the head.
 fn gate_allows(
     gate: &dyn DispatchGate,
     policy_class: &str,
@@ -132,7 +133,7 @@ fn gate_allows(
 ) -> bool {
     match gate.check(&queued.dispatch_head(policy_class)) {
         DispatchDecision::Go { target } => {
-            queued.gate_target.set(Some(target));
+            queued.gate_target.set(target);
             true
         }
         DispatchDecision::Hold { until } => {
@@ -2308,7 +2309,7 @@ impl<
             if let Some(gate) = &gate
                 && !released
             {
-                let target = queued.gate_target.take().flatten();
+                let target = queued.gate_target.take();
                 if queued.request.pinned_worker.is_none()
                     && let Some(target) = target
                 {
