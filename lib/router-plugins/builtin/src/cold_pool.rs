@@ -50,10 +50,18 @@ pub struct ColdPoolConfig {
     pub workers: usize,
     /// Longest a Cold request waits, from queue admission, for a member with no active Warm work.
     pub soft_drain_timeout_ms: u64,
+    /// Keep Warm off the pool while Cold is pending, and off the workers running Cold. `false`
+    /// leaves Warm on every worker; with `soft_drain_timeout_ms: 0` that is a pool-only policy.
+    #[serde(default = "default_steer_warm")]
+    pub steer_warm: bool,
 }
 
 fn default_workers() -> usize {
     1
+}
+
+fn default_steer_warm() -> bool {
+    true
 }
 
 impl ColdPoolConfig {
@@ -206,7 +214,7 @@ impl State {
     /// Warm's allowed workers among `eligible`: everything but the workers to avoid, or `None`
     /// when there is nothing to avoid or nothing would be left.
     fn warm_allowed(&self, eligible: &HashSet<WorkerId>) -> Option<HashSet<WorkerId>> {
-        if self.members.is_empty() {
+        if self.members.is_empty() || !self.config.steer_warm {
             return None;
         }
         let avoid = self.warm_avoid();
@@ -415,6 +423,7 @@ impl ColdPoolClassifier {
             request_threshold = config.request_threshold,
             workers = config.workers,
             soft_drain_timeout_ms = config.soft_drain_timeout_ms,
+            steer_warm = config.steer_warm,
             "Cold Pool enabled"
         );
         Self {
@@ -566,6 +575,7 @@ mod tests {
             request_threshold: 128_000,
             workers,
             soft_drain_timeout_ms: 1_000,
+            steer_warm: true,
         }
     }
 
@@ -731,6 +741,26 @@ mod tests {
         });
         assert_eq!(state.pending_cold, 0);
         assert!(state.warm_avoid().is_empty());
+    }
+
+    #[test]
+    fn pool_only_neither_steers_warm_nor_holds_cold() {
+        let mut state = State::new(ColdPoolConfig {
+            steer_warm: false,
+            soft_drain_timeout_ms: 0,
+            ..config(2)
+        });
+        state.reconcile_membership((1..=6).map(rank));
+        let now = Instant::now();
+        track(&mut state, "c", Lane::Cold);
+        assert_eq!(state.warm_allowed(&all(&state)), None);
+        track(&mut state, "w", Lane::Warm);
+        let member = *state.members.iter().next().unwrap();
+        sent(&mut state, "w", member);
+        assert_eq!(
+            state.check("c", now, now),
+            DispatchDecision::Go { target: None }
+        );
     }
 
     #[test]
