@@ -68,6 +68,16 @@ impl KvHintAction {
         }
     }
 
+    /// The `kv.prefetch@1.0` action: load `token_ids` from the shared store into the device
+    /// cache of attention DP group `dp_rank`.
+    pub fn prefetch(action_id: impl Into<String>, token_ids: &[u32], dp_rank: u32) -> Self {
+        let payload = BTreeMap::from([
+            ("token_ids".to_string(), serde_json::json!(token_ids)),
+            ("dp_rank".to_string(), serde_json::json!(dp_rank)),
+        ]);
+        Self::new(action_id, "kv.prefetch", "1.0", payload)
+    }
+
     /// The `kv.fetch@1.0` action with its typed payload.
     pub fn fetch(action_id: impl Into<String>, payload: KvSourceLocationsPayload) -> Self {
         let KvSourceLocationsPayload {

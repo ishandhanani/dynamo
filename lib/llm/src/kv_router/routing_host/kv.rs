@@ -287,6 +287,7 @@ impl RoutingHost {
             .select_with_request_lifecycle(request, phase, select)
             .await?;
         drop(route_guard);
+        self.kv_router().hints().on_route(request, selection.worker);
         Ok(RoutePlan {
             phase,
             cleanup: KvRequestCleanup::new(

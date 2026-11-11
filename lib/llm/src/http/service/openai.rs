@@ -1239,6 +1239,13 @@ where
     if let Some(session_affinity) = session_affinity_from_headers(headers) {
         request.insert(SESSION_AFFINITY_CONTEXT_KEY, session_affinity);
     }
+    use crate::kv_router::hints;
+    if let Some(wakeup) = hints::wakeup_from_headers(headers) {
+        request.insert(hints::WAKEUP_CONTEXT_KEY, wakeup);
+    }
+    if let Some(call) = hints::sim_tool_call_from_headers(headers) {
+        request.insert(hints::SIM_TOOL_CALL_CONTEXT_KEY, call);
+    }
     Ok(request)
 }
 

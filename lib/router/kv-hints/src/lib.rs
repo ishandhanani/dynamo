@@ -20,6 +20,8 @@
 //!   the two plain data types a worker's runtime config speaks
 //!   ([`KvHintTransferWorkerMetadata`], [`KvTransferEnforcement`]), and the indexer's label
 //!   hashing ([`label_key`], [`topology_keys`]), re-exported so both sides hash alike.
+//! - [`pin`] and `sender` (feature `zmq`): prefetching a prompt to a worker's scheduler and
+//!   pinning a waiting session's pages in the Mooncake store.
 //!
 //! Deliberately elsewhere: the transfer candidate vocabulary (`KvTransferCandidateSource`,
 //! `label_key`, `topology_keys`), `KvTransferCandidates`, `CacheOwnerKvTransferKeys`, and the
@@ -36,6 +38,9 @@
 //! hosts consume it; no stage depends on it.
 
 pub mod keys;
+pub mod pin;
+#[cfg(feature = "zmq")]
+pub mod sender;
 pub mod transfer;
 pub mod wire;
 
