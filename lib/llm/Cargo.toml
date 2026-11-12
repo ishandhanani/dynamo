@@ -73,6 +73,7 @@ required-features = ["media-ffmpeg"]
 [dependencies]
 dynamo-router-policies = { workspace = true }
 # repo
+dynamo-http-server = { workspace = true }
 dynamo-global-discovery-client = { workspace = true }
 dynamo-admission = { workspace = true }
 dynamo-global-common = { workspace = true, features = ["grpc"] }
