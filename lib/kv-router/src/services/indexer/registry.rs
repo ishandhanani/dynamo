@@ -482,12 +482,14 @@ impl WorkerRegistry {
         });
 
         if indexer_entry.block_size != block_size {
-            bail!(
-                "block_size mismatch for model={} routing_group={}: existing={}, requested={}",
-                key.model_name,
-                key.routing_group,
-                indexer_entry.block_size,
-                block_size
+            // One radix tree serves every page size: blocks of different sizes hash to
+            // different branches, and lookups are issued per size.
+            tracing::info!(
+                model_name = %key.model_name,
+                routing_group = %key.routing_group,
+                indexer_block_size = indexer_entry.block_size,
+                worker_block_size = block_size,
+                "indexing a worker with a different KV block size in the shared tree"
             );
         }
 

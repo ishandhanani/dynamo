@@ -46,6 +46,12 @@ pub struct SelectionWorkerConfig {
     pub data_parallel_size: u32,
     pub max_num_batched_tokens: Option<u64>,
     pub total_kv_blocks: Option<u64>,
+    /// Engine context limit, for per-worker eligibility in a pooled partition.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context_length: Option<u32>,
+    /// This worker's KV block size when a pooled partition mixes page sizes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub block_size: Option<u32>,
     pub stable_routing_id: Option<String>,
     pub is_eagle: Option<bool>,
     #[serde(default)]
@@ -91,6 +97,14 @@ impl WorkerConfigLike for SelectionWorkerConfig {
 
     fn taints(&self) -> &HashSet<String> {
         &self.taints
+    }
+
+    fn context_length(&self) -> Option<u32> {
+        self.context_length
+    }
+
+    fn kv_cache_block_size(&self) -> Option<u32> {
+        self.block_size
     }
 
     fn stable_routing_id(&self) -> Option<&str> {
@@ -154,6 +168,8 @@ pub struct WorkerCatalogRecord {
     pub data_parallel_size: Option<u32>,
     pub max_num_batched_tokens: Option<u64>,
     pub total_kv_blocks: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context_length: Option<u32>,
     pub stable_routing_id: Option<String>,
     pub is_eagle: Option<bool>,
     #[serde(default)]
@@ -193,6 +209,7 @@ impl WorkerCatalogRecord {
             data_parallel_size: req.data_parallel_size,
             max_num_batched_tokens: req.max_num_batched_tokens,
             total_kv_blocks: req.total_kv_blocks,
+            context_length: req.context_length,
             stable_routing_id: req.stable_routing_id,
             is_eagle: req.is_eagle,
             taints: req.taints,
@@ -233,6 +250,8 @@ impl WorkerCatalogRecord {
             data_parallel_size: self.dp_size(),
             max_num_batched_tokens: self.max_num_batched_tokens,
             total_kv_blocks: self.total_kv_blocks,
+            context_length: self.context_length,
+            block_size: self.block_size,
             stable_routing_id: self.stable_routing_id.clone(),
             is_eagle: self.is_eagle,
             taints: self.taints.clone(),
@@ -291,6 +310,7 @@ impl Default for WorkerRequest {
             kv_events_endpoints: HashMap::new(),
             replay_endpoint: None,
             block_size: None,
+            context_length: None,
             data_parallel_start_rank: None,
             data_parallel_size: None,
             max_num_batched_tokens: None,
@@ -327,6 +347,8 @@ pub struct WorkerRequest {
     pub data_parallel_size: Option<u32>,
     pub max_num_batched_tokens: Option<u64>,
     pub total_kv_blocks: Option<u64>,
+    #[serde(default)]
+    pub context_length: Option<u32>,
     pub stable_routing_id: Option<String>,
     #[serde(default, deserialize_with = "strict_bool")]
     pub is_eagle: Option<bool>,

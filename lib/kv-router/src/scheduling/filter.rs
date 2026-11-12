@@ -51,6 +51,8 @@ pub struct RoutingEligibility<'a> {
     affinity_target: Option<WorkerAffinityTarget>,
     routing_constraints: &'a RoutingConstraints,
     reject: Option<RejectCheck<'a>>,
+    /// Tokens the worker's published context limit must cover; 0 skips the check.
+    min_context_tokens: usize,
 }
 
 impl<'a> RoutingEligibility<'a> {
@@ -69,7 +71,24 @@ impl<'a> RoutingEligibility<'a> {
             affinity_target: None,
             routing_constraints,
             reject: None,
+            min_context_tokens: 0,
         }
+    }
+
+    /// Require a worker's published context limit to cover `tokens`. A worker that publishes
+    /// no limit always passes.
+    #[inline]
+    pub fn with_min_context_tokens(mut self, tokens: usize) -> Self {
+        self.min_context_tokens = tokens;
+        self
+    }
+
+    #[inline]
+    fn fits_context<C: WorkerConfigLike>(&self, config: &C) -> bool {
+        self.min_context_tokens == 0
+            || config
+                .context_length()
+                .is_none_or(|limit| limit as usize >= self.min_context_tokens)
     }
 
     /// Skip workers whose every rank the request's load projection found past the host's
@@ -165,6 +184,7 @@ impl<'a> RoutingEligibility<'a> {
             && self
                 .routing_constraints
                 .is_compatible_with_worker_taints(config.taints())
+            && self.fits_context(config)
     }
 
     #[inline]
@@ -173,6 +193,7 @@ impl<'a> RoutingEligibility<'a> {
             && self
                 .routing_constraints
                 .is_compatible_with_worker_taints(config.taints())
+            && self.fits_context(config)
             && !self.is_worker_full(worker_id, config.data_parallel_size())
     }
 
@@ -892,5 +913,44 @@ mod tests {
         eligibility.for_each_eligible_worker_rank(&workers, |worker, _| ranks.push(worker));
 
         assert!(ranks.is_empty());
+    }
+}
+
+#[cfg(test)]
+mod context_length_tests {
+    use super::*;
+
+    struct Ctx(Option<u32>);
+
+    impl WorkerConfigLike for Ctx {
+        fn data_parallel_start_rank(&self) -> u32 {
+            0
+        }
+        fn data_parallel_size(&self) -> u32 {
+            1
+        }
+        fn max_num_batched_tokens(&self) -> Option<u64> {
+            None
+        }
+        fn total_kv_blocks(&self) -> Option<u64> {
+            None
+        }
+        fn context_length(&self) -> Option<u32> {
+            self.0
+        }
+    }
+
+    #[test]
+    fn a_worker_whose_context_is_too_short_is_not_eligible() {
+        let constraints = RoutingConstraints::default();
+        let eligibility =
+            RoutingEligibility::new(None, None, None, &constraints).with_min_context_tokens(5_000);
+        assert!(!eligibility.allows_worker(1, &Ctx(Some(4_096))));
+        assert!(eligibility.allows_worker(2, &Ctx(Some(8_192))));
+        assert!(eligibility.allows_worker(3, &Ctx(None)));
+        assert!(!eligibility.allows_worker_ignoring_overload(1, &Ctx(Some(4_096))));
+
+        let unchecked = RoutingEligibility::new(None, None, None, &constraints);
+        assert!(unchecked.allows_worker(1, &Ctx(Some(16))));
     }
 }

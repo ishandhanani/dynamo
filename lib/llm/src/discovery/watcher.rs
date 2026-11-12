@@ -223,6 +223,10 @@ pub struct ModelWatcher {
     generate_engine_capabilities: Vec<&'static str>,
     systemone_enabled: bool,
     plugins: RouterPluginBuilder,
+    /// `DYN_WORKERSET_IDENTITY=model`: admit workers by model identity instead of the full
+    /// card checksum, so engine shapes that differ in context length, KV block size, source
+    /// path, or advertised router config share one WorkerSet. POC.
+    pool_compat: bool,
 }
 
 pub(crate) struct PreparedWorkerSet {
@@ -336,6 +340,8 @@ impl ModelWatcher {
             generate_engine_capabilities: Vec::new(),
             systemone_enabled: false,
             plugins,
+            pool_compat: std::env::var("DYN_WORKERSET_IDENTITY")
+                .is_ok_and(|value| value.eq_ignore_ascii_case("model")),
         }
     }
 
@@ -1178,7 +1184,11 @@ impl ControllerHost for ModelWatcher {
             model_name: card.name().to_string(),
             worker_set_key: worker_set_key(&endpoint_id, card.model_type, card.worker_type),
         };
-        let mdc_checksum = card.mdcsum().to_string();
+        let mdc_checksum = if self.pool_compat {
+            card.pool_compat_checksum()
+        } else {
+            card.mdcsum().to_string()
+        };
         let projection_fingerprint = lora_projection_fingerprint(&card)?;
         let video_contract = qwen_video_contract_digest(&card);
         Ok(Some(DesiredInstance {

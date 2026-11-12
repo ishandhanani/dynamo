@@ -784,8 +784,41 @@ impl SelectionCore {
         // when the index lookup fails.
         *lookup = Some(timings);
         let tiered = tiered?;
-        let overlap =
+        let mut overlap =
             OverlapAnalysis::new(&self.kv_router_config, entry.block_size, &tiered).signals();
+        // A pooled partition may hold workers with other page sizes. Their blocks live on
+        // their own branches of the shared tree, so look them up with hashes at each size
+        // and fold the result in, scaled to the partition's block unit.
+        let other_block_sizes: Vec<u32> = {
+            let workers = entry.workers_tx.borrow();
+            let mut sizes: Vec<u32> = workers
+                .values()
+                .filter_map(|config| config.block_size)
+                .filter(|size| *size != 0 && *size != entry.block_size)
+                .collect();
+            sizes.sort_unstable();
+            sizes.dedup();
+            sizes
+        };
+        for size in other_block_sizes {
+            let hashes = prompt.block_hashes_for_indexer(size, entry.is_eagle)?;
+            if hashes.is_empty() {
+                continue;
+            }
+            let tiered_at_size = entry
+                .indexer
+                .find_tiered_matches_ref_with_options(
+                    &hashes,
+                    LowerTierQueryOptions {
+                        retain_kv_transfer_chain: false,
+                    },
+                )
+                .await
+                .map_err(SelectionError::Indexer)?;
+            let signals =
+                OverlapAnalysis::new(&self.kv_router_config, size, &tiered_at_size).signals();
+            overlap.merge_scaled(signals, size as f64 / entry.block_size as f64);
+        }
         let kv_transfer_candidates = retain_kv_transfer_chain
             .then(|| tiered.into_kv_transfer_candidates())
             .flatten();

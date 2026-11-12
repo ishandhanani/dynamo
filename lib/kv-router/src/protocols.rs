@@ -324,6 +324,19 @@ pub trait WorkerConfigLike {
         &EMPTY_WORKER_TAINTS
     }
 
+    /// The engine's context limit in tokens, when published. Routing skips a worker whose
+    /// limit is below the request's input length.
+    fn context_length(&self) -> Option<u32> {
+        None
+    }
+
+    /// This worker's KV block (page) size, when it may differ from the partition's. The
+    /// router hashes a request at every page size present and accounts capacity in the
+    /// partition's block unit.
+    fn kv_cache_block_size(&self) -> Option<u32> {
+        None
+    }
+
     /// Stable identifier for the worker, preserved across process restarts.
     ///
     /// In Kubernetes StatefulSet deployments this is the pod hostname (`worker-0`, `worker-1`,

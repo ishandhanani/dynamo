@@ -28,6 +28,33 @@ pub struct OverlapSignals {
 }
 
 impl OverlapSignals {
+    /// Fold in signals computed at another page size. Block counts are scaled by `ratio`
+    /// (that size over this partition's unit) so every worker's overlap shares one unit;
+    /// cached tokens are already tokens. Workers appear in at most one lookup, so this is a
+    /// union.
+    pub fn merge_scaled(&mut self, other: OverlapSignals, ratio: f64) {
+        let scale = |blocks: usize| (blocks as f64 * ratio).round() as usize;
+        for (worker, blocks) in other.tier_overlap_blocks.device {
+            *self.tier_overlap_blocks.device.entry(worker).or_default() += scale(blocks);
+        }
+        for (worker, blocks) in other.tier_overlap_blocks.host_pinned {
+            *self
+                .tier_overlap_blocks
+                .host_pinned
+                .entry(worker)
+                .or_default() += scale(blocks);
+        }
+        for (worker, blocks) in other.tier_overlap_blocks.disk {
+            *self.tier_overlap_blocks.disk.entry(worker).or_default() += scale(blocks);
+        }
+        for (worker, blocks) in other.effective_overlap_blocks {
+            *self.effective_overlap_blocks.entry(worker).or_default() += blocks * ratio;
+        }
+        for (worker, tokens) in other.effective_cached_tokens {
+            *self.effective_cached_tokens.entry(worker).or_default() += tokens;
+        }
+    }
+
     pub fn selected_worker_tiers<C: WorkerConfigLike>(
         &self,
         worker: WorkerWithDpRank,
@@ -505,5 +532,33 @@ mod tests {
         assert_eq!(snapshot.gpu_blocks, u32::MAX);
         assert_eq!(snapshot.host_pinned_blocks, u32::MAX);
         assert_eq!(snapshot.disk_blocks, u32::MAX);
+    }
+}
+
+#[cfg(test)]
+mod merge_scaled_tests {
+    use super::*;
+
+    #[test]
+    fn merge_scaled_converts_other_page_sizes_into_the_partition_unit() {
+        let w16 = WorkerWithDpRank::from_worker_id(1);
+        let w64 = WorkerWithDpRank::from_worker_id(2);
+        let mut base = OverlapSignals::default();
+        base.tier_overlap_blocks.device.insert(w16, 8);
+        base.effective_overlap_blocks.insert(w16, 8.0);
+        base.effective_cached_tokens.insert(w16, 128);
+
+        let mut other = OverlapSignals::default();
+        other.tier_overlap_blocks.device.insert(w64, 3);
+        other.effective_overlap_blocks.insert(w64, 3.0);
+        other.effective_cached_tokens.insert(w64, 192);
+
+        // Partition unit is 16 tokens; the other lookup ran at 64.
+        base.merge_scaled(other, 64.0 / 16.0);
+        assert_eq!(base.tier_overlap_blocks.device[&w16], 8);
+        assert_eq!(base.tier_overlap_blocks.device[&w64], 12);
+        assert_eq!(base.effective_overlap_blocks[&w64], 12.0);
+        assert_eq!(base.effective_cached_tokens[&w64], 192);
+        assert_eq!(base.effective_cached_tokens[&w16], 128);
     }
 }
