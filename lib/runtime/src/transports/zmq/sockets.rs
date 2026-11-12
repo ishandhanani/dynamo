@@ -1,10 +1,13 @@
 // SPDX-FileCopyrightText: Copyright (c) 2024-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
+//! PUB/SUB and PUSH/PULL socket constructors with the socket options Dynamo's raw ZMQ
+//! publishers and listeners share.
+
 use std::sync::Arc;
 
+use super::ipv6_option_for;
 use anyhow::Result;
-use dynamo_runtime::transports::zmq::ipv6_option_for;
 use futures::SinkExt;
 use tmq::{
     Context, Multipart, SocketBuilder,
@@ -14,14 +17,12 @@ use tmq::{
 };
 use tokio::sync::Mutex;
 
-pub(crate) type MultipartMessage = Vec<Vec<u8>>;
-#[cfg_attr(not(feature = "block-manager"), allow(dead_code))]
-pub(crate) type SharedPubSocket = Arc<Mutex<Publish>>;
-pub(crate) type SubSocket = Subscribe;
-pub(crate) type PullSocket = Pull;
+pub type MultipartMessage = Vec<Vec<u8>>;
+pub type SharedPubSocket = Arc<Mutex<Publish>>;
+pub type SubSocket = Subscribe;
+pub type PullSocket = Pull;
 
 const ZMQ_RCVTIMEOUT_MS: i32 = 100;
-#[cfg_attr(not(feature = "block-manager"), allow(dead_code))]
 const ZMQ_SNDTIMEOUT_MS: i32 = 0;
 const ZMQ_RECONNECT_IVL_MS: i32 = 100;
 const ZMQ_RECONNECT_IVL_MAX_MS: i32 = 5000;
@@ -46,7 +47,6 @@ where
     configure_common_builder(builder).set_rcvtimeo(ZMQ_RCVTIMEOUT_MS)
 }
 
-#[cfg_attr(not(feature = "block-manager"), allow(dead_code))]
 fn configure_send_builder<T>(builder: SocketBuilder<T>) -> SocketBuilder<T>
 where
     T: tmq::FromZmqSocket<T>,
@@ -54,7 +54,7 @@ where
     configure_common_builder(builder).set_sndtimeo(ZMQ_SNDTIMEOUT_MS)
 }
 
-pub(crate) async fn connect_sub_socket(endpoint: &str, topic: Option<&str>) -> Result<SubSocket> {
+pub async fn connect_sub_socket(endpoint: &str, topic: Option<&str>) -> Result<SubSocket> {
     let ctx = Context::new();
     let socket = configure_receive_builder(subscribe(&ctx))
         .set_ipv6(ipv6_option_for(endpoint)?)
@@ -64,7 +64,7 @@ pub(crate) async fn connect_sub_socket(endpoint: &str, topic: Option<&str>) -> R
 }
 
 /// Connect using the ordinary SUB options plus connection notifications for replay recovery.
-pub(crate) async fn connect_sub_socket_with_monitor(
+pub async fn connect_sub_socket_with_monitor(
     endpoint: &str,
     topic: &str,
 ) -> Result<(SubSocket, tmq::pair::Pair)> {
@@ -83,8 +83,7 @@ pub(crate) async fn connect_sub_socket_with_monitor(
     Ok((socket, monitor))
 }
 
-#[cfg_attr(not(feature = "block-manager"), allow(dead_code))]
-pub(crate) async fn bind_pub_socket(endpoint: &str) -> Result<SharedPubSocket> {
+pub async fn bind_pub_socket(endpoint: &str) -> Result<SharedPubSocket> {
     let ctx = Context::new();
     let socket = configure_send_builder(publish(&ctx))
         .set_ipv6(ipv6_option_for(endpoint)?)
@@ -92,7 +91,7 @@ pub(crate) async fn bind_pub_socket(endpoint: &str) -> Result<SharedPubSocket> {
     Ok(Arc::new(Mutex::new(socket)))
 }
 
-pub(crate) async fn bind_pull_socket(endpoint: &str) -> Result<PullSocket> {
+pub async fn bind_pull_socket(endpoint: &str) -> Result<PullSocket> {
     let ctx = Context::new();
     let socket = configure_receive_builder(pull(&ctx))
         .set_ipv6(ipv6_option_for(endpoint)?)
@@ -100,8 +99,7 @@ pub(crate) async fn bind_pull_socket(endpoint: &str) -> Result<PullSocket> {
     Ok(socket)
 }
 
-#[cfg(test)]
-pub(crate) async fn connect_push_socket(endpoint: &str) -> Result<tmq::push::Push> {
+pub async fn connect_push_socket(endpoint: &str) -> Result<tmq::push::Push> {
     let ctx = Context::new();
     let socket = configure_send_builder(tmq::push::push(&ctx))
         .set_ipv6(ipv6_option_for(endpoint)?)
@@ -109,15 +107,11 @@ pub(crate) async fn connect_push_socket(endpoint: &str) -> Result<tmq::push::Pus
     Ok(socket)
 }
 
-pub(crate) fn multipart_message(multipart: Multipart) -> MultipartMessage {
+pub fn multipart_message(multipart: Multipart) -> MultipartMessage {
     multipart.into_iter().map(|frame| frame.to_vec()).collect()
 }
 
-#[cfg_attr(not(feature = "block-manager"), allow(dead_code))]
-pub(crate) async fn send_multipart<S>(
-    socket: &Arc<Mutex<S>>,
-    frames: MultipartMessage,
-) -> Result<()>
+pub async fn send_multipart<S>(socket: &Arc<Mutex<S>>, frames: MultipartMessage) -> Result<()>
 where
     S: futures::Sink<Multipart, Error = tmq::TmqError> + Unpin,
 {
@@ -125,8 +119,7 @@ where
     Ok(())
 }
 
-#[cfg(test)]
-pub(crate) async fn send_multipart_direct<S>(socket: &mut S, frames: MultipartMessage) -> Result<()>
+pub async fn send_multipart_direct<S>(socket: &mut S, frames: MultipartMessage) -> Result<()>
 where
     S: futures::Sink<Multipart, Error = tmq::TmqError> + Unpin,
 {

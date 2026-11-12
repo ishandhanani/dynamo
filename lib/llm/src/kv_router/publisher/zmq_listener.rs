@@ -19,7 +19,7 @@ use dynamo_router_protocol::worker::{WorkerId, WorkerWithDpRank};
 
 use super::{PublisherInput, ZmqRecoveryConfig};
 use crate::kv_router::metrics::kv_publisher_metrics;
-use crate::utils::zmq::{connect_sub_socket, multipart_message};
+use dynamo_runtime::transports::zmq::sockets::{connect_sub_socket, multipart_message};
 
 pub(super) struct DecodedZmqKvBatch {
     pub(super) source_cursor: u64,
@@ -30,7 +30,7 @@ pub(super) struct DecodedZmqKvBatch {
 ///
 /// Callers retain their own malformed-input and protocol-version policies.
 pub(super) fn decode_zmq_kv_batch(
-    frames: crate::utils::zmq::MultipartMessage,
+    frames: dynamo_runtime::transports::zmq::sockets::MultipartMessage,
 ) -> Result<DecodedZmqKvBatch> {
     let (source_cursor, payload) = split_zmq_kv_batch(frames)?;
     let batch = decode_event_batch(&payload).context("failed to decode KV event batch")?;
@@ -42,7 +42,7 @@ pub(super) fn decode_zmq_kv_batch(
 
 /// Split the envelope into its sequence and still-encoded payload.
 pub(super) fn split_zmq_kv_batch(
-    mut frames: crate::utils::zmq::MultipartMessage,
+    mut frames: dynamo_runtime::transports::zmq::sockets::MultipartMessage,
 ) -> Result<(u64, Vec<u8>)> {
     if frames.len() != 3 {
         anyhow::bail!("expected three ZMQ frames, received {}", frames.len());

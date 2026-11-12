@@ -25,7 +25,7 @@ use dynamo_runtime::component::{Component, Endpoint};
 use dynamo_runtime::traits::DistributedRuntimeProvider;
 use dynamo_runtime::transports::event_plane::EventPublisher;
 
-use crate::utils::zmq::{connect_sub_socket, multipart_message};
+use dynamo_runtime::transports::zmq::sockets::{connect_sub_socket, multipart_message};
 
 const FPM_TOPIC: &str = "forward-pass-metrics";
 const FPM_VERSION: i32 = 1;
