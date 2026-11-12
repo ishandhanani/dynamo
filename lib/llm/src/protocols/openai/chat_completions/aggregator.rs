@@ -751,7 +751,7 @@ impl DeltaAggregator {
                             }
                         }
                     }
-                    Err(error) if family == super::unified_parser::BEAM_UNIFIED_FAMILY => {
+                    Err(error) if family == crate::parser_family::BEAM_UNIFIED_FAMILY => {
                         return Err(DynamoError::builder()
                             .class(dynamo_runtime::error::ErrorClass::Internal)
                             .diagnostic(format!("Invalid Beam tool output: {error}"))

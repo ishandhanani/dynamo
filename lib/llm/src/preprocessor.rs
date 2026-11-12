@@ -3001,9 +3001,7 @@ impl OpenAIPreprocessor {
             && crate::protocols::openai::chat_completions::unified_parser::selected_family(
                 tool_call_parser.as_deref(),
                 mdc.runtime_config.reasoning_parser.as_deref(),
-            ) == Some(
-                crate::protocols::openai::chat_completions::unified_parser::BEAM_UNIFIED_FAMILY,
-            );
+            ) == Some(crate::parser_family::BEAM_UNIFIED_FAMILY);
 
         if let Some(ref lora_name) = lora_name {
             tracing::info!(model = %mdc.display_name, lora_name, "LoRA adapter detected in MDC");
@@ -4027,7 +4025,7 @@ impl OpenAIPreprocessor {
             None
         };
         let final_message_start_tag = (continue_final
-            && crate::protocols::openai::chat_completions::unified_parser::configured_family(
+            && crate::parser_family::configured_family(
                 self.tool_call_parser.as_deref(),
                 self.runtime_config.reasoning_parser.as_deref(),
             ) == Some("gpt_oss"))
@@ -5947,7 +5945,7 @@ impl OpenAIPreprocessor {
             let prefill = policy.resolve_stream_prefill(
                 family,
                 unified_parser::StreamPrefill {
-                    starting_state: if *family == unified_parser::BEAM_UNIFIED_FAMILY
+                    starting_state: if *family == crate::parser_family::BEAM_UNIFIED_FAMILY
                         && (prompt_prefill.response || self.beam_output_is_bare_guidance(request))
                     {
                         dynamo_parsers_v2::UnifiedParserStartingState::Response
@@ -7482,11 +7480,8 @@ impl OpenAIPreprocessor {
         reasoning_parser: Option<&str>,
         formatted_prompt: Option<&str>,
     ) -> bool {
-        let parser = crate::protocols::openai::chat_completions::unified_parser::configured_family(
-            tool_call_parser,
-            reasoning_parser,
-        )
-        .or(reasoning_parser);
+        let parser = crate::parser_family::configured_family(tool_call_parser, reasoning_parser)
+            .or(reasoning_parser);
         Self::prompt_injected_reasoning_start(parser, formatted_prompt)
     }
 
@@ -7510,10 +7505,7 @@ impl OpenAIPreprocessor {
         formatted_prompt: Option<&str>,
         header_search_end: Option<usize>,
     ) -> PromptReasoningPrefill {
-        let family = crate::protocols::openai::chat_completions::unified_parser::configured_family(
-            tool_call_parser,
-            reasoning_parser,
-        );
+        let family = crate::parser_family::configured_family(tool_call_parser, reasoning_parser);
         let assistant_prefill = (family == Some("gpt_oss"))
             .then(|| {
                 formatted_prompt
@@ -7569,16 +7561,13 @@ impl OpenAIPreprocessor {
                 .then(|| formatted_prompt.map(|prompt| prompt.trim_end().ends_with("</mm:think>")))
                 .flatten()
         };
-        let beam_channel = (family
-            == Some(
-                crate::protocols::openai::chat_completions::unified_parser::BEAM_UNIFIED_FAMILY,
-            ))
-        .then(|| {
-            formatted_prompt
-                .map(str::trim_end)
-                .and_then(beam_prompt_open_channel)
-        })
-        .flatten();
+        let beam_channel = (family == Some(crate::parser_family::BEAM_UNIFIED_FAMILY))
+            .then(|| {
+                formatted_prompt
+                    .map(str::trim_end)
+                    .and_then(beam_prompt_open_channel)
+            })
+            .flatten();
         let response =
             beam_channel == Some(dynamo_parsers_v2::UnifiedParserStartingState::Response);
         PromptReasoningPrefill {
@@ -7707,7 +7696,7 @@ impl OpenAIPreprocessor {
             && crate::protocols::openai::chat_completions::unified_parser::selected_content_decoder_family(
                 tool_parser,
                 reasoning_parser,
-            ) == Some(crate::protocols::openai::chat_completions::unified_parser::GEMMA4_UNIFIED_FAMILY)
+            ) == Some(crate::parser_family::GEMMA4_UNIFIED_FAMILY)
     }
 
     /// Leading marker the model can still emit after the request turned reasoning off,
@@ -10978,7 +10967,6 @@ mod tests {
 
     #[tokio::test]
     async fn kimi2_plain_response_without_prompt_prefill_stays_content() {
-        use crate::protocols::openai::chat_completions::unified_parser;
         let mut card = ModelDeploymentCard::load_from_disk(
             "tests/data/sample-models/mock-llama-3.1-8b-instruct",
             None,
@@ -11000,7 +10988,7 @@ mod tests {
                     &request,
                     false.into(),
                     crate::protocols::openai::GuidedToolConstraint::None,
-                    ToolProcessingRoute::Unified(unified_parser::KIMI_K2_UNIFIED_FAMILY),
+                    ToolProcessingRoute::Unified(crate::parser_family::KIMI_K2_UNIFIED_FAMILY),
                 )
                 .unwrap()
                 .collect::<Vec<_>>()

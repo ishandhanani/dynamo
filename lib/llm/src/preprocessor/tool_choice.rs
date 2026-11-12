@@ -568,7 +568,7 @@ fn beam_turn_structural_tag(
         PromptChannel, StructuralTagContext, StructuralTagSchemaMode, StructuralTagToolChoice,
     };
     let builder = dynamo_parsers_v2::structural_tag_builder_for_family(
-        crate::protocols::openai::chat_completions::unified_parser::BEAM_UNIFIED_FAMILY,
+        crate::parser_family::BEAM_UNIFIED_FAMILY,
     )?;
     let v2_tools: Vec<dynamo_parsers_v2::Tool> = tools
         .iter()
@@ -774,10 +774,8 @@ pub(super) fn uses_muse_spark_parser(
     tool_call_parser: Option<&str>,
     reasoning_parser: Option<&str>,
 ) -> bool {
-    crate::protocols::openai::chat_completions::unified_parser::configured_family(
-        tool_call_parser,
-        reasoning_parser,
-    ) == Some("muse_spark")
+    crate::parser_family::configured_family(tool_call_parser, reasoning_parser)
+        == Some("muse_spark")
 }
 
 /// Map a forced `tool_choice` onto the guided-JSON parser constraint for its grammar.
