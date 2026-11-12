@@ -79,7 +79,7 @@ dynamo-global-common = { workspace = true, features = ["grpc"] }
 dynamo-global-view-broadcaster = { path = "../global-view-broadcaster" }
 dynamo-kv-events = { workspace = true }
 dynamo-kv-hashing = { workspace = true }
-dynamo-kv-hints = { workspace = true }
+dynamo-kv-hints = { workspace = true, features = ["zmq"] }
 dynamo-kv-indexer = { workspace = true, features = ["export"] }
 dynamo-kv-router = { workspace = true, features = ["metrics"] }
 dynamo-lora = { workspace = true }

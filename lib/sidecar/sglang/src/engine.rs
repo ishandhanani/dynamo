@@ -334,6 +334,7 @@ impl LLMEngine for SglangSidecarEngine {
                 .runtime_data
                 .insert("sglang_generate".into(), true.into());
         }
+        publish_kv_hint_config(&discovery.server_info, &self.endpoint, &mut config)?;
         let kv_event_sources =
             discover_kv_event_sources(&discovery, &mut config, &self.endpoint, deadline).await?;
         let connection_count = pool.len();
@@ -990,6 +991,47 @@ fn kv_event_connect_host(
 /// Same predicate as SGLang's `SpeculativeAlgorithm.is_eagle()`, which is
 /// what switches its radix cache (and so its KV events) to bigram keys.
 /// `NEXTN` covers older builds that don't normalize it to `EAGLE`.
+/// What the router's KV hints need from the worker: its scheduler hint socket
+/// (`--hint-zmq-endpoint`), and, with the direct Mooncake linker, the object keys of a page
+/// (`hicache_object_layout`) for pins.
+fn publish_kv_hint_config(
+    info: &Value,
+    endpoint: &GrpcEndpoint,
+    config: &mut EngineConfig,
+) -> Result<(), DynamoError> {
+    if let Some((host, port)) = info["hint_zmq_endpoint"]
+        .as_str()
+        .and_then(|bound| bound.strip_prefix("tcp://")?.rsplit_once(':'))
+    {
+        let host = kv_event_connect_host(host, endpoint)?;
+        let hint = format!("tcp://{host}:{port}");
+        config
+            .runtime_data
+            .insert("hint_zmq_endpoint".into(), hint.into());
+    }
+    let layout = &info["hicache_object_layout"];
+    if info["enable_unified_cache_external_linker"] == true && layout["enabled"] == true {
+        let objects = &layout["hicache_object_layout"];
+        let mooncake = serde_json::json!({
+            "backend": "mooncake",
+            "tenant_id": info["unified_cache_external_linker_config"]["tenant_id"],
+            "page_size": info["page_size"],
+            "tp_size": info["tp_size"],
+            "pp_size": info["pp_size"],
+            "is_mla_model": objects["is_mla_backend"],
+            "is_eagle": sglang_eagle_enabled(info),
+            "should_split_heads": false,
+            "key_prefix": objects["key_prefix"],
+            "key_layout": "linker",
+            "object_layout": objects,
+        });
+        config
+            .runtime_data
+            .insert("sglang_hicache_mooncake".into(), mooncake);
+    }
+    Ok(())
+}
+
 fn sglang_eagle_enabled(server_info: &Value) -> bool {
     server_info
         .get("speculative_algorithm")

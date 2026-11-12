@@ -799,6 +799,29 @@ impl AsyncEngine<SingleIn<PreprocessedRequest>, ManyOut<Annotated<LLMEngineOutpu
             return Ok(ResponseStream::new(Box::pin(stream), stream_context));
         }
 
+        if request
+            .get::<super::hints::Wakeup>(super::hints::WAKEUP_CONTEXT_KEY)
+            .is_ok()
+        {
+            // A wake-up call: prefetch its prompt to the worker this request would get, then
+            // answer without running it. Selection runs without admission or booking: nothing
+            // runs on the worker, and the prefetched pages reach the router through its KV
+            // events, which is how the real request finds them. Without a booking, a burst of
+            // wake-ups sees the same loads and can all pick one worker; if that shows up, give
+            // the wake-up a reservation that expires after the expected lead time.
+            let (selection, _) = self
+                .select_with_affinity(&request, phase, true, &budget)
+                .await?;
+            self.kv_router()
+                .hints()
+                .prefetch(&request, selection.worker);
+            let stop = stream::iter(vec![Annotated::from_data(LLMEngineOutput::stop())]);
+            return Ok(ResponseStream::new(
+                Box::pin(stop),
+                request.context().clone(),
+            ));
+        }
+
         let plan = self.plan_kv_route(&request, phase, None, budget).await?;
         self.dispatch_kv_plan(request, plan).await
     }

@@ -33,6 +33,7 @@ use crate::{
 };
 use dynamo_kv_events::residency::StorageTier;
 use dynamo_kv_hashing::ExternalSequenceBlockHash;
+use dynamo_kv_hints::pin::MooncakeObjectLayout;
 use dynamo_kv_indexer::host::{
     KvRouterError, SessionPrefixIndexer, SessionResidencyOwner, SharedCacheBackend,
 };
@@ -47,7 +48,8 @@ const MAX_MOONCAKE_INDEX_ENTRIES: usize = 1_000_000;
 #[derive(Debug, Clone, Deserialize, Serialize)]
 struct SglangHicacheMooncakeConfig {
     backend: String,
-    #[serde(default)]
+    /// SGLang publishes `null` when it has no tenant.
+    #[serde(default, deserialize_with = "null_as_empty")]
     tenant_id: String,
     page_size: u32,
     tp_size: u32,
@@ -68,6 +70,13 @@ struct SglangHicacheMooncakeConfig {
     /// `hicache` (default) or `linker` for SGLang's direct external linker.
     #[serde(default)]
     key_layout: Option<String>,
+    /// Every object a page is stored as, so the router can pin it.
+    #[serde(default)]
+    object_layout: Option<MooncakeObjectLayout>,
+}
+
+fn null_as_empty<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<String, D::Error> {
+    Ok(Option::<String>::deserialize(deserializer)?.unwrap_or_default())
 }
 
 impl SglangHicacheMooncakeConfig {
@@ -84,6 +93,7 @@ impl SglangHicacheMooncakeConfig {
             && self.extra_backend_tag == other.extra_backend_tag
             && self.key_prefix == other.key_prefix
             && self.key_layout == other.key_layout
+            && self.object_layout == other.object_layout
     }
 
     fn key_layout(&self) -> MooncakeKeyLayout {
@@ -770,6 +780,19 @@ impl SharedKvCache for HicacheSharedKvCache {
     }
 }
 
+/// The tenant and Mooncake object keys of the full pages of `tokens` on `worker_id`, when it
+/// publishes an object layout.
+pub(crate) fn mooncake_pin_keys(
+    worker_id: WorkerId,
+    runtime_config: &ModelRuntimeConfig,
+    tokens: &[u32],
+) -> Option<(String, Vec<String>)> {
+    let config = mooncake_config_from_runtime(worker_id, runtime_config)?;
+    let pages = logical_page_hashes(tokens, config.page_size, config.is_eagle);
+    let keys = config.object_layout.as_ref()?.object_keys(&pages);
+    Some((config.tenant_id().to_string(), keys))
+}
+
 fn mooncake_config_from_runtime(
     worker_id: WorkerId,
     runtime_config: &ModelRuntimeConfig,
@@ -936,6 +959,7 @@ mod tests {
             key_prefix: None,
             kv_events_endpoint: Some("tcp://127.0.0.1:5557".to_string()),
             key_layout: None,
+            object_layout: None,
         }
     }
 

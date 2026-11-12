@@ -13,6 +13,10 @@ repository.workspace = true
 keywords.workspace = true
 readme = "README.md"
 
+[features]
+# The hint sockets; only dynamo-llm enables it.
+zmq = ["dep:zmq", "dep:rmp-serde", "dep:tracing"]
+
 [dependencies]
 dynamo-kv-hashing = { workspace = true }
 dynamo-kv-indexer = { workspace = true }
@@ -20,3 +24,6 @@ dynamo-router-protocol = { workspace = true }
 rustc-hash = "2.1.1"
 serde = { workspace = true }
 serde_json = { workspace = true }
+rmp-serde = { workspace = true, optional = true }
+tracing = { workspace = true, optional = true }
+zmq = { workspace = true, optional = true }

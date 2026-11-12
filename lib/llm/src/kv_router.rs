@@ -60,6 +60,7 @@ pub use dynamo_scheduler::protocols;
 pub mod active_load;
 pub(crate) mod embedded;
 pub mod encoder_router;
+pub mod hints;
 pub mod indexer;
 pub mod metrics;
 pub(crate) mod metrics_subscriber;
@@ -639,6 +640,7 @@ pub struct KvRouter {
     teardown_task_guard: Option<dynamo_runtime::engine::EngineContextGuard>,
     /// Optional session-aware logical prefix index.
     session_prefix_index: Option<Arc<SessionPrefixIndexer>>,
+    hints: Arc<hints::KvHints>,
 }
 
 fn resolve_tracking_model_name(
@@ -914,6 +916,7 @@ impl KvRouter {
         replica_ingress.start().await;
         tracing::info!("KV Routing initialized");
         let cancellation_token = cancellation_guard.disarm();
+        let hints = hints::KvHints::new(workers_with_configs.clone());
         Ok(Self {
             admission_policy,
             indexer,
@@ -934,6 +937,7 @@ impl KvRouter {
             shared_cache,
             teardown_task_guard: None,
             session_prefix_index,
+            hints,
         })
     }
 
@@ -990,6 +994,10 @@ impl KvRouter {
     ) {
         self.ingress.set_task_guard(task_guard.clone());
         self.teardown_task_guard = Some(task_guard);
+    }
+
+    pub(crate) fn hints(&self) -> &Arc<hints::KvHints> {
+        &self.hints
     }
 
     /// Get a reference to the client used by this KvRouter

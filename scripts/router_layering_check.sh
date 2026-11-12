@@ -45,7 +45,7 @@ TABLE=(
   "dynamo-router-protocol | - | dynamo-runtime dynamo-kv-router dynamo-kv-hashing dynamo-tokens tokio anyhow tracing async-trait derive_builder prometheus axum hyper reqwest zmq"
   "dynamo-kv-hashing | dynamo-tokens | dynamo-runtime dynamo-kv-router dynamo-router-protocol tokio anyhow tracing async-trait prometheus axum hyper reqwest zmq"
   "dynamo-kv-events | dynamo-kv-hashing dynamo-router-protocol | dynamo-runtime dynamo-kv-router tokio anyhow async-trait prometheus axum hyper reqwest zmq"
-  "dynamo-kv-hints | dynamo-kv-hashing dynamo-kv-indexer dynamo-router-protocol | dynamo-runtime dynamo-kv-router dynamo-slot-tracker dynamo-session-affinity dynamo-worker-selection dynamo-admission dynamo-scheduler prometheus axum hyper reqwest zmq"
+  "dynamo-kv-hints | dynamo-kv-hashing dynamo-kv-indexer dynamo-router-protocol | dynamo-runtime dynamo-kv-router dynamo-slot-tracker dynamo-session-affinity dynamo-worker-selection dynamo-admission dynamo-scheduler prometheus axum hyper reqwest"
   "dynamo-kv-indexer | dynamo-kv-events dynamo-kv-hashing dynamo-router-protocol dynamo-tokens | dynamo-runtime dynamo-kv-router dynamo-kv-hints axum hyper reqwest zmq"
   "dynamo-slot-tracker | dynamo-router-protocol dynamo-tokens | dynamo-runtime dynamo-kv-router dynamo-kv-indexer dynamo-kv-events dynamo-kv-hashing axum hyper reqwest zmq prometheus"
   "dynamo-session-affinity | dynamo-router-protocol | dynamo-runtime dynamo-kv-router dynamo-kv-indexer dynamo-slot-tracker dynamo-worker-selection dynamo-admission dynamo-kv-events dynamo-kv-hashing axum hyper reqwest zmq prometheus"
@@ -89,6 +89,8 @@ HOSTS_EXTERNAL="dynamo-py3|lib/bindings/python/Cargo.toml|kv-indexer,slot-tracke
 # prometheus joins this list in step 9c, when exposition moves to dynamo-metrics; today the
 # kv-indexer `export` feature (kv-router `metrics`) reaches it by design.
 HOST_FORBIDDEN="axum hyper reqwest zmq"
+# "crate:external" a host may reach through that crate: dynamo-kv-hints' `zmq` feature.
+HOST_ALLOWED="dynamo-kv-hints:zmq"
 
 # Executable behavior the protocol crate must not contain (SPLIT_V2 G9).
 PROTOCOL_CRATE="dynamo-router-protocol"
@@ -346,7 +348,11 @@ check_host() {
     # cargo when two versions coexist (reqwest 0.12 and 0.13 in dynamo-llm).
     for v in "${versions[@]}"; do
       spec="$x@${v#v}"
-      tree "$host" "$x" "$@" -i "$spec" >"$tmp/inv_tree.txt"
+      prune=()
+      for pair in $HOST_ALLOWED; do
+        [ "${pair#*:}" = "$x" ] && prune+=(--prune "${pair%%:*}")
+      done
+      tree "$host" "$x" "$@" -i "$spec" "${prune[@]}" >"$tmp/inv_tree.txt"
       awk '{ print $1 }' "$tmp/inv_tree.txt" | lines >"$tmp/inv.txt"
       comm -12 "$tmp/inv.txt" "$tmp/table_crates.txt" >"$tmp/inv_hits.txt"
       if [ ! -s "$tmp/inv_hits.txt" ]; then
