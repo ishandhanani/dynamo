@@ -1,12 +1,12 @@
 # Migration Guide: block_manager to kvbm-physical
 
-Guide for migrating from `dynamo-llm::block_manager` (v1) to `kvbm-physical`.
+Guide for migrating from `dynamo-block-manager` (v1) to `kvbm-physical`.
 
 ## Overview
 
-`kvbm-physical` is a ground-up rewrite of the physical transfer layer from `lib/llm/src/block_manager/`. The core data flow is the same (register layouts, exchange metadata, execute transfers), but `kvbm-physical` adds block format awareness, richer transfer options, and a cleaner separation between logical tiers and physical handles.
+`kvbm-physical` is a ground-up rewrite of the physical transfer layer from `lib/block-manager/src/`. The core data flow is the same (register layouts, exchange metadata, execute transfers), but `kvbm-physical` adds block format awareness, richer transfer options, and a cleaner separation between logical tiers and physical handles.
 
-Both implementations use the same `vectorized_copy` CUDA kernel. The original embeds it in a `.fatbin` (`lib/llm/src/block_manager/block/transfer/kernels/vectorized_copy.fatbin`) loaded via `cuModuleLoadData`. `kvbm-physical` wraps the same kernel via the `kvbm-kernels` crate with explicit Rust FFI for transparency and testability.
+Both implementations use the same `vectorized_copy` CUDA kernel. The original embeds it in a `.fatbin` (`lib/block-manager/src/block/transfer/kernels/vectorized_copy.fatbin`) loaded via `cuModuleLoadData`. `kvbm-physical` wraps the same kernel via the `kvbm-kernels` crate with explicit Rust FFI for transparency and testability.
 
 ## Type mapping table
 

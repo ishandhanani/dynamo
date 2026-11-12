@@ -2,7 +2,7 @@
 
 ## Context
 
-`lib/llm/src/block_manager/` (referred to as **v1** throughout) manages the KV cache block lifecycle for LLM inference. Its logical layer — block state machines, registry, pools, events — is interleaved with physical concerns (storage backends, CUDA, NIXL, offloading).
+`lib/block-manager/src/` (referred to as **v1** throughout) manages the KV cache block lifecycle for LLM inference. Its logical layer — block state machines, registry, pools, events — is interleaved with physical concerns (storage backends, CUDA, NIXL, offloading).
 
 `lib/kvbm-logical/` is a standalone crate that provides an independent logical block lifecycle layer. This document compares the two implementations factually across API surface, registry design, pool architecture, testability, and usability — and evaluates how `kvbm-logical` aligns with the future direction of operating on blocks by sequence hash.
 

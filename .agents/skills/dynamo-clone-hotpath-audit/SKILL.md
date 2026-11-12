@@ -72,7 +72,7 @@ Prioritize in this order:
    services, protocol conversion, migration
 2. KV routing and scheduling: `lib/router/scheduler/src`, `lib/router/worker-selection/src`,
    `lib/router/admission/src`, `lib/router/slot-tracker/src`, `lib/router/kv-indexer/src`
-3. KV/block manager event paths: `lib/llm/src/block_manager`,
+3. KV/block manager event paths: `lib/block-manager/src`,
    `lib/bindings/kvbm/src/block_manager`, `lib/kvbm-engine/src/offload`
 4. runtime request/transport paths: `lib/runtime/src/component`,
    `lib/runtime/src/pipeline`, `lib/runtime/src/transports`

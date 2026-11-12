@@ -194,7 +194,7 @@ cargo clippy --locked --no-deps -p dynamo-kv-router --all-targets -- -D warnings
 - CI's non-default feature checks are in [`pre-merge.yml`](.github/workflows/pre-merge.yml).
   Each is a separate cold build (about 4 min), so run only the one you touched.
 
-On macOS, build and test `dynamo-llm` with `--no-default-features` unless you need `block-manager`.
+The block manager is the `dynamo-block-manager` crate (`lib/block-manager`); `dynamo-llm` does not depend on it. It is Linux/CUDA-oriented NIXL, NUMA, and `O_DIRECT` code, so on macOS pass `--exclude dynamo-block-manager` to workspace-wide commands.
 
 ### Python tests
 

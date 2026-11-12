@@ -113,4 +113,4 @@ The `test_version_check_on_deserialization` test in `layout::tests` is the only 
 
 ## Documentation
 
-- [v1 Migration Guide](docs/v1_migration.md) — Migration from `dynamo-llm::block_manager` to `kvbm-physical`
+- [v1 Migration Guide](docs/v1_migration.md) — Migration from `dynamo-block-manager` to `kvbm-physical`

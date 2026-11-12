@@ -33,7 +33,7 @@ HOT_PATH_RULES = (
     ("lib/llm/src/protocols", 7, "protocol conversion"),
     ("lib/llm/src/migration.rs", 7, "request retry/migration"),
     ("lib/llm/src/kv_router", 8, "llm kv routing"),
-    ("lib/llm/src/block_manager", 8, "block manager path"),
+    ("lib/block-manager/src", 8, "block manager path"),
     ("lib/bindings/kvbm/src/block_manager", 8, "kvbm binding block manager"),
     ("lib/kvbm-engine/src/offload", 8, "kvbm offload path"),
     ("lib/kvbm-logical/src", 7, "kvbm logical manager"),
