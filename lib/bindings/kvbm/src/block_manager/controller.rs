@@ -16,7 +16,11 @@ impl BlockManagerClient {
     #[new]
     fn new(component: Component, instance_id: i64) -> PyResult<Self> {
         let client = pyo3_async_runtimes::tokio::get_runtime()
-            .block_on(ControlClient::new(component.inner, instance_id))
+            .block_on(ControlClient::new(
+                component.inner,
+                instance_id,
+                dynamo_llm::kv_router::plugins::push_router_options(),
+            ))
             .map_err(to_pyerr)?;
         Ok(BlockManagerClient { inner: client })
     }

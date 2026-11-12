@@ -94,6 +94,11 @@ pub enum ResetResponse {
     ResetBlocks(ResetBlocksResponse),
 }
 
+// The runtime's stand-in for the router-mode plugins a host passes to `PushRouter`.
+#[cfg(all(test, feature = "testing-etcd", feature = "testing-full"))]
+#[path = "../../../runtime/tests/common/selector.rs"]
+mod selector;
+
 #[cfg(all(test, feature = "testing-etcd", feature = "testing-full"))]
 mod tests {
     use crate::tokens::Tokens;
@@ -127,7 +132,7 @@ mod tests {
             .await
             .unwrap();
 
-        let client = client::ControlClient::new(component.clone(), worker_id)
+        let client = client::ControlClient::new(component.clone(), worker_id, selector::options())
             .await
             .unwrap();
 

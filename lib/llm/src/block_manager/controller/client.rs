@@ -4,7 +4,11 @@
 use super::*;
 
 use anyhow::Result;
-use dynamo_runtime::{component::Component, pipeline::PushRouter, protocols::annotated::Annotated};
+use dynamo_runtime::{
+    component::Component,
+    pipeline::{PushRouter, PushRouterOptions},
+    protocols::annotated::Annotated,
+};
 use futures::StreamExt;
 use serde::de::DeserializeOwned;
 use serde_json::Value;
@@ -15,13 +19,19 @@ pub struct ControlClient {
 }
 
 impl ControlClient {
-    pub async fn new(component: Component, instance_id: i64) -> Result<Self> {
+    /// `options` carries the instance selectors the router's default mode requires; the host
+    /// that links the router plugins supplies them.
+    pub async fn new(
+        component: Component,
+        instance_id: i64,
+        options: PushRouterOptions<ControlMessage, Annotated<Value>>,
+    ) -> Result<Self> {
         let client = component.endpoint("controller").client().await?;
         client.wait_for_instances().await?;
         let client = PushRouter::<ControlMessage, Annotated<Value>>::from_client_with_options(
             client,
             Default::default(),
-            crate::kv_router::plugins::push_router_options(),
+            options,
         )
         .await?;
 
