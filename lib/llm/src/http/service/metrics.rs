@@ -14,15 +14,14 @@ use serde::Serialize;
 use std::sync::{Arc, LazyLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use crate::discovery::ModelManager;
 use crate::protocols::{
     common::metrics::{ANNOTATION_LLM_METRICS, LLMMetricAnnotation},
     openai::chat_completions::NvCreateChatCompletionStreamResponse,
 };
-use crate::reasoning_field::{ReasoningField, RoutedReasoning};
-use crate::{
-    discovery::ModelManager, local_model::runtime_config::ModelRuntimeConfig,
-    model_card::ModelDeploymentCard,
-};
+use dynamo_model_card::local_model::runtime_config::ModelRuntimeConfig;
+use dynamo_model_card::model_card::ModelDeploymentCard;
+use dynamo_model_card::reasoning_field::{ReasoningField, RoutedReasoning};
 
 use super::RouteDoc;
 use dynamo_http_server::metrics::{

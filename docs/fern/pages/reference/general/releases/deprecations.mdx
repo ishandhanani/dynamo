@@ -118,6 +118,13 @@ Removed with no replacement: the dummy shared-cache server, `services::shared_ca
 | `http::service::disconnect::{ConnectionHandle, ConnectionStatus, create_connection_monitor}` | `dynamo_http_server::disconnect` |
 | `http::service::service_v2::{ServiceObserver, ServiceStage, InflightPermit}` | `dynamo_http_server::lifecycle` |
 | `engines::ValidateRequest` | `dynamo_llm::protocols::ValidateRequest` |
+| `model_card`, `local_model`, `model_type`, `endpoint_type`, `hub`, `request_template`, `reasoning_field`, `frontend_config` | `dynamo_model_card`, under the same module names |
+| The method `frontend_config::ChatTemplateDefaults::apply_to_request` | read the defaults with `dynamo_model_card::frontend_config::ChatTemplateDefaults::default_chat_template_kwargs`; the frontend merges them into the request itself |
+| `common::checked_file` | `dynamo_model_card::checked_file` |
+| `entrypoint::RouterConfig`, `discovery::LoadThresholdConfig` | `dynamo_model_card::router_config` |
+| The `preprocessor::media` decoder and fetcher configuration: `MediaDecoder`, `ImageDecoder`, `ImageDecoderLimits`, `VideoDecoder`, `VideoDecoderLimits`, `MediaFetcher` | `dynamo_model_card::media_config` |
+| `protocols::tensor::{TensorModelConfig, TensorMetadata, DataType, ParameterValue, Parameters}` | `dynamo_model_card::tensor_model` |
+| `protocols::openai::chat_completions::tool_parser_v2::unified_family_names` | `dynamo_model_card::parser_family` |
 
 A log statement that does not pin a target reports its module path, so its target follows the move.
 
@@ -127,6 +134,8 @@ A log statement that does not pin a target reports its module path, so its targe
 | `dynamo_llm::http::service::disconnect`, for the connection monitor | `dynamo_http_server::disconnect` |
 | `dynamo_llm::http::service::server` | `dynamo_http_server::server` |
 | `dynamo_llm::http::service::service_v2`, for listener startup, shutdown, and the service stages | `dynamo_http_server::{server, lifecycle}` |
+| `dynamo_llm::{model_card, local_model, hub, frontend_config}`, `dynamo_llm::common::checked_file` | `dynamo_model_card::{model_card, local_model, hub, frontend_config, checked_file}` |
+| `dynamo_llm::preprocessor::media::loader`, for the media fetcher configuration | `dynamo_model_card::media_config` |
 
   > **Migrate:** Replace each `dynamo_llm::<pre-split path>` import with the owner path from the first table and add the owner crate to your `Cargo.toml`. A `DYN_LOG` filter scoped to `dynamo_llm` or to one of its modules must name the new crate from the second table. There is no runtime alias, so the old directive no longer selects the moved statements.
 

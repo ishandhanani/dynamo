@@ -36,7 +36,6 @@ use super::*;
 use crate::lora::{LoadEstimator, LoraFilter};
 use crate::{
     kv_router::{RoutingLoadContext, routing_host::request_guard::RouteObservation},
-    local_model::runtime_config::ModelRuntimeConfig,
     lora::{LoraReplicaConfig, LoraRoutingTable, LoraStateTracker},
     migration::Migration,
     protocols::common::{
@@ -46,6 +45,7 @@ use crate::{
     },
 };
 use dynamo_http_server::metrics::Metrics;
+use dynamo_model_card::local_model::runtime_config::ModelRuntimeConfig;
 
 fn request() -> PreprocessedRequest {
     PreprocessedRequest::builder()
