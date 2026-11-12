@@ -4,6 +4,7 @@
 use anyhow::Error;
 use async_stream::stream;
 use base64::Engine as _;
+use dynamo_http_server::metrics::{Endpoint, ErrorType, Metrics, RequestType, Status};
 use dynamo_llm::protocols::{
     Annotated,
     codec::SseLineCodec,
@@ -20,9 +21,7 @@ use dynamo_llm::types::openai::chat_completions::OpenAIChatCompletionsStreamingE
 use dynamo_llm::{
     endpoint_type::EndpointType,
     http::service::{
-        Metrics,
         error::HttpError,
-        metrics::{Endpoint, ErrorType, RequestType, Status},
         service_v2::{BackendErrorCheck, HttpService},
     },
     model_card::ModelDeploymentCard,
@@ -2707,7 +2706,7 @@ async fn assert_pre_commit_disconnect_is_recorded_once(on_kill: OnKill) {
         1,
         "one disconnect must be recorded once"
     );
-    let cancellation_labels = dynamo_llm::http::service::metrics::CancellationLabels {
+    let cancellation_labels = dynamo_http_server::metrics::CancellationLabels {
         model: MODEL.to_string(),
         endpoint: Endpoint::ChatCompletions.to_string(),
         request_type: RequestType::Stream.as_str().to_string(),

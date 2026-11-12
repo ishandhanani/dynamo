@@ -113,8 +113,21 @@ Removed with no replacement: the dummy shared-cache server, `services::shared_ca
 | Pre-split module | Owner crate |
 | :---- | :---- |
 | `http::service::error::{SanitizedError, BackendStatusAction}` | `dynamo_error::http`, behind the `http` cargo feature of `dynamo-error` |
+| `http::service::metrics::{Metrics, Endpoint, RequestType, Status, ErrorType, CancellationLabels, InflightGuard, HttpQueueGuard, ResponseMetricCollector, Registry, generate_log_buckets, round_to_sig_figs}`, the `request_was_*` and `request_deadline_exceeded` predicates, the `WORKER_LAST_*_GAUGE` gauges, and the `http::service::Metrics` re-export | `dynamo_http_server::metrics` |
+| The methods `Metrics::{update_metrics_from_mdc, update_runtime_config_metrics}` | free functions of the same names in `dynamo_llm::http::service::metrics`, which take the `Metrics` handle as their first argument |
+| `http::service::disconnect::{ConnectionHandle, ConnectionStatus, create_connection_monitor}` | `dynamo_http_server::disconnect` |
+| `http::service::service_v2::{ServiceObserver, ServiceStage, InflightPermit}` | `dynamo_http_server::lifecycle` |
 
-  > **Migrate:** Replace each `dynamo_llm::<pre-split path>` import with the owner path from the table and add the owner crate to your `Cargo.toml`.
+A log statement that does not pin a target reports its module path, so its target follows the move.
+
+| Pre-split log target | Log target |
+| :---- | :---- |
+| `dynamo_llm::http::service::metrics`, for the request metrics | `dynamo_http_server::metrics` |
+| `dynamo_llm::http::service::disconnect`, for the connection monitor | `dynamo_http_server::disconnect` |
+| `dynamo_llm::http::service::server` | `dynamo_http_server::server` |
+| `dynamo_llm::http::service::service_v2`, for listener startup, shutdown, and the service stages | `dynamo_http_server::{server, lifecycle}` |
+
+  > **Migrate:** Replace each `dynamo_llm::<pre-split path>` import with the owner path from the first table and add the owner crate to your `Cargo.toml`. A `DYN_LOG` filter scoped to `dynamo_llm` or to one of its modules must name the new crate from the second table. There is no runtime alias, so the old directive no longer selects the moved statements.
 
 <a id="v160"></a>
 
