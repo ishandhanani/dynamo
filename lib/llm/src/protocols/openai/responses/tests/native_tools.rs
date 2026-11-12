@@ -415,7 +415,8 @@ fn responses_tool_kinds_are_validated_before_function_conversion() {
 
 #[test]
 fn named_tool_rendering_policy_matches_the_production_preprocessor() {
-    use crate::{model_card::ModelDeploymentCard, preprocessor::OpenAIPreprocessor};
+    use crate::preprocessor::OpenAIPreprocessor;
+    use dynamo_model_card::model_card::ModelDeploymentCard;
     let mut tools = namespace(true);
     tools
         .as_array_mut()

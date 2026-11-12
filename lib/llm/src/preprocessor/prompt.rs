@@ -23,10 +23,10 @@ use dynamo_renderer::{
     may_be_fix_tool_schema, native_formatter_for,
 };
 
-use crate::model_card::{ModelDeploymentCard, PromptFormatterArtifact};
 use crate::protocols::openai::{
     chat_completions::NvCreateChatCompletionRequest, completions::NvCreateCompletionRequest,
 };
+use dynamo_model_card::model_card::{ModelDeploymentCard, PromptFormatterArtifact};
 
 /// lib/llm-local extension carrying multimodal media-IO config. Kept off
 /// [`OAIChatLikeRequest`] so `dynamo_renderer` stays free of the media module;

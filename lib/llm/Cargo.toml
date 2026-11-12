@@ -27,7 +27,7 @@ nccl = ["dep:cudarc", "cudarc/nccl"]  # Enable NCCL collective operations
 block-manager-bench = ["block-manager", "testing-full", "dep:clap", "dep:indicatif"]
 cuda = ["dep:cudarc"]
 integration = ["dynamo-runtime/integration"]
-media-ffmpeg = ["dep:video-rs", "dep:ffmpeg-next", "dep:memfile"]
+media-ffmpeg = ["dep:video-rs", "dep:ffmpeg-next", "dep:memfile", "dynamo-model-card/media-ffmpeg"]
 bench = ["dynamo-kv-router/bench"]
 # Pull-only CKF Relay stats and snapshots. Keep this separate from `metrics`, which
 # is enabled by normal `dynamo-llm` builds and must not retain diagnostic hot-path work.
@@ -83,6 +83,7 @@ dynamo-kv-hints = { workspace = true }
 dynamo-kv-indexer = { workspace = true, features = ["export"] }
 dynamo-kv-router = { workspace = true, features = ["metrics"] }
 dynamo-lora = { workspace = true }
+dynamo-model-card = { workspace = true }
 dynamo-router-protocol = { workspace = true }
 dynamo-scheduler = { workspace = true }
 dynamo-session-affinity = { workspace = true }
@@ -128,7 +129,6 @@ rand = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true, features = ["raw_value"] }
 sha2 = "0.10"
-strum = { workspace = true }
 tempfile = { workspace = true }
 thiserror = { workspace = true }
 tmq = { workspace = true }
@@ -144,11 +144,8 @@ url = { workspace = true }
 uuid = { workspace = true }
 xxhash-rust = { workspace = true }
 zmq = { workspace = true }
-modelexpress-client = { workspace = true }
-modelexpress-common = { workspace = true }
 
 
-bitflags = { version = "2.4", features = ["serde"] }
 blake3 = { version = "1.8", features = ["mmap", "rayon"] }
 bytemuck = "1.22"
 derive-getters = "0.5"
@@ -218,7 +215,6 @@ bs62 = { version = "0.1" }
 # dict insertion order. serde_json already has its preserve_order enabled by
 # dynamo-renderer; minijinja's map is the remaining sort point.
 minijinja = { version = "2.21.0", features = ["loader", "loop_controls", "preserve_order"] }
-json-five = { version = "0.3" }
 
 # media loading in the preprocessor
 reqwest = { workspace = true }
@@ -261,8 +257,6 @@ approx = "0.5"
 assert_matches = "1.5"
 criterion = { version = "0.5", features = ["html_reports"] }
 hf-hub = { workspace = true }
-modelexpress-client = { workspace = true }
-modelexpress-common = { workspace = true }
 reqwest = { workspace = true, features = ["http2"] }
 rcgen = { workspace = true }
 rustls = { workspace = true }

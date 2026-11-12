@@ -52,8 +52,12 @@ pub use metrics::Metrics;
 
 use crate::{
     preprocessor::OpenAIPreprocessor,
-    protocols::openai::{ParsingOptions, chat_completions::NvCreateChatCompletionRequest},
+    protocols::openai::{
+        ParsingOptions,
+        chat_completions::{NvCreateChatCompletionRequest, is_thinking_control_key},
+    },
 };
+use dynamo_model_card::frontend_config::ChatTemplateDefaults;
 
 use dynamo_protocols::types::ChatCompletionToolChoiceOption;
 use dynamo_runtime::error::DynamoError;
@@ -120,6 +124,43 @@ fn apply_request_tool_call_parsing_options(
         .with_tools(converted_tools))
 }
 
+/// Layer the frontend's default chat template kwargs under the request's own. The chat
+/// handlers call this before they resolve thinking controls, so every later reader sees
+/// the merged request.
+pub(crate) fn apply_chat_template_defaults(
+    defaults: &ChatTemplateDefaults,
+    request: &mut NvCreateChatCompletionRequest,
+) {
+    let Some(defaults) = defaults.default_chat_template_kwargs() else {
+        return;
+    };
+    // As in vLLM `merge_kwargs`: a null or "auto" request value leaves the key unset.
+    if let Some(args) = request.chat_template_args.as_mut() {
+        args.retain(|_, value| !(value.is_null() || value.as_str() == Some("auto")));
+    }
+    // The thinking keys are dialects of one control, so a request control in any
+    // dialect replaces all of them.
+    let request_controls_thinking = request.thinking.is_some()
+        || request.inner.reasoning_effort.is_some()
+        || request
+            .chat_template_args
+            .as_ref()
+            .is_some_and(|args| args.keys().any(|key| is_thinking_control_key(key)));
+    let mut defaults = defaults
+        .iter()
+        .filter(|(key, _)| !(request_controls_thinking && is_thinking_control_key(key)))
+        .peekable();
+    if defaults.peek().is_none() {
+        return;
+    }
+    let args = request
+        .chat_template_args
+        .get_or_insert_with(Default::default);
+    for (key, value) in defaults {
+        args.entry(key.clone()).or_insert_with(|| value.clone());
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -149,17 +190,16 @@ mod tests {
     fn frontend_thinking_default_reaches_reasoning_policy() {
         // Kimi K2.5 reasons unless the request or a default turns thinking off.
         let options = ParsingOptions::new(None, Some("kimi_k25".to_string()));
-        let reasoning_disabled = |defaults: &crate::frontend_config::ChatTemplateDefaults,
-                                  kwargs: Value| {
+        let reasoning_disabled = |defaults: &ChatTemplateDefaults, kwargs: Value| {
             let mut req = request(json!("auto"));
             req.chat_template_args = serde_json::from_value(kwargs).unwrap();
-            defaults.apply_to_request(&mut req);
+            apply_chat_template_defaults(defaults, &mut req);
             req.normalize_reasoning_template_args().unwrap();
             apply_request_tool_call_parsing_options(options.clone(), &req)
                 .unwrap()
                 .reasoning_disabled
         };
-        let mut defaults = crate::frontend_config::ChatTemplateDefaults::default();
+        let mut defaults = ChatTemplateDefaults::default();
         assert!(!reasoning_disabled(&defaults, Value::Null));
         defaults.set_default_chat_template_kwargs(
             json!({"enable_thinking": false}).as_object().cloned(),
@@ -233,7 +273,6 @@ mod tests {
 
     #[test]
     fn unified_request_controls_use_canonical_family_for_each_selector_shape() {
-        use crate::protocols::openai::chat_completions::unified_parser;
         if crate::test_utils::run_isolated(
             concat!(
                 module_path!(),
@@ -246,8 +285,8 @@ mod tests {
         ) {
             return;
         }
-        for selector in unified_parser::FAMILY_NAMES.iter() {
-            let family = unified_parser::canonical_family(selector).unwrap();
+        for selector in dynamo_model_card::parser_family::FAMILY_NAMES.iter() {
+            let family = dynamo_model_card::parser_family::canonical_family(selector).unwrap();
             for (tool, reasoning) in [
                 (Some(*selector), None),
                 (None, Some(*selector)),
@@ -567,8 +606,8 @@ mod tests {
             ] {
                 let options = ParsingOptions {
                     tool_call_parser: Some(parser.to_string()),
-                    structural_tag: Some(crate::local_model::runtime_config::StructuralTagConfig {
-                        scope: crate::local_model::runtime_config::StructuralTagScope::Always,
+                    structural_tag: Some(dynamo_model_card::local_model::runtime_config::StructuralTagConfig {
+                        scope: dynamo_model_card::local_model::runtime_config::StructuralTagScope::Always,
                         ..Default::default()
                     }),
                     ..Default::default()
@@ -615,7 +654,7 @@ mod tests {
             }))
             .expect("response_format must deserialize"),
         );
-        let config = crate::local_model::runtime_config::StructuralTagConfig {
+        let config = dynamo_model_card::local_model::runtime_config::StructuralTagConfig {
             allow_tool_calls_with_structured_output: true,
             ..Default::default()
         };
@@ -964,5 +1003,102 @@ impl RouteDoc {
     /// Return the registered URL path, including any operator override.
     pub fn path(&self) -> &str {
         &self.path
+    }
+}
+
+#[cfg(test)]
+mod chat_template_defaults_tests {
+    use super::*;
+
+    fn template_defaults(kwargs: serde_json::Value) -> ChatTemplateDefaults {
+        let mut defaults = ChatTemplateDefaults::default();
+        defaults.set_default_chat_template_kwargs(kwargs.as_object().cloned());
+        defaults
+    }
+
+    fn request(extra: serde_json::Value) -> NvCreateChatCompletionRequest {
+        let mut body = serde_json::json!({
+            "model": "m",
+            "messages": [{"role": "user", "content": "hi"}],
+        });
+        body.as_object_mut()
+            .unwrap()
+            .extend(extra.as_object().unwrap().clone());
+        serde_json::from_value(body).unwrap()
+    }
+
+    #[test]
+    fn chat_template_defaults_layers_defaults_under_request_kwargs() {
+        let defaults = template_defaults(
+            serde_json::json!({"clear_thinking": false, "preserve_thinking": true}),
+        );
+        let mut req = request(serde_json::json!({
+            "chat_template_kwargs": {"preserve_thinking": false}
+        }));
+        apply_chat_template_defaults(&defaults, &mut req);
+        assert_eq!(
+            serde_json::to_value(req.chat_template_args).unwrap(),
+            serde_json::json!({"clear_thinking": false, "preserve_thinking": false})
+        );
+
+        let mut req = request(serde_json::json!({}));
+        apply_chat_template_defaults(&ChatTemplateDefaults::default(), &mut req);
+        assert!(req.chat_template_args.is_none());
+    }
+
+    #[test]
+    fn chat_template_defaults_thinking_defaults_yield_to_request_thinking_controls() {
+        let defaults = template_defaults(
+            serde_json::json!({"enable_thinking": false, "clear_thinking": false}),
+        );
+
+        let mut req = request(serde_json::json!({}));
+        apply_chat_template_defaults(&defaults, &mut req);
+        req.normalize_reasoning_template_args().unwrap();
+        let args = req.chat_template_args.unwrap();
+        assert_eq!(args.get("enable_thinking"), Some(&serde_json::json!(false)));
+        assert_eq!(args.get("thinking"), Some(&serde_json::json!(false)));
+
+        let mut req = request(serde_json::json!({"reasoning_effort": "high"}));
+        apply_chat_template_defaults(&defaults, &mut req);
+        req.normalize_reasoning_template_args().unwrap();
+        let args = req.chat_template_args.unwrap();
+        assert_eq!(args.get("enable_thinking"), Some(&serde_json::json!(true)));
+        assert_eq!(args.get("clear_thinking"), Some(&serde_json::json!(false)));
+    }
+
+    #[test]
+    fn chat_template_defaults_treats_null_and_auto_request_values_as_unset() {
+        let defaults = template_defaults(
+            serde_json::json!({"enable_thinking": false, "clear_thinking": false}),
+        );
+        for unset in [serde_json::Value::Null, serde_json::json!("auto")] {
+            let mut req = request(serde_json::json!({
+                "chat_template_kwargs": {"enable_thinking": unset, "reasoning_effort": unset, "x": unset}
+            }));
+            apply_chat_template_defaults(&defaults, &mut req);
+            assert_eq!(
+                serde_json::to_value(req.chat_template_args).unwrap(),
+                serde_json::json!({"enable_thinking": false, "clear_thinking": false})
+            );
+        }
+
+        let mut req = request(serde_json::json!({
+            "chat_template_kwargs": {"enable_thinking": true}
+        }));
+        apply_chat_template_defaults(&defaults, &mut req);
+        assert_eq!(
+            serde_json::to_value(req.chat_template_args).unwrap(),
+            serde_json::json!({"enable_thinking": true, "clear_thinking": false})
+        );
+
+        let mut req = request(serde_json::json!({
+            "chat_template_kwargs": {"enable_thinking": null}
+        }));
+        apply_chat_template_defaults(&ChatTemplateDefaults::default(), &mut req);
+        assert_eq!(
+            serde_json::to_value(req.chat_template_args).unwrap(),
+            serde_json::json!({"enable_thinking": null})
+        );
     }
 }

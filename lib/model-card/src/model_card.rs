@@ -16,15 +16,15 @@ use std::fmt;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock};
 
-use crate::common::checked_file::CheckedFile;
-use crate::entrypoint::RouterConfig;
+use crate::checked_file::CheckedFile;
+use crate::json::canonicalize_json_object_keys;
 use crate::local_model::runtime_config::{
     ModelRuntimeConfig, SGLANG_GENERATE_CAPABILITY, SGLANG_SYSTEMONE_SERIAL_V1,
     SPEC_DECODE_RUNTIME_KEY, TokenizerBackend, VLLM_NEMOTRON_VIDEO_PROCESSOR_CONTRACT_RUNTIME_KEY,
 };
 use crate::model_type::{ModelInput, ModelType};
-use crate::protocols::tensor::TensorModelConfig;
-use crate::utils::json::canonicalize_json_object_keys;
+use crate::router_config::RouterConfig;
+use crate::tensor_model::TensorModelConfig;
 use anyhow::{Context, Result};
 use derive_builder::Builder;
 use dynamo_kv_indexer::host::{ExplicitIdentityMap, IndexerIdentitySpec};
@@ -32,14 +32,14 @@ use dynamo_runtime::{slug::Slug, storage::kv};
 use serde::{Deserialize, Serialize};
 use tokenizers::Tokenizer as HfTokenizer;
 
-use crate::preprocessor::media::{MediaDecoder, MediaFetcher};
-use crate::protocols::TokenIdType;
+use crate::media_config::{MediaDecoder, MediaFetcher};
+use dynamo_tokenizers::TokenIdType;
 
 const FALLBACK_TOKENIZER_CACHE_BYTES: usize = 64 * 1024 * 1024;
 const MAX_DEFAULT_TOKENIZER_CACHE_BYTES: u64 = 8 * 1024 * 1024 * 1024;
 // Cache RSS measures 1.3-3.3x the token-ID budget once per-entry metadata is included.
 const TOKENIZER_CACHE_MEMORY_FRACTION: u64 = 16;
-static TOKENIZER_CACHE: OnceLock<crate::tokenizers::SharedTokenizerCache> = OnceLock::new();
+static TOKENIZER_CACHE: OnceLock<dynamo_tokenizers::SharedTokenizerCache> = OnceLock::new();
 
 fn append_runtime_contract_checksum(
     bytes: &mut Vec<u8>,
@@ -177,7 +177,7 @@ fn tokenizer_cache_budget(
     }
 }
 
-fn shared_tokenizer_cache() -> &'static crate::tokenizers::SharedTokenizerCache {
+fn shared_tokenizer_cache() -> &'static dynamo_tokenizers::SharedTokenizerCache {
     TOKENIZER_CACHE.get_or_init(|| {
         // Lossy conversion lets non-UTF-8 values reach the parse warning.
         let value = std::env::var_os("DYN_TOKENIZER_CACHE_BYTES")
@@ -193,7 +193,7 @@ fn shared_tokenizer_cache() -> &'static crate::tokenizers::SharedTokenizerCache 
             memory_limit = ?memory_limit,
             "initializing process-wide tokenizer cache"
         );
-        crate::tokenizers::SharedTokenizerCache::new(cache_bytes)
+        dynamo_tokenizers::SharedTokenizerCache::new(cache_bytes)
     })
 }
 
@@ -205,7 +205,7 @@ fn tokenizer_cache_namespace(checksum: &str, backend: &str) -> Vec<u8> {
     namespace
 }
 
-fn tokenizer_cache_token_observer(model: &str) -> crate::tokenizers::CacheTokenUsageFn {
+fn tokenizer_cache_token_observer(model: &str) -> dynamo_tokenizers::CacheTokenUsageFn {
     let cached_tokens = dynamo_runtime::metrics::frontend_perf::TOKENIZER_CACHE_CACHED_TOKENS_TOTAL
         .with_label_values(&[model]);
     let uncached_tokens =
@@ -219,14 +219,14 @@ fn tokenizer_cache_token_observer(model: &str) -> crate::tokenizers::CacheTokenU
 }
 
 fn instrumented_tokenizer_cache(
-    raw: Arc<dyn crate::tokenizers::traits::Tokenizer>,
+    raw: Arc<dyn dynamo_tokenizers::traits::Tokenizer>,
     special_tokens: Vec<String>,
-    shared_cache: &crate::tokenizers::SharedTokenizerCache,
+    shared_cache: &dynamo_tokenizers::SharedTokenizerCache,
     cache_extend: bool,
     model: &str,
     namespace: &[u8],
-) -> Result<Arc<dyn crate::tokenizers::traits::Tokenizer>> {
-    let cached = crate::tokenizers::CachedTokenizer::new_with_cache(
+) -> Result<Arc<dyn dynamo_tokenizers::traits::Tokenizer>> {
+    let cached = dynamo_tokenizers::CachedTokenizer::new_with_cache(
         raw,
         special_tokens,
         shared_cache.clone(),
@@ -332,7 +332,7 @@ struct ArchMaxContextTextConfig {
 /// `config.json.text_config.max_position_embeddings`
 fn architectural_max_context_length_from_repo(local_path: &Path) -> anyhow::Result<Option<u32>> {
     let tokenizer_context_length = || {
-        crate::file_json_field(
+        dynamo_tokenizers::file_json_field(
             &local_path.join("tokenizer_config.json"),
             "model_max_length",
         )
@@ -1057,7 +1057,7 @@ pub struct ModelDeploymentCard {
     /// `#[serde(default)]` are kept so older cards still deserialize, but
     /// downstream readers treat them as not-ready.
     #[serde(default)]
-    pub worker_type: Option<crate::worker_type::WorkerType>,
+    pub worker_type: Option<dynamo_router_protocol::worker_type::WorkerType>,
 
     /// Peer worker types this worker requires to serve traffic, in DNF form.
     /// The outer `Vec` is OR; each inner `Vec` is an AND-set of required
@@ -1068,7 +1068,7 @@ pub struct ModelDeploymentCard {
     /// - Encode worker: `[[Prefill, Decode], [Aggregated]]` — needs either a
     ///   P+D pair or a single Aggregated peer.
     #[serde(default)]
-    pub needs: Vec<Vec<crate::worker_type::WorkerType>>,
+    pub needs: Vec<Vec<dynamo_router_protocol::worker_type::WorkerType>>,
 
     /// LoRA metadata for routing
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1126,7 +1126,7 @@ pub struct ModelDeploymentCard {
     tokenizer_id_bound: OnceLock<Option<usize>>,
 }
 
-pub use crate::lora::LoraInfo;
+pub use dynamo_lora::LoraInfo;
 
 impl ModelDeploymentCard {
     /// Number of typed metadata slots (`model_info`, `tokenizer`,
@@ -1142,20 +1142,20 @@ impl ModelDeploymentCard {
     ///
     /// Before `worker_type` was added, prefill cards used `ModelType::Prefill`; every other
     /// worker was a full-request worker.
-    pub fn effective_worker_type(&self) -> crate::worker_type::WorkerType {
+    pub fn effective_worker_type(&self) -> dynamo_router_protocol::worker_type::WorkerType {
         Self::resolve_worker_type(self.worker_type, self.model_type)
     }
 
     /// Resolve an explicit or legacy worker role without constructing a model card.
     pub fn resolve_worker_type(
-        worker_type: Option<crate::worker_type::WorkerType>,
+        worker_type: Option<dynamo_router_protocol::worker_type::WorkerType>,
         model_type: ModelType,
-    ) -> crate::worker_type::WorkerType {
+    ) -> dynamo_router_protocol::worker_type::WorkerType {
         worker_type.unwrap_or_else(|| {
             if model_type.supports_prefill() {
-                crate::worker_type::WorkerType::Prefill
+                dynamo_router_protocol::worker_type::WorkerType::Prefill
             } else {
-                crate::worker_type::WorkerType::Aggregated
+                dynamo_router_protocol::worker_type::WorkerType::Aggregated
             }
         })
     }
@@ -1177,14 +1177,14 @@ impl ModelDeploymentCard {
     pub fn load_from_json_file<P: AsRef<Path>>(file: P) -> std::io::Result<Self> {
         let contents = std::fs::read_to_string(&file)?;
         Ok(serde_json::from_str(&contents).inspect_err(|err| {
-            crate::log_json_err(&file.as_ref().display().to_string(), &contents, err)
+            dynamo_tokenizers::log_json_err(&file.as_ref().display().to_string(), &contents, err)
         })?)
     }
 
     /// Load a model deployment card from a JSON string
     pub fn load_from_json_str(contents: &str) -> Result<Self, anyhow::Error> {
         Ok(serde_json::from_str(contents)
-            .inspect_err(|err| crate::log_json_err("unknown", contents, err))?)
+            .inspect_err(|err| dynamo_tokenizers::log_json_err("unknown", contents, err))?)
     }
 
     //
@@ -1236,7 +1236,7 @@ impl ModelDeploymentCard {
         mdc_local_path(&self.slug, self.mdcsum())
     }
 
-    pub(crate) fn is_systemone_serial_eligible(&self) -> bool {
+    pub fn is_systemone_serial_eligible(&self) -> bool {
         self.runtime_config
             .supports_runtime_capability(SGLANG_GENERATE_CAPABILITY)
             && self
@@ -1244,7 +1244,7 @@ impl ModelDeploymentCard {
                 .supports_runtime_capability(SGLANG_SYSTEMONE_SERIAL_V1)
             && self.runtime_config.max_num_seqs == Some(1)
             && self.runtime_config.data_parallel_size == 1
-            && self.worker_type == Some(crate::worker_type::WorkerType::Aggregated)
+            && self.worker_type == Some(dynamo_router_protocol::worker_type::WorkerType::Aggregated)
             && self.needs.is_empty()
             && self.lora.is_none()
             && !self
@@ -1316,10 +1316,10 @@ impl ModelDeploymentCard {
                 // worker_type discriminator: 0 = None, then the variant ordinal.
                 match self.worker_type {
                     None => bytes_to_hash.push(0),
-                    Some(crate::worker_type::WorkerType::Prefill) => bytes_to_hash.push(1),
-                    Some(crate::worker_type::WorkerType::Decode) => bytes_to_hash.push(2),
-                    Some(crate::worker_type::WorkerType::Encode) => bytes_to_hash.push(3),
-                    Some(crate::worker_type::WorkerType::Aggregated) => bytes_to_hash.push(4),
+                    Some(dynamo_router_protocol::worker_type::WorkerType::Prefill) => bytes_to_hash.push(1),
+                    Some(dynamo_router_protocol::worker_type::WorkerType::Decode) => bytes_to_hash.push(2),
+                    Some(dynamo_router_protocol::worker_type::WorkerType::Encode) => bytes_to_hash.push(3),
+                    Some(dynamo_router_protocol::worker_type::WorkerType::Aggregated) => bytes_to_hash.push(4),
                 }
                 // needs is DNF: hash length(outer) || for each alt { length(inner) || each variant }
                 bytes_to_hash.extend((self.needs.len() as u32).to_be_bytes());
@@ -1327,10 +1327,10 @@ impl ModelDeploymentCard {
                     bytes_to_hash.extend((alt.len() as u32).to_be_bytes());
                     for w in alt {
                         let v: u8 = match w {
-                            crate::worker_type::WorkerType::Prefill => 1,
-                            crate::worker_type::WorkerType::Decode => 2,
-                            crate::worker_type::WorkerType::Encode => 3,
-                            crate::worker_type::WorkerType::Aggregated => 4,
+                            dynamo_router_protocol::worker_type::WorkerType::Prefill => 1,
+                            dynamo_router_protocol::worker_type::WorkerType::Decode => 2,
+                            dynamo_router_protocol::worker_type::WorkerType::Encode => 3,
+                            dynamo_router_protocol::worker_type::WorkerType::Aggregated => 4,
                         };
                         bytes_to_hash.push(v);
                     }
@@ -1447,28 +1447,28 @@ impl ModelDeploymentCard {
     ///   turn of a growing multi-turn conversation hits deeper than the last, keeping
     ///   per-turn tokenization cost flat instead of growing with history. Set to `0` to
     ///   fall back to the original hit-without-insert behavior.
-    pub fn tokenizer(&self) -> anyhow::Result<crate::tokenizers::Tokenizer> {
+    pub fn tokenizer(&self) -> anyhow::Result<dynamo_tokenizers::Tokenizer> {
         self.tokenizer_with_options(Default::default(), false)
     }
 
     /// `None` until this card loads its tokenizer, then `Some` of the
     /// tokenizer's token id bound. That bound is `None` if unknown (tiktoken).
-    pub(crate) fn tokenizer_id_bound(&self) -> Option<Option<usize>> {
+    pub fn tokenizer_id_bound(&self) -> Option<Option<usize>> {
         self.tokenizer_id_bound.get().copied()
     }
 
-    pub(crate) fn embedding_tokenizer_with_options(
+    pub fn embedding_tokenizer_with_options(
         &self,
-        options: crate::tokenizers::TokenizerOptions,
-    ) -> anyhow::Result<crate::tokenizers::Tokenizer> {
+        options: dynamo_tokenizers::TokenizerOptions,
+    ) -> anyhow::Result<dynamo_tokenizers::Tokenizer> {
         self.tokenizer_with_options(options, options.add_special_tokens)
     }
 
     fn tokenizer_with_options(
         &self,
-        options: crate::tokenizers::TokenizerOptions,
+        options: dynamo_tokenizers::TokenizerOptions,
         force_hugging_face: bool,
-    ) -> anyhow::Result<crate::tokenizers::Tokenizer> {
+    ) -> anyhow::Result<dynamo_tokenizers::Tokenizer> {
         let tokenizer_backend = if force_hugging_face {
             TokenizerBackend::Default
         } else {
@@ -1484,7 +1484,7 @@ impl ModelDeploymentCard {
             Some("0")
         );
 
-        let inner: Arc<dyn crate::tokenizers::traits::Tokenizer> = match &self.tokenizer {
+        let inner: Arc<dyn dynamo_tokenizers::traits::Tokenizer> = match &self.tokenizer {
             Some(TokenizerKind::HfTokenizerJson(checked_file)) => {
                 let p = checked_file.path().ok_or_else(|| {
                     anyhow::anyhow!("Tokenizer is URL-backed ({:?})", checked_file.url())
@@ -1499,7 +1499,11 @@ impl ModelDeploymentCard {
                         if let Some(serde_err) = err.downcast_ref::<serde_json::Error>()
                             && let Ok(contents) = std::fs::read_to_string(p)
                         {
-                            crate::log_json_err(&p.display().to_string(), &contents, serde_err);
+                            dynamo_tokenizers::log_json_err(
+                                &p.display().to_string(),
+                                &contents,
+                                serde_err,
+                            );
                         }
                     })
                     .map_err(anyhow::Error::msg)
@@ -1512,7 +1516,7 @@ impl ModelDeploymentCard {
                 // but missing from the cache specials), letting chat prefixes
                 // straddle a special-token boundary and reducing hit rate.
                 if let Some(model_dir) = p.parent() {
-                    crate::tokenizers::hf::merge_special_tokens_from_config(&mut hf, model_dir);
+                    dynamo_tokenizers::hf::merge_special_tokens_from_config(&mut hf, model_dir);
                 }
                 self.tokenizer_id_bound
                     .get_or_init(|| hf_token_id_bound(&hf));
@@ -1554,19 +1558,19 @@ impl ModelDeploymentCard {
                 // tokenizers use the HF post-processor to apply BOS/EOS when
                 // requested; normal tokenizers keep their existing defaults.
                 let wrap_hf = |hf: HfTokenizer| {
-                    let tokenizer = crate::tokenizers::HuggingFaceTokenizer::from_tokenizer(hf);
-                    crate::tokenizers::traits::Tokenizer::with_options(tokenizer, options)
+                    let tokenizer = dynamo_tokenizers::HuggingFaceTokenizer::from_tokenizer(hf);
+                    dynamo_tokenizers::traits::Tokenizer::with_options(tokenizer, options)
                 };
 
                 // Pick the inner backend.
                 let (raw, cache_backend): (
-                    Arc<dyn crate::tokenizers::traits::Tokenizer>,
+                    Arc<dyn dynamo_tokenizers::traits::Tokenizer>,
                     TokenizerBackend,
                 ) = match tokenizer_backend {
                     TokenizerBackend::Default => (Arc::new(wrap_hf(hf)), TokenizerBackend::Default),
                     TokenizerBackend::Fastokens => {
                         if let Some(path_str) = p.to_str() {
-                            match crate::tokenizers::FastTokenizer::from_file(path_str) {
+                            match dynamo_tokenizers::FastTokenizer::from_file(path_str) {
                                 Ok(fast) => {
                                     tracing::info!("Using fastokens tokenizer backend");
                                     (Arc::new(fast), TokenizerBackend::Fastokens)
@@ -1600,7 +1604,7 @@ impl ModelDeploymentCard {
                     }
                     TokenizerBackend::Basetenkenizer => {
                         if let Some(path_str) = p.to_str() {
-                            match crate::tokenizers::BasetenTokenizer::from_file(path_str) {
+                            match dynamo_tokenizers::BasetenTokenizer::from_file(path_str) {
                                 Ok(baseten) => {
                                     tracing::info!("Using basetenkenizer tokenizer backend");
                                     (Arc::new(baseten), TokenizerBackend::Basetenkenizer)
@@ -1667,7 +1671,7 @@ impl ModelDeploymentCard {
                 let path_str = p.to_str().ok_or_else(|| {
                     anyhow::anyhow!("Tokenizer path contains invalid UTF-8: {}", p.display())
                 })?;
-                let tokenizer = crate::tokenizers::TikTokenTokenizer::from_file_auto(path_str)
+                let tokenizer = dynamo_tokenizers::TikTokenTokenizer::from_file_auto(path_str)
                     .with_context(|| {
                         format!("Failed to load tiktoken tokenizer from {}", p.display())
                     })?;
@@ -1675,7 +1679,7 @@ impl ModelDeploymentCard {
                 self.tokenizer_id_bound.get_or_init(|| None);
 
                 let specials = tokenizer.special_tokens().to_vec();
-                let raw: Arc<dyn crate::tokenizers::traits::Tokenizer> = Arc::new(tokenizer);
+                let raw: Arc<dyn dynamo_tokenizers::traits::Tokenizer> = Arc::new(tokenizer);
                 if cache_enabled {
                     let shared_cache = shared_tokenizer_cache();
                     let namespace = tokenizer_cache_namespace(self.mdcsum(), "tiktoken");
@@ -1709,7 +1713,7 @@ impl ModelDeploymentCard {
             }
         };
 
-        Ok(crate::tokenizers::Tokenizer::from(inner))
+        Ok(dynamo_tokenizers::Tokenizer::from(inner))
     }
 
     pub(crate) fn set_source_path(&mut self, source_path: PathBuf) {
@@ -2226,7 +2230,7 @@ impl HFConfig {
         // generation_config wins over config.json (HF convention); the tokenizer
         // rungs rescue models that ship the token only there, not in config.
         text_config.bos_token_id =
-            crate::file_json_field::<TokenIdType>(&gencfg_path, "bos_token_id")
+            dynamo_tokenizers::file_json_field::<TokenIdType>(&gencfg_path, "bos_token_id")
                 .ok()
                 .or(text_config.bos_token_id)
                 .or_else(|| resolve_token_id_from_tokenizer_files(model_dir, "bos_token"));
@@ -2234,7 +2238,7 @@ impl HFConfig {
         // Same chain as bos above, but eos may be a single id or a list.
         // TODO: refactor when we switch to per-architecture tokenization.
         let mut final_eos_token_ids: Vec<TokenIdType> = {
-                crate::file_json_field::<serde_json::Value>(&gencfg_path, "eos_token_id")
+                dynamo_tokenizers::file_json_field::<serde_json::Value>(&gencfg_path, "eos_token_id")
                 .inspect_err(
                     |err| tracing::debug!(%err, "eos_token_id not found in generation_config.json, will fall back"),
                 )
@@ -2633,7 +2637,7 @@ mod tests {
         let before_a = (cached_a.get(), uncached_a.get());
         let before_b = (cached_b.get(), uncached_b.get());
 
-        super::tokenizer_cache_token_observer(model_a)(crate::tokenizers::CacheTokenUsage {
+        super::tokenizer_cache_token_observer(model_a)(dynamo_tokenizers::CacheTokenUsage {
             cached_tokens: 7,
             uncached_tokens: 5,
         });
@@ -2644,7 +2648,7 @@ mod tests {
         );
         assert_eq!((cached_b.get(), uncached_b.get()), before_b);
 
-        super::tokenizer_cache_token_observer(model_b)(crate::tokenizers::CacheTokenUsage {
+        super::tokenizer_cache_token_observer(model_b)(dynamo_tokenizers::CacheTokenUsage {
             cached_tokens: 3,
             uncached_tokens: 11,
         });
@@ -2772,7 +2776,7 @@ mod tests {
     #[test]
     pub fn test_config_json_llama3() -> anyhow::Result<()> {
         let config_file = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("tests/data/sample-models/mock-llama-3.1-8b-instruct/config.json");
+            .join("../llm/tests/data/sample-models/mock-llama-3.1-8b-instruct/config.json");
         let config = HFConfig::from_json_file(&config_file)?;
         assert_eq!(config.bos_token_id(), Some(128000));
         // eos_token_ids can be in any order as long as the set is correct
@@ -2784,7 +2788,7 @@ mod tests {
     #[test]
     pub fn test_config_json_llama4() -> anyhow::Result<()> {
         let config_file = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("tests/data/sample-models/Llama-4-Scout-17B-16E-Instruct/config.json");
+            .join("../llm/tests/data/sample-models/Llama-4-Scout-17B-16E-Instruct/config.json");
         let config = HFConfig::from_json_file(&config_file)?;
         assert_eq!(config.bos_token_id(), Some(200000));
         Ok(())
@@ -2796,7 +2800,7 @@ mod tests {
     #[test]
     fn test_invalid_json_but_py_accepts_it() {
         dynamo_runtime::logging::init();
-        let path = "tests/data/sample-models/NVIDIA-Nemotron-Nano-12B-v2-Base/config.json";
+        let path = "../llm/tests/data/sample-models/NVIDIA-Nemotron-Nano-12B-v2-Base/config.json";
         let _ = HFConfig::from_json_file(path).unwrap();
     }
 
@@ -2806,7 +2810,7 @@ mod tests {
     #[test]
     fn test_config_json_qwen35_eos_from_tokenizer() -> anyhow::Result<()> {
         let config_file = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("tests/data/sample-models/mock-qwen3.5-0.8B/config.json");
+            .join("../llm/tests/data/sample-models/mock-qwen3.5-0.8B/config.json");
         let config = HFConfig::from_json_file(&config_file)?;
         let eos_token_id_set: HashSet<_> = config.eos_token_ids().iter().cloned().collect();
         // Must include both: 248044 (<|endoftext|>) from text_config and
@@ -2829,7 +2833,7 @@ mod tests {
     #[test]
     fn test_config_json_eos_bos_from_tokenizer_config_only() -> anyhow::Result<()> {
         let config_file = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("tests/data/sample-models/mock-tokenizer-config-only/config.json");
+            .join("../llm/tests/data/sample-models/mock-tokenizer-config-only/config.json");
         let config = HFConfig::from_json_file(&config_file)?;
         assert_eq!(config.bos_token_id(), Some(101));
         let eos: HashSet<_> = config.eos_token_ids().iter().cloned().collect();
@@ -2848,7 +2852,7 @@ mod tests {
     #[test]
     fn test_config_json_eos_bos_from_special_tokens_map() -> anyhow::Result<()> {
         let config_file = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("tests/data/sample-models/mock-special-tokens-only/config.json");
+            .join("../llm/tests/data/sample-models/mock-special-tokens-only/config.json");
         let config = HFConfig::from_json_file(&config_file)?;
         assert_eq!(config.bos_token_id(), Some(201));
         let eos: HashSet<_> = config.eos_token_ids().iter().cloned().collect();
@@ -2874,7 +2878,7 @@ mod tests {
     #[test]
     fn test_config_json_eos_bos_from_tokenizer_json_fallback() -> anyhow::Result<()> {
         let config_file = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("tests/data/sample-models/mock-tokenizer-json-fallback/config.json");
+            .join("../llm/tests/data/sample-models/mock-tokenizer-json-fallback/config.json");
         let config = HFConfig::from_json_file(&config_file)?;
         let eos: HashSet<_> = config.eos_token_ids().iter().cloned().collect();
         assert!(
@@ -3015,8 +3019,8 @@ mod tests {
         let blobs = workspace.join("blobs");
         std::fs::create_dir_all(&snapshot)?;
         std::fs::create_dir_all(&blobs)?;
-        let src =
-            Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/data/sample-models/TinyLlama_v1.1");
+        let src = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../llm/tests/data/sample-models/TinyLlama_v1.1");
         for entry in std::fs::read_dir(&src)? {
             let entry = entry?;
             let name = entry.file_name();
@@ -3155,8 +3159,8 @@ mod tests {
     /// reused for another worker that needs a differently-named sibling.
     #[test]
     fn mdcsum_extras_distinguish_basename_at_equal_checksum() {
-        let src =
-            Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/data/sample-models/TinyLlama_v1.1");
+        let src = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../llm/tests/data/sample-models/TinyLlama_v1.1");
         let mut a = super::ModelDeploymentCard::load_from_disk(&src, None).unwrap();
         let mut b = super::ModelDeploymentCard::load_from_disk(&src, None).unwrap();
         a.extra_files.push(cf_for("/m/preprocessor_config.json"));
@@ -3168,8 +3172,8 @@ mod tests {
     /// hash the same (sort_unstable on (basename, checksum) pairs).
     #[test]
     fn mdcsum_extras_stable_across_read_order() {
-        let src =
-            Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/data/sample-models/TinyLlama_v1.1");
+        let src = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../llm/tests/data/sample-models/TinyLlama_v1.1");
         let mut a = super::ModelDeploymentCard::load_from_disk(&src, None).unwrap();
         let mut b = super::ModelDeploymentCard::load_from_disk(&src, None).unwrap();
         let cf1 = cf_for("/m/a.json");
@@ -3513,7 +3517,7 @@ mod ownership_tests {
 
     #[test]
     fn prefill_load_model_wire_aliases_preserve_card_and_mdcsum() {
-        use crate::entrypoint::RouterConfig;
+        use crate::router_config::RouterConfig;
         use dynamo_runtime::pipeline::RouterMode;
         use dynamo_scheduler::host::RouterPrefillLoadModel;
 
@@ -3685,7 +3689,7 @@ mod ownership_tests {
 
         fn card(configure: impl FnOnce(&mut ModelDeploymentCard)) -> ModelDeploymentCard {
             let mut card = ModelDeploymentCard::with_name_only("model");
-            card.worker_type = Some(crate::worker_type::WorkerType::Aggregated);
+            card.worker_type = Some(dynamo_router_protocol::worker_type::WorkerType::Aggregated);
             card.runtime_config.max_num_seqs = Some(1);
             card.runtime_config
                 .runtime_data
@@ -3715,8 +3719,14 @@ mod ownership_tests {
                     .runtime_data
                     .remove(SGLANG_GENERATE_CAPABILITY);
             },
-            |card| card.worker_type = Some(crate::worker_type::WorkerType::Prefill),
-            |card| card.needs = vec![vec![crate::worker_type::WorkerType::Prefill]],
+            |card| {
+                card.worker_type = Some(dynamo_router_protocol::worker_type::WorkerType::Prefill)
+            },
+            |card| {
+                card.needs = vec![vec![
+                    dynamo_router_protocol::worker_type::WorkerType::Prefill,
+                ]]
+            },
             |card| {
                 card.lora = Some(LoraInfo {
                     name: "adapter".to_string(),
@@ -3922,7 +3932,7 @@ mod worker_type_tests {
     //! See `docs/proposals/health-disagg-readiness.md`.
 
     use super::*;
-    use crate::worker_type::WorkerType;
+    use dynamo_router_protocol::worker_type::WorkerType;
     use std::collections::BTreeMap;
 
     #[test]

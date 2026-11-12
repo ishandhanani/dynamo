@@ -11,11 +11,11 @@ use crate::http::service::Metrics;
 use crate::http::service::service_v2 as http_service;
 
 use crate::discovery::ModelManager;
-use crate::protocols::tensor::TensorModelConfig;
 use crate::protocols::tensor::{NvCreateTensorRequest, NvCreateTensorResponse};
-use crate::request_template::{RequestTemplate, resolve_request_model};
 use anyhow::Result;
 use derive_builder::Builder;
+use dynamo_model_card::request_template::{RequestTemplate, resolve_request_model};
+use dynamo_model_card::tensor_model::TensorModelConfig;
 use dynamo_runtime::config::environment_names::llm::metrics as env_metrics;
 use futures::pin_mut;
 use tokio::task::JoinHandle;
@@ -68,7 +68,8 @@ impl GrpcTuningConfig {
 use crate::grpc::service::dispatch_error_status;
 use crate::grpc::service::openai::completion_response_stream;
 use crate::grpc::service::tensor::{
-    ExtendedNvCreateTensorResponse, kserve_metadata_shape, tensor_response_stream,
+    ExtendedNvCreateTensorResponse, data_type_to_kserve, kserve_metadata_shape,
+    tensor_response_stream,
 };
 use std::convert::{TryFrom, TryInto};
 use tonic::{Request, Response, Status, transport::Server};
@@ -829,7 +830,7 @@ impl GrpcInferenceService for KserveService {
                                 .iter()
                                 .map(|input| ModelInput {
                                     name: input.name.clone(),
-                                    data_type: input.data_type.to_kserve(),
+                                    data_type: data_type_to_kserve(&input.data_type),
                                     dims: input.shape.clone(),
                                     ..Default::default()
                                 })
@@ -839,7 +840,7 @@ impl GrpcInferenceService for KserveService {
                                 .iter()
                                 .map(|output| ModelOutput {
                                     name: output.name.clone(),
-                                    data_type: output.data_type.to_kserve(),
+                                    data_type: data_type_to_kserve(&output.data_type),
                                     dims: output.shape.clone(),
                                     ..Default::default()
                                 })
@@ -938,8 +939,8 @@ mod readiness_gate_tests {
     use super::inference::{ModelReadyRequest, ServerReadyRequest};
     use super::*;
     use crate::discovery::WorkerSet;
-    use crate::model_card::ModelDeploymentCard;
     use crate::worker_type::WorkerType;
+    use dynamo_model_card::model_card::ModelDeploymentCard;
     use tonic::Request;
 
     /// A WorkerSet with an explicit role/needs, a live worker, and a chat engine

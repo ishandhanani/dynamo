@@ -4,6 +4,12 @@
 use anyhow::Error;
 use async_stream::stream;
 use base64::Engine as _;
+use dynamo_llm::http::service::{
+    Metrics,
+    error::HttpError,
+    metrics::{Endpoint, ErrorType, RequestType, Status},
+    service_v2::{BackendErrorCheck, HttpService},
+};
 use dynamo_llm::protocols::{
     Annotated,
     codec::SseLineCodec,
@@ -17,16 +23,7 @@ use dynamo_llm::protocols::{
 };
 use dynamo_llm::types::openai::audios::OpenAIAudiosStreamingEngine;
 use dynamo_llm::types::openai::chat_completions::OpenAIChatCompletionsStreamingEngine;
-use dynamo_llm::{
-    endpoint_type::EndpointType,
-    http::service::{
-        Metrics,
-        error::HttpError,
-        metrics::{Endpoint, ErrorType, RequestType, Status},
-        service_v2::{BackendErrorCheck, HttpService},
-    },
-    model_card::ModelDeploymentCard,
-};
+use dynamo_model_card::{endpoint_type::EndpointType, model_card::ModelDeploymentCard};
 use dynamo_runtime::metrics::prometheus_names::{frontend_service, name_prefix};
 use dynamo_runtime::{
     CancellationToken,
@@ -3116,7 +3113,7 @@ async fn test_audio_speech_speed_out_of_range_returns_400() {
     let (listener, port) = bind_random_port().await;
     let service = HttpService::builder().port(port).build().unwrap();
     service
-        .enable_model_endpoint(dynamo_llm::endpoint_type::EndpointType::Audios, true)
+        .enable_model_endpoint(dynamo_model_card::endpoint_type::EndpointType::Audios, true)
         .unwrap();
 
     let state = service.state_clone();
@@ -3220,7 +3217,7 @@ async fn test_audio_speech_backend_invalid_argument_returns_4xx() {
     let (listener, port) = bind_random_port().await;
     let service = HttpService::builder().port(port).build().unwrap();
     service
-        .enable_model_endpoint(dynamo_llm::endpoint_type::EndpointType::Audios, true)
+        .enable_model_endpoint(dynamo_model_card::endpoint_type::EndpointType::Audios, true)
         .unwrap();
 
     let state = service.state_clone();
@@ -3328,7 +3325,7 @@ async fn test_audio_speech_failed_status_meters_as_client_error() {
     let (listener, port) = bind_random_port().await;
     let service = HttpService::builder().port(port).build().unwrap();
     service
-        .enable_model_endpoint(dynamo_llm::endpoint_type::EndpointType::Audios, true)
+        .enable_model_endpoint(dynamo_model_card::endpoint_type::EndpointType::Audios, true)
         .unwrap();
 
     let state = service.state_clone();
@@ -3473,13 +3470,19 @@ async fn test_pooling_family_validation_errors_are_metered() {
     let (listener, port) = bind_random_port().await;
     let service = HttpService::builder().port(port).build().unwrap();
     service
-        .enable_model_endpoint(dynamo_llm::endpoint_type::EndpointType::Classify, true)
+        .enable_model_endpoint(
+            dynamo_model_card::endpoint_type::EndpointType::Classify,
+            true,
+        )
         .unwrap();
     service
-        .enable_model_endpoint(dynamo_llm::endpoint_type::EndpointType::Pooling, true)
+        .enable_model_endpoint(
+            dynamo_model_card::endpoint_type::EndpointType::Pooling,
+            true,
+        )
         .unwrap();
     service
-        .enable_model_endpoint(dynamo_llm::endpoint_type::EndpointType::Rerank, true)
+        .enable_model_endpoint(dynamo_model_card::endpoint_type::EndpointType::Rerank, true)
         .unwrap();
 
     let state = service.state_clone();
@@ -4043,7 +4046,8 @@ async fn check_reject_media_openai(status: StatusCode) {
         .enable_chat_endpoints(true)
         .enable_responses_endpoints(true)
         .media_rejection(
-            dynamo_llm::frontend_config::MediaRejectionConfig::new(true, status.as_u16()).unwrap(),
+            dynamo_model_card::frontend_config::MediaRejectionConfig::new(true, status.as_u16())
+                .unwrap(),
         )
         .port(port)
         .build()
@@ -4307,7 +4311,8 @@ async fn check_reject_media_anthropic(status: StatusCode) {
     let service = HttpService::builder()
         .enable_anthropic_endpoints(true)
         .media_rejection(
-            dynamo_llm::frontend_config::MediaRejectionConfig::new(true, status.as_u16()).unwrap(),
+            dynamo_model_card::frontend_config::MediaRejectionConfig::new(true, status.as_u16())
+                .unwrap(),
         )
         .port(port)
         .build()

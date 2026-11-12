@@ -29,6 +29,7 @@ mm-routing = ["dynamo-llm/mm-routing"]
 dynamo-sglang-generate = { workspace = true }
 dynamo-backend-common = { workspace = true }
 dynamo-llm = { workspace = true }
+dynamo-model-card = { workspace = true }
 dynamo-runtime = { workspace = true }
 dynamo-sidecar-common = { workspace = true }
 

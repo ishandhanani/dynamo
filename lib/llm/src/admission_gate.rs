@@ -168,7 +168,7 @@ use futures::Stream;
 use parking_lot::Mutex;
 use tokio::sync::oneshot;
 
-use crate::model_card::ModelDeploymentCard;
+use dynamo_model_card::model_card::ModelDeploymentCard;
 
 mod metrics;
 

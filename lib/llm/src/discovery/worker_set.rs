@@ -20,7 +20,6 @@ use tokio_util::sync::CancellationToken;
 use crate::{
     discovery::{LoadThresholdHandle, allocator::AllocatorTrimOnDrop},
     kv_router::{EncoderRouter, RoutingLoadContext, prefill_router::PrefillRouterLifecycle},
-    model_card::ModelDeploymentCard,
     preprocessor::OpenAIPreprocessor,
     types::{
         RealtimeBidirectionalEngine,
@@ -37,6 +36,7 @@ use crate::{
         },
     },
 };
+use dynamo_model_card::model_card::ModelDeploymentCard;
 
 type StreamingEngine<Req, Resp> = Arc<dyn AsyncEngine<SingleIn<Req>, ManyOut<Resp>, Error>>;
 
@@ -642,7 +642,6 @@ impl Drop for WorkerSet {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model_card::ModelDeploymentCard;
     use crate::protocols::common::llm_backend::LLMEngineOutput;
     use crate::protocols::common::preprocessor::PreprocessedRequest;
     use crate::types::Annotated;
@@ -664,6 +663,7 @@ mod tests {
     };
     use crate::types::openai::videos::{NvCreateVideoRequest, NvVideosResponse};
     use async_trait::async_trait;
+    use dynamo_model_card::model_card::ModelDeploymentCard;
     use dynamo_runtime::engine::AsyncEngine;
     use dynamo_runtime::pipeline::{Error, ManyOut, SingleIn};
     use std::{marker::PhantomData, sync::Mutex};
@@ -750,7 +750,7 @@ mod tests {
             observed_lora: observed_lora.clone(),
         }));
         let mut adapter_card = ModelDeploymentCard::with_name_only("adapter-model");
-        adapter_card.lora = Some(crate::model_card::LoraInfo {
+        adapter_card.lora = Some(dynamo_model_card::model_card::LoraInfo {
             name: "adapter-model".to_string(),
             max_gpu_lora_count: Some(4),
         });
@@ -787,7 +787,7 @@ mod tests {
         base.set_lifecycle_cancellation(cancellation.clone());
 
         let mut adapter_card = ModelDeploymentCard::with_name_only("adapter-model");
-        adapter_card.lora = Some(crate::model_card::LoraInfo {
+        adapter_card.lora = Some(dynamo_model_card::model_card::LoraInfo {
             name: "adapter-model".to_string(),
             max_gpu_lora_count: Some(4),
         });
@@ -810,7 +810,7 @@ mod tests {
         base.set_lifecycle_cancellation(cancellation.clone());
 
         let mut adapter_card = ModelDeploymentCard::with_name_only("adapter-model");
-        adapter_card.lora = Some(crate::model_card::LoraInfo {
+        adapter_card.lora = Some(dynamo_model_card::model_card::LoraInfo {
             name: "adapter-model".to_string(),
             max_gpu_lora_count: Some(4),
         });
@@ -828,7 +828,7 @@ mod tests {
         let mut base = make_worker_set("ns1", "abc123");
         base.realtime_engine = Some(Arc::new(crate::engines::EchoBidirectionalEngine));
         let mut adapter_card = ModelDeploymentCard::with_name_only("adapter-model");
-        adapter_card.lora = Some(crate::model_card::LoraInfo {
+        adapter_card.lora = Some(dynamo_model_card::model_card::LoraInfo {
             name: "adapter-model".to_string(),
             max_gpu_lora_count: Some(4),
         });

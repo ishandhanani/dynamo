@@ -400,7 +400,7 @@ impl NvCreateChatCompletionRequest {
     /// configured parsers opt into phase replay; metadata stays off worker wires.
     pub fn python_chat_processor_request_json(
         &self,
-        runtime_config: &crate::local_model::runtime_config::ModelRuntimeConfig,
+        runtime_config: &dynamo_model_card::local_model::runtime_config::ModelRuntimeConfig,
     ) -> Result<serde_json::Value, serde_json::Error> {
         let mut value = serde_json::to_value(self)?;
         if let Some(context) = &self.responses_tools {
@@ -418,11 +418,10 @@ impl NvCreateChatCompletionRequest {
                 let native = serde_json::to_value(native)?;
                 // Match the production Rust preprocessor's Spark-only policy.
                 // Other families retain the full native catalog for named choices.
-                let render_named_tool_eagerly =
-                    super::super::chat_completions::unified_parser::configured_family(
-                        runtime_config.tool_call_parser.as_deref(),
-                        runtime_config.reasoning_parser.as_deref(),
-                    ) == Some("muse_spark");
+                let render_named_tool_eagerly = dynamo_model_card::parser_family::configured_family(
+                    runtime_config.tool_call_parser.as_deref(),
+                    runtime_config.reasoning_parser.as_deref(),
+                ) == Some("muse_spark");
                 value["responses_native_tools"] = serde_json::json!({
                     "render_named_tool_eagerly": render_named_tool_eagerly,
                     "template_tools": template_tools,

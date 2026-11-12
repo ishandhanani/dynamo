@@ -26,17 +26,10 @@ use dynamo_renderer::PromptFormatter;
 use crate::{
     backend::Backend,
     discovery::{LoadThresholdHandle, WORKER_TYPE_DECODE, WorkerSet},
-    entrypoint::{self, ChatEngineFactoryCallback, RouterConfig},
+    entrypoint::{self, ChatEngineFactoryCallback},
     http::service::metrics::Metrics,
     kv_router::plugins::RouterPluginBuilder,
     kv_router::{EncoderRouter, PrefillRouter, RouterLoadSource, RoutingLoadContext},
-    local_model::runtime_config::{
-        DISAGG_PREFILL_CANCEL_ANYTIME_V1, SGLANG_QWEN_VIDEO_PROCESSOR_CONTRACT_RUNTIME_KEY,
-        TokenizerBackend, VLLM_INFERENCE_V1_GENERATE_CAPABILITY,
-        VLLM_QWEN_VIDEO_PROCESSOR_CONTRACT_RUNTIME_KEY,
-    },
-    model_card::ModelDeploymentCard,
-    model_type::{ModelInput, ModelType},
     preprocessor::{
         OpenAIPreprocessor, PreprocessedEmbeddingRequest, prompt::prompt_formatter_from_mdc,
     },
@@ -59,8 +52,18 @@ use crate::{
         tensor::{NvCreateTensorRequest, NvCreateTensorResponse},
     },
     types::generic::realtime::{DynamoRealtimeClientEvent, RealtimeServerEvent},
-    utils::json::canonicalize_json_object_keys,
     worker_type::WorkerType,
+};
+use dynamo_model_card::{
+    json::canonicalize_json_object_keys,
+    local_model::runtime_config::{
+        DISAGG_PREFILL_CANCEL_ANYTIME_V1, SGLANG_QWEN_VIDEO_PROCESSOR_CONTRACT_RUNTIME_KEY,
+        TokenizerBackend, VLLM_INFERENCE_V1_GENERATE_CAPABILITY,
+        VLLM_QWEN_VIDEO_PROCESSOR_CONTRACT_RUNTIME_KEY,
+    },
+    model_card::ModelDeploymentCard,
+    model_type::{ModelInput, ModelType},
+    router_config::RouterConfig,
 };
 
 use super::readiness::normalize_legacy_prefill_topology;
@@ -1627,9 +1630,9 @@ fn worker_set_chat_preprocessor(
 mod tests {
     use super::*;
     use crate::discovery::Model;
-    use crate::local_model::runtime_config::VLLM_INFERENCE_V1_GENERATE_CAPABILITY;
-    use crate::model_card::ModelDeploymentCard;
     use crate::session_affinity::SessionAffinityMode;
+    use dynamo_model_card::local_model::runtime_config::VLLM_INFERENCE_V1_GENERATE_CAPABILITY;
+    use dynamo_model_card::model_card::ModelDeploymentCard;
     use dynamo_runtime::discovery::DiscoveryEvent;
     use dynamo_runtime::engine::AsyncEngine;
     use dynamo_runtime::pipeline::Error;
@@ -1638,7 +1641,7 @@ mod tests {
 
     #[test]
     fn direct_routing_gets_a_threshold_handle_that_ignores_thresholds() {
-        let thresholds = crate::discovery::LoadThresholdConfig {
+        let thresholds = dynamo_model_card::router_config::LoadThresholdConfig {
             active_decode_blocks_threshold: Some(0.9),
             ..Default::default()
         };
@@ -2494,7 +2497,7 @@ request_classifier:
             card.model_input = ModelInput::Tokens;
             card.kv_cache_block_size = 16;
             card.worker_type = Some(WorkerType::Aggregated);
-            crate::local_model::register_model_card(&endpoint, &card)
+            dynamo_model_card::local_model::register_model_card(&endpoint, &card)
                 .await
                 .unwrap();
             // SelectionCore takes membership from runtime-config discovery,
@@ -2629,7 +2632,7 @@ request_classifier:
             .unwrap();
         let manager = Arc::new(ModelManager::new());
         let router_config = RouterConfig {
-            load_threshold_config: crate::discovery::LoadThresholdConfig {
+            load_threshold_config: dynamo_model_card::router_config::LoadThresholdConfig {
                 active_decode_blocks_threshold: Some(0.8),
                 ..Default::default()
             },
@@ -3069,7 +3072,7 @@ request_classifier:
         base_card.worker_type = Some(WorkerType::Aggregated);
         let mut adapter_card = base_card.clone();
         adapter_card.set_name("lora-lifecycle-adapter");
-        adapter_card.lora = Some(crate::model_card::LoraInfo {
+        adapter_card.lora = Some(dynamo_model_card::model_card::LoraInfo {
             name: adapter_card.name().to_string(),
             max_gpu_lora_count: Some(1),
         });
@@ -3649,7 +3652,7 @@ request_classifier:
             let worker_id = watcher.drt.discovery().instance_id();
             if accepted {
                 endpoint.register_endpoint_instance().await.unwrap();
-                crate::local_model::register_model_card(&endpoint, &card)
+                dynamo_model_card::local_model::register_model_card(&endpoint, &card)
                     .await
                     .unwrap();
                 let mut workers = manager
@@ -3842,7 +3845,9 @@ request_classifier:
 
     #[tokio::test]
     async fn discovery_normalizes_legacy_and_future_structural_tag_fields() {
-        use crate::local_model::runtime_config::{StructuralTagConfig, StructuralTagScope};
+        use dynamo_model_card::local_model::runtime_config::{
+            StructuralTagConfig, StructuralTagScope,
+        };
 
         let runtime = Runtime::from_current().unwrap();
         let drt = DistributedRuntime::new(runtime, DistributedConfig::process_local())

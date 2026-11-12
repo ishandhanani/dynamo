@@ -568,7 +568,7 @@ fn beam_turn_structural_tag(
         PromptChannel, StructuralTagContext, StructuralTagSchemaMode, StructuralTagToolChoice,
     };
     let builder = dynamo_parsers_v2::structural_tag_builder_for_family(
-        crate::protocols::openai::chat_completions::unified_parser::BEAM_UNIFIED_FAMILY,
+        dynamo_model_card::parser_family::BEAM_UNIFIED_FAMILY,
     )?;
     let v2_tools: Vec<dynamo_parsers_v2::Tool> = tools
         .iter()
@@ -774,10 +774,8 @@ pub(super) fn uses_muse_spark_parser(
     tool_call_parser: Option<&str>,
     reasoning_parser: Option<&str>,
 ) -> bool {
-    crate::protocols::openai::chat_completions::unified_parser::configured_family(
-        tool_call_parser,
-        reasoning_parser,
-    ) == Some("muse_spark")
+    dynamo_model_card::parser_family::configured_family(tool_call_parser, reasoning_parser)
+        == Some("muse_spark")
 }
 
 /// Map a forced `tool_choice` onto the guided-JSON parser constraint for its grammar.
@@ -802,9 +800,9 @@ mod tests {
     use std::{path::PathBuf, sync::Arc};
 
     use super::*;
-    use crate::local_model::runtime_config::StructuralTagMode;
-    use crate::model_card::ModelDeploymentCard;
     use crate::protocols::common::{OutputOptions, SamplingOptions, StopConditions};
+    use dynamo_model_card::local_model::runtime_config::StructuralTagMode;
+    use dynamo_model_card::model_card::ModelDeploymentCard;
     use dynamo_protocols::types::{ChatCompletionNamedToolChoice, FunctionName};
     use serde_json::{Value, json};
 
@@ -843,7 +841,7 @@ mod tests {
             .join("tests/data/sample-models/mock-llama-3.1-8b-instruct");
         let mut mdc = ModelDeploymentCard::load_from_disk(model_path, None).unwrap();
         mdc.runtime_config.structural_tag = (mode == StructuralTagMode::On)
-            .then(crate::local_model::runtime_config::StructuralTagConfig::default);
+            .then(dynamo_model_card::local_model::runtime_config::StructuralTagConfig::default);
         mdc.runtime_config.tool_call_parser = Some(parser.to_string());
         OpenAIPreprocessor::new(mdc).unwrap()
     }
@@ -1243,7 +1241,7 @@ mod tests {
         tool_parser: Option<&str>,
         reasoning_parser: Option<&str>,
     ) -> std::sync::Arc<OpenAIPreprocessor> {
-        let mut mdc = crate::model_card::ModelDeploymentCard::load_from_disk(
+        let mut mdc = dynamo_model_card::model_card::ModelDeploymentCard::load_from_disk(
             "tests/data/sample-models/mock-llama-3.1-8b-instruct",
             None,
         )
@@ -1455,7 +1453,7 @@ mod tests {
             "tool_choice": {"type": "function", "function": {"name": "get_weather"}}
         }));
         for parser in ["muse_spark", "hermes"] {
-            let mut mdc = crate::model_card::ModelDeploymentCard::load_from_disk(
+            let mut mdc = dynamo_model_card::model_card::ModelDeploymentCard::load_from_disk(
                 "tests/data/sample-models/mock-llama-3.1-8b-instruct",
                 None,
             )
@@ -1503,7 +1501,7 @@ mod tests {
         let dynamo_renderer::PromptFormatter::OAI(formatter) =
             dynamo_renderer::PromptFormatter::from_parts(template, Default::default(), false)
                 .unwrap();
-        let mut mdc = crate::model_card::ModelDeploymentCard::load_from_disk(
+        let mut mdc = dynamo_model_card::model_card::ModelDeploymentCard::load_from_disk(
             "tests/data/sample-models/mock-llama-3.1-8b-instruct",
             None,
         )
@@ -1529,7 +1527,7 @@ mod tests {
         let dynamo_renderer::PromptFormatter::OAI(formatter) =
             dynamo_renderer::PromptFormatter::from_parts(template, Default::default(), false)
                 .unwrap();
-        let mut mdc = crate::model_card::ModelDeploymentCard::load_from_disk(
+        let mut mdc = dynamo_model_card::model_card::ModelDeploymentCard::load_from_disk(
             "tests/data/sample-models/mock-llama-3.1-8b-instruct",
             None,
         )
@@ -1577,7 +1575,7 @@ mod tests {
             dynamo_renderer::PromptFormatter::from_parts(template, Default::default(), false)
                 .unwrap();
         for parser in ["muse_spark", "muse_spark_open"] {
-            let mut mdc = crate::model_card::ModelDeploymentCard::load_from_disk(
+            let mut mdc = dynamo_model_card::model_card::ModelDeploymentCard::load_from_disk(
                 "tests/data/sample-models/mock-llama-3.1-8b-instruct",
                 None,
             )

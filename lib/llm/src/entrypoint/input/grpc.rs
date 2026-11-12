@@ -7,14 +7,16 @@ use std::sync::Arc;
 use crate::{
     discovery::{ModelManager, ModelWatcher},
     engines::StreamingEngineAdapter,
-    entrypoint::{EngineConfig, RouterConfig, input::common},
+    entrypoint::{EngineConfig, input::common},
     grpc::service::kserve,
     http::service::metrics::Metrics,
-    local_model::runtime_config::TokenizerBackend,
     namespace::NamespaceFilter,
     types::openai::chat_completions::{
         NvCreateChatCompletionRequest, NvCreateChatCompletionStreamResponse,
     },
+};
+use dynamo_model_card::{
+    local_model::runtime_config::TokenizerBackend, router_config::RouterConfig,
 };
 use dynamo_runtime::DistributedRuntime;
 
@@ -188,7 +190,8 @@ async fn run_watcher(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{engines::make_echo_engine, local_model::LocalModelBuilder};
+    use crate::engines::make_echo_engine;
+    use dynamo_model_card::local_model::LocalModelBuilder;
     use dynamo_runtime::{Runtime, distributed::DistributedConfig};
     use std::time::Duration;
 

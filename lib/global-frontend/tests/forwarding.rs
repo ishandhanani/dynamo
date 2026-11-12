@@ -15,9 +15,9 @@ use dynamo_global_frontend::{Metrics, PoolSnapshot};
 use dynamo_global_router::{
     InFlightTracker, Pool, PoolSelector, PoolTarget, RoundRobinSelector, RoutingRequest,
 };
-use dynamo_llm::endpoint_type::EndpointType;
 use dynamo_llm::engines::{StreamingEngineAdapter, make_echo_engine};
 use dynamo_llm::http::service::service_v2::HttpService;
+use dynamo_model_card::endpoint_type::EndpointType;
 use futures::StreamExt;
 use reqwest::StatusCode;
 use serde_json::{Value, json};

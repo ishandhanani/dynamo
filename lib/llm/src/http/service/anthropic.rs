@@ -42,7 +42,6 @@ use super::{
     service_v2::{self, BackendErrorCheck},
 };
 use crate::engines::ValidateRequest;
-use crate::frontend_config::ChatTemplateDefaults;
 use crate::protocols::anthropic::stream_converter::AnthropicStreamConverter;
 use crate::protocols::anthropic::types::{
     AnthropicContentBlock, AnthropicCountTokensRequest, AnthropicCountTokensResponse,
@@ -60,8 +59,9 @@ use crate::protocols::openai::chat_completions::{
     NvCreateChatCompletionStreamResponse, aggregator::ChatCompletionAggregator,
 };
 use crate::protocols::unified::UnifiedRequest;
-use crate::request_template::{RequestTemplate, resolve_request_model};
 use crate::types::Annotated;
+use dynamo_model_card::frontend_config::ChatTemplateDefaults;
+use dynamo_model_card::request_template::{RequestTemplate, resolve_request_model};
 
 // Re-use helpers from the openai module (sibling under service/)
 use super::error::{
@@ -1353,7 +1353,7 @@ fn apply_anthropic_template_args(
     }
     // After the thinking decision, so the defaults' thinking keys yield to it, and
     // before the history fallback, so a default can still set that key.
-    chat_template_defaults.apply_to_request(request);
+    super::apply_chat_template_defaults(chat_template_defaults, request);
     if prompt_injected_reasoning {
         // Preserve reasoning from prior turns. Some templates (Nemotron)
         // strip historical <think> content by default to save context.
