@@ -1,7 +1,13 @@
 // SPDX-FileCopyrightText: Copyright (c) 2025-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-use axum::Router;
+use axum::{
+    Router,
+    extract::State,
+    http::StatusCode,
+    response::{IntoResponse, Response},
+    routing::get,
+};
 use dynamo_runtime::metrics::prometheus_names::{
     kvbm::{
         DISK_CACHE_HIT_RATE, HOST_CACHE_HIT_RATE, MATCHED_TOKENS, OBJECT_CACHE_HIT_RATE,
@@ -11,11 +17,9 @@ use dynamo_runtime::metrics::prometheus_names::{
     },
     sanitize_prometheus_name,
 };
-use prometheus::{Gauge, IntCounter, Opts, Registry};
+use prometheus::{Encoder, Gauge, IntCounter, Opts, Registry, TextEncoder};
 use std::{collections::HashMap, net::SocketAddr, sync::Arc, thread};
 use tokio::{net::TcpListener, sync::Notify};
-
-use crate::http::service::{RouteDoc, metrics::router};
 
 #[derive(Clone, Debug)]
 pub struct KvbmMetrics {
@@ -180,11 +184,9 @@ impl KvbmMetrics {
         let notify_for_task = notify.clone();
 
         let addr = SocketAddr::from(([0, 0, 0, 0], metrics_port));
-        let (_route_docs, app): (Vec<RouteDoc>, Router) = router(
-            (*registry).clone(), // take owned Registry (Clone) for router to wrap in Arc
-            None,                // or Some("/metrics".to_string()) to override the path
-            None,                // no DRT metrics for standalone KVBM server
-        );
+        let app = Router::new()
+            .route("/metrics", get(handler_metrics))
+            .with_state(registry);
 
         let run_server = async move {
             let listener = match TcpListener::bind(addr).await {
@@ -250,6 +252,29 @@ impl KvbmMetrics {
     /// Record failed object storage write operations
     pub fn record_object_write_failure(&self, num_blocks: u64) {
         self.object_write_failures.inc_by(num_blocks);
+    }
+}
+
+/// `GET /metrics`: the registry in the Prometheus text format.
+async fn handler_metrics(State(registry): State<Arc<Registry>>) -> Response {
+    let mut buffer = vec![];
+    if TextEncoder::new()
+        .encode(&registry.gather(), &mut buffer)
+        .is_err()
+    {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "Failed to encode metrics",
+        )
+            .into_response();
+    }
+    match String::from_utf8(buffer) {
+        Ok(metrics) => (StatusCode::OK, metrics).into_response(),
+        Err(_) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "Failed to encode metrics",
+        )
+            .into_response(),
     }
 }
 
@@ -322,5 +347,60 @@ impl KvbmMetricsRegistry {
 impl Default for KvbmMetricsRegistry {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::Duration;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::TcpStream;
+
+    /// The standalone listener serves the registry at `GET /metrics` in the Prometheus text
+    /// format.
+    #[tokio::test]
+    async fn metrics_endpoint_serves_prometheus_text() {
+        let port = std::net::TcpListener::bind("127.0.0.1:0")
+            .unwrap()
+            .local_addr()
+            .unwrap()
+            .port();
+        let registry = KvbmMetricsRegistry::new();
+        let metrics = KvbmMetrics::new(&registry, true, port);
+        metrics.offload_blocks_d2h.inc_by(3);
+
+        let mut expected = Vec::new();
+        prometheus::TextEncoder::new()
+            .encode(&registry.inner().gather(), &mut expected)
+            .unwrap();
+        let expected = String::from_utf8(expected).unwrap();
+
+        let mut stream = tokio::time::timeout(Duration::from_secs(10), async {
+            loop {
+                match TcpStream::connect(("127.0.0.1", port)).await {
+                    Ok(stream) => break stream,
+                    Err(_) => tokio::time::sleep(Duration::from_millis(10)).await,
+                }
+            }
+        })
+        .await
+        .expect("metrics listener did not start");
+        stream
+            .write_all(b"GET /metrics HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n")
+            .await
+            .unwrap();
+        let mut response = String::new();
+        stream.read_to_string(&mut response).await.unwrap();
+
+        let (head, body) = response.split_once("\r\n\r\n").unwrap();
+        assert!(head.starts_with("HTTP/1.1 200 OK\r\n"), "{head}");
+        assert!(
+            head.to_ascii_lowercase()
+                .contains("content-type: text/plain; charset=utf-8"),
+            "{head}"
+        );
+        assert_eq!(body, expected);
+        assert!(body.contains("kvbm_offload_blocks_d2h 3"), "{body}");
     }
 }
