@@ -3,10 +3,8 @@
 
 use dynamo_runtime::error::ErrorClass;
 
-use super::{
-    super::{error, metrics},
-    DispatchError,
-};
+use super::{super::error, DispatchError};
+use dynamo_http_server::metrics;
 
 pub(super) fn classify(cause: &(dyn std::error::Error + 'static)) -> DispatchError {
     if metrics::request_was_cancelled(cause) {
