@@ -131,6 +131,7 @@ fn worker(worker_id: WorkerId) -> WorkerRequest {
         data_parallel_size: None,
         max_num_batched_tokens: Some(1024),
         total_kv_blocks: None,
+        context_length: None,
         stable_routing_id: None,
         is_eagle: None,
         taints: HashSet::new(),
@@ -3822,6 +3823,8 @@ fn hint_config(worker_type: &str, endpoints: &[(u32, &str)]) -> SelectionWorkerC
             .map(|(rank, endpoint)| (*rank, endpoint.to_string()))
             .collect(),
         kv_event_source_mode: None,
+        context_length: None,
+        block_size: None,
         kv_transfer_keys: Default::default(),
     }
 }

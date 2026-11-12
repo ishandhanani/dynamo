@@ -1415,6 +1415,100 @@ impl ModelDeploymentCard {
             .as_ref()
     }
 
+    /// Model identity for pooled WorkerSets (`DYN_WORKERSET_IDENTITY=model`): the same
+    /// fields as [`Self::mdcsum`] minus the per-deployment ones that two engine shapes of one
+    /// model may legitimately disagree on (`source_path`, context length, KV block size, and
+    /// the advertised router config). Workers that agree on this hash join one WorkerSet and
+    /// the router treats those fields per worker. POC: not cached, and not the metadata-cache
+    /// identity.
+    pub fn pool_compat_checksum(&self) -> String {
+        let mut bytes_to_hash: Vec<u8> = Vec::with_capacity(512);
+        bytes_to_hash.extend(self.display_name.as_bytes());
+        if let Some(model_info) = self.model_info.as_ref() {
+            bytes_to_hash.extend(model_info.checksum().as_bytes());
+        }
+        if let Some(tokenizer) = self.tokenizer.as_ref() {
+            bytes_to_hash.extend(tokenizer.checksum().as_bytes());
+        }
+        if let Some(prompt_formatter) = self.prompt_formatter.as_ref() {
+            bytes_to_hash.extend(prompt_formatter.checksum().as_bytes());
+        }
+        if let Some(chat_template) = self.chat_template_file.as_ref() {
+            bytes_to_hash.extend(chat_template.checksum().as_bytes());
+        }
+        if let Some(gen_config) = self.gen_config.as_ref() {
+            bytes_to_hash.extend(gen_config.checksum().as_bytes());
+        }
+        let mut extras: Vec<(&str, &str)> = self
+            .extra_files
+            .iter()
+            .map(|cf| (cf.basename().unwrap_or(""), cf.checksum().hash()))
+            .collect();
+        extras.sort_unstable();
+        for (name, h) in &extras {
+            bytes_to_hash.extend(name.as_bytes());
+            bytes_to_hash.push(0);
+            bytes_to_hash.extend(h.as_bytes());
+        }
+        if let Some(prompt_context_vec) = self.prompt_context.as_ref() {
+            bytes_to_hash.extend(format!("{prompt_context_vec:?}").as_bytes());
+        }
+        match self.worker_type {
+            None => bytes_to_hash.push(0),
+            Some(crate::worker_type::WorkerType::Prefill) => bytes_to_hash.push(1),
+            Some(crate::worker_type::WorkerType::Decode) => bytes_to_hash.push(2),
+            Some(crate::worker_type::WorkerType::Encode) => bytes_to_hash.push(3),
+            Some(crate::worker_type::WorkerType::Aggregated) => bytes_to_hash.push(4),
+        }
+        bytes_to_hash.extend((self.needs.len() as u32).to_be_bytes());
+        for alt in &self.needs {
+            bytes_to_hash.extend((alt.len() as u32).to_be_bytes());
+            for w in alt {
+                let v: u8 = match w {
+                    crate::worker_type::WorkerType::Prefill => 1,
+                    crate::worker_type::WorkerType::Decode => 2,
+                    crate::worker_type::WorkerType::Encode => 3,
+                    crate::worker_type::WorkerType::Aggregated => 4,
+                };
+                bytes_to_hash.push(v);
+            }
+        }
+        if let Some(identity) = self.indexer_identity.as_ref() {
+            append_indexer_identity_checksum(&mut bytes_to_hash, identity);
+        }
+        if !self.aliases.is_empty() {
+            bytes_to_hash.extend((self.aliases.len() as u32).to_be_bytes());
+            for alias in &self.aliases {
+                bytes_to_hash.extend((alias.len() as u32).to_be_bytes());
+                bytes_to_hash.extend(alias.as_bytes());
+            }
+        }
+        if self.runtime_config.runtime_flag_enabled(
+            crate::local_model::runtime_config::VLLM_ENABLE_TOWER_CONNECTOR_LORA_RUNTIME_KEY,
+        ) {
+            bytes_to_hash.extend_from_slice(b"\0vllm_enable_tower_connector_lora\0true");
+        }
+        if self.runtime_config.runtime_flag_enabled(
+            crate::local_model::runtime_config::VLLM_INFERENCE_V1_GENERATE_CAPABILITY,
+        ) {
+            bytes_to_hash.extend_from_slice(b"\0vllm_inference_v1_generate\0true");
+        }
+        if self.is_systemone_serial_eligible() {
+            bytes_to_hash.extend_from_slice(b"\0sglang_systemone_serial_v1\0true");
+        }
+        append_runtime_contract_checksum(
+            &mut bytes_to_hash,
+            &self.runtime_config,
+            VLLM_NEMOTRON_VIDEO_PROCESSOR_CONTRACT_RUNTIME_KEY,
+        );
+        if self.runtime_config.runtime_flag_enabled(
+            crate::local_model::runtime_config::DISAGG_PREFILL_CANCEL_ANYTIME_V1,
+        ) {
+            bytes_to_hash.extend_from_slice(b"\0disagg_prefill_cancel_anytime_v1\0true");
+        }
+        blake3::hash(&bytes_to_hash).to_string()
+    }
+
     /// Is this a full model card with tokenizer?
     /// There are cases where we have a placeholder card (see `with_name_only`).
     pub fn has_tokenizer(&self) -> bool {
@@ -4095,5 +4189,29 @@ mod worker_type_tests {
         );
         let restored: ModelDeploymentCard = serde_json::from_value(serialized).unwrap();
         assert!(restored.indexer_identity.is_none());
+    }
+}
+
+#[cfg(test)]
+mod pool_compat_tests {
+    use super::ModelDeploymentCard;
+
+    #[test]
+    fn pool_compat_checksum_ignores_per_deployment_fields_but_not_identity() {
+        let base = ModelDeploymentCard::with_name_only("model");
+        let mut other = ModelDeploymentCard::with_name_only("model");
+        other.source_path = Some("/elsewhere".to_string());
+        other.runtime_config.context_length = Some(131_072);
+        other.kv_cache_block_size = base.kv_cache_block_size * 4;
+        other.runtime_config.data_parallel_size = 4;
+        other.runtime_config.total_kv_blocks = Some(99);
+        assert_ne!(base.mdcsum(), other.mdcsum());
+        assert_eq!(base.pool_compat_checksum(), other.pool_compat_checksum());
+
+        let renamed = ModelDeploymentCard::with_name_only("other-model");
+        assert_ne!(base.pool_compat_checksum(), renamed.pool_compat_checksum());
+        let mut aliased = ModelDeploymentCard::with_name_only("model");
+        aliased.aliases = vec!["alias".to_string()];
+        assert_ne!(base.pool_compat_checksum(), aliased.pool_compat_checksum());
     }
 }

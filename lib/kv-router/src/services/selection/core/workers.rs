@@ -386,10 +386,14 @@ impl SelectionCore {
             })?
             .clone();
         if entry.block_size != block_size {
-            return Err(SelectionError::Conflict(format!(
-                "block_size mismatch for {key}: existing={} requested={block_size}",
-                entry.block_size
-            )));
+            // A pooled partition mixes page sizes: the entry's size stays the accounting
+            // unit, and selection hashes requests at every size its workers publish.
+            tracing::info!(
+                %key,
+                partition_block_size = entry.block_size,
+                worker_block_size = block_size,
+                "worker joins a partition with a different KV block size"
+            );
         }
         if entry.is_eagle != is_eagle {
             return Err(SelectionError::Conflict(format!(

@@ -26,8 +26,8 @@ use super::selector::{WorkerSelector, log_selection};
 use super::types::{
     AdmissionAttempt, AdmittedSchedulingResponse, AdvisorySchedulingResponse, AttemptId,
     KvSchedulerError, NonMaxOverlapSelectionObserver, OverloadedWorkerProvider, PotentialLoad,
-    ScheduleMode, ScheduleRequest, SchedulingRequest, SchedulingResponse, TierOverlapBlocks,
-    WorkerAvailabilityProvider,
+    PromptBlockHashes, ScheduleMode, ScheduleRequest, SchedulingRequest, SchedulingResponse,
+    TierOverlapBlocks, WorkerAvailabilityProvider,
 };
 use crate::plugins::request_classifier::{ClassifyRequest, RequestClassifier};
 use crate::plugins::worker_selection::{WorkerCapacity, WorkerInputs};
@@ -82,7 +82,7 @@ where
         &self,
         request: ScheduleRequest,
         resp_tx: Option<tokio::sync::oneshot::Sender<Result<SchedulingResponse, KvSchedulerError>>>,
-    ) -> (SchedulingRequest, Option<Vec<LocalBlockHash>>) {
+    ) -> (SchedulingRequest, Option<PromptBlockHashes>) {
         let track_prefill_tokens = request
             .router_config_override
             .as_ref()
@@ -647,7 +647,7 @@ where
         self.schedule_request(ScheduleRequest {
             mode,
             token_seq,
-            block_hashes,
+            block_hashes: block_hashes.map(PromptBlockHashes::from),
             isl_tokens,
             overlap: OverlapSignals {
                 tier_overlap_blocks,

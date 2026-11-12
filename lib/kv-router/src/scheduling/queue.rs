@@ -37,8 +37,8 @@ use super::selector::{
 use super::types::{
     AdvisorySchedulingResponse, AdvisoryWorkerLoad, AttemptId, AvailableWorkerIds,
     KvSchedulerError, NonMaxOverlapSelection, NonMaxOverlapSelectionObserver,
-    OverloadedWorkerProvider, SchedulingContext, SchedulingRequest, SchedulingResponse,
-    WorkerAvailabilityProvider, WorkerIdSet,
+    OverloadedWorkerProvider, PromptBlockHashes, SchedulingContext, SchedulingRequest,
+    SchedulingResponse, WorkerAvailabilityProvider, WorkerIdSet,
 };
 use crate::plugins::request_classifier::ClassifyRequest;
 use crate::plugins::request_classifier::{
@@ -101,7 +101,7 @@ struct QueuedRequest {
     /// When the request expires: its explicit deadline, else its class due time when the
     /// class expires them. It stays fixed through refresh and admission.
     due_at: Option<Instant>,
-    block_hashes: Option<Vec<LocalBlockHash>>,
+    block_hashes: Option<PromptBlockHashes>,
     /// Actor turn that received the request. Its prepared rows last only that turn.
     enqueue_turn: u64,
     /// The dispatch gate's last `Go` target for this head, written by the dispatch predicate
@@ -479,7 +479,7 @@ enum AdmissionCommand {
     Enqueue {
         request: SchedulingRequest,
         attempt_tx: Option<oneshot::Sender<AttemptId>>,
-        block_hashes: Option<Vec<LocalBlockHash>>,
+        block_hashes: Option<PromptBlockHashes>,
         prepared: Option<Box<PreparedAdmission>>,
         queue_metadata: QueueMetadata,
         classifier_lane: Option<SessionLane>,
@@ -1199,7 +1199,7 @@ impl<
     ) -> Option<Box<RequestLifecycleLease>> {
         self.enqueue_admitted_with_block_hashes_and_lease(
             request,
-            block_hashes,
+            block_hashes.map(PromptBlockHashes::from),
             lease,
             None,
             None,
@@ -1211,7 +1211,7 @@ impl<
     pub(crate) async fn enqueue_admitted_with_block_hashes_and_lease(
         &self,
         mut request: SchedulingRequest,
-        block_hashes: Option<Vec<LocalBlockHash>>,
+        block_hashes: Option<PromptBlockHashes>,
         lease: Option<Box<RequestLifecycleLease>>,
         attempt_tx: Option<oneshot::Sender<AttemptId>>,
         classified_request: Option<ClassifyRequest>,
@@ -1253,12 +1253,14 @@ impl<
             request.respond(Err(KvSchedulerError::SubscriberShutdown));
             return None;
         };
+        let block_hashes = self
+            .prepare_block_hashes_for_refresh(block_hashes, request.allowed_worker_ids.as_ref());
         let prepared = self.prepare_candidates(&request);
         let (ack_tx, ack_rx) = oneshot::channel();
         slot.send(AdmissionCommand::Enqueue {
             request,
             attempt_tx,
-            block_hashes: self.prepare_block_hashes_for_refresh(block_hashes),
+            block_hashes,
             prepared,
             queue_metadata,
             classifier_lane,
@@ -1640,14 +1642,27 @@ impl<
         }))
     }
 
+    /// Hashes the queued request keeps for overlap refresh. Once the classifier has narrowed
+    /// the allowed workers, extra page-size lists that no allowed worker uses are dropped.
     fn prepare_block_hashes_for_refresh(
         &self,
-        block_hashes: Option<Vec<LocalBlockHash>>,
-    ) -> Option<Vec<LocalBlockHash>> {
+        block_hashes: Option<PromptBlockHashes>,
+        allowed_worker_ids: Option<&HashSet<WorkerId>>,
+    ) -> Option<PromptBlockHashes> {
         if !self.supports_overlap_refresh {
             return None;
         }
-        block_hashes.filter(|hashes| !hashes.is_empty())
+        let mut block_hashes = block_hashes.filter(|hashes| !hashes.is_empty())?;
+        if !block_hashes.others.is_empty() {
+            let workers = self.workers_with_configs.borrow();
+            prune_other_block_sizes(
+                &mut block_hashes,
+                allowed_worker_ids,
+                &workers,
+                self.block_size,
+            );
+        }
+        Some(block_hashes)
     }
 }
 
@@ -1826,7 +1841,7 @@ impl<
         mut request: SchedulingRequest,
         attempt_tx: Option<oneshot::Sender<AttemptId>>,
         lifecycle_transfer: Option<Arc<AdmissionLifecycleTransfer>>,
-        block_hashes: Option<Vec<LocalBlockHash>>,
+        block_hashes: Option<PromptBlockHashes>,
         prepared: Option<Box<PreparedAdmission>>,
         queue_metadata: QueueMetadata,
         classifier_lane: Option<SessionLane>,
@@ -2312,7 +2327,7 @@ impl<
             let refreshing = should_refresh_overlap(
                 self.overlap_scores_refresh.is_some(),
                 self.overlap_refresh_after,
-                queued.block_hashes.as_deref(),
+                queued.block_hashes.as_ref(),
                 queued.enqueue_at,
                 decay_now,
             );
@@ -2429,7 +2444,7 @@ impl<
             refresh_overlap(
                 refresher.as_deref(),
                 self.overlap_refresh_after,
-                queued.block_hashes.as_deref(),
+                queued.block_hashes.as_ref(),
                 queued.request.retain_kv_transfer_chain,
                 queued.enqueue_at,
                 decay_now,
@@ -3649,7 +3664,7 @@ mod tests {
     impl OverlapScoresRefresh for CountingRefresher {
         async fn refresh(
             &self,
-            _block_hashes: &[LocalBlockHash],
+            _block_hashes: &PromptBlockHashes,
             retain_kv_transfer_chain: bool,
         ) -> Option<RefreshedOverlap> {
             self.calls.fetch_add(1, Ordering::Relaxed);
@@ -3691,7 +3706,7 @@ mod tests {
     impl OverlapScoresRefresh for BlockingRefresher {
         async fn refresh(
             &self,
-            _block_hashes: &[LocalBlockHash],
+            _block_hashes: &PromptBlockHashes,
             _retain_kv_transfer_chain: bool,
         ) -> Option<RefreshedOverlap> {
             self.calls.fetch_add(1, Ordering::Relaxed);
@@ -4219,7 +4234,7 @@ policy_classes:
             .send(AdmissionCommand::Enqueue {
                 request,
                 attempt_tx: None,
-                block_hashes: Some(vec![LocalBlockHash(42)]),
+                block_hashes: Some(vec![LocalBlockHash(42)].into()),
                 prepared: None,
                 queue_metadata,
                 classifier_lane: None,
@@ -4283,7 +4298,7 @@ policy_classes:
             queue
                 .enqueue_admitted_with_block_hashes_and_lease(
                     queued,
-                    Some(vec![LocalBlockHash(hash)]),
+                    Some(vec![LocalBlockHash(hash)].into()),
                     None,
                     None,
                     Some(classified),
@@ -7715,7 +7730,7 @@ policy_classes:
         queue
             .enqueue_admitted_with_block_hashes_and_lease(
                 request,
-                block_hashes,
+                block_hashes.map(PromptBlockHashes::from),
                 None,
                 None,
                 classified,
@@ -9989,5 +10004,88 @@ policy_classes:
         assert_eq!(class_outcomes(&queue, 0), (2, 0, 0));
         assert_eq!(refresher.calls.load(Ordering::Relaxed), 1);
         slots.assert_completely_drained(decay_now());
+    }
+}
+
+/// Drop the extra page-size hash lists that no allowed worker uses. With no allowed set every
+/// list stays; a worker without a published page size counts as the partition's.
+fn prune_other_block_sizes<C: WorkerConfigLike>(
+    block_hashes: &mut PromptBlockHashes,
+    allowed_worker_ids: Option<&HashSet<WorkerId>>,
+    workers: &HashMap<WorkerId, C>,
+    partition_block_size: u32,
+) {
+    let Some(allowed) = allowed_worker_ids else {
+        return;
+    };
+    let sizes: HashSet<u32> = allowed
+        .iter()
+        .filter_map(|worker_id| workers.get(worker_id))
+        .map(|config| {
+            config
+                .kv_cache_block_size()
+                .filter(|size| *size > 0)
+                .unwrap_or(partition_block_size)
+        })
+        .collect();
+    block_hashes.retain_other_sizes(|size| sizes.contains(&size));
+}
+
+#[cfg(test)]
+mod prune_block_hashes_tests {
+    use super::*;
+    use crate::test_utils::SimpleWorkerConfig;
+
+    fn hashes() -> PromptBlockHashes {
+        PromptBlockHashes::with_others(
+            vec![LocalBlockHash(1)],
+            vec![
+                (64, vec![LocalBlockHash(2)]),
+                (128, vec![LocalBlockHash(3)]),
+            ],
+        )
+    }
+
+    fn workers() -> HashMap<WorkerId, SimpleWorkerConfig> {
+        HashMap::from([
+            (1, SimpleWorkerConfig::default()),
+            (
+                2,
+                SimpleWorkerConfig {
+                    block_size: Some(64),
+                    ..Default::default()
+                },
+            ),
+            (
+                3,
+                SimpleWorkerConfig {
+                    block_size: Some(128),
+                    ..Default::default()
+                },
+            ),
+        ])
+    }
+
+    #[test]
+    fn unrestricted_requests_keep_every_list() {
+        let mut block_hashes = hashes();
+        prune_other_block_sizes(&mut block_hashes, None, &workers(), 16);
+        assert_eq!(block_hashes.others.len(), 2);
+    }
+
+    #[test]
+    fn narrowing_to_a_pool_keeps_only_that_pool_size() {
+        let mut block_hashes = hashes();
+        let allowed = HashSet::from([2]);
+        prune_other_block_sizes(&mut block_hashes, Some(&allowed), &workers(), 16);
+        assert_eq!(block_hashes.others, vec![(64, vec![LocalBlockHash(2)])]);
+        assert_eq!(block_hashes.for_block_size(16, 64), &[LocalBlockHash(2)]);
+        assert_eq!(block_hashes.for_block_size(16, 128), &[LocalBlockHash(1)]);
+
+        let mut block_hashes = hashes();
+        let allowed = HashSet::from([1]);
+        prune_other_block_sizes(&mut block_hashes, Some(&allowed), &workers(), 16);
+        assert!(block_hashes.others.is_empty());
+        assert!(!block_hashes.is_empty());
     }
 }

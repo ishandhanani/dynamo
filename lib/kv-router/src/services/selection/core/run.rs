@@ -44,6 +44,8 @@
 
 use super::super::affinity::{SessionAffinityMode, validate_dispatch_target};
 use super::hint::transfer_hint_payload;
+use crate::protocols::WorkerId;
+use crate::scheduling::PromptBlockHashes;
 
 /// `try_acquire` then `join_initializing` attempts before a commit that finds
 /// the session initializing routes unpinned (see the module doc).
@@ -56,6 +58,9 @@ const KV_HINT_FETCH_ACTION_ID: &str = "a1";
 
 pub(super) struct PreparedSelectionInputs {
     pub(super) block_hashes: Vec<LocalBlockHash>,
+    /// Hashes at each other page size among the partition's workers, for queued-request
+    /// refresh and for recording the decision at the chosen worker's size.
+    pub(super) other_block_hashes: Vec<(u32, Vec<LocalBlockHash>)>,
     pub(super) sequence_hashes: Vec<SequenceHash>,
     pub(super) isl_tokens: usize,
     pub(super) overlap: OverlapSignals,
@@ -335,6 +340,7 @@ impl SelectionCore {
         }
         let PreparedSelectionInputs {
             block_hashes,
+            other_block_hashes,
             sequence_hashes,
             isl_tokens,
             overlap,
@@ -413,7 +419,7 @@ impl SelectionCore {
         // into an approximate indexer; keep the public hashes for that.
         let routing_hashes = (entry.indexer.records_routing_decisions()
             && (claim.is_some() || cached_inputs.is_some()))
-        .then(|| block_hashes.clone());
+        .then(|| PromptBlockHashes::with_others(block_hashes.clone(), other_block_hashes.clone()));
         // Only `Book` callers read the hashes back (the reservation response);
         // the frontend's `Lease` path discards them.
         let booked_sequence_hashes =
@@ -422,7 +428,10 @@ impl SelectionCore {
         let schedule_request = ScheduleRequest {
             mode,
             token_seq: track_active_blocks.then_some(sequence_hashes),
-            block_hashes: Some(block_hashes),
+            block_hashes: Some(PromptBlockHashes::with_others(
+                block_hashes,
+                other_block_hashes,
+            )),
             isl_tokens,
             overlap,
             kv_transfer_candidates,
@@ -523,6 +532,12 @@ impl SelectionCore {
                 _ => None,
             };
             if let Some(hashes) = routing_hashes.take() {
+                // Record at the chosen worker's page size: its KV events are keyed that way.
+                let worker_block_size =
+                    self.worker_block_size(&entry, response.best_worker.worker_id);
+                let hashes = hashes
+                    .for_block_size(entry.block_size, worker_block_size)
+                    .to_vec();
                 self.record_routing_decision(&entry, response.best_worker, hashes)
                     .await;
             }
@@ -546,7 +561,9 @@ impl SelectionCore {
                     expected_output_tokens,
                     track_prefill_tokens,
                     lora_name,
-                    routing_hashes,
+                    // The replay cache records at the partition's page size; a later
+                    // reservation rehashes for its worker.
+                    routing_hashes: routing_hashes.map(|hashes| hashes.primary),
                     session_id,
                 },
                 Instant::now(),
@@ -673,6 +690,17 @@ impl SelectionCore {
         }
     }
 
+    /// The page size `worker_id` publishes, else the partition's.
+    pub(super) fn worker_block_size(&self, entry: &SelectionEntry, worker_id: WorkerId) -> u32 {
+        entry
+            .workers_tx
+            .borrow()
+            .get(&worker_id)
+            .and_then(|config| config.block_size)
+            .filter(|size| *size > 0)
+            .unwrap_or(entry.block_size)
+    }
+
     /// Record a booked routing decision into the partition's approximate
     /// indexer (side or primary). The booking already landed, so a failure
     /// here only costs predicted cache credit; it is logged, not returned.
@@ -784,13 +812,49 @@ impl SelectionCore {
         // when the index lookup fails.
         *lookup = Some(timings);
         let tiered = tiered?;
-        let overlap =
+        let mut overlap =
             OverlapAnalysis::new(&self.kv_router_config, entry.block_size, &tiered).signals();
+        // A pooled partition may hold workers with other page sizes. Their blocks live on
+        // their own branches of the shared tree, so look them up with hashes at each size
+        // and fold the result in, scaled to the partition's block unit.
+        let other_block_sizes: Vec<u32> = {
+            let workers = entry.workers_tx.borrow();
+            let mut sizes: Vec<u32> = workers
+                .values()
+                .filter_map(|config| config.block_size)
+                .filter(|size| *size != 0 && *size != entry.block_size)
+                .collect();
+            sizes.sort_unstable();
+            sizes.dedup();
+            sizes
+        };
+        let mut other_block_hashes = Vec::new();
+        for size in other_block_sizes {
+            let hashes = prompt.block_hashes_for_indexer(size, entry.is_eagle)?;
+            if hashes.is_empty() {
+                continue;
+            }
+            let tiered_at_size = entry
+                .indexer
+                .find_tiered_matches_ref_with_options(
+                    &hashes,
+                    LowerTierQueryOptions {
+                        retain_kv_transfer_chain: false,
+                    },
+                )
+                .await
+                .map_err(SelectionError::Indexer)?;
+            let signals =
+                OverlapAnalysis::new(&self.kv_router_config, size, &tiered_at_size).signals();
+            overlap.merge_scaled(signals, size as f64 / entry.block_size as f64);
+            other_block_hashes.push((size, hashes));
+        }
         let kv_transfer_candidates = retain_kv_transfer_chain
             .then(|| tiered.into_kv_transfer_candidates())
             .flatten();
         Ok(PreparedSelectionInputs {
             block_hashes: normalized.block_hashes,
+            other_block_hashes,
             sequence_hashes: normalized.sequence_hashes,
             isl_tokens: normalized.isl_tokens,
             overlap,

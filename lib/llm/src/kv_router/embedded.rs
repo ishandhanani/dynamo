@@ -486,12 +486,27 @@ pub(crate) fn worker_request_from_runtime_config(
             }
         }
     }
+    // A pooled WorkerSet may mix page sizes: the partition keeps the set's block size as
+    // its unit, each worker's own size is recorded for hashing, and this worker's KV
+    // capacity is expressed in partition blocks so load and capacity compare like for like.
+    let worker_block_size = config
+        .kv_cache_block_size()
+        .filter(|size| *size > 0)
+        .unwrap_or(block_size);
+    let total_kv_blocks = config.total_kv_blocks.map(|blocks| {
+        if worker_block_size == block_size {
+            blocks
+        } else {
+            (blocks as f64 * worker_block_size as f64 / block_size as f64).round() as u64
+        }
+    });
     WorkerRequest {
         worker_id,
         model_name: key.model_name.clone(),
         routing_group: key.routing_group.clone(),
         endpoint: Some(format!("dyn://{worker_id}")),
-        block_size: Some(block_size),
+        block_size: Some(worker_block_size),
+        context_length: config.context_length,
         data_parallel_start_rank: Some(dp_start),
         data_parallel_size: Some(dp_size),
         // Default unreported capacity so the catalog's queueing gate does not
@@ -501,7 +516,7 @@ pub(crate) fn worker_request_from_runtime_config(
                 .max_num_batched_tokens
                 .unwrap_or(DEFAULT_MAX_BATCHED_TOKENS),
         ),
-        total_kv_blocks: config.total_kv_blocks,
+        total_kv_blocks,
         stable_routing_id: config.stable_routing_id.clone(),
         is_eagle: Some(is_eagle),
         taints: config.taints().clone(),

@@ -333,11 +333,14 @@ impl SelectionCore {
         let can_record = entry.indexer.records_routing_decisions()
             && (req.prompt.view().routing_tokens_and_mm_infos().is_some()
                 || req.prompt.block_hashes.is_some());
+        // Hash at the chosen worker's page size: in a pooled partition it may not be the
+        // partition's, and its KV events are keyed at its own size.
+        let worker_block_size = self.worker_block_size(&entry, worker.worker_id);
         let routing_hashes = can_record
             .then(|| {
                 req.prompt
                     .view()
-                    .block_hashes_for_indexer(entry.block_size, entry.is_eagle)
+                    .block_hashes_for_indexer(worker_block_size, entry.is_eagle)
             })
             .transpose()?;
 

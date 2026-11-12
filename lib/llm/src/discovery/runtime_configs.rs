@@ -70,7 +70,9 @@ fn base_runtime_config_watch(
                         );
                         configs.remove(&id.instance_id);
                     } else {
-                        configs.insert(id.instance_id, card.runtime_config);
+                        let mut runtime_config = card.runtime_config;
+                        runtime_config.kv_cache_block_size = Some(card.kv_cache_block_size);
+                        configs.insert(id.instance_id, runtime_config);
                     }
                 }
                 Ok(DiscoveryEvent::ModelTaintsUpdated(update)) => {

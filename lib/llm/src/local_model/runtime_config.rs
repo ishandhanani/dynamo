@@ -383,6 +383,12 @@ pub struct ModelRuntimeConfig {
     #[serde(default, skip_serializing_if = "HashSet::is_empty")]
     pub taints: HashSet<String>,
 
+    /// The card's KV block size, copied in per instance on the frontend so the router can
+    /// hash and account per worker when a pooled WorkerSet mixes page sizes. Workers do not
+    /// publish it here; the card field is authoritative.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kv_cache_block_size: Option<u32>,
+
     /// Stable routing identity, set via the `DYN_STABLE_ROUTING_ID` env var. Used as
     /// the rendezvous-hash key so cache assignments survive a new ephemeral
     /// `worker_id`. `None` if unset.
@@ -478,6 +484,7 @@ impl Default for ModelRuntimeConfig {
             disaggregated_endpoint: None,
             enable_eagle: false,
             taints: HashSet::new(),
+            kv_cache_block_size: None,
             stable_routing_id: None,
             topology_domains: HashMap::new(),
             kv_transfer_domain: None,
@@ -596,6 +603,14 @@ impl dynamo_kv_router::WorkerConfigLike for ModelRuntimeConfig {
 
     fn taints(&self) -> &HashSet<String> {
         &self.taints
+    }
+
+    fn context_length(&self) -> Option<u32> {
+        self.context_length
+    }
+
+    fn kv_cache_block_size(&self) -> Option<u32> {
+        self.kv_cache_block_size
     }
 
     fn stable_routing_id(&self) -> Option<&str> {
