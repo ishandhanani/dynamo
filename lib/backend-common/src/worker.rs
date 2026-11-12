@@ -231,6 +231,10 @@ pub struct WorkerConfig {
     pub media_fetcher: Option<MediaFetcher>,
     /// Deployment-level default thinking mode written to runtime metadata.
     pub default_thinking_mode: Option<String>,
+    /// Caller-managed routing taints published in the model card. Topology taints are
+    /// added separately from `DYN_TOPOLOGY_*`, and `update/model_taints` replaces this set
+    /// at runtime.
+    pub taints: HashSet<String>,
 }
 
 impl WorkerConfig {
@@ -270,6 +274,7 @@ impl Default for WorkerConfig {
             media_decoder: None,
             media_fetcher: None,
             default_thinking_mode: None,
+            taints: HashSet::new(),
         }
     }
 }
@@ -2271,6 +2276,7 @@ async fn build_local_model(
         kv_state_endpoint: config.kv_state_endpoint.clone(),
         disaggregated_endpoint,
         runtime_data,
+        taints: config.taints.clone(),
         ..ModelRuntimeConfig::default()
     };
 

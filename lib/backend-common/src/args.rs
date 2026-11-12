@@ -7,10 +7,13 @@
 //! the same CLI surface across Rust and Python backends. Engines extend this
 //! with their own `clap` `Args` using `#[command(flatten)]`.
 
+use std::collections::HashSet;
 use std::path::PathBuf;
 
 use clap::Args;
-use dynamo_llm::local_model::runtime_config::{StructuralTagConfig, StructuralTagScope};
+use dynamo_llm::local_model::runtime_config::{
+    StructuralTagConfig, StructuralTagScope, TOPOLOGY_TAINT_PREFIX,
+};
 use dynamo_runtime::config::parse_bool_opt;
 
 use crate::disagg::DisaggregationMode;
@@ -115,6 +118,19 @@ pub struct CommonArgs {
     /// Publish this worker's engine control/update routes on the RL request-plane endpoint.
     #[arg(long, default_value_t = false, env = "DYN_ENABLE_RL")]
     pub enable_rl: bool,
+
+    /// Comma-separated routing taints published in this worker's model card, for
+    /// example `pool/tp2`. Requests select or prefer tainted workers through
+    /// `nvext.routing_constraints`, and router plugins read them per worker. Taints
+    /// do not change the card checksum, so differently tainted workers of one model
+    /// share a WorkerSet. The `dynamo.topology/` prefix is reserved.
+    #[arg(
+        long = "dyn-taints",
+        env = "DYN_TAINTS",
+        value_delimiter = ',',
+        value_parser = parse_taint
+    )]
+    pub dyn_taints: Vec<String>,
 }
 
 /// An explicit `--dyn-structural-tag` value; `StructuralTagFlag(None)` is `false`.
@@ -122,6 +138,11 @@ pub struct CommonArgs {
 pub struct StructuralTagFlag(pub Option<StructuralTagConfig>);
 
 impl CommonArgs {
+    /// The `--dyn-taints` values as the model card's caller-managed taint set.
+    pub fn taints(&self) -> HashSet<String> {
+        self.dyn_taints.iter().cloned().collect()
+    }
+
     /// The flag's value, or the always-on policy when unset and `on_by_default`.
     pub fn structural_tag(&self, on_by_default: bool) -> Option<StructuralTagConfig> {
         match &self.dyn_structural_tag {
@@ -150,6 +171,19 @@ fn parse_worker_namespace(namespace: &str) -> Result<String, std::convert::Infal
         return Ok(namespace.to_owned());
     }
     Ok(format!("{namespace}{suffix}"))
+}
+
+fn parse_taint(value: &str) -> Result<String, String> {
+    let taint = value.trim();
+    if taint.is_empty() {
+        return Err("taint must be non-empty".to_string());
+    }
+    if taint.starts_with(TOPOLOGY_TAINT_PREFIX) {
+        return Err(format!(
+            "taint {taint:?} uses the reserved prefix {TOPOLOGY_TAINT_PREFIX:?}"
+        ));
+    }
+    Ok(taint.to_string())
 }
 
 fn parse_structural_tag(value: &str) -> Result<StructuralTagFlag, String> {
@@ -203,6 +237,32 @@ mod tests {
                 );
             },
         );
+    }
+
+    #[test]
+    fn dyn_taints_parse_as_a_trimmed_set_and_reject_the_topology_prefix() {
+        let args = TestArgs::try_parse_from(["test", "--dyn-taints", "pool/tp2, pool/tp2 ,zone/a"])
+            .unwrap();
+        assert_eq!(
+            args.common.taints(),
+            ["pool/tp2", "zone/a"]
+                .map(str::to_owned)
+                .into_iter()
+                .collect()
+        );
+        assert!(
+            TestArgs::try_parse_from(["test"])
+                .unwrap()
+                .common
+                .taints()
+                .is_empty()
+        );
+        for argv in [
+            ["test", "--dyn-taints", "dynamo.topology/zone=a"],
+            ["test", "--dyn-taints", "pool/tp2,, "],
+        ] {
+            assert!(TestArgs::try_parse_from(argv).is_err(), "{argv:?}");
+        }
     }
 
     #[test]

@@ -270,7 +270,7 @@ impl RequestClassifier for LoadAwareClass {
 }
 ```
 
-Dynamo builds these rows with the same code that worker selection uses, so `CACHE`, `LOAD`, and `PREFERRED_TAINT` have the same meaning in both plugins. Dynamo reads `required_worker_inputs` once, when it installs the classifier. With the default `WorkerInputs::NONE`, Dynamo builds no rows and `workers` is empty.
+Dynamo builds these rows with the same code that worker selection uses, so `CACHE`, `LOAD`, and `PREFERRED_TAINT` have the same meaning in both plugins. Declare `TAINTS` to read each worker's routing taints with `taints()`, for example to narrow a request to a tainted pool with `set_allowed_workers`; the shipped `isl_pool` classifier does this by input length. Dynamo reads `required_worker_inputs` once, when it installs the classifier. With the default `WorkerInputs::NONE`, Dynamo builds no rows and `workers` is empty.
 
 - Rows cover each worker rank that is eligible for the request, including overloaded workers. Row order is unspecified.
 - `workers` is a snapshot taken for this `classify` call and is lent only for its duration. Dynamo frees the rows when `classify` returns. Do not treat a copy as current load when the request dispatches later.

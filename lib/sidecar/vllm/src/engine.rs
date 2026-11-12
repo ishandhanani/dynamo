@@ -252,6 +252,7 @@ impl VllmSidecarEngine {
             .common
             .structural_tag(model.compiles_structural_tags());
         let config = WorkerConfig {
+            taints: args.sidecar.common.taints(),
             runtime: args.sidecar.common.runtime,
             namespace: args.sidecar.common.namespace,
             // Disaggregated workers register under fixed role components so the

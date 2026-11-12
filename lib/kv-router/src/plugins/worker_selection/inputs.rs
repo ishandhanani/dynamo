@@ -7,7 +7,9 @@ use crate::protocols::{SharedCacheHits, WorkerConfigLike, WorkerId, WorkerWithDp
 use crate::sequences::WorkerLoadProjection;
 use rustc_hash::FxHashMap;
 use std::cell::OnceCell;
+use std::collections::HashSet;
 use std::ops::BitOr;
+use std::sync::LazyLock;
 
 /// Host-owned row materialized once for the union of component input requirements.
 pub(crate) struct CandidateData {
@@ -26,24 +28,38 @@ pub(crate) struct CandidateData {
 /// never carry it.
 pub(crate) type WorkerInfoLookup<'a> = &'a dyn Fn(usize) -> WorkerInfo;
 
+/// A worker's taints by view row, read only by a component that declared
+/// [`WorkerInputs::TAINTS`].
+pub(crate) type WorkerTaintsLookup<'a> = &'a dyn Fn(usize) -> &'a HashSet<String>;
+
+static NO_TAINTS: LazyLock<HashSet<String>> = LazyLock::new(HashSet::new);
+
+/// Lookup for rows whose taints were not materialized.
+pub(crate) fn no_taints(_: usize) -> &'static HashSet<String> {
+    &NO_TAINTS
+}
+
 /// A borrowed view of one worker, restricted to this component's declared inputs.
 #[derive(Clone, Copy)]
 pub struct WorkerCandidate<'a> {
     data: &'a CandidateData,
     inputs: WorkerInputs,
-    // Row passed to `info`. A u32 packs beside `inputs`, keeping the view at five words.
+    // Row passed to `info` and `taints`. A u32 packs beside `inputs`, keeping the view at six
+    // words.
     row: u32,
     cache_snapshot: &'a CacheSnapshot<'a>,
     info: WorkerInfoLookup<'a>,
+    taints: WorkerTaintsLookup<'a>,
 }
 
 impl<'a> WorkerCandidate<'a> {
-    /// A single-worker view; `info` is called with row 0.
+    /// A single-worker view; `info` and `taints` are called with row 0.
     pub(crate) fn new(
         data: &'a CandidateData,
         inputs: WorkerInputs,
         cache_snapshot: &'a CacheSnapshot<'a>,
         info: WorkerInfoLookup<'a>,
+        taints: WorkerTaintsLookup<'a>,
     ) -> Self {
         Self {
             data,
@@ -51,6 +67,7 @@ impl<'a> WorkerCandidate<'a> {
             row: 0,
             cache_snapshot,
             info,
+            taints,
         }
     }
 
@@ -63,6 +80,15 @@ impl<'a> WorkerCandidate<'a> {
     /// to declare; the host looks it up on each call.
     pub fn info(self) -> WorkerInfo {
         (self.info)(self.row as usize)
+    }
+
+    /// This worker's taints from its runtime config, only when this component declared
+    /// TAINTS. The set is the worker's, not the rank's: every rank of a worker reads the same
+    /// taints. An untainted worker reads `Some` of an empty set.
+    pub fn taints(self) -> Option<&'a HashSet<String>> {
+        self.inputs
+            .contains(WorkerInputs::TAINTS)
+            .then(|| (self.taints)(self.row as usize))
     }
 
     /// Read this worker's cache snapshot only when this component declared CACHE.
@@ -115,6 +141,8 @@ pub struct WorkerCandidates<'a> {
     cache_snapshot: &'a CacheSnapshot<'a>,
     // Indexed by row in `rows`.
     info: WorkerInfoLookup<'a>,
+    // Indexed by row in `rows`.
+    taints: WorkerTaintsLookup<'a>,
 }
 
 impl WorkerCandidates<'static> {
@@ -129,7 +157,7 @@ impl WorkerCandidates<'static> {
             unreachable!("an empty candidate view has no rows")
         }
         static NO_INFO: &(dyn Fn(usize) -> WorkerInfo + Sync) = &no_rows;
-        Self::new(&[], WorkerInputs::NONE, &NO_CACHE, NO_INFO)
+        Self::new(&[], WorkerInputs::NONE, &NO_CACHE, NO_INFO, &no_taints)
     }
 }
 
@@ -139,6 +167,7 @@ impl<'a> WorkerCandidates<'a> {
         inputs: WorkerInputs,
         cache_snapshot: &'a CacheSnapshot<'a>,
         info: WorkerInfoLookup<'a>,
+        taints: WorkerTaintsLookup<'a>,
     ) -> Self {
         debug_assert!(u32::try_from(rows.len()).is_ok());
         Self {
@@ -146,6 +175,7 @@ impl<'a> WorkerCandidates<'a> {
             inputs,
             cache_snapshot,
             info,
+            taints,
         }
     }
 
@@ -156,6 +186,7 @@ impl<'a> WorkerCandidates<'a> {
             row: row as u32,
             cache_snapshot: self.cache_snapshot,
             info: self.info,
+            taints: self.taints,
         }
     }
 
@@ -206,6 +237,10 @@ impl WorkerInputs {
     pub const LOAD: Self = Self(1 << 1);
     /// Request preferred-taint routing metadata.
     pub const PREFERRED_TAINT: Self = Self(1 << 2);
+    /// Request each worker's taints, read through [`WorkerCandidate::taints`]. A classifier
+    /// that declares it pays one copy of each eligible worker's taint set per request; worker
+    /// selection reads them from the live worker map.
+    pub const TAINTS: Self = Self(1 << 3);
     /// Request each row's active request count, read through
     /// [`WorkerInputView::active_requests`]. Picker only: filters and scorers that declare it
     /// receive nothing.
@@ -256,6 +291,8 @@ pub(crate) struct WorkerInputRows {
     // Index-aligned with `rows`. The rows outlive the worker map, so they carry each rank's
     // capacity; the rank itself is already in the row.
     capacities: Vec<WorkerCapacity>,
+    // Index-aligned with `rows` when `inputs` contains TAINTS; otherwise empty.
+    taints: Vec<HashSet<String>>,
     shared_hits: Option<SharedCacheHits>,
     has_tier_matches: bool,
 }
@@ -265,13 +302,16 @@ impl WorkerInputRows {
         inputs: WorkerInputs,
         rows: Vec<CandidateData>,
         capacities: Vec<WorkerCapacity>,
+        taints: Vec<HashSet<String>>,
         cache_snapshot: CacheSnapshot<'_>,
     ) -> Self {
         debug_assert_eq!(rows.len(), capacities.len());
+        debug_assert!(taints.is_empty() || taints.len() == rows.len());
         Self {
             inputs,
             rows,
             capacities,
+            taints,
             shared_hits: if inputs.contains(WorkerInputs::CACHE) {
                 cache_snapshot.shared_hits.cloned()
             } else {
@@ -287,6 +327,7 @@ impl WorkerInputRows {
             inputs: WorkerInputs::NONE,
             rows: Vec::new(),
             capacities: Vec::new(),
+            taints: Vec::new(),
             shared_hits: None,
             has_tier_matches: false,
         }
@@ -299,11 +340,13 @@ impl WorkerInputRows {
             has_tier_matches: self.has_tier_matches,
         };
         let info = |row: usize| WorkerInfo::new(self.rows[row].worker, self.capacities[row]);
+        let taints = |row: usize| self.taints.get(row).unwrap_or_else(|| no_taints(row));
         read(WorkerCandidates::new(
             &self.rows,
             self.inputs,
             &cache_snapshot,
             &info,
+            &taints,
         ))
     }
 }

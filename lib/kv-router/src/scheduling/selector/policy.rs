@@ -11,7 +11,7 @@ use crossbeam_queue::ArrayQueue;
 use super::DefaultWorkerPicker;
 use super::{
     HostedWorkerPicker, MaterializedSelectionInput, WorkerSelectionInput, WorkerSelector,
-    select_worker_with_policy, worker_info,
+    select_worker_with_policy, worker_info, worker_taints,
 };
 
 use crate::kv_hints::{KvTransferSourceSummary, KvTransferTarget};
@@ -368,13 +368,14 @@ impl ComposedPolicyState {
         }
         let unscored_candidates: &[CandidateData] = unscored_candidates;
         let info = |row: usize| worker_info(workers, unscored_candidates[row].worker);
+        let taints = |row: usize| worker_taints(workers, unscored_candidates[row].worker.worker_id);
         debug_assert_eq!(unscored_candidates.len(), candidates.len());
         score_contributions.resize(candidates.len(), f64::NAN);
         for (scorer_index, (inputs, scorer)) in scorers.iter().enumerate() {
             score_contributions.fill(f64::NAN);
             scorer.score(
                 context,
-                WorkerCandidates::new(unscored_candidates, *inputs, cache_snapshot, &info),
+                WorkerCandidates::new(unscored_candidates, *inputs, cache_snapshot, &info, &taints),
                 score_contributions,
             )?;
             for (row, (contribution, scored)) in score_contributions
@@ -651,10 +652,17 @@ pub(super) fn collect_policy_candidates<C: WorkerConfigLike>(
             state.filter_inputs,
         );
         let info = |_: usize| WorkerInfo::of(worker, config);
+        let taints = |_: usize| config.taints();
         for (inputs, filter) in &state.filters {
             match filter.keep(
                 &input.context,
-                WorkerCandidate::new(&filter_candidate, *inputs, &input.cache_snapshot, &info),
+                WorkerCandidate::new(
+                    &filter_candidate,
+                    *inputs,
+                    &input.cache_snapshot,
+                    &info,
+                    &taints,
+                ),
             ) {
                 Ok(true) => {}
                 Ok(false) => return false,

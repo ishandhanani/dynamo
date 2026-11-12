@@ -10,6 +10,7 @@
 
 mod cold_pool;
 mod default;
+mod isl_pool;
 pub mod router_modes;
 mod sticky_min_load;
 mod thunderagent;
@@ -44,6 +45,7 @@ use dynamo_kv_router::plugins::{RouterPluginRegistry, RouterPluginRegistryError}
 pub fn register(registry: &mut RouterPluginRegistry) -> Result<(), RouterPluginRegistryError> {
     default::register(registry)?;
     cold_pool::register(registry)?;
+    isl_pool::register(registry)?;
     sticky_min_load::register(registry)?;
     two_tier_cost_fn::register(registry)?;
     thunderagent::register(registry)?;

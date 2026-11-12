@@ -198,8 +198,10 @@ impl DiscoveredEngine {
     pub(crate) fn worker_config(&self, args: Args) -> WorkerConfig {
         let common = args.sidecar.common;
         let mode = common.disaggregation_mode;
+        let taints = common.taints();
         WorkerConfig {
             runtime: common.runtime,
+            taints,
             namespace: common.namespace,
             // A decode worker registers under the decode role's component so
             // the frontend's prefill router finds it; an aggregated worker

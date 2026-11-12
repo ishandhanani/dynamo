@@ -257,6 +257,7 @@ impl TrtllmSidecarEngine {
         // Off by default: TensorRT-LLM's xgrammar rejects several tag formats (NVIDIA/TensorRT-LLM#19913).
         let structural_tag = args.sidecar.common.structural_tag(false);
         let config = WorkerConfig {
+            taints: args.sidecar.common.taints(),
             runtime: args.sidecar.common.runtime,
             namespace: args.sidecar.common.namespace,
             // Every disaggregated role registers under its own component so
