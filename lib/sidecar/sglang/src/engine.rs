@@ -190,8 +190,10 @@ impl SglangSidecarEngine {
         let native_http_max_event_bytes = args.native_http_max_event_bytes.get();
         let common = args.sidecar.common;
         let structural_tag = common.structural_tag(true);
+        let taints = common.taints();
         let config = WorkerConfig {
             runtime: common.runtime,
+            taints,
             namespace: common.namespace,
             component: if disaggregation_mode == DisaggregationMode::Aggregated {
                 common.component

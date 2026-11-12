@@ -3,7 +3,7 @@
 
 use std::{
     cell::{Cell, OnceCell},
-    collections::HashMap,
+    collections::{HashMap, HashSet},
 };
 
 mod hosted;
@@ -29,7 +29,7 @@ use crate::kv_hints::{
 };
 use crate::plugins::worker_selection::{
     CacheSnapshot, CandidateData, WorkerCacheData, WorkerCapacity, WorkerInfo, WorkerInputRows,
-    WorkerTransferInput,
+    WorkerTransferInput, no_taints,
 };
 use crate::plugins::worker_selection::{
     RuntimePolicyConfig, RuntimePolicyError, RuntimePolicyUpdate,
@@ -424,10 +424,15 @@ pub(crate) fn worker_input_rows<C: WorkerConfigLike>(
 ) -> WorkerInputRows {
     let materialize_preferred_taint =
         eligibility.pinned_worker().is_none() && inputs.contains(WorkerInputs::PREFERRED_TAINT);
+    let materialize_taints = inputs.contains(WorkerInputs::TAINTS);
     let mut rows = Vec::new();
     let mut capacities = Vec::new();
+    let mut taints = Vec::new();
     eligibility.any_eligible_worker_rank(workers, |worker, config| {
         capacities.push(WorkerCapacity::of(config));
+        if materialize_taints {
+            taints.push(config.taints().clone());
+        }
         let preferred_taint_multiplier = if materialize_preferred_taint {
             request
                 .routing_constraints
@@ -444,7 +449,17 @@ pub(crate) fn worker_input_rows<C: WorkerConfigLike>(
         ));
         false
     });
-    WorkerInputRows::new(inputs, rows, capacities, cache_snapshot(request))
+    WorkerInputRows::new(inputs, rows, capacities, taints, cache_snapshot(request))
+}
+
+/// Taints of the worker owning `worker_id`, or none for a worker that left the map.
+pub(crate) fn worker_taints<C: WorkerConfigLike>(
+    workers: &HashMap<WorkerId, C>,
+    worker_id: WorkerId,
+) -> &HashSet<String> {
+    workers
+        .get(&worker_id)
+        .map_or_else(|| no_taints(0), |config| config.taints())
 }
 
 /// Static info for a rank of `workers`, looked up only when a component asks for it.
