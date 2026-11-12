@@ -2133,6 +2133,7 @@ dependencies = [
 name = "dynamo-error"
 version = "1.8.0"
 dependencies = [
+ "http 1.4.2",
  "serde",
  "serde_json",
 ]
@@ -2318,6 +2319,7 @@ dependencies = [
  "dialoguer",
  "dynamo-admission",
  "dynamo-decisions",
+ "dynamo-error",
  "dynamo-global-common",
  "dynamo-global-discovery-client",
  "dynamo-global-view-broadcaster",
@@ -2622,6 +2624,7 @@ dependencies = [
  "dashmap",
  "dynamo-admission",
  "dynamo-backend-common",
+ "dynamo-error",
  "dynamo-generate-format-catalog",
  "dynamo-kv-events",
  "dynamo-kv-hashing",
@@ -2863,6 +2866,7 @@ version = "1.8.0"
 dependencies = [
  "axum",
  "base64 0.22.1",
+ "dynamo-error",
  "dynamo-llm",
  "dynamo-protocols 10.0.1",
  "dynamo-runtime",
@@ -3035,6 +3039,7 @@ dependencies = [
  "anyhow",
  "axum",
  "base64 0.22.1",
+ "dynamo-error",
  "dynamo-kv-events",
  "dynamo-kv-hashing",
  "dynamo-llm",
