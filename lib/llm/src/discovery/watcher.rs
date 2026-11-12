@@ -27,6 +27,7 @@ use crate::{
     backend::Backend,
     discovery::{LoadThresholdHandle, WORKER_TYPE_DECODE, WorkerSet},
     entrypoint::{self, ChatEngineFactoryCallback},
+    json::canonicalize_json_object_keys,
     kv_router::{
         EncoderRouter, PrefillRouter, RouterLoadSource, RoutingLoadContext,
         plugins::RouterPluginBuilder,
@@ -61,7 +62,6 @@ use crate::{
     },
     router_config::RouterConfig,
     types::generic::realtime::{DynamoRealtimeClientEvent, RealtimeServerEvent},
-    utils::json::canonicalize_json_object_keys,
     worker_type::WorkerType,
 };
 use dynamo_http_server::metrics::Metrics;
