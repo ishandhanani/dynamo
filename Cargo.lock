@@ -2370,6 +2370,55 @@ dependencies = [
 ]
 
 [[package]]
+name = "dynamo-block-manager"
+version = "1.7.0"
+dependencies = [
+ "aligned-vec",
+ "anyhow",
+ "assert_matches",
+ "async-trait",
+ "axum 0.8.4",
+ "bincode 2.0.1",
+ "blake3",
+ "bytemuck",
+ "bytes",
+ "clap",
+ "criterion",
+ "cudarc",
+ "derive-getters",
+ "derive_builder",
+ "dynamo-kv-events",
+ "dynamo-kv-hashing",
+ "dynamo-memory",
+ "dynamo-runtime",
+ "futures",
+ "futures-util",
+ "indicatif 0.18.4",
+ "lazy_static",
+ "nix 0.26.4",
+ "nixl-sys",
+ "offset-allocator",
+ "oneshot",
+ "parking_lot",
+ "prometheus",
+ "rayon",
+ "rmp-serde",
+ "rstest 0.18.2",
+ "serde",
+ "serde_json",
+ "temp-env",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tmq",
+ "tokio",
+ "tokio-util",
+ "tracing",
+ "uuid",
+ "validator",
+ "xxhash-rust",
+]
+
+[[package]]
 name = "dynamo-codegen"
 version = "0.1.0"
 dependencies = [
@@ -2843,17 +2892,14 @@ dependencies = [
 name = "dynamo-llm"
 version = "1.7.0"
 dependencies = [
- "aligned-vec",
  "anyhow",
  "approx",
  "arc-swap",
- "assert_matches",
  "async-nats",
  "async-stream",
  "async-trait",
  "axum 0.8.4",
  "base64 0.22.1",
- "bincode 2.0.1",
  "bitflags 2.13.2",
  "blake3",
  "bs62",
@@ -2910,7 +2956,6 @@ dependencies = [
  "insta",
  "ipnet",
  "json-five",
- "lazy_static",
  "libc",
  "libloading 0.8.9",
  "llm-multimodal",
@@ -2924,10 +2969,7 @@ dependencies = [
  "modelexpress-common",
  "moka",
  "ndarray 0.16.1",
- "nix 0.26.4",
- "nixl-sys",
  "object_store 0.12.5",
- "offset-allocator",
  "oneshot",
  "opentelemetry",
  "opentelemetry-otlp",

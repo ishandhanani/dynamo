@@ -9,16 +9,14 @@ use std::{
 use derive_getters::Dissolve;
 use pyo3::{prelude::*, wrap_pymodule};
 
-use dynamo_llm::{
-    block_manager::{
-        BasicMetadata, DeviceStorage, Storage,
-        block::{
-            BlockId, ImmutableBlock, MutableBlock,
-            data::logical::distributed_leader_worker::DistributedLeaderWorkerResources,
-            locality::{LocalityProvider, Logical},
-        },
-        pool::{BlockPool, BlockPoolError},
+use dynamo_block_manager::{
+    BasicMetadata, DeviceStorage, Storage,
+    block::{
+        BlockId, ImmutableBlock, MutableBlock,
+        data::logical::distributed_leader_worker::DistributedLeaderWorkerResources,
+        locality::{LocalityProvider, Logical},
     },
+    pool::{BlockPool, BlockPoolError},
     tokens::{SaltHash, SequenceHash, TokenBlockSequence, Tokens},
 };
 

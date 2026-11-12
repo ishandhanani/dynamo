@@ -3,8 +3,8 @@
 
 use super::*;
 
-pub use dynamo_llm::block_manager::controller::client::ControlClient;
-pub use dynamo_llm::block_manager::controller::{CacheLevel, Controller};
+pub use dynamo_block_manager::controller::client::ControlClient;
+pub use dynamo_block_manager::controller::{CacheLevel, Controller};
 
 #[pyclass]
 pub struct BlockManagerClient {
@@ -70,7 +70,7 @@ impl BlockManagerClient {
 #[pyclass]
 #[derive(Clone)]
 pub struct BlockPoolStatus {
-    inner: dynamo_llm::block_manager::pool::BlockPoolStatus,
+    inner: dynamo_block_manager::pool::BlockPoolStatus,
 }
 
 #[pymethods]
@@ -90,7 +90,7 @@ impl BlockPoolStatus {
 
 #[pyclass]
 pub struct ResetBlocksResponse {
-    inner: dynamo_llm::block_manager::pool::ResetBlocksResponse,
+    inner: dynamo_block_manager::pool::ResetBlocksResponse,
 }
 
 #[pymethods]

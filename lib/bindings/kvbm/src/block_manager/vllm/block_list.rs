@@ -5,9 +5,9 @@ use super::*;
 
 use std::sync::Arc;
 
-use dynamo_llm::block_manager as bm;
-use dynamo_llm::block_manager::block::data::logical::distributed_leader_worker::DistributedLeaderWorkerResources;
-use dynamo_llm::block_manager::block::locality::Logical;
+use dynamo_block_manager as bm;
+use dynamo_block_manager::block::data::logical::distributed_leader_worker::DistributedLeaderWorkerResources;
+use dynamo_block_manager::block::locality::Logical;
 
 use crate::to_pyerr;
 

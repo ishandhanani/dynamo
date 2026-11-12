@@ -21,10 +21,11 @@ crate-type = ["cdylib", "rlib"]
 
 [features]
 default = ["block-manager"]
-block-manager = ["dynamo-llm/block-manager", "dep:dlpark", "dep:cudarc"]
-nccl = ["block-manager", "dynamo-llm/nccl", "cudarc/nccl"]  # Enable NCCL collective operations for replicated mode
+block-manager = ["dep:dlpark", "dep:cudarc"]
+nccl = ["block-manager", "dynamo-block-manager/nccl", "cudarc/nccl"]  # Enable NCCL collective operations for replicated mode
 
 [dependencies]
+dynamo-block-manager = { path = "../../block-manager" }
 dynamo-llm = { path = "../../llm" }
 dynamo-runtime = { path = "../../runtime" }
 

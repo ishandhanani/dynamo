@@ -2080,6 +2080,47 @@ dependencies = [
 ]
 
 [[package]]
+name = "dynamo-block-manager"
+version = "1.7.0"
+dependencies = [
+ "aligned-vec",
+ "anyhow",
+ "async-trait",
+ "axum",
+ "bincode 2.0.1",
+ "blake3",
+ "bytemuck",
+ "bytes",
+ "cudarc",
+ "derive-getters",
+ "derive_builder",
+ "dynamo-kv-events",
+ "dynamo-kv-hashing",
+ "dynamo-memory",
+ "dynamo-runtime",
+ "futures",
+ "futures-util",
+ "nix 0.26.4",
+ "nixl-sys",
+ "offset-allocator",
+ "oneshot",
+ "parking_lot",
+ "prometheus",
+ "rayon",
+ "rmp-serde",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tmq",
+ "tokio",
+ "tokio-util",
+ "tracing",
+ "uuid",
+ "validator",
+ "xxhash-rust",
+]
+
+[[package]]
 name = "dynamo-decisions"
 version = "0.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2244,7 +2285,6 @@ dependencies = [
 name = "dynamo-llm"
 version = "1.7.0"
 dependencies = [
- "aligned-vec",
  "anyhow",
  "arc-swap",
  "async-nats",
@@ -2252,14 +2292,12 @@ dependencies = [
  "async-trait",
  "axum",
  "base64 0.22.1",
- "bincode 2.0.1",
  "bitflags 2.12.1",
  "blake3",
  "bs62",
  "bytemuck",
  "bytes",
  "chrono",
- "cudarc",
  "dashmap",
  "derive-getters",
  "derive_builder",
@@ -2312,10 +2350,7 @@ dependencies = [
  "modelexpress-common",
  "moka",
  "ndarray",
- "nix 0.26.4",
- "nixl-sys",
  "object_store 0.12.5",
- "offset-allocator",
  "oneshot",
  "opentelemetry",
  "opentelemetry-otlp",
@@ -4700,6 +4735,7 @@ dependencies = [
  "cudarc",
  "derive-getters",
  "dlpark",
+ "dynamo-block-manager",
  "dynamo-llm",
  "dynamo-runtime",
  "pyo3",

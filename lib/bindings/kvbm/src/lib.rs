@@ -13,8 +13,6 @@ use dynamo_runtime::{
     self as rs, RuntimeConfig, config, logging, traits::DistributedRuntimeProvider,
 };
 
-use dynamo_llm::{self as llm_rs};
-
 mod block_manager;
 
 /// A Python module implemented in Rust. The name of this function must match

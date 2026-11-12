@@ -3,6 +3,7 @@
 
 [workspace]
 members = [
+    "lib/block-manager",
     "lib/llm",
     "lib/lora",
     "lib/rl",
@@ -119,6 +120,7 @@ dynamo-parsers = { version = "=11.0.11" }
 #   sparse index: curl https://index.crates.io/dy/na/dynamo-parsers-v2   (one JSON line per release; read the "vers" field)
 dynamo-parsers-v2 = { version = "=0.10.2" }
 dynamo-backend-common = { path = "lib/backend-common", version = "1.7.0" }
+dynamo-block-manager = { path = "lib/block-manager", version = "1.7.0" }
 dynamo-sidecar-common = { path = "lib/sidecar/common", version = "1.7.0" }
 
 

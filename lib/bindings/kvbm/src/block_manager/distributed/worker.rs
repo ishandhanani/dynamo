@@ -6,14 +6,14 @@ use super::*;
 use std::sync::Arc;
 use utils::{get_leader_zmq_ack_url, get_leader_zmq_pub_url};
 
-use llm_rs::block_manager::distributed::{
+use dynamo_block_manager::distributed::{
     BlockTransferHandler as RustBlockTransferHandler, KvbmWorker as KvbmWorkerImpl,
     KvbmWorkerConfig, NcclConfig,
 };
 #[cfg(feature = "nccl")]
-use llm_rs::block_manager::distributed::{NcclBootstrap, NcclCommOwned};
-use llm_rs::block_manager::layout::LayoutType;
-use llm_rs::block_manager::storage::torch::{TorchDevice, TorchTensor};
+use dynamo_block_manager::distributed::{NcclBootstrap, NcclCommOwned};
+use dynamo_block_manager::layout::LayoutType;
+use dynamo_block_manager::storage::torch::{TorchDevice, TorchTensor};
 
 /// Build NcclConfig from Python parameters.
 ///
