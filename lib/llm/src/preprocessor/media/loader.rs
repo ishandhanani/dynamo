@@ -17,8 +17,9 @@ use dynamo_runtime::error::{DynamoError, ErrorType};
 
 use super::common::EncodedMediaData;
 use super::decoders::{Decoder, MediaDecoder};
-use super::rdma::{DataType, RdmaMediaDataDescriptor, drain_nixl_notifications, get_nixl_agent};
+use super::rdma::{drain_nixl_notifications, get_nixl_agent};
 use super::require_image_url;
+use crate::protocols::common::media::{DataType, RdmaMediaDataDescriptor};
 use lru::LruCache;
 use parking_lot::Mutex;
 use std::collections::hash_map::DefaultHasher;
@@ -784,7 +785,6 @@ impl MediaLoader {
 #[cfg(all(test, feature = "testing-nixl"))]
 mod tests {
     use super::super::decoders::ImageDecoder;
-    use super::super::rdma::DataType;
     use super::*;
     use dynamo_protocols::types::{ChatCompletionRequestMessageContentPartImage, ImageUrl};
 
