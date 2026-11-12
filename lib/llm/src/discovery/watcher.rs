@@ -26,7 +26,7 @@ use dynamo_renderer::PromptFormatter;
 use crate::{
     backend::Backend,
     discovery::{LoadThresholdHandle, WORKER_TYPE_DECODE, WorkerSet},
-    entrypoint::{self, ChatEngineFactoryCallback, RouterConfig},
+    entrypoint::{self, ChatEngineFactoryCallback},
     http::service::metrics::Metrics,
     kv_router::plugins::RouterPluginBuilder,
     kv_router::{EncoderRouter, PrefillRouter, RouterLoadSource, RoutingLoadContext},
@@ -58,6 +58,7 @@ use crate::{
         },
         tensor::{NvCreateTensorRequest, NvCreateTensorResponse},
     },
+    router_config::RouterConfig,
     types::generic::realtime::{DynamoRealtimeClientEvent, RealtimeServerEvent},
     utils::json::canonicalize_json_object_keys,
     worker_type::WorkerType,
@@ -1638,7 +1639,7 @@ mod tests {
 
     #[test]
     fn direct_routing_gets_a_threshold_handle_that_ignores_thresholds() {
-        let thresholds = crate::discovery::LoadThresholdConfig {
+        let thresholds = crate::router_config::LoadThresholdConfig {
             active_decode_blocks_threshold: Some(0.9),
             ..Default::default()
         };
@@ -2629,7 +2630,7 @@ request_classifier:
             .unwrap();
         let manager = Arc::new(ModelManager::new());
         let router_config = RouterConfig {
-            load_threshold_config: crate::discovery::LoadThresholdConfig {
+            load_threshold_config: crate::router_config::LoadThresholdConfig {
                 active_decode_blocks_threshold: Some(0.8),
                 ..Default::default()
             },

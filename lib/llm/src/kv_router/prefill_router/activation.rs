@@ -669,9 +669,9 @@ mod tests {
 
     use super::*;
     use crate::discovery::CommittedWorkerSetTarget;
-    use crate::entrypoint::RouterConfig;
     use crate::kv_router::prefill_router::PrefillRouterLifecycle;
     use crate::protocols::common::llm_backend::{LLMEngineOutput, PreprocessedRequest};
+    use crate::router_config::RouterConfig;
     use dynamo_kv_router::config::KvRouterConfig;
     use dynamo_runtime::protocols::annotated::Annotated;
     use dynamo_runtime::{
