@@ -6,14 +6,15 @@ use std::sync::Once;
 
 use anyhow::{Context as _, Result};
 use image::metadata::Orientation;
-use image::{ColorType, DynamicImage, ImageDecoder as _, ImageFormat, ImageReader};
+use image::{DynamicImage, ImageDecoder as _, ImageFormat, ImageReader};
 use ndarray::Array3;
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
 use super::super::common::EncodedMediaData;
 use super::super::rdma::DecodedMediaData;
-use super::{DecodedMediaMetadata, Decoder};
+use super::Decoder;
+use crate::protocols::common::media::{DecodedMediaMetadata, ImageLayout, ImageMetadata};
 use backends::{
     BackendAvailability, BackendDecline, DecodedImage, ImageDecodeBackend, ImageDecodeOutcome,
     ImageDecodeRequest, PixelFormat, image_reader_backend, turbojpeg_backend,
@@ -108,19 +109,6 @@ impl Default for ImageDecoder {
             apply_exif_orientation: false,
         }
     }
-}
-
-#[allow(clippy::upper_case_acronyms)]
-#[derive(Serialize, Deserialize, Clone, Copy, Debug)]
-pub enum ImageLayout {
-    HWC,
-}
-
-#[derive(Serialize, Deserialize, Clone, Copy, Debug)]
-pub struct ImageMetadata {
-    pub(crate) format: Option<ImageFormat>,
-    pub(crate) color_type: ColorType,
-    pub(crate) layout: ImageLayout,
 }
 
 impl Decoder for ImageDecoder {
@@ -316,10 +304,10 @@ impl ImageDecoder {
 
 #[cfg(test)]
 mod tests {
-    use super::super::super::rdma::DataType;
     use super::*;
     use crate::preprocessor::media::jpeg_turbo;
-    use image::{DynamicImage, ImageBuffer};
+    use crate::protocols::common::media::DataType;
+    use image::{ColorType, DynamicImage, ImageBuffer};
     use rstest::rstest;
     use std::io::Cursor;
 

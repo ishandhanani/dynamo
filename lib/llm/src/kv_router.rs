@@ -79,7 +79,6 @@ pub use active_load::ActiveLoad;
 pub use encoder_router::EncoderRouter;
 pub use indexer::Indexer;
 pub use prefill_router::PrefillRouter;
-pub(crate) use request_lease::RequestAttemptRelease;
 pub use routing_host::{
     KvPushRouter, LlmDispatch, MultimodalCache, RoutingHost, RoutingHostBuilder,
 };

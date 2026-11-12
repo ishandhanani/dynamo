@@ -14,9 +14,8 @@ use utoipa::ToSchema;
 use video_rs::Time;
 
 use super::Decoder;
-use crate::preprocessor::media::{
-    DecodedMediaData, EncodedMediaData, decoders::DecodedMediaMetadata,
-};
+use crate::preprocessor::media::{DecodedMediaData, EncodedMediaData};
+use crate::protocols::common::media::{DecodedMediaMetadata, VideoMetadata};
 
 /// Small time buffer (seconds) to avoid edge cases when seeking near frame boundaries
 const FRAME_TIME_BUFFER_SECS: f64 = 0.001;
@@ -56,13 +55,6 @@ pub struct VideoDecoder {
     /// fail if some frames fail to decode
     #[serde(default)]
     pub(crate) strict: bool,
-}
-
-#[derive(Serialize, Deserialize, Clone, Debug)]
-pub struct VideoMetadata {
-    pub(crate) source_fps: f64,
-    pub(crate) source_duration: f64,
-    pub(crate) sampled_timestamps: Vec<f64>,
 }
 
 struct SourceVideoTiming {
@@ -614,8 +606,8 @@ impl Decoder for VideoDecoder {
 
 #[cfg(test)]
 mod tests {
-    use super::super::super::rdma::DataType;
     use super::*;
+    use crate::protocols::common::media::DataType;
     use rstest::rstest;
     use video_rs::Location;
 
