@@ -9,7 +9,6 @@ use std::time::Duration;
 
 use anyhow::Error;
 use base64::Engine as _;
-use dynamo_llm::endpoint_type::EndpointType;
 use dynamo_llm::http::service::{
     Metrics,
     metrics::{Endpoint, ErrorType as MetricErrorType, RequestType, Status},
@@ -19,6 +18,7 @@ use dynamo_llm::protocols::Annotated;
 use dynamo_llm::protocols::openai::transcriptions::{
     NvAudioTranscriptionResponse, NvCreateAudioTranscriptionRequest,
 };
+use dynamo_model_card::endpoint_type::EndpointType;
 use dynamo_runtime::CancellationToken;
 use dynamo_runtime::error::{BackendError, DynamoError, ErrorType};
 use dynamo_runtime::pipeline::{

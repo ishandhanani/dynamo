@@ -15,13 +15,13 @@ use std::time::Duration;
 
 use dynamo_llm::admission_gate::{AdmissionEngine, WorkerAdmissionGate};
 use dynamo_llm::first_token::FirstTokenSource;
-use dynamo_llm::local_model::runtime_config::{
+use dynamo_llm::worker_type::WorkerType;
+use dynamo_model_card::local_model::runtime_config::{
     DisaggregatedEndpoint, ModelRuntimeConfig, StructuralTagConfig, TOPOLOGY_TAINT_PREFIX,
 };
-use dynamo_llm::local_model::{LocalModel, LocalModelBuilder, update_model_taints};
-use dynamo_llm::media_config::{MediaDecoder, MediaFetcher};
-use dynamo_llm::model_type::{ModelInput, ModelType};
-use dynamo_llm::worker_type::WorkerType;
+use dynamo_model_card::local_model::{LocalModel, LocalModelBuilder, update_model_taints};
+use dynamo_model_card::media_config::{MediaDecoder, MediaFetcher};
+use dynamo_model_card::model_type::{ModelInput, ModelType};
 use dynamo_runtime::config::HealthStatus;
 use dynamo_runtime::engine_routes::EngineRouteCallback;
 use dynamo_runtime::pipeline::network::Ingress;

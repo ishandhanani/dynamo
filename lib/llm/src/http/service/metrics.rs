@@ -31,13 +31,13 @@ use std::{
 
 use crate::discovery::{ModelManager, UNKNOWN_METRIC_MODEL};
 use crate::frontend_load::{FrontendLoadFrame, FrontendModelLoad, RequestGauges, RequestTotals};
-use crate::local_model::runtime_config::ModelRuntimeConfig;
-use crate::model_card::ModelDeploymentCard;
 use crate::protocols::{
     common::metrics::{ANNOTATION_LLM_METRICS, LLMMetricAnnotation},
     openai::chat_completions::NvCreateChatCompletionStreamResponse,
 };
-use crate::reasoning_field::{ReasoningField, RoutedReasoning};
+use dynamo_model_card::local_model::runtime_config::ModelRuntimeConfig;
+use dynamo_model_card::model_card::ModelDeploymentCard;
+use dynamo_model_card::reasoning_field::{ReasoningField, RoutedReasoning};
 use dynamo_runtime::metrics::prometheus_names::clamp_u64_to_i64;
 use dynamo_runtime::{engine::Data, pipeline::Context};
 

@@ -58,21 +58,6 @@ use tokio_util::sync::CancellationToken;
 use tracing::{self, Instrument};
 
 use crate::http::service::metrics::RequestMetrics;
-#[cfg(all(feature = "mm-routing", feature = "media-ffmpeg"))]
-use crate::local_model::runtime_config::{
-    ModelRuntimeConfig, SGLANG_QWEN_VIDEO_PROCESSOR_CONTRACT_RUNTIME_KEY,
-    VLLM_NEMOTRON_VIDEO_PROCESSOR_CONTRACT_RUNTIME_KEY,
-    VLLM_QWEN_VIDEO_PROCESSOR_CONTRACT_RUNTIME_KEY,
-};
-use crate::local_model::runtime_config::{
-    SGLANG_GENERATE_CAPABILITY, TOKEN_BUDGET_RUNTIME_KEY, TokenBudget,
-};
-use crate::media_config::MediaDecoder;
-#[cfg(feature = "mm-routing")]
-use crate::media_config::MediaFetcher;
-#[cfg(feature = "mm-routing")]
-use crate::model_card::ModelInfoType;
-use crate::model_card::{ModelDeploymentCard, ModelInfo, PromptFormatterArtifact};
 #[cfg(feature = "mm-routing")]
 use crate::preprocessor::media::MediaFetcherPolicy;
 use crate::preprocessor::media::{MediaLoader, max_data_url_bytes};
@@ -82,6 +67,21 @@ use crate::protocols::common::preprocessor::{
 };
 use crate::protocols::common::timing::RequestTracker;
 use crate::tokenizers::Encoding;
+#[cfg(all(feature = "mm-routing", feature = "media-ffmpeg"))]
+use dynamo_model_card::local_model::runtime_config::{
+    ModelRuntimeConfig, SGLANG_QWEN_VIDEO_PROCESSOR_CONTRACT_RUNTIME_KEY,
+    VLLM_NEMOTRON_VIDEO_PROCESSOR_CONTRACT_RUNTIME_KEY,
+    VLLM_QWEN_VIDEO_PROCESSOR_CONTRACT_RUNTIME_KEY,
+};
+use dynamo_model_card::local_model::runtime_config::{
+    SGLANG_GENERATE_CAPABILITY, TOKEN_BUDGET_RUNTIME_KEY, TokenBudget,
+};
+use dynamo_model_card::media_config::MediaDecoder;
+#[cfg(feature = "mm-routing")]
+use dynamo_model_card::media_config::MediaFetcher;
+#[cfg(feature = "mm-routing")]
+use dynamo_model_card::model_card::ModelInfoType;
+use dynamo_model_card::model_card::{ModelDeploymentCard, ModelInfo, PromptFormatterArtifact};
 
 use dynamo_parsers::{
     ReasoningParser, ReasoningParserType, reasoning::ParserResult,
@@ -1113,9 +1113,9 @@ enum RoutingImageDimensionPolicy {
 
 #[cfg(feature = "mm-routing")]
 fn runtime_has_vllm_generate_capability(
-    runtime_config: &crate::local_model::runtime_config::ModelRuntimeConfig,
+    runtime_config: &dynamo_model_card::local_model::runtime_config::ModelRuntimeConfig,
 ) -> bool {
-    use crate::local_model::runtime_config::VLLM_INFERENCE_V1_GENERATE_CAPABILITY;
+    use dynamo_model_card::local_model::runtime_config::VLLM_INFERENCE_V1_GENERATE_CAPABILITY;
 
     runtime_config
         .get_engine_specific::<bool>(VLLM_INFERENCE_V1_GENERATE_CAPABILITY)
@@ -1126,7 +1126,7 @@ fn runtime_has_vllm_generate_capability(
 
 #[cfg(feature = "mm-routing")]
 fn routing_image_dimension_policy(
-    runtime_config: &crate::local_model::runtime_config::ModelRuntimeConfig,
+    runtime_config: &dynamo_model_card::local_model::runtime_config::ModelRuntimeConfig,
     frontend_decoding: bool,
     prompt_layout: Option<RoutingImagePromptLayout>,
 ) -> RoutingImageDimensionPolicy {
@@ -1640,8 +1640,8 @@ fn mdc_model_dir(mdc: &ModelDeploymentCard) -> Option<std::path::PathBuf> {
 /// request 20 minutes in. Text-only deployments skip the force, leaving
 /// the LazyLock dormant.
 #[cfg(feature = "mm-routing")]
-static DIM_FETCH_MEDIA_FETCHER: std::sync::LazyLock<crate::media_config::MediaFetcher> =
-    std::sync::LazyLock::new(crate::media_config::MediaFetcher::from_env);
+static DIM_FETCH_MEDIA_FETCHER: std::sync::LazyLock<dynamo_model_card::media_config::MediaFetcher> =
+    std::sync::LazyLock::new(dynamo_model_card::media_config::MediaFetcher::from_env);
 
 #[cfg(feature = "mm-routing")]
 static DIM_FETCH_HTTP_CLIENT: std::sync::LazyLock<reqwest::Client> =
@@ -1996,7 +1996,7 @@ pub struct OpenAIPreprocessor {
     token_id_bound: Option<usize>,
     lora_name: Option<String>,
     /// Per-model runtime configuration propagated to response generator (e.g., reasoning/tool parser)
-    runtime_config: crate::local_model::runtime_config::ModelRuntimeConfig,
+    runtime_config: dynamo_model_card::local_model::runtime_config::ModelRuntimeConfig,
     structural_tag_reasoning_boundary: structural_tag::ResolvedReasoningBoundary,
     /// KV cache block size published in the model deployment card.
     kv_cache_block_size: usize,
@@ -2371,7 +2371,7 @@ impl OpenAIPreprocessor {
     }
 
     fn apply_default_thinking_mode_from_runtime_config(
-        runtime_config: &crate::local_model::runtime_config::ModelRuntimeConfig,
+        runtime_config: &dynamo_model_card::local_model::runtime_config::ModelRuntimeConfig,
         request: &mut NvCreateChatCompletionRequest,
     ) {
         let default_mode = runtime_config
@@ -2995,13 +2995,13 @@ impl OpenAIPreprocessor {
                 mdc.runtime_config.reasoning_parser.as_deref(),
             )?;
         let normalize_tool_call_args = mdc.runtime_config.tool_call_arguments_format
-            == crate::local_model::runtime_config::ToolCallArgumentsFormat::JsonObject
+            == dynamo_model_card::local_model::runtime_config::ToolCallArgumentsFormat::JsonObject
             || mdc.runtime_config.tool_call_parser.as_deref() == Some("glm47");
         let beam_route = mdc.model_type.supports_chat()
             && crate::protocols::openai::chat_completions::unified_parser::selected_family(
                 tool_call_parser.as_deref(),
                 mdc.runtime_config.reasoning_parser.as_deref(),
-            ) == Some(crate::parser_family::BEAM_UNIFIED_FAMILY);
+            ) == Some(dynamo_model_card::parser_family::BEAM_UNIFIED_FAMILY);
 
         if let Some(ref lora_name) = lora_name {
             tracing::info!(model = %mdc.display_name, lora_name, "LoRA adapter detected in MDC");
@@ -4025,7 +4025,7 @@ impl OpenAIPreprocessor {
             None
         };
         let final_message_start_tag = (continue_final
-            && crate::parser_family::configured_family(
+            && dynamo_model_card::parser_family::configured_family(
                 self.tool_call_parser.as_deref(),
                 self.runtime_config.reasoning_parser.as_deref(),
             ) == Some("gpt_oss"))
@@ -5289,7 +5289,7 @@ impl OpenAIPreprocessor {
                 .send()
                 .await
                 .map_err(|error| {
-                    crate::media_config::MediaFetcher::map_fetch_error(error.into())
+                    dynamo_model_card::media_config::MediaFetcher::map_fetch_error(error.into())
                 })?;
             let status = resp.status();
             // Require 206 Partial Content — if the origin ignored the
@@ -5945,7 +5945,8 @@ impl OpenAIPreprocessor {
             let prefill = policy.resolve_stream_prefill(
                 family,
                 unified_parser::StreamPrefill {
-                    starting_state: if *family == crate::parser_family::BEAM_UNIFIED_FAMILY
+                    starting_state: if *family
+                        == dynamo_model_card::parser_family::BEAM_UNIFIED_FAMILY
                         && (prompt_prefill.response || self.beam_output_is_bare_guidance(request))
                     {
                         dynamo_parsers_v2::UnifiedParserStartingState::Response
@@ -7480,8 +7481,9 @@ impl OpenAIPreprocessor {
         reasoning_parser: Option<&str>,
         formatted_prompt: Option<&str>,
     ) -> bool {
-        let parser = crate::parser_family::configured_family(tool_call_parser, reasoning_parser)
-            .or(reasoning_parser);
+        let parser =
+            dynamo_model_card::parser_family::configured_family(tool_call_parser, reasoning_parser)
+                .or(reasoning_parser);
         Self::prompt_injected_reasoning_start(parser, formatted_prompt)
     }
 
@@ -7505,7 +7507,8 @@ impl OpenAIPreprocessor {
         formatted_prompt: Option<&str>,
         header_search_end: Option<usize>,
     ) -> PromptReasoningPrefill {
-        let family = crate::parser_family::configured_family(tool_call_parser, reasoning_parser);
+        let family =
+            dynamo_model_card::parser_family::configured_family(tool_call_parser, reasoning_parser);
         let assistant_prefill = (family == Some("gpt_oss"))
             .then(|| {
                 formatted_prompt
@@ -7561,7 +7564,7 @@ impl OpenAIPreprocessor {
                 .then(|| formatted_prompt.map(|prompt| prompt.trim_end().ends_with("</mm:think>")))
                 .flatten()
         };
-        let beam_channel = (family == Some(crate::parser_family::BEAM_UNIFIED_FAMILY))
+        let beam_channel = (family == Some(dynamo_model_card::parser_family::BEAM_UNIFIED_FAMILY))
             .then(|| {
                 formatted_prompt
                     .map(str::trim_end)
@@ -7696,7 +7699,7 @@ impl OpenAIPreprocessor {
             && crate::protocols::openai::chat_completions::unified_parser::selected_content_decoder_family(
                 tool_parser,
                 reasoning_parser,
-            ) == Some(crate::parser_family::GEMMA4_UNIFIED_FAMILY)
+            ) == Some(dynamo_model_card::parser_family::GEMMA4_UNIFIED_FAMILY)
     }
 
     /// Leading marker the model can still emit after the request turned reasoning off,
@@ -9061,8 +9064,8 @@ impl
 #[cfg(test)]
 mod token_data_tests {
     use super::*;
-    use crate::checked_file::CheckedFile;
-    use crate::model_card::{ModelDeploymentCard, ModelInfoType, TokenizerKind};
+    use dynamo_model_card::checked_file::CheckedFile;
+    use dynamo_model_card::model_card::{ModelDeploymentCard, ModelInfoType, TokenizerKind};
 
     /// `config.json` has `vocab_size` 128256; the mock tokenizer is smaller.
     const LLAMA_DIR: &str = "tests/data/sample-models/mock-llama-3.1-8b-instruct";
@@ -9277,12 +9280,15 @@ mod token_data_tests {
             return;
         }
         let mut card = ModelDeploymentCard::load_from_disk(LLAMA_DIR, None).unwrap();
-        card.model_type =
-            crate::model_type::ModelType::Chat | crate::model_type::ModelType::Completions;
+        card.model_type = dynamo_model_card::model_type::ModelType::Chat
+            | dynamo_model_card::model_type::ModelType::Completions;
         card.runtime_config.tool_call_parser = Some("engine_native_tool".to_string());
         card.runtime_config.reasoning_parser = Some("openai_gptoss".to_string());
         let tokenizer = card.tokenizer().unwrap();
-        for model_type in [crate::model_type::ModelType::empty(), card.model_type] {
+        for model_type in [
+            dynamo_model_card::model_type::ModelType::empty(),
+            card.model_type,
+        ] {
             let mut completion_card = card.clone();
             completion_card.model_type = model_type;
             let checksum = completion_card.mdcsum().to_string();
@@ -9318,7 +9324,7 @@ mod token_data_tests {
         ) {
             return;
         }
-        use crate::model_type::ModelType;
+        use dynamo_model_card::model_type::ModelType;
 
         let base = ModelDeploymentCard::load_from_disk(LLAMA_DIR, None).unwrap();
         let tokenizer = base.tokenizer().unwrap();
@@ -9375,7 +9381,7 @@ mod token_data_tests {
     #[tokio::test]
     async fn embedding_token_input_is_bounded_by_model_vocab() {
         let mut mdc = ModelDeploymentCard::load_from_disk(LLAMA_DIR, None).unwrap();
-        mdc.model_type = crate::model_type::ModelType::Embedding;
+        mdc.model_type = dynamo_model_card::model_type::ModelType::Embedding;
         let preprocessor = OpenAIPreprocessor::new_for_embeddings(mdc).unwrap();
         let backend = Arc::new(RecordingEmbeddingBackend::default());
         let next: Arc<
@@ -9432,7 +9438,7 @@ mod token_data_tests {
     #[tokio::test]
     async fn embedding_token_input_is_bounded_by_largest_tokenizer_id() {
         let (mut mdc, _dir) = tinyllama_card(NO_VOCAB_SIZE, Some(GAP_TOKENIZER));
-        mdc.model_type = crate::model_type::ModelType::Embedding;
+        mdc.model_type = dynamo_model_card::model_type::ModelType::Embedding;
         let preprocessor = OpenAIPreprocessor::new_for_embeddings(mdc).unwrap();
         let backend = Arc::new(RecordingEmbeddingBackend::default());
         let next: Arc<
@@ -9579,8 +9585,8 @@ mod strip_tests {
 #[cfg(test)]
 mod extra_args_media_copy_tests {
     use super::*;
-    use crate::model_card::ModelDeploymentCard;
     use crate::protocols::common::preprocessor::MultimodalData;
+    use dynamo_model_card::model_card::ModelDeploymentCard;
 
     pub(super) fn test_preprocessor() -> OpenAIPreprocessor {
         let mdc = ModelDeploymentCard::load_from_disk(
@@ -9660,8 +9666,8 @@ mod extra_args_media_copy_tests {
 
     #[tokio::test]
     async fn deepseek_v41_display_name_fallback_orders_tool_media() {
-        use crate::checked_file::CheckedFile;
-        use crate::model_card::ModelInfoType;
+        use dynamo_model_card::checked_file::CheckedFile;
+        use dynamo_model_card::model_card::ModelInfoType;
 
         let mut mdc = ModelDeploymentCard::load_from_disk(
             "tests/data/sample-models/mock-llama-3.1-8b-instruct",
@@ -10988,7 +10994,9 @@ mod tests {
                     &request,
                     false.into(),
                     crate::protocols::openai::GuidedToolConstraint::None,
-                    ToolProcessingRoute::Unified(crate::parser_family::KIMI_K2_UNIFIED_FAMILY),
+                    ToolProcessingRoute::Unified(
+                        dynamo_model_card::parser_family::KIMI_K2_UNIFIED_FAMILY,
+                    ),
                 )
                 .unwrap()
                 .collect::<Vec<_>>()
@@ -11606,7 +11614,7 @@ mod tests {
             ModelDeploymentCard::load_from_disk("tests/data/sample-models/TinyLlama_v1.1", None)
                 .unwrap();
         card.runtime_config.tokenizer_backend =
-            Some(crate::local_model::runtime_config::TokenizerBackend::Default);
+            Some(dynamo_model_card::local_model::runtime_config::TokenizerBackend::Default);
         let mut preprocessor = OpenAIPreprocessor::new(card).unwrap();
         let (prompt_ids, label_ids, _) = preprocessor
             .render_systemone_question(
@@ -11744,7 +11752,7 @@ mod tests {
             ModelDeploymentCard::load_from_disk("tests/data/sample-models/TinyLlama_v1.1", None)
                 .unwrap();
         card.runtime_config.tokenizer_backend =
-            Some(crate::local_model::runtime_config::TokenizerBackend::Fastokens);
+            Some(dynamo_model_card::local_model::runtime_config::TokenizerBackend::Fastokens);
         let mut preprocessor = OpenAIPreprocessor::new(card).unwrap();
         Arc::get_mut(&mut preprocessor).unwrap().formatter = Arc::new(SystemOneSegmentedFormatter);
         let error = preprocessor
@@ -12263,7 +12271,7 @@ responses_tools: None,
             let model_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
                 .join("tests/data/sample-models/mock-llama-3.1-8b-instruct");
             let mut card = ModelDeploymentCard::load_from_disk(model_path, None).unwrap();
-            card.model_type = crate::model_type::ModelType::Chat;
+            card.model_type = dynamo_model_card::model_type::ModelType::Chat;
             card.runtime_config.tool_call_parser = Some(tool.to_string());
             card.runtime_config.reasoning_parser = reasoning.map(str::to_string);
             let error = OpenAIPreprocessor::new(card)
@@ -14452,7 +14460,7 @@ responses_tools: None,
             None,
         )
         .unwrap();
-        card.model_type = crate::model_type::ModelType::Chat;
+        card.model_type = dynamo_model_card::model_type::ModelType::Chat;
         card.runtime_config.tool_call_parser = Some("kimi_k3".into());
         let preprocessor = OpenAIPreprocessor::new(card).unwrap();
         assert_eq!(CREATED.load(std::sync::atomic::Ordering::SeqCst), 1);
@@ -14495,7 +14503,7 @@ responses_tools: None,
             None,
         )
         .unwrap();
-        card.model_type = crate::model_type::ModelType::Chat;
+        card.model_type = dynamo_model_card::model_type::ModelType::Chat;
         card.runtime_config.tool_call_parser = Some("kimi_k3".into());
         let error = OpenAIPreprocessor::new(card)
             .err()
@@ -15101,8 +15109,9 @@ responses_tools: None,
 
     fn runtime_config_with_default_thinking_mode(
         mode: &str,
-    ) -> crate::local_model::runtime_config::ModelRuntimeConfig {
-        let mut runtime_config = crate::local_model::runtime_config::ModelRuntimeConfig::new();
+    ) -> dynamo_model_card::local_model::runtime_config::ModelRuntimeConfig {
+        let mut runtime_config =
+            dynamo_model_card::local_model::runtime_config::ModelRuntimeConfig::new();
         runtime_config
             .set_engine_specific(DEFAULT_THINKING_MODE_RUNTIME_KEY, mode)
             .unwrap();
@@ -15300,7 +15309,7 @@ responses_tools: None,
 
     #[test]
     fn test_sglang_gpt_oss_structured_output_rejects_thinking_budget() {
-        use crate::local_model::runtime_config::SGLANG_GENERATE_CAPABILITY;
+        use dynamo_model_card::local_model::runtime_config::SGLANG_GENERATE_CAPABILITY;
 
         let mut mdc = ModelDeploymentCard::load_from_disk(
             "tests/data/sample-models/mock-llama-3.1-8b-instruct",
@@ -15350,7 +15359,7 @@ responses_tools: None,
 
     #[test]
     fn test_gpt_oss_thinking_budget_preserves_supported_output_paths() {
-        use crate::local_model::runtime_config::{
+        use dynamo_model_card::local_model::runtime_config::{
             SGLANG_GENERATE_CAPABILITY, VLLM_INFERENCE_V1_GENERATE_CAPABILITY,
         };
 
@@ -16118,7 +16127,7 @@ responses_tools: None,
             None,
         )
         .unwrap();
-        mdc.model_type = crate::model_type::ModelType::Chat;
+        mdc.model_type = dynamo_model_card::model_type::ModelType::Chat;
         mdc.runtime_config.tool_call_parser = Some("beam".to_string());
         mdc.runtime_config.reasoning_parser = Some("beam".to_string());
         let preprocessor = OpenAIPreprocessor::new(mdc).unwrap();
@@ -16382,7 +16391,7 @@ responses_tools: None,
             None,
         )
         .unwrap();
-        mdc.model_type = crate::model_type::ModelType::Embedding;
+        mdc.model_type = dynamo_model_card::model_type::ModelType::Embedding;
         let preprocessor = OpenAIPreprocessor::new_for_embeddings(mdc).unwrap();
         let request: NvCreateEmbeddingRequest = serde_json::from_value(serde_json::json!({
             "model": "test-model", "input": [[1, 2, 3], [4, 5]],
@@ -20140,7 +20149,7 @@ responses_tools: None,
     #[cfg(feature = "mm-routing")]
     #[test]
     fn exif_dimension_policy_is_limited_to_kimi_k3_vllm_url_passthrough() {
-        use crate::local_model::runtime_config::{
+        use dynamo_model_card::local_model::runtime_config::{
             ModelRuntimeConfig, SGLANG_GENERATE_CAPABILITY, VLLM_INFERENCE_V1_GENERATE_CAPABILITY,
         };
 
@@ -20946,7 +20955,7 @@ mod beam_route_tests {
             None,
         )
         .unwrap();
-        card.model_type = crate::model_type::ModelType::Chat;
+        card.model_type = dynamo_model_card::model_type::ModelType::Chat;
         card.runtime_config.tool_call_parser = parsers.map(str::to_string);
         card.runtime_config.reasoning_parser = parsers.map(str::to_string);
         card

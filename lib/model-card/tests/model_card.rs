@@ -1,18 +1,18 @@
 // SPDX-FileCopyrightText: Copyright (c) 2024-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-use dynamo_llm::checked_file::CheckedFile;
-use dynamo_llm::local_model::runtime_config::TokenizerBackend;
-use dynamo_llm::model_card::{ModelDeploymentCard, PromptFormatterArtifact, TokenizerKind};
-use dynamo_llm::tokenizers::{
+use dynamo_model_card::checked_file::CheckedFile;
+use dynamo_model_card::local_model::runtime_config::TokenizerBackend;
+use dynamo_model_card::model_card::{ModelDeploymentCard, PromptFormatterArtifact, TokenizerKind};
+use dynamo_tokenizers::{
     BasetenTokenizer, EncodeSegment, HuggingFaceTokenizer, TikTokenTokenizer, traits::Encoder,
 };
 use std::path::PathBuf;
 use tempfile::{TempDir, tempdir};
 use tokenizers::models::bpe::{BPE, Vocab};
 
-const HF_PATH: &str = "tests/data/sample-models/TinyLlama_v1.1";
-const TIKTOKEN_PATH: &str = "tests/data/sample-models/mock-tiktoken";
+const HF_PATH: &str = "../llm/tests/data/sample-models/TinyLlama_v1.1";
+const TIKTOKEN_PATH: &str = "../llm/tests/data/sample-models/mock-tiktoken";
 
 fn unsupported_alternate_tokenizer() -> (TempDir, PathBuf) {
     let dir = tempdir().unwrap();
@@ -55,7 +55,7 @@ async fn test_model_info_from_hf_like_local_repo() {
 
 #[tokio::test]
 async fn test_model_info_from_non_existent_local_repo() {
-    let path = "tests/data/sample-models/this-model-does-not-exist";
+    let path = "../llm/tests/data/sample-models/this-model-does-not-exist";
     let result = ModelDeploymentCard::load_from_disk(path, None);
     assert!(result.is_err());
 }
@@ -378,7 +378,7 @@ async fn test_missing_required_files() {
 /// non-Rust chat processor for these models (e.g. --dyn-chat-processor vllm).
 #[tokio::test]
 async fn test_model_loads_without_tokenizer_json() {
-    let path = "tests/data/sample-models/mock-no-tokenizer-json";
+    let path = "../llm/tests/data/sample-models/mock-no-tokenizer-json";
     let mdc = ModelDeploymentCard::load_from_disk(path, None).unwrap();
     assert!(
         mdc.tokenizer.is_none(),
@@ -394,7 +394,7 @@ async fn test_model_loads_without_tokenizer_json() {
 /// inline chat_template, so this is the only template source.
 #[tokio::test]
 async fn test_chat_template_json_fallback() {
-    let path = "tests/data/sample-models/mock-no-tokenizer-json";
+    let path = "../llm/tests/data/sample-models/mock-no-tokenizer-json";
     let mdc = ModelDeploymentCard::load_from_disk(path, None).unwrap();
     match &mdc.chat_template_file {
         Some(PromptFormatterArtifact::HfChatTemplateJson { file, is_custom }) => {

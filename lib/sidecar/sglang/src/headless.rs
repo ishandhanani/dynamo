@@ -11,7 +11,7 @@ use anyhow::{Context, Result, bail, ensure};
 use dynamo_backend_common::{CommonArgs, DisaggregationMode, DynamoError};
 use dynamo_llm::discovery::{RuntimeConfigWatch, runtime_config_watch};
 use dynamo_llm::kv_router::publisher::{KvEventPublisher, KvEventSourceConfig};
-use dynamo_llm::local_model::runtime_config::ModelRuntimeConfig;
+use dynamo_model_card::local_model::runtime_config::ModelRuntimeConfig;
 use dynamo_runtime::component::Endpoint;
 use dynamo_runtime::config::HealthStatus;
 use dynamo_runtime::distributed::DistributedRuntime;

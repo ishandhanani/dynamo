@@ -37,7 +37,7 @@ use crate::kv_router::metrics::{
     ActiveSequenceIngressMetrics, ROUTER_QUEUE_METRICS, RegistrationAvailabilityProvider,
     RouterQueueMetricHandles, RouterRequestMetrics, WORKER_LOAD_METRICS,
 };
-use crate::local_model::runtime_config::ModelRuntimeConfig;
+use dynamo_model_card::local_model::runtime_config::ModelRuntimeConfig;
 
 /// Inputs the embedded backend needs from the router at construction.
 pub(crate) struct EmbeddedSelectionArgs {

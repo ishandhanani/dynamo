@@ -184,7 +184,6 @@ use super::{
 };
 use crate::{
     discovery::SystemOneExecutionSelection,
-    model_card::ModelDeploymentCard,
     preprocessor::OpenAIPreprocessor,
     protocols::{
         Annotated,
@@ -196,6 +195,7 @@ use crate::{
         systemone::build_native_score_request,
     },
 };
+use dynamo_model_card::model_card::ModelDeploymentCard;
 
 #[test]
 fn cumulative_input_limit_is_checked_without_overflow() {

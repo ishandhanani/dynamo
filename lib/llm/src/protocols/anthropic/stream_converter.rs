@@ -1619,8 +1619,8 @@ mod tests {
     /// carries the matched stop, then release it with the finish reason.
     #[tokio::test]
     async fn test_stream_stop_sequence_survives_tool_parser_split() {
-        use crate::model_card::ModelDeploymentCard;
         use crate::preprocessor::OpenAIPreprocessor;
+        use dynamo_model_card::model_card::ModelDeploymentCard;
         use dynamo_runtime::protocols::annotated::Annotated;
         use futures::StreamExt;
 

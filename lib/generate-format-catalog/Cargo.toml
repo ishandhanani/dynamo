@@ -18,6 +18,7 @@ dynamo-sglang-generate = { workspace = true }
 dynamo-vllm-generate = { workspace = true }
 
 [dev-dependencies]
+dynamo-model-card = { workspace = true }
 dynamo-sglang-generate = { workspace = true, features = ["testkit"] }
 dynamo-runtime = { workspace = true }
 axum = { workspace = true }

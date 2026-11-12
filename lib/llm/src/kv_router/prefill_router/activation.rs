@@ -28,10 +28,10 @@ pub(super) enum ActivationSnapshot {
 use crate::{
     discovery::{LoadThresholdHandle, ModelManager, WorkerSetTarget},
     kv_router::{RouterLoadSource, RoutingHost, RoutingLoadContext, SelectionPolicySource},
-    model_card::ModelDeploymentCard,
     protocols::common::timing::WORKER_TYPE_PREFILL,
     session_affinity::{SessionAffinityMode, create_affinity_coordinator},
 };
+use dynamo_model_card::model_card::ModelDeploymentCard;
 
 /// How the prefill worker set wants to be routed to, resolved from its cards.
 #[derive(Debug)]
@@ -671,8 +671,8 @@ mod tests {
     use crate::discovery::CommittedWorkerSetTarget;
     use crate::kv_router::prefill_router::PrefillRouterLifecycle;
     use crate::protocols::common::llm_backend::{LLMEngineOutput, PreprocessedRequest};
-    use crate::router_config::RouterConfig;
     use dynamo_kv_router::config::KvRouterConfig;
+    use dynamo_model_card::router_config::RouterConfig;
     use dynamo_runtime::protocols::annotated::Annotated;
     use dynamo_runtime::{
         DistributedRuntime, Runtime,
