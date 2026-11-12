@@ -241,7 +241,7 @@ async fn call_python_frontend_route(
     if extension_executor().try_send(job).is_err() {
         tracing::warn!("frontend extension pool saturated; shedding request");
         return extension_error_response(
-            dynamo_llm::http::service::error::SanitizedError::Overloaded.status(),
+            dynamo_error::http::SanitizedError::Overloaded.status(),
             "frontend route extension busy",
         );
     }
