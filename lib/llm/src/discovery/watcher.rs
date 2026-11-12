@@ -345,6 +345,12 @@ impl ModelWatcher {
         }
     }
 
+    /// Admit by model identity instead of card checksum (see `DYN_WORKERSET_IDENTITY=model`).
+    #[cfg(test)]
+    pub(crate) fn set_pool_compat(&mut self, enabled: bool) {
+        self.pool_compat = enabled;
+    }
+
     pub fn set_notify_on_model_update(&mut self, tx: Sender<ModelUpdate>) {
         self.model_update_tx = Some(tx);
     }
@@ -445,6 +451,23 @@ impl ModelWatcher {
 
         card.download_config(self.local_model_path.as_deref())
             .await?;
+
+        // A pooled set mixes engine shapes, so the first cohort's token budget is not the
+        // set's. Drop it from the set-level card: the router's per-worker context filter picks
+        // a worker that fits, and that engine owns prompt-overflow handling.
+        if self.pool_compat
+            && card
+                .runtime_config
+                .runtime_data
+                .remove(crate::local_model::runtime_config::TOKEN_BUDGET_RUNTIME_KEY)
+                .is_some()
+        {
+            tracing::info!(
+                model_name = card.name(),
+                group = %spec.key.id(),
+                "pooled WorkerSet: token budget left to each worker's engine"
+            );
+        }
 
         validate_card_parser_version(card, self.chat_engine_factory.is_some())?;
 
@@ -1944,7 +1967,16 @@ mod tests {
         manager: Arc<ModelManager>,
         router_config: RouterConfig,
     ) -> (TestDiscoverySender, tokio::task::JoinHandle<()>) {
-        let watcher = Arc::new(ModelWatcher::new(
+        watch_test_cards_with(drt, manager, router_config, false)
+    }
+
+    fn watch_test_cards_with(
+        drt: DistributedRuntime,
+        manager: Arc<ModelManager>,
+        router_config: RouterConfig,
+        pool_compat: bool,
+    ) -> (TestDiscoverySender, tokio::task::JoinHandle<()>) {
+        let mut watcher = ModelWatcher::new(
             drt,
             manager,
             router_config,
@@ -1953,7 +1985,9 @@ mod tests {
             None,
             None,
             Arc::new(Metrics::new()),
-        ));
+        );
+        watcher.set_pool_compat(pool_compat);
+        let watcher = Arc::new(watcher);
         let (event_tx, event_rx) = tokio::sync::mpsc::unbounded_channel();
         let stream = futures::stream::unfold(
             (event_rx, None::<tokio::sync::oneshot::Sender<()>>),
@@ -2277,6 +2311,82 @@ mod tests {
                 manager.get_model_cards()[0].source_path,
                 incumbent.source_path
             );
+            drop(events);
+            task.await.unwrap();
+        }
+        runtime.shutdown();
+    }
+
+    /// `DYN_WORKERSET_IDENTITY=model`: two engine shapes of one model, differing in source
+    /// path, context length, and KV page size, join one WorkerSet; the same cards are a
+    /// rejected newcomer under the default checksum identity.
+    #[tokio::test]
+    async fn pooled_identity_admits_different_context_and_page_size_into_one_worker_set() {
+        let runtime = Runtime::from_current().unwrap();
+        let drt = DistributedRuntime::new(runtime.clone(), DistributedConfig::process_local())
+            .await
+            .unwrap();
+        for pool_compat in [true, false] {
+            let name = if pool_compat { "pooled" } else { "unpooled" };
+            let endpoint = drt
+                .namespace(name)
+                .unwrap()
+                .component("workers")
+                .unwrap()
+                .endpoint("generate");
+            endpoint.register_endpoint_instance().await.unwrap();
+            let worker_id = drt.discovery().instance_id();
+            let mut small = ModelDeploymentCard::with_name_only(name);
+            small.model_input = ModelInput::Text;
+            small.model_type = ModelType::Chat;
+            small.worker_type = Some(WorkerType::Aggregated);
+            small.source_path = Some("/models/tp1".to_string());
+            small.runtime_config.context_length = Some(16_384);
+            small.kv_cache_block_size = 16;
+            let mut large = small.clone();
+            large.source_path = Some("/models/tp2".to_string());
+            large.runtime_config.context_length = Some(65_536);
+            large.kv_cache_block_size = 64;
+            large.runtime_config.data_parallel_size = 2;
+            assert_ne!(small.mdcsum(), large.mdcsum());
+
+            let manager = Arc::new(ModelManager::new());
+            let (events, task) = watch_test_cards_with(
+                drt.clone(),
+                manager.clone(),
+                RouterConfig::default(),
+                pool_compat,
+            );
+            apply_discovery_event(&events, discovered_card(name, worker_id, &small)).await;
+            wait_for_model(&manager, name, Model::is_ready_to_serve).await;
+            apply_discovery_event(&events, discovered_card(name, worker_id + 1, &large)).await;
+
+            let model = manager.get_committed_model(name).unwrap();
+            assert!(model.is_ready_to_serve(), "{name}");
+            assert_eq!(model.worker_set_count(), 1, "{name}");
+            // Only one endpoint instance exists in this process, so compare the controller's
+            // admitted worker IDs rather than live instance counts.
+            let expected: Vec<u64> = if pool_compat {
+                vec![worker_id, worker_id + 1]
+            } else {
+                vec![worker_id]
+            };
+            let mut admitted = Vec::new();
+            for _ in 0..50 {
+                admitted = model.worker_sets()[0]
+                    .decision_admissions()
+                    .map(|rx| {
+                        let mut ids = rx.borrow().clone();
+                        ids.sort_unstable();
+                        ids
+                    })
+                    .unwrap_or_default();
+                if admitted == expected {
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            }
+            assert_eq!(admitted, expected, "{name}");
             drop(events);
             task.await.unwrap();
         }
