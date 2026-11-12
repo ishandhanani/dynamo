@@ -41,8 +41,8 @@ use super::{
     },
     service_v2::{self, BackendErrorCheck},
 };
-use crate::engines::ValidateRequest;
 use crate::frontend_config::ChatTemplateDefaults;
+use crate::protocols::ValidateRequest;
 use crate::protocols::anthropic::stream_converter::AnthropicStreamConverter;
 use crate::protocols::anthropic::types::{
     AnthropicContentBlock, AnthropicCountTokensRequest, AnthropicCountTokensResponse,
