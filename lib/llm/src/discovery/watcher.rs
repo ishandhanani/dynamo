@@ -28,6 +28,7 @@ use crate::{
     discovery::{LoadThresholdHandle, WORKER_TYPE_DECODE, WorkerSet},
     entrypoint::{self, ChatEngineFactoryCallback},
     http::service::metrics::Metrics,
+    json::canonicalize_json_object_keys,
     kv_router::plugins::RouterPluginBuilder,
     kv_router::{EncoderRouter, PrefillRouter, RouterLoadSource, RoutingLoadContext},
     local_model::runtime_config::{
@@ -60,7 +61,6 @@ use crate::{
     },
     router_config::RouterConfig,
     types::generic::realtime::{DynamoRealtimeClientEvent, RealtimeServerEvent},
-    utils::json::canonicalize_json_object_keys,
     worker_type::WorkerType,
 };
 
