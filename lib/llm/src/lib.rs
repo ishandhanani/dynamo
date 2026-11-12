@@ -35,6 +35,7 @@ pub mod mocker;
 pub mod model_card;
 pub mod model_type;
 pub mod namespace;
+pub mod parser_family;
 pub mod perf;
 pub mod pool_relay;
 pub mod preprocessor;
