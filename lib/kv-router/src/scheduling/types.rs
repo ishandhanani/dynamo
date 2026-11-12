@@ -440,11 +440,64 @@ impl SessionContext {
     }
 }
 
+/// A prompt's block hashes at the partition's page size, plus, in a pooled partition, at each
+/// other page size among the request's eligible workers. The queue prunes the extra lists as the
+/// allowed workers narrow, refreshes overlap from every list a request still holds, and records
+/// or hints with the list that matches the chosen worker's page size.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct PromptBlockHashes {
+    pub primary: Vec<LocalBlockHash>,
+    pub others: Vec<(u32, Vec<LocalBlockHash>)>,
+}
+
+impl PromptBlockHashes {
+    pub fn new(primary: Vec<LocalBlockHash>) -> Self {
+        Self {
+            primary,
+            others: Vec::new(),
+        }
+    }
+
+    pub fn with_others(
+        primary: Vec<LocalBlockHash>,
+        others: Vec<(u32, Vec<LocalBlockHash>)>,
+    ) -> Self {
+        Self { primary, others }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.primary.is_empty() && self.others.iter().all(|(_, hashes)| hashes.is_empty())
+    }
+
+    /// Hashes at `block_size`; the primary list for the partition's size or a size no list
+    /// was kept for.
+    pub fn for_block_size(&self, partition_block_size: u32, block_size: u32) -> &[LocalBlockHash] {
+        if block_size == partition_block_size {
+            return &self.primary;
+        }
+        self.others
+            .iter()
+            .find(|(size, _)| *size == block_size)
+            .map_or(self.primary.as_slice(), |(_, hashes)| hashes.as_slice())
+    }
+
+    /// Keep only the extra lists whose page size `keep` accepts.
+    pub fn retain_other_sizes(&mut self, mut keep: impl FnMut(u32) -> bool) {
+        self.others.retain(|(size, _)| keep(*size));
+    }
+}
+
+impl From<Vec<LocalBlockHash>> for PromptBlockHashes {
+    fn from(primary: Vec<LocalBlockHash>) -> Self {
+        Self::new(primary)
+    }
+}
+
 /// Validated request accepted by [`LocalScheduler`](super::LocalScheduler).
 pub struct ScheduleRequest {
     pub mode: ScheduleMode,
     pub token_seq: Option<Vec<SequenceHash>>,
-    pub block_hashes: Option<Vec<LocalBlockHash>>,
+    pub block_hashes: Option<PromptBlockHashes>,
     pub isl_tokens: usize,
     pub lora_name: Option<String>,
     pub expected_output_tokens: Option<u32>,

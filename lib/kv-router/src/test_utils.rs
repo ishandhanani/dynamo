@@ -373,6 +373,7 @@ pub struct SimpleWorkerConfig {
     pub max_num_batched_tokens: Option<u64>,
     pub total_kv_blocks: Option<u64>,
     pub taints: HashSet<String>,
+    pub block_size: Option<u32>,
 }
 
 impl Default for SimpleWorkerConfig {
@@ -383,6 +384,7 @@ impl Default for SimpleWorkerConfig {
             max_num_batched_tokens: None,
             total_kv_blocks: None,
             taints: HashSet::new(),
+            block_size: None,
         }
     }
 }
@@ -406,5 +408,9 @@ impl WorkerConfigLike for SimpleWorkerConfig {
 
     fn taints(&self) -> &HashSet<String> {
         &self.taints
+    }
+
+    fn kv_cache_block_size(&self) -> Option<u32> {
+        self.block_size
     }
 }

@@ -33,6 +33,7 @@ use crate::kv_hints::KvTransferCandidates;
 use crate::protocols::LocalBlockHash;
 
 use super::overlap::{OverlapAnalysis, OverlapSignals};
+use super::types::PromptBlockHashes;
 
 /// Result of a successful overlap refresh.
 ///
@@ -70,7 +71,7 @@ impl RefreshedOverlap {
 pub trait OverlapScoresRefresh: Send + Sync {
     async fn refresh(
         &self,
-        block_hashes: &[LocalBlockHash],
+        block_hashes: &PromptBlockHashes,
         retain_kv_transfer_chain: bool,
     ) -> Option<RefreshedOverlap>;
 }
@@ -91,36 +92,67 @@ impl<P> TieredOverlapRefresher<P> {
     }
 }
 
-#[async_trait]
-impl<P: TieredMatchProvider> OverlapScoresRefresh for TieredOverlapRefresher<P> {
-    async fn refresh(
+impl<P: TieredMatchProvider> TieredOverlapRefresher<P> {
+    async fn query(
         &self,
-        block_hashes: &[LocalBlockHash],
+        hashes: &[LocalBlockHash],
         retain_kv_transfer_chain: bool,
-    ) -> Option<RefreshedOverlap> {
-        if block_hashes.is_empty() {
-            return None;
-        }
-        let tiered = match self
-            .provider
+    ) -> Result<crate::indexer::TieredMatchDetails, crate::indexer::KvRouterError> {
+        self.provider
             .find_tiered_matches_with_options(
-                block_hashes,
+                hashes,
                 LowerTierQueryOptions {
                     retain_kv_transfer_chain,
                 },
             )
             .await
-        {
-            Ok(tiered) => tiered,
-            Err(error) => {
-                tracing::warn!(%error, "overlap refresh: tiered match query failed");
-                return None;
+    }
+}
+
+#[async_trait]
+impl<P: TieredMatchProvider> OverlapScoresRefresh for TieredOverlapRefresher<P> {
+    async fn refresh(
+        &self,
+        block_hashes: &PromptBlockHashes,
+        retain_kv_transfer_chain: bool,
+    ) -> Option<RefreshedOverlap> {
+        if block_hashes.is_empty() {
+            return None;
+        }
+        let mut overlap = OverlapSignals::default();
+        let mut kv_transfer_candidates = None;
+        if !block_hashes.primary.is_empty() {
+            let tiered = match self
+                .query(&block_hashes.primary, retain_kv_transfer_chain)
+                .await
+            {
+                Ok(tiered) => tiered,
+                Err(error) => {
+                    tracing::warn!(%error, "overlap refresh: tiered match query failed");
+                    return None;
+                }
+            };
+            overlap = OverlapAnalysis::new(&self.config, self.block_size, &tiered).signals();
+            kv_transfer_candidates = retain_kv_transfer_chain
+                .then(|| tiered.into_kv_transfer_candidates())
+                .flatten();
+        }
+        // Workers with another page size keep their blocks on their own branches; fold each
+        // retained list in at that size, scaled to the partition's block unit.
+        for (size, hashes) in &block_hashes.others {
+            if hashes.is_empty() || *size == 0 {
+                continue;
             }
-        };
-        let overlap = OverlapAnalysis::new(&self.config, self.block_size, &tiered).signals();
-        let kv_transfer_candidates = retain_kv_transfer_chain
-            .then(|| tiered.into_kv_transfer_candidates())
-            .flatten();
+            let tiered = match self.query(hashes, false).await {
+                Ok(tiered) => tiered,
+                Err(error) => {
+                    tracing::warn!(%error, block_size = size, "overlap refresh: tiered match query failed");
+                    return None;
+                }
+            };
+            let signals = OverlapAnalysis::new(&self.config, *size, &tiered).signals();
+            overlap.merge_scaled(signals, f64::from(*size) / f64::from(self.block_size));
+        }
         Some(RefreshedOverlap {
             overlap,
             kv_transfer_candidates,
@@ -177,7 +209,7 @@ pub fn read_overlap_refresh_after() -> Option<Duration> {
 pub fn should_refresh_overlap(
     has_refresher: bool,
     refresh_after: Option<Duration>,
-    block_hashes: Option<&[LocalBlockHash]>,
+    block_hashes: Option<&PromptBlockHashes>,
     enqueue_at: tokio::time::Instant,
     now: tokio::time::Instant,
 ) -> bool {
@@ -199,7 +231,7 @@ pub fn should_refresh_overlap(
 pub async fn refresh_overlap<RF: OverlapScoresRefresh + ?Sized>(
     refresher: Option<&RF>,
     refresh_after: Option<Duration>,
-    block_hashes: Option<&[LocalBlockHash]>,
+    block_hashes: Option<&PromptBlockHashes>,
     retain_kv_transfer_chain: bool,
     enqueue_at: tokio::time::Instant,
     now: tokio::time::Instant,
@@ -226,7 +258,7 @@ pub struct NoopOverlapScoresRefresh;
 impl OverlapScoresRefresh for NoopOverlapScoresRefresh {
     async fn refresh(
         &self,
-        _block_hashes: &[LocalBlockHash],
+        _block_hashes: &PromptBlockHashes,
         _retain_kv_transfer_chain: bool,
     ) -> Option<RefreshedOverlap> {
         None
@@ -284,7 +316,7 @@ mod tests {
     impl OverlapScoresRefresh for CountingRefresher {
         async fn refresh(
             &self,
-            _block_hashes: &[LocalBlockHash],
+            _block_hashes: &PromptBlockHashes,
             _retain_kv_transfer_chain: bool,
         ) -> Option<RefreshedOverlap> {
             self.calls.fetch_add(1, Ordering::Relaxed);
@@ -300,7 +332,7 @@ mod tests {
     fn should_refresh_only_after_threshold_with_hashes() {
         let enqueue_at = tokio::time::Instant::now();
         let now = enqueue_at + Duration::from_secs(5);
-        let hashes = [LocalBlockHash(1)];
+        let hashes = PromptBlockHashes::new(vec![LocalBlockHash(1)]);
         assert!(!should_refresh_overlap(
             true,
             Some(Duration::from_secs(10)),
@@ -324,7 +356,7 @@ mod tests {
         };
         let enqueue_at = tokio::time::Instant::now();
         let now = enqueue_at + Duration::from_secs(1);
-        let hashes = [LocalBlockHash(1)];
+        let hashes = PromptBlockHashes::new(vec![LocalBlockHash(1)]);
         assert!(
             refresh_overlap(
                 Some(&refresher),
@@ -353,12 +385,15 @@ mod tests {
         );
         let worker = WorkerWithDpRank::new(4, 0);
 
-        assert!(refresher.refresh(&[], false).await.is_none());
+        assert!(
+            refresher
+                .refresh(&PromptBlockHashes::default(), false)
+                .await
+                .is_none()
+        );
         assert_eq!(calls.load(Ordering::Relaxed), 0);
-        let refreshed = refresher
-            .refresh(&[LocalBlockHash(1)], false)
-            .await
-            .unwrap();
+        let one = PromptBlockHashes::new(vec![LocalBlockHash(1)]);
+        let refreshed = refresher.refresh(&one, false).await.unwrap();
         assert_eq!(refreshed.overlap.tier_overlap_blocks.device[&worker], 2);
         assert_eq!(refreshed.overlap.effective_cached_tokens[&worker], 32);
 
@@ -367,6 +402,57 @@ mod tests {
             KvRouterConfig::default(),
             16,
         );
-        assert!(failing.refresh(&[LocalBlockHash(1)], false).await.is_none());
+        assert!(failing.refresh(&one, false).await.is_none());
+    }
+}
+
+#[cfg(test)]
+mod multi_page_size_tests {
+    use super::*;
+    use crate::indexer::{KvRouterError, MatchDetails, TieredMatchDetails};
+    use crate::protocols::{OverlapScores, WorkerWithDpRank};
+    use std::collections::HashMap;
+
+    /// Reports two matched blocks for worker 4 on any query, so the refresher's own arithmetic
+    /// is what the assertions see.
+    struct TwoBlocks;
+
+    #[async_trait]
+    impl TieredMatchProvider for TwoBlocks {
+        async fn find_tiered_matches(
+            &self,
+            _sequence: &[LocalBlockHash],
+        ) -> Result<TieredMatchDetails, KvRouterError> {
+            let mut scores = OverlapScores::new();
+            scores.scores.insert(WorkerWithDpRank::new(4, 0), 2);
+            Ok(TieredMatchDetails {
+                device: MatchDetails {
+                    overlap_scores: scores,
+                    ..Default::default()
+                },
+                lower_tier: HashMap::new(),
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn refresh_folds_other_page_sizes_into_the_partition_unit() {
+        let refresher = TieredOverlapRefresher::new(TwoBlocks, KvRouterConfig::default(), 16);
+        let worker = WorkerWithDpRank::new(4, 0);
+
+        let primary_only = PromptBlockHashes::new(vec![LocalBlockHash(1)]);
+        let refreshed = refresher.refresh(&primary_only, false).await.unwrap();
+        assert_eq!(refreshed.overlap.effective_overlap_blocks[&worker], 2.0);
+        assert_eq!(refreshed.overlap.effective_cached_tokens[&worker], 32);
+
+        // Two blocks at page 64 are eight partition blocks and 128 tokens more.
+        let pooled = PromptBlockHashes::with_others(
+            vec![LocalBlockHash(1)],
+            vec![(64, vec![LocalBlockHash(2)])],
+        );
+        let refreshed = refresher.refresh(&pooled, false).await.unwrap();
+        assert_eq!(refreshed.overlap.effective_overlap_blocks[&worker], 10.0);
+        assert_eq!(refreshed.overlap.tier_overlap_blocks.device[&worker], 10);
+        assert_eq!(refreshed.overlap.effective_cached_tokens[&worker], 32 + 128);
     }
 }
