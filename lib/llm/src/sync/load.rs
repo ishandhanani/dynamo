@@ -5,8 +5,8 @@
 //! that turns it into busy and overloaded workers, and the load context of one routing endpoint.
 
 pub mod active_load;
-pub(crate) mod metrics_subscriber;
-pub(crate) mod routing_load;
+pub mod metrics_subscriber;
+pub mod routing_load;
 mod worker_monitor;
 
 pub use active_load::ActiveLoad;

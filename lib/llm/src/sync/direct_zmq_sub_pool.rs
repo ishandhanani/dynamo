@@ -27,7 +27,7 @@ const GROUP_JOIN_TIMEOUT: Duration = Duration::from_secs(5);
 
 pub(crate) const ENDPOINTS_PER_SUB_ENV: &str = "DYN_ROUTER_ZMQ_ENDPOINTS_PER_SUB";
 pub(crate) const DEFAULT_ENDPOINTS_PER_SUB: usize = 1;
-pub(crate) const KV_ZMQ_RCVHWM: i32 = 100_000;
+pub const KV_ZMQ_RCVHWM: i32 = 100_000;
 
 pub(crate) fn endpoints_per_sub_from_env() -> Result<usize> {
     endpoints_per_sub_from_lookup(|key| std::env::var_os(key))
@@ -53,14 +53,14 @@ fn parse_endpoints_per_sub(raw: &OsStr) -> Result<usize> {
 }
 
 #[derive(Debug)]
-pub(crate) enum DirectZmqSubItem {
+pub enum DirectZmqSubItem {
     Envelope(ValidatedEnvelope),
     EnvelopeDecodeError,
     IdentityMismatch,
 }
 
 /// Undecoded multipart frames from a pool that routes by raw topic frame.
-pub(crate) type RawZmqFrames = Vec<Vec<u8>>;
+pub type RawZmqFrames = Vec<Vec<u8>>;
 
 enum RouteSender {
     Envelope(mpsc::Sender<DirectZmqSubItem>),
@@ -147,7 +147,7 @@ impl PoolInner {
 }
 
 #[derive(Clone)]
-pub(crate) struct DirectZmqSubPool {
+pub struct DirectZmqSubPool {
     inner: Arc<Mutex<PoolInner>>,
     topic: Arc<str>,
     endpoints_per_sub: usize,
@@ -157,10 +157,10 @@ pub(crate) struct DirectZmqSubPool {
     cancellation_token: CancellationToken,
 }
 
-pub(crate) struct DirectZmqSubRegistration<T = DirectZmqSubItem> {
+pub struct DirectZmqSubRegistration<T = DirectZmqSubItem> {
     pub(crate) group_id: u64,
-    pub(crate) receiver: mpsc::Receiver<T>,
-    pub(crate) disconnected: CancellationToken,
+    pub receiver: mpsc::Receiver<T>,
+    pub disconnected: CancellationToken,
     pool: DirectZmqSubPool,
     publisher_id: u64,
     endpoint: String,
@@ -264,7 +264,7 @@ impl DirectZmqSubPool {
     /// A pool for raw publishers, such as vLLM KV event streams, whose frames
     /// carry no publisher ID. Each route subscribes to its own topic and receives
     /// the frames whose topic frame matches it exactly, undecoded.
-    pub(crate) fn new_raw(
+    pub fn new_raw(
         endpoints_per_sub: usize,
         rcvhwm: i32,
         cancellation_token: CancellationToken,
@@ -350,7 +350,7 @@ impl DirectZmqSubPool {
     /// Route the frames `endpoint` publishes on exactly `topic` to `route_id`.
     /// Topics must be non-empty, and a group holds each topic once: subscriptions
     /// are prefix filters, so frames are routed only by an exact topic match.
-    pub(crate) async fn register_raw(
+    pub async fn register_raw(
         &self,
         route_id: u64,
         endpoint: &str,
@@ -553,7 +553,7 @@ impl DirectZmqSubPool {
         None
     }
 
-    pub(crate) async fn shutdown(&self) {
+    pub async fn shutdown(&self) {
         let groups = {
             let mut inner = self.inner.lock();
             inner.closed = true;

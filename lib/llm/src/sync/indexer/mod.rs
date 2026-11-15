@@ -20,11 +20,11 @@ use anyhow::Result;
 // keep working after these types moved to `dynamo-kv-router`.
 #[allow(unused_imports)]
 pub(crate) use dynamo_kv_indexer::host::WireTieredMatchDetails;
-pub(crate) use dynamo_kv_indexer::host::{ApproximateRequestLease, TieredMatchDetails};
+pub use dynamo_kv_indexer::host::{ApproximateRequestLease, TieredMatchDetails};
 pub use dynamo_kv_indexer::host::{Indexer, RemotePrimary, SideIndexer};
 use dynamo_runtime::component::Component;
 use dynamo_runtime::pipeline::ModeSelectors;
-pub(crate) use ingress::{RuntimeIngress, RuntimeIngressArgs};
+pub use ingress::{RuntimeIngress, RuntimeIngressArgs};
 use tokio_util::sync::CancellationToken;
 
 mod embedding_cache;
@@ -38,21 +38,22 @@ pub use self::embedding_cache::{
     EmbeddingCacheIndexer, MULTIMODAL_EMBEDDING_CACHE_SUBJECT, MultimodalEmbeddingCacheEvent,
     MultimodalEmbeddingCacheUpdate, preprocessed_multimodal_cache_keys, try_build_cache_indexer,
 };
-pub(crate) use self::event_source_requirement::KvEventSourceRequirement;
+pub use self::event_source_requirement::KvEventSourceRequirement;
 use self::remote::RemoteIndexer;
 pub use self::remote::{ServedIndexerHandle, ServedIndexerMode, ensure_served_indexer_service};
 #[cfg(feature = "ckf-diagnostics")]
-pub(crate) use recovery::WorkerQueryHealthSnapshot;
-pub(crate) use recovery::{
-    DEFAULT_RECOVERY_ATTEMPT_TIMEOUT, KvEventSubscriptionHandle, RecoveryResetReason,
-    RecoverySupervisor, RecoveryTarget, TargetFaultDisposition, start_target_subscriber,
+pub use recovery::WorkerQueryHealthSnapshot;
+pub use recovery::{
+    DEFAULT_RECOVERY_ATTEMPT_TIMEOUT, RecoveryResetReason, RecoverySupervisor, RecoveryTarget,
+    TargetFaultDisposition, start_target_subscriber,
 };
-pub(crate) use recovery::{
-    KvStateAgentStatusCell, start_subscriber, start_worker_kv_query_endpoint,
+pub(crate) use recovery::{KvEventSubscriptionHandle, start_subscriber};
+pub use recovery::{
+    KvStateAgentStatusCell, start_worker_kv_query_endpoint,
     start_worker_kv_query_endpoint_with_status,
 };
 #[cfg(test)]
-pub(crate) use recovery::{WorkerQueryClient, WorkerQueryTransport};
+pub use recovery::{WorkerQueryClient, WorkerQueryTransport};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ResolvedApproximatePrimaryPolicy {
@@ -275,7 +276,7 @@ fn predict_on_route_side_indexer(
 }
 
 #[cfg(test)]
-pub(crate) mod test_util {
+pub mod test_util {
     use dynamo_kv_events::event::{
         KvCacheEvent, KvCacheEventData, KvCacheStoreData, KvCacheStoredBlockData, RouterEvent,
     };
@@ -283,7 +284,7 @@ pub(crate) mod test_util {
     use dynamo_kv_hashing::routing::compute_seq_hash_for_block;
     use dynamo_kv_hashing::{ExternalSequenceBlockHash, LocalBlockHash};
 
-    pub(crate) fn store_event(
+    pub fn store_event(
         worker_id: u64,
         dp_rank: u32,
         event_id: u64,

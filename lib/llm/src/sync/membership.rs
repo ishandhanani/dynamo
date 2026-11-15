@@ -12,7 +12,7 @@ pub use kv_source_membership::{
 };
 
 mod kv_source_watch;
-pub(crate) use kv_source_watch::KvSourceMembershipCoordinator;
+pub use kv_source_watch::KvSourceMembershipCoordinator;
 pub use kv_source_watch::KvSourceMembershipWatch;
 
 pub mod kv_state_agent;

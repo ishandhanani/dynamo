@@ -11,7 +11,7 @@ use dynamo_kv_router::plugins::worker_selection::WorkerInputs;
 use dynamo_router_protocol::worker_type::WorkerType;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum KvEventSourceRequirement {
+pub enum KvEventSourceRequirement {
     NotRequired,
     CacheAwareRouting,
     ConditionalDisaggDecodeCache,
@@ -19,7 +19,7 @@ pub(crate) enum KvEventSourceRequirement {
 }
 
 impl KvEventSourceRequirement {
-    pub(crate) fn derive(
+    pub fn derive(
         worker_role: Option<WorkerType>,
         config: &KvRouterConfig,
         inputs: WorkerInputs,
@@ -53,7 +53,7 @@ impl KvEventSourceRequirement {
         )
     }
 
-    pub(crate) fn should_subscribe(self) -> bool {
+    pub fn should_subscribe(self) -> bool {
         self != Self::NotRequired
     }
 }

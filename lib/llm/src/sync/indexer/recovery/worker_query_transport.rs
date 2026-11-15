@@ -21,7 +21,7 @@ use futures::StreamExt;
 use crate::sync::indexer::reply::WorkerKvQueryReply;
 
 #[async_trait]
-pub(crate) trait WorkerQueryTransport: Send + Sync {
+pub trait WorkerQueryTransport: Send + Sync {
     async fn query_worker(
         &self,
         worker_id: WorkerId,

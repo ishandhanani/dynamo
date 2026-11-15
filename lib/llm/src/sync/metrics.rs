@@ -31,7 +31,7 @@ use prometheus::{IntCounter, IntCounterVec, IntGauge, IntGaugeVec, Opts};
 
 mod worker_registered;
 use worker_registered::RouterWorkerRegistered;
-pub(crate) use worker_registered::{RegistrationAvailabilityProvider, RouterWorkerRegistration};
+pub use worker_registered::{RegistrationAvailabilityProvider, RouterWorkerRegistration};
 
 pub(crate) const ROUTER_WORKER_ID_LABEL: &str = "router_worker_id";
 const TARGET_NAMESPACE_LABEL: &str = "target_namespace";
@@ -244,7 +244,7 @@ impl ActiveSequenceZmqIngressMetrics {
 // ---------------------------------------------------------------------------
 
 /// Component-scoped router gauges for worker discovery.
-pub(crate) struct RouterWorkerStatusMetrics {
+pub struct RouterWorkerStatusMetrics {
     registered: RouterWorkerRegistered,
     pub kv_event_source_mismatch_workers: IntGaugeVec,
 }
@@ -478,10 +478,10 @@ impl RemoteIndexerMetrics {
 }
 
 #[cfg(test)]
-pub(crate) mod test_fixtures {
+pub mod test_fixtures {
     use prometheus::{Encoder, TextEncoder};
 
-    pub(crate) fn gather_pef(registry: &prometheus::Registry) -> String {
+    pub fn gather_pef(registry: &prometheus::Registry) -> String {
         let encoder = TextEncoder::new();
         let mut buffer = Vec::new();
         encoder.encode(&registry.gather(), &mut buffer).unwrap();

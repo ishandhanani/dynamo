@@ -29,7 +29,7 @@ pub enum RouterLoadSource {
 }
 
 impl RouterLoadSource {
-    pub(crate) const fn metric_label(self) -> &'static str {
+    pub const fn metric_label(self) -> &'static str {
         match self {
             Self::Decode | Self::Aggregated => WORKER_TYPE_DECODE,
             Self::Prefill => WORKER_TYPE_PREFILL,
@@ -46,7 +46,7 @@ impl RouterLoadSource {
         }
     }
 
-    pub(crate) fn from_worker_role_or_metric(
+    pub fn from_worker_role_or_metric(
         worker_role: Option<WorkerType>,
         metric_worker_type: &'static str,
     ) -> Self {
@@ -59,7 +59,7 @@ impl RouterLoadSource {
         })
     }
 
-    pub(crate) const fn monitors_sequence_load(self) -> bool {
+    pub const fn monitors_sequence_load(self) -> bool {
         !matches!(self, Self::Encode)
     }
 }
@@ -200,7 +200,7 @@ pub struct SchedulerLoadSender {
 }
 
 impl SchedulerLoadSender {
-    pub(crate) fn disabled(cancellation_token: CancellationToken) -> Self {
+    pub fn disabled(cancellation_token: CancellationToken) -> Self {
         Self {
             wake_tx: None,
             shared: Arc::new(SchedulerLoadShared::new(SCHEDULER_LOAD_CHANNEL_CAPACITY)),
@@ -212,7 +212,7 @@ impl SchedulerLoadSender {
     /// Hand enforcement of the booked-load checks to the caller's queue, which applies the
     /// returned live handle to the load it books itself. The worker monitor keeps judging
     /// worker-published load against the decode threshold.
-    pub(crate) fn route_busy_thresholds(&self) -> Option<LoadThresholdHandle> {
+    pub fn route_busy_thresholds(&self) -> Option<LoadThresholdHandle> {
         self.busy_thresholds.as_ref().map(RoutableThresholds::route)
     }
 

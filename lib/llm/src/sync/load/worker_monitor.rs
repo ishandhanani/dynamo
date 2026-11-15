@@ -106,7 +106,7 @@ impl LoadThresholdHandle {
 
     /// A handle that ignores thresholds, for a frontend in direct routing mode.
     /// Its monitor never subscribes to KV metrics.
-    pub(crate) fn disabled() -> Self {
+    pub fn disabled() -> Self {
         Self {
             enabled: false,
             ..Self::new(LoadThresholdConfig::default())
@@ -114,7 +114,7 @@ impl LoadThresholdHandle {
     }
 
     /// False for a handle from [`Self::disabled`].
-    pub(crate) fn is_enabled(&self) -> bool {
+    pub fn is_enabled(&self) -> bool {
         self.enabled
     }
 

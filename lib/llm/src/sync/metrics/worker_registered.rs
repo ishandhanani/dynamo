@@ -21,11 +21,11 @@ use crate::sync::runtime_configs::RuntimeConfigWatch;
 
 const LABELS: &[&str] = &[ROUTER_WORKER_ID_LABEL, labels::DP_RANK, labels::WORKER_TYPE];
 
-pub(crate) type RegistrationAvailabilityProvider =
+pub type RegistrationAvailabilityProvider =
     Arc<dyn Fn() -> Option<Arc<HashSet<WorkerId>>> + Send + Sync + 'static>;
 
 /// Owned by an embedded router, independently of its request/replica slot state.
-pub(crate) struct RouterWorkerRegistration {
+pub struct RouterWorkerRegistration {
     workers: RuntimeConfigWatch,
     worker_type: &'static str,
     cancellation: CancellationToken,

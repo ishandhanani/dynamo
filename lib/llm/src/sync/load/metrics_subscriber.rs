@@ -37,7 +37,7 @@ const MAX_PENDING_ACTIVE_LOADS: usize = 100_000;
 /// consumer scans the shards for each load, so keep the count small.
 const ACTIVE_LOAD_SHARDS: usize = 16;
 
-pub(crate) struct KvMetricsSubscriber {
+pub struct KvMetricsSubscriber {
     inner: KvMetricsSubscriberInner,
 }
 
@@ -319,10 +319,7 @@ impl KvMetricsSubscriber {
         Self::new(endpoint.component(), endpoint.id()).await
     }
 
-    pub(crate) async fn for_endpoint_id(
-        component: &Component,
-        endpoint: &EndpointId,
-    ) -> Result<Self> {
+    pub async fn for_endpoint_id(component: &Component, endpoint: &EndpointId) -> Result<Self> {
         Self::new(component, endpoint.clone()).await
     }
 
@@ -343,7 +340,7 @@ impl KvMetricsSubscriber {
         })
     }
 
-    pub(crate) async fn next(&mut self) -> Option<Result<ActiveLoad>> {
+    pub async fn next(&mut self) -> Option<Result<ActiveLoad>> {
         match &mut self.inner {
             KvMetricsSubscriberInner::Standard(subscriber) => subscriber
                 .next()

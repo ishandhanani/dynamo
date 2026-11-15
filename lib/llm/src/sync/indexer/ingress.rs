@@ -25,7 +25,7 @@ use super::{
 };
 use crate::sync::membership::KvSourceMembershipWatch;
 
-pub(crate) struct RuntimeIngressArgs<'a> {
+pub struct RuntimeIngressArgs<'a> {
     pub endpoint: &'a Endpoint,
     pub kv_router_config: &'a KvRouterConfig,
     pub block_size: u32,
@@ -42,14 +42,14 @@ pub(crate) struct RuntimeIngressArgs<'a> {
     pub remote_indexer_selectors: ModeSelectors,
 }
 
-pub(crate) struct RuntimeIngress {
+pub struct RuntimeIngress {
     indexer: Indexer,
     subscription: parking_lot::Mutex<Option<KvEventSubscriptionHandle>>,
     _served: Option<super::ServedIndexerHandle>,
 }
 
 impl RuntimeIngress {
-    pub(crate) async fn start(args: RuntimeIngressArgs<'_>) -> Result<Arc<Self>> {
+    pub async fn start(args: RuntimeIngressArgs<'_>) -> Result<Arc<Self>> {
         let RuntimeIngressArgs {
             endpoint,
             kv_router_config,
@@ -136,16 +136,16 @@ impl RuntimeIngress {
         }))
     }
 
-    pub(crate) fn indexer(&self) -> &Indexer {
+    pub fn indexer(&self) -> &Indexer {
         &self.indexer
     }
 
     #[cfg(test)]
-    pub(crate) fn has_subscription(&self) -> bool {
+    pub fn has_subscription(&self) -> bool {
         self.subscription.lock().is_some()
     }
 
-    pub(crate) fn set_task_guard(&self, task_guard: dynamo_runtime::engine::EngineContextGuard) {
+    pub fn set_task_guard(&self, task_guard: dynamo_runtime::engine::EngineContextGuard) {
         if let Some(subscription) = self.subscription.lock().as_mut() {
             subscription.set_task_guard(task_guard);
         }

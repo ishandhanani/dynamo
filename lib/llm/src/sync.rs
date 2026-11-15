@@ -18,8 +18,8 @@
 //! - `direct_zmq_fan_in`, `direct_zmq_sub_pool`: the direct-ZMQ subscription the sync channels
 //!   share.
 
-pub(crate) mod direct_zmq_fan_in;
-pub(crate) mod direct_zmq_sub_pool;
+pub mod direct_zmq_fan_in;
+pub mod direct_zmq_sub_pool;
 pub mod indexer;
 pub mod load;
 pub mod membership;
