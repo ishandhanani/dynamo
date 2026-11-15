@@ -23,6 +23,7 @@ pub(crate) use dynamo_kv_indexer::host::WireTieredMatchDetails;
 pub(crate) use dynamo_kv_indexer::host::{ApproximateRequestLease, TieredMatchDetails};
 pub use dynamo_kv_indexer::host::{Indexer, RemotePrimary, SideIndexer};
 use dynamo_runtime::component::Component;
+use dynamo_runtime::pipeline::ModeSelectors;
 pub(crate) use ingress::{RuntimeIngress, RuntimeIngressArgs};
 use tokio_util::sync::CancellationToken;
 
@@ -86,6 +87,7 @@ pub(crate) async fn build(
     model_name: Option<&str>,
     cancellation_token: CancellationToken,
     session_prefix_index: Option<Arc<SessionPrefixIndexer>>,
+    remote_indexer_selectors: ModeSelectors,
 ) -> Result<Indexer> {
     let approximate_policy = resolve_approximate_primary_policy(kv_router_config)?;
     if approximate_policy == ResolvedApproximatePrimaryPolicy::TtlRemoteFallback {
@@ -114,8 +116,13 @@ pub(crate) async fn build(
             model_name,
             "Using remote KV indexer"
         );
-        let remote =
-            RemoteIndexer::new(component, model_name, kv_router_config.use_kv_events).await?;
+        let remote = RemoteIndexer::new(
+            component,
+            model_name,
+            kv_router_config.use_kv_events,
+            remote_indexer_selectors,
+        )
+        .await?;
         let approx = predict_on_route_side_indexer(
             component,
             kv_router_config,

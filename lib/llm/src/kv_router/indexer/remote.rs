@@ -16,8 +16,9 @@ use dynamo_router_protocol::worker::WorkerWithDpRank;
 use dynamo_runtime::component::{Client, Component};
 use dynamo_runtime::discovery::{DiscoveryInstance, DiscoveryQuery};
 use dynamo_runtime::pipeline::{
-    AsyncEngine, AsyncEngineContextProvider, ManyOut, PushRouterOptions, ResponseStream,
-    RouterMode, SingleIn, async_trait, network::Ingress, network::egress::push_router::PushRouter,
+    AsyncEngine, AsyncEngineContextProvider, ManyOut, ModeSelectors, PushRouterOptions,
+    ResponseStream, RouterMode, SingleIn, async_trait, network::Ingress,
+    network::egress::push_router::PushRouter,
 };
 use dynamo_runtime::stream;
 use dynamo_runtime::traits::DistributedRuntimeProvider;
@@ -44,10 +45,13 @@ pub struct RemoteIndexer {
 }
 
 impl RemoteIndexer {
+    /// `selectors` are the router-mode selectors the two request-plane routers pick with; the
+    /// router host supplies them, because they resolve the installed router plugins.
     pub(super) async fn new(
         component: &Component,
         model_name: String,
         use_kv_events: bool,
+        selectors: ModeSelectors,
     ) -> Result<Self> {
         let query_client = component
             .endpoint(KV_INDEXER_QUERY_ENDPOINT)
@@ -58,7 +62,8 @@ impl RemoteIndexer {
             RouterMode::RoundRobin,
             PushRouterOptions {
                 fault_detection: false,
-                ..crate::kv_router::plugins::push_router_options()
+                selectors: Some(selectors.clone()),
+                ..PushRouterOptions::default()
             },
         )
         .await?;
@@ -75,7 +80,8 @@ impl RemoteIndexer {
                     RouterMode::RoundRobin,
                     PushRouterOptions {
                         fault_detection: false,
-                        ..crate::kv_router::plugins::push_router_options()
+                        selectors: Some(selectors),
+                        ..PushRouterOptions::default()
                     },
                 )
                 .await?,

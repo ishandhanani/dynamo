@@ -838,6 +838,7 @@ impl KvRouter {
             kv_source_membership,
             cancellation_token: cancellation_token.clone(),
             session_prefix_index: session_prefix_index.clone(),
+            remote_indexer_selectors: plugins::mode_selectors(),
         })
         .await?;
         let indexer = ingress.indexer().clone();
