@@ -75,7 +75,6 @@ use super::wan::grpc::{GrpcTransport, PoolRelayGrpcConfig};
 use crate::discovery::{
     KvSourceMembershipCoordinator, KvSourceMembershipView, KvSourceMembershipWatch,
 };
-use crate::kv_router::SCHEDULER_LOAD_SUBJECT;
 #[cfg(feature = "ckf-diagnostics")]
 use crate::kv_router::indexer::WorkerQueryHealthSnapshot;
 use crate::kv_router::indexer::{
@@ -83,6 +82,7 @@ use crate::kv_router::indexer::{
     start_target_subscriber,
 };
 use crate::kv_router::metrics_subscriber::KvMetricsSubscriber;
+use crate::scheduler_load::SCHEDULER_LOAD_SUBJECT;
 use crate::utils::retry::{Backoff, FailureStreak};
 use dynamo_model_card::local_model::runtime_config::ModelRuntimeConfig;
 

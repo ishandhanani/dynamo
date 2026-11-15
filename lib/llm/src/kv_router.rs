@@ -65,6 +65,7 @@ pub mod active_load;
 pub(crate) mod embedded;
 pub mod encoder_router;
 pub mod indexer;
+mod managed;
 pub mod metrics;
 pub(crate) mod metrics_subscriber;
 pub mod plugins;
@@ -82,14 +83,13 @@ pub use active_load::ActiveLoad;
 
 pub use encoder_router::EncoderRouter;
 pub use indexer::Indexer;
+pub use managed::ManagedKvRouter;
 pub use prefill_router::PrefillRouter;
 pub(crate) use routing_host::{EVERY_ROLE, check_hint_policies_route_on_kv_path};
 pub use routing_host::{
     KvPushRouter, LlmDispatch, MultimodalCache, RoutingHost, RoutingHostBuilder,
 };
-pub use routing_load::{
-    ManagedKvRouter, RouterLoadSource, RoutingLoadContext, SchedulerLoadSender,
-};
+pub use routing_load::{RouterLoadSource, RoutingLoadContext, SchedulerLoadSender};
 
 use crate::{
     discovery::{KvSourceMembershipWatch, RuntimeConfigWatch},
@@ -560,11 +560,6 @@ fn cache_hit_for_worker(
 
 // for metric publishing (push-based)
 pub const KV_METRICS_SUBJECT: &str = "kv_metrics";
-/// Router scheduler views of per-worker load, consumed by the Pool Relay.
-///
-/// Kept separate from [`KV_METRICS_SUBJECT`] so one router's view never
-/// overwrites another router's worker-overload state.
-pub const SCHEDULER_LOAD_SUBJECT: &str = "scheduler_load";
 pub const MULTIMODAL_EMBEDDING_CACHE_SUBJECT: &str = "multimodal_embedding_cache";
 
 // for inter-router comms
