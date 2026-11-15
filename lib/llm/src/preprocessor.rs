@@ -9885,8 +9885,116 @@ mod extra_args_media_copy_tests {
     }
 }
 
+/// Fixtures the tests below share with the HTTP service's tests.
+#[cfg(test)]
+pub mod test_fixtures {
+    use super::*;
+
+    pub fn preprocessed_budget_request(max_tokens: Option<u32>) -> PreprocessedRequest {
+        let stop_conditions = dynamo_frontend_protocols::common::StopConditions {
+            max_tokens,
+            ..Default::default()
+        };
+
+        PreprocessedRequest::builder()
+            .model("test-model".to_string())
+            .token_ids(vec![1, 2, 3])
+            .stop_conditions(stop_conditions)
+            .sampling_options(dynamo_frontend_protocols::common::SamplingOptions::default())
+            .output_options(dynamo_frontend_protocols::common::OutputOptions::default())
+            .build()
+            .unwrap()
+    }
+
+    pub struct UnifiedReplayEngine {
+        pub preprocessor: Arc<OpenAIPreprocessor>,
+        pub native: String,
+        pub arguments: String,
+        pub release: Option<Arc<tokio::sync::Semaphore>>,
+    }
+
+    #[async_trait]
+    impl
+        dynamo_runtime::pipeline::AsyncEngine<
+            SingleIn<NvCreateChatCompletionRequest>,
+            ManyOut<Annotated<NvCreateChatCompletionStreamResponse>>,
+            Error,
+        > for UnifiedReplayEngine
+    {
+        async fn generate(
+            &self,
+            request: SingleIn<NvCreateChatCompletionRequest>,
+        ) -> Result<ManyOut<Annotated<NvCreateChatCompletionStreamResponse>>, Error> {
+            use dynamo_runtime::pipeline::{AsyncEngineContextProvider, ResponseStream};
+            let (mut request, context) = request.transfer(());
+            OpenAIPreprocessor::normalize_kimi_k3_named_tool_choice(
+                &mut request,
+                self.preprocessor.tool_call_parser.as_deref(),
+            );
+            let mut backend_request = preprocessed_budget_request(None);
+            let constraint = self.preprocessor.apply_tool_choice_guided_decoding(
+                &request,
+                &mut backend_request,
+                false,
+            )?;
+            eprintln!("replay installed tool constraint: {constraint:?}");
+            let raw = match &request.inner.tool_choice {
+                Some(ChatCompletionToolChoiceOption::Required)
+                    if constraint.installs_guided_json() =>
+                {
+                    format!(
+                        "[{{\"name\":\"write_file\",\"arguments\":{}}}]",
+                        self.arguments
+                    )
+                }
+                Some(ChatCompletionToolChoiceOption::Named(_))
+                    if constraint.installs_guided_json() =>
+                {
+                    self.arguments.clone()
+                }
+                _ => self.native.clone(),
+            };
+            let mut chunks = Vec::new();
+            for (index, character) in raw.chars().enumerate() {
+                let response = serde_json::from_value(
+                    serde_json::json!({"id":"replay", "object":"chat.completion.chunk", "created":0,"model":"replay","choices":[{"index":0,"delta":{"role":if index == 0 {Some("assistant")} else {None},"content":character.to_string()},"finish_reason":null}]}),
+                )?;
+                chunks.push(Annotated::from_data(response));
+            }
+            chunks.push(Annotated::from_data(serde_json::from_value(serde_json::json!({"id":"replay","object":"chat.completion.chunk","created":0,"model":"replay","choices":[{"index":0,"delta":{"content":""},"finish_reason":"stop"}]}))?));
+            let pauses: Vec<usize> = [" STAGE_TWO ", " END"]
+                .into_iter()
+                .filter_map(|marker| raw.find(marker).map(|at| raw[..at].chars().count()))
+                .collect();
+            let release = self.release.clone();
+            let source = async_stream::stream! {
+                for (index, chunk) in chunks.into_iter().enumerate() {
+                    if pauses.contains(&index) && let Some(release) = &release {
+                        release.acquire().await.expect("replay barrier closed").forget();
+                    }
+                    yield chunk;
+                }
+            };
+            let route = self
+                .preprocessor
+                .tool_processing_route(&request, &constraint)?;
+            let parsed = self
+                .preprocessor
+                .postprocessor_parsing_stream_with_constraint(
+                    source,
+                    &request,
+                    false.into(),
+                    constraint,
+                    route,
+                )?;
+            Ok(ResponseStream::new(Box::pin(parsed), context.context()))
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    use super::test_fixtures::preprocessed_budget_request;
     use super::*;
     use dynamo_frontend_protocols::common::extensions::{AGENT_CONTEXT_CONTEXT_KEY, AgentContext};
     use dynamo_frontend_protocols::common::metrics::ANNOTATION_LLM_METRICS;
@@ -11139,410 +11247,6 @@ mod tests {
                     "prompt={prompt} split={split}"
                 );
             }
-        }
-    }
-
-    struct UnifiedReplayEngine {
-        preprocessor: Arc<OpenAIPreprocessor>,
-        native: String,
-        arguments: String,
-        release: Option<Arc<tokio::sync::Semaphore>>,
-    }
-
-    #[async_trait]
-    impl
-        dynamo_runtime::pipeline::AsyncEngine<
-            SingleIn<NvCreateChatCompletionRequest>,
-            ManyOut<Annotated<NvCreateChatCompletionStreamResponse>>,
-            Error,
-        > for UnifiedReplayEngine
-    {
-        async fn generate(
-            &self,
-            request: SingleIn<NvCreateChatCompletionRequest>,
-        ) -> Result<ManyOut<Annotated<NvCreateChatCompletionStreamResponse>>, Error> {
-            use dynamo_runtime::pipeline::{AsyncEngineContextProvider, ResponseStream};
-            let (mut request, context) = request.transfer(());
-            OpenAIPreprocessor::normalize_kimi_k3_named_tool_choice(
-                &mut request,
-                self.preprocessor.tool_call_parser.as_deref(),
-            );
-            let mut backend_request = preprocessed_budget_request(None);
-            let constraint = self.preprocessor.apply_tool_choice_guided_decoding(
-                &request,
-                &mut backend_request,
-                false,
-            )?;
-            eprintln!("replay installed tool constraint: {constraint:?}");
-            let raw = match &request.inner.tool_choice {
-                Some(ChatCompletionToolChoiceOption::Required)
-                    if constraint.installs_guided_json() =>
-                {
-                    format!(
-                        "[{{\"name\":\"write_file\",\"arguments\":{}}}]",
-                        self.arguments
-                    )
-                }
-                Some(ChatCompletionToolChoiceOption::Named(_))
-                    if constraint.installs_guided_json() =>
-                {
-                    self.arguments.clone()
-                }
-                _ => self.native.clone(),
-            };
-            let mut chunks = Vec::new();
-            for (index, character) in raw.chars().enumerate() {
-                let response = serde_json::from_value(
-                    serde_json::json!({"id":"replay", "object":"chat.completion.chunk", "created":0,"model":"replay","choices":[{"index":0,"delta":{"role":if index == 0 {Some("assistant")} else {None},"content":character.to_string()},"finish_reason":null}]}),
-                )?;
-                chunks.push(Annotated::from_data(response));
-            }
-            chunks.push(Annotated::from_data(serde_json::from_value(serde_json::json!({"id":"replay","object":"chat.completion.chunk","created":0,"model":"replay","choices":[{"index":0,"delta":{"content":""},"finish_reason":"stop"}]}))?));
-            let pauses: Vec<usize> = [" STAGE_TWO ", " END"]
-                .into_iter()
-                .filter_map(|marker| raw.find(marker).map(|at| raw[..at].chars().count()))
-                .collect();
-            let release = self.release.clone();
-            let source = async_stream::stream! {
-                for (index, chunk) in chunks.into_iter().enumerate() {
-                    if pauses.contains(&index) && let Some(release) = &release {
-                        release.acquire().await.expect("replay barrier closed").forget();
-                    }
-                    yield chunk;
-                }
-            };
-            let route = self
-                .preprocessor
-                .tool_processing_route(&request, &constraint)?;
-            let parsed = self
-                .preprocessor
-                .postprocessor_parsing_stream_with_constraint(
-                    source,
-                    &request,
-                    false.into(),
-                    constraint,
-                    route,
-                )?;
-            Ok(ResponseStream::new(Box::pin(parsed), context.context()))
-        }
-    }
-
-    async fn start_unified_replay(
-        family: &str,
-        native: String,
-        arguments: String,
-        release: Option<Arc<tokio::sync::Semaphore>>,
-    ) -> (
-        u16,
-        dynamo_runtime::CancellationToken,
-        tokio::task::JoinHandle<anyhow::Result<()>>,
-    ) {
-        use crate::http::service::service_v2::HttpService;
-        let (tool, reason) = match family {
-            "qwen3" => ("qwen3_coder", "qwen3"),
-            "kimi_k2" => ("kimi_k2", "kimi_k25"),
-            "glm47" => ("glm47", "glm45"),
-            other => (other, other),
-        };
-        let mut card = ModelDeploymentCard::load_from_disk(
-            "tests/data/sample-models/mock-llama-3.1-8b-instruct",
-            None,
-        )
-        .unwrap();
-        card.runtime_config.tool_call_parser = Some(tool.into());
-        card.runtime_config.reasoning_parser = Some(reason.into());
-        card.worker_type = Some(crate::worker_type::WorkerType::Aggregated);
-        card.needs.clear();
-        let preprocessor = OpenAIPreprocessor::new(card.clone()).unwrap();
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let port = listener.local_addr().unwrap().port();
-        let service = HttpService::builder()
-            .host("127.0.0.1")
-            .port(port)
-            .enable_chat_endpoints(true)
-            .enable_cmpl_endpoints(false)
-            .build()
-            .unwrap();
-        // HTTP aggregation reads parser configuration from the selected worker
-        // card, just as discovery does for a deployed model.
-        let mut workers = crate::discovery::WorkerSet::new(
-            "replay-workers".into(),
-            "replay-checksum".into(),
-            card,
-        );
-        workers.chat_engine = Some(Arc::new(UnifiedReplayEngine {
-            preprocessor,
-            native,
-            arguments,
-            release,
-        }));
-        assert!(
-            service
-                .model_manager()
-                .add_worker_set("replay", "replay-workers", workers)
-        );
-        let cancel = dynamo_runtime::CancellationToken::new();
-        let join = service.spawn_with_listener(cancel.clone(), listener).await;
-        (port, cancel, join)
-    }
-
-    // The backend cannot emit either continuation until the client releases it.
-    // This catches transport buffering even when the final aggregate is correct.
-    async fn paused_http_tool_progress(guided: bool) {
-        use dynamo_frontend_protocols::openai::chat_completions::unified_parser;
-        assert!(
-            unified_parser::parsers_v2_selected(),
-            "run with DYN_PARSER_VERSION=2"
-        );
-        let client = reqwest::Client::builder().no_proxy().build().unwrap();
-        let mut failures = Vec::new();
-        for (shape, fields) in unified_parser::test_fixtures::write_file_progress_cases() {
-            let expected_arguments: serde_json::Value =
-                serde_json::from_str(&unified_parser::test_fixtures::ordered_arguments(&fields))
-                    .unwrap();
-            for (family, native) in unified_parser::test_fixtures::native_write_file_calls(&fields)
-            {
-                for named in if guided {
-                    vec![false, true]
-                } else {
-                    vec![false]
-                } {
-                    let release = Arc::new(tokio::sync::Semaphore::new(0));
-                    let (port, cancel, join) = start_unified_replay(
-                        family,
-                        native.clone(),
-                        unified_parser::test_fixtures::ordered_arguments(&fields),
-                        Some(release.clone()),
-                    )
-                    .await;
-                    let choice = if !guided {
-                        serde_json::json!("auto")
-                    } else if named {
-                        serde_json::json!({"type":"function","function":{"name":"write_file"}})
-                    } else {
-                        serde_json::json!("required")
-                    };
-                    let request = serde_json::json!({"model":"replay","messages":[{"role":"user","content":"write it"}],"stream":true,"tool_choice":choice,"tools":[{"type":"function","function":{"name":"write_file","parameters":{"type":"object","properties":{"count":{"type":"integer"},"path":{"type":"string"},"content":{"type":"string"}}}}}]});
-                    let response = client
-                        .post(format!("http://127.0.0.1:{port}/v1/chat/completions"))
-                        .json(&request)
-                        .send()
-                        .await
-                        .unwrap();
-                    assert!(response.status().is_success());
-                    let mut source = response.bytes_stream();
-                    let mut body = String::new();
-                    let mut pending = Vec::new();
-                    let mut arguments = String::new();
-                    let mut names = String::new();
-                    let mut ids = Vec::new();
-                    let mut finishes = Vec::new();
-                    let mut progress = Vec::new();
-                    for expected in ["first content", "second content"] {
-                        let reached =
-                            tokio::time::timeout(std::time::Duration::from_secs(2), async {
-                                while let Some(bytes) = source.next().await {
-                                    pending.extend_from_slice(&bytes.unwrap());
-                                    while let Some(end) =
-                                        pending.iter().position(|byte| *byte == b'\n')
-                                    {
-                                        let line =
-                                            String::from_utf8(pending.drain(..=end).collect())
-                                                .unwrap();
-                                        body.push_str(&line);
-                                        read_replay_delta(
-                                            &line,
-                                            &mut names,
-                                            &mut arguments,
-                                            &mut ids,
-                                            &mut finishes,
-                                        );
-                                    }
-                                    if names == "write_file" && arguments.contains(expected) {
-                                        return true;
-                                    }
-                                }
-                                false
-                            })
-                            .await
-                            .unwrap_or(false);
-                        progress.push(reached);
-                        release.add_permits(1);
-                    }
-                    tokio::time::timeout(std::time::Duration::from_secs(10), async {
-                        while let Some(bytes) = source.next().await {
-                            pending.extend_from_slice(&bytes.unwrap());
-                            while let Some(end) = pending.iter().position(|byte| *byte == b'\n') {
-                                let line =
-                                    String::from_utf8(pending.drain(..=end).collect()).unwrap();
-                                body.push_str(&line);
-                                read_replay_delta(
-                                    &line,
-                                    &mut names,
-                                    &mut arguments,
-                                    &mut ids,
-                                    &mut finishes,
-                                );
-                            }
-                        }
-                    })
-                    .await
-                    .unwrap();
-                    cancel.cancel();
-                    tokio::time::timeout(std::time::Duration::from_secs(5), join)
-                        .await
-                        .unwrap()
-                        .unwrap()
-                        .unwrap();
-                    assert!(body.contains("[DONE]"));
-                    assert_eq!(names, "write_file", "{family}/{choice}");
-                    assert_eq!(ids.len(), 1, "{family}/{choice}");
-                    assert_eq!(finishes, ["tool_calls"], "{family}/{choice}");
-                    assert_eq!(
-                        serde_json::from_str::<serde_json::Value>(&arguments).unwrap(),
-                        expected_arguments,
-                        "{family}/{choice}"
-                    );
-                    eprintln!(
-                        "paused HTTP {family}/{shape}/{choice}: first={} continued={} final=true",
-                        progress[0], progress[1]
-                    );
-                    if progress != [true, true] {
-                        failures.push(format!("{family}/{shape}/{choice}: {progress:?}"));
-                    }
-                }
-            }
-        }
-        assert!(
-            failures.is_empty(),
-            "paused HTTP progress failed: {failures:?}"
-        );
-    }
-
-    fn read_replay_delta(
-        line: &str,
-        names: &mut String,
-        arguments: &mut String,
-        ids: &mut Vec<String>,
-        finishes: &mut Vec<String>,
-    ) {
-        let Some(data) = line.trim_end().strip_prefix("data: ") else {
-            return;
-        };
-        if data == "[DONE]" {
-            return;
-        }
-        let event: serde_json::Value = serde_json::from_str(data).unwrap();
-        for choice in event["choices"].as_array().unwrap() {
-            if let Some(finish) = choice["finish_reason"].as_str() {
-                finishes.push(finish.into());
-            }
-            if let Some(calls) = choice["delta"]["tool_calls"].as_array() {
-                for call in calls {
-                    assert_eq!(call["index"], 0);
-                    if let Some(id) = call["id"].as_str() {
-                        ids.push(id.into());
-                    }
-                    if let Some(name) = call["function"]["name"].as_str() {
-                        names.push_str(name);
-                    }
-                    if let Some(value) = call["function"]["arguments"].as_str() {
-                        arguments.push_str(value);
-                    }
-                }
-            }
-        }
-    }
-
-    #[tokio::test]
-    #[ignore = "Run explicitly with DYN_PARSER_VERSION=2; measures upstream native buffering"]
-    async fn eight_family_paused_native_http_progress() {
-        paused_http_tool_progress(false).await;
-    }
-
-    #[tokio::test]
-    #[ignore = "Run explicitly with DYN_PARSER_VERSION=2; measures installed forced-tool modes"]
-    async fn eight_family_paused_forced_http_progress() {
-        paused_http_tool_progress(true).await;
-    }
-
-    #[tokio::test]
-    async fn eight_family_http_sse_replay() {
-        use dynamo_frontend_protocols::openai::chat_completions::unified_parser;
-        // Run with the experiment enabled in a separate process: its flag is cached.
-        if unified_parser::selected_family(Some("qwen3_coder"), Some("qwen3")).is_none() {
-            return;
-        }
-        let client = reqwest::Client::builder().no_proxy().build().unwrap();
-        for (family, native) in unified_parser::test_fixtures::eight_family_calls("é replay") {
-            let (port, cancel, join) = start_unified_replay(
-                family,
-                native,
-                serde_json::json!({"count":2,"content":"é replay"}).to_string(),
-                None,
-            )
-            .await;
-            for streaming in [false, true] {
-                for choice in [
-                    serde_json::Value::Null,
-                    serde_json::json!("auto"),
-                    serde_json::json!("required"),
-                    serde_json::json!({"type":"function","function":{"name":"write_file"}}),
-                    serde_json::json!("none"),
-                ] {
-                    let response = client.post(format!("http://127.0.0.1:{port}/v1/chat/completions")).json(&serde_json::json!({"model":"replay","messages":[{"role":"user","content":"write it"}],"stream":streaming,"tool_choice":choice,"tools":[{"type":"function","function":{"name":"write_file","parameters":{"type":"object","properties":{"count":{"type":"integer"},"content":{"type":"string"}}}}}]})).send().await.unwrap();
-                    let status = response.status();
-                    let body = response.text().await.unwrap();
-                    assert!(status.is_success(), "{family} {choice} {status}: {body}");
-                    let mut arguments = String::new();
-                    if streaming {
-                        assert!(body.contains("[DONE]"), "{family}");
-                        for line in body
-                            .lines()
-                            .filter_map(|line| line.strip_prefix("data: "))
-                            .filter(|line| *line != "[DONE]")
-                        {
-                            let event: serde_json::Value = serde_json::from_str(line).unwrap();
-                            if let Some(calls) =
-                                event["choices"][0]["delta"]["tool_calls"].as_array()
-                            {
-                                for call in calls {
-                                    arguments.push_str(
-                                        call["function"]["arguments"].as_str().unwrap_or(""),
-                                    );
-                                }
-                            }
-                        }
-                    } else {
-                        let result: serde_json::Value = serde_json::from_str(&body).unwrap();
-                        if let Some(calls) =
-                            result["choices"][0]["message"]["tool_calls"].as_array()
-                        {
-                            assert_eq!(calls.len(), 1, "{family}");
-                            arguments.push_str(calls[0]["function"]["arguments"].as_str().unwrap());
-                        }
-                    }
-                    if choice == "none" {
-                        assert!(arguments.is_empty(), "{family}");
-                    } else {
-                        assert_eq!(
-                            serde_json::from_str::<serde_json::Value>(&arguments).unwrap_or_else(
-                                |error| panic!(
-                                    "{family} {choice} stream={streaming}: {error}; body={body}"
-                                )
-                            ),
-                            serde_json::json!({"count":2,"content":"é replay"}),
-                            "{family} {choice}"
-                        );
-                    }
-                }
-            }
-            cancel.cancel();
-            tokio::time::timeout(std::time::Duration::from_secs(5), join)
-                .await
-                .unwrap()
-                .unwrap()
-                .unwrap();
         }
     }
 
@@ -16015,22 +15719,6 @@ responses_tools: None,
                 should_reject,
             );
         }
-    }
-
-    fn preprocessed_budget_request(max_tokens: Option<u32>) -> PreprocessedRequest {
-        let stop_conditions = dynamo_frontend_protocols::common::StopConditions {
-            max_tokens,
-            ..Default::default()
-        };
-
-        PreprocessedRequest::builder()
-            .model("test-model".to_string())
-            .token_ids(vec![1, 2, 3])
-            .stop_conditions(stop_conditions)
-            .sampling_options(dynamo_frontend_protocols::common::SamplingOptions::default())
-            .output_options(dynamo_frontend_protocols::common::OutputOptions::default())
-            .build()
-            .unwrap()
     }
 
     #[test]

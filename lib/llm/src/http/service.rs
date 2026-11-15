@@ -40,6 +40,8 @@ pub mod response_headers;
 pub mod router_policy;
 pub mod service_v2;
 pub mod systemone;
+#[cfg(test)]
+mod unified_replay_tests;
 mod worker_metrics;
 #[cfg(test)]
 mod write_timeout_tests;
