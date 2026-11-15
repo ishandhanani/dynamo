@@ -6,7 +6,7 @@ pub mod config;
 mod integration;
 mod otel_sink;
 pub mod payload;
-pub(crate) mod payload_stream;
+pub mod payload_stream;
 mod record;
 mod replay;
 #[cfg(feature = "request-trace-s3")]
@@ -28,19 +28,20 @@ use dynamo_model_card::local_model::LocalModel;
 pub use agent_context::SharedFinishReasonMetadata;
 pub(crate) use agent_context::{
     AgentContextTraceState, build_agent_context_trace_state, into_owned_replay_metrics,
-    record_backend_finish_reason_metadata, record_chat_finish_reason_metadata,
-    record_completion_finish_reason_metadata, record_llm_metric_tokens, request_metrics,
+    record_chat_finish_reason_metadata, record_completion_finish_reason_metadata, request_metrics,
     request_metrics_from_agent_state, start_request_trace_tool_event_ingest,
 };
+pub use agent_context::{record_backend_finish_reason_metadata, record_llm_metric_tokens};
 pub use config::{
     RequestTraceFileFormat, RequestTracePolicy, RequestTraceRecordKind, RequestTraceSinkKind,
     is_enabled, policy,
 };
-pub(crate) use integration::{
-    build_request_end_trace_state, finish_reason_metadata_handle, wrap_chat_request_end_stream,
-    wrap_completion_request_end_stream,
+pub use integration::{
+    RequestEndTraceState, build_request_end_trace_state, finish_reason_metadata_handle,
+    wrap_chat_request_end_stream, wrap_completion_request_end_stream,
 };
-pub(crate) use record::{emit_router_selection, publish_tool_record, validate_tool_record};
+pub use record::emit_router_selection;
+pub(crate) use record::{publish_tool_record, validate_tool_record};
 pub(crate) use replay::replay_metrics;
 pub use sink::{ActiveInput, TraceShutdownReport, shutdown_workers};
 pub use types::{
@@ -53,7 +54,7 @@ pub use types::{
 static BUS: TelemetryBus<RequestTraceRecord> = TelemetryBus::new();
 
 pub const DEFAULT_TOOL_EVENTS_TOPIC: &str = "agent-tool-events";
-pub(crate) const X_REQUEST_ID_CONTEXT_KEY: &str = "request_trace.x_request_id";
+pub const X_REQUEST_ID_CONTEXT_KEY: &str = "request_trace.x_request_id";
 
 /// Context key for an endpoint that gives clients other tool-call IDs than the
 /// backend's; its value is the endpoint's [`ClientToolCallIds`].
@@ -110,7 +111,7 @@ pub async fn init_from_env_with_shutdown(shutdown: CancellationToken) -> anyhow:
     Ok(())
 }
 
-pub(crate) async fn start_tool_event_ingest_from_policy(
+pub async fn start_tool_event_ingest_from_policy(
     drt: DistributedRuntime,
     local_model: &LocalModel,
 ) -> anyhow::Result<()> {

@@ -15,7 +15,7 @@ use dynamo_frontend_protocols::openai::chat_completions::{
 pub const HTTP_HEADERS_CONTEXT_KEY: &str = "request_trace.http.request.headers";
 
 /// True when payload records are being captured and a header allowlist is set.
-pub(crate) fn http_header_capture_active() -> bool {
+pub fn http_header_capture_active() -> bool {
     if !super::config::capture_enabled() {
         return false;
     }
