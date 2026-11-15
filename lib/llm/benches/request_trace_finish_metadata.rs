@@ -12,7 +12,7 @@ use dynamo_frontend_protocols::common::llm_backend::{
     BackendOutput, FinishReason as BackendFinishReason,
 };
 use dynamo_frontend_protocols::openai::chat_completions::NvCreateChatCompletionRequest;
-use dynamo_llm::preprocessor::OpenAIPreprocessor;
+use dynamo_preprocessor::OpenAIPreprocessor;
 use dynamo_protocols::types::{
     ChatCompletionRequestMessage, ChatCompletionRequestUserMessage,
     ChatCompletionRequestUserMessageContent, CreateChatCompletionRequest,

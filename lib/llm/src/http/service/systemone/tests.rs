@@ -182,7 +182,7 @@ use super::{
     Placement, PreparedBranch, StartedBranch, add_input_tokens, bind_native, dispatch,
     finish_branch, pin_to_placement, resolve_dp_rank,
 };
-use crate::{discovery::SystemOneExecutionSelection, preprocessor::OpenAIPreprocessor};
+use crate::discovery::SystemOneExecutionSelection;
 use dynamo_frontend_protocols::{
     Annotated,
     common::{
@@ -193,6 +193,7 @@ use dynamo_frontend_protocols::{
     systemone::build_native_score_request,
 };
 use dynamo_model_card::model_card::ModelDeploymentCard;
+use dynamo_preprocessor::OpenAIPreprocessor;
 
 #[test]
 fn cumulative_input_limit_is_checked_without_overflow() {

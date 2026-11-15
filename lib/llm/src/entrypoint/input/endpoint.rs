@@ -5,7 +5,6 @@ use std::{future::Future, pin::Pin, sync::Arc};
 
 use crate::{
     admission_gate::AdmissionEngine,
-    backend::ExecutionContext,
     engines::StreamingEngineAdapter,
     first_token::{FirstTokenNotifier, FirstTokenSource},
     worker_type::WorkerType,
@@ -18,6 +17,7 @@ use dynamo_frontend_protocols::types::{
     },
 };
 use dynamo_model_card::model_type::{ModelInput, ModelType};
+use dynamo_preprocessor::backend::ExecutionContext;
 
 use dynamo_runtime::engine::AsyncEngineStream;
 use dynamo_runtime::pipeline::{

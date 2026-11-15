@@ -15,11 +15,11 @@ use serde::Serialize;
 
 use super::ModelManagerError;
 use super::worker_set::WorkerSet;
-use crate::preprocessor::OpenAIPreprocessor;
 use dynamo_frontend_protocols::openai::ParsingOptions;
 use dynamo_model_card::local_model::runtime_config::VLLM_ENABLE_TOWER_CONNECTOR_LORA_RUNTIME_KEY;
 use dynamo_model_card::model_card::ModelDeploymentCard;
 use dynamo_model_card::router_config::LoadThresholdConfig;
+use dynamo_preprocessor::OpenAIPreprocessor;
 
 use dynamo_frontend_protocols::types::{
     RealtimeBidirectionalEngine,

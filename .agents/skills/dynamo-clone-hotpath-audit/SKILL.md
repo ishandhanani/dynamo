@@ -57,7 +57,7 @@ Use narrower paths when the user names a subsystem:
 
 ```bash
 python3 .agents/skills/dynamo-clone-hotpath-audit/scripts/clone_inventory.py \
-  --paths lib/router/scheduler/src lib/llm/src/backend.rs \
+  --paths lib/router/scheduler/src lib/preprocessor/src/backend.rs \
   --only-actionable
 ```
 
@@ -68,7 +68,7 @@ prove removability.
 
 Prioritize in this order:
 
-1. per-request LLM paths: `lib/llm/src/backend.rs`, preprocessor, HTTP/gRPC
+1. per-request LLM paths: `lib/preprocessor/src/backend.rs`, preprocessor, HTTP/gRPC
    services, protocol conversion, migration
 2. KV routing and scheduling: `lib/router/scheduler/src`, `lib/router/worker-selection/src`,
    `lib/router/admission/src`, `lib/router/slot-tracker/src`, `lib/router/kv-indexer/src`
@@ -159,7 +159,7 @@ For every proposed change, report:
 Example:
 
 ```text
-lib/llm/src/preprocessor.rs:123
+lib/preprocessor/src/lib.rs:123
 Hot path: every embeddings request.
 Cost: clones Vec<String> before moving into spawn_blocking.
 Bucket: removable move.
@@ -170,7 +170,7 @@ Required-clone check: no fan-out, retry, async task sharing, or later logging
 uses the original value.
 Proof: the closure receives the same owned Vec<String>; all later behavior reads
 from that moved value.
-Validation: cargo test -p dynamo-llm preprocessor
+Validation: cargo test -p dynamo-preprocessor
 ```
 
 ### 7. Validate Before Finishing

@@ -24,14 +24,12 @@ use dynamo_scheduler::host::PrefillLoadEstimator;
 use dynamo_renderer::PromptFormatter;
 
 use crate::{
-    backend::Backend,
     discovery::{LoadThresholdHandle, WorkerSet},
     entrypoint::{self, ChatEngineFactoryCallback},
     kv_router::{
         EncoderRouter, PrefillRouter, RouterLoadSource, RoutingLoadContext,
         plugins::RouterPluginBuilder,
     },
-    preprocessor::{OpenAIPreprocessor, prompt::prompt_formatter_from_mdc},
     worker_type::WorkerType,
 };
 use dynamo_frontend_protocols::common::preprocessor::PreprocessedEmbeddingRequest;
@@ -67,6 +65,8 @@ use dynamo_model_card::{
     model_type::{ModelInput, ModelType},
     router_config::RouterConfig,
 };
+use dynamo_preprocessor::backend::Backend;
+use dynamo_preprocessor::{OpenAIPreprocessor, prompt::prompt_formatter_from_mdc};
 
 use super::readiness::normalize_legacy_prefill_topology;
 use super::{

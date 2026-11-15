@@ -1584,7 +1584,6 @@ mod tests {
         use super::*;
         use crate::http::service::openai::check_for_backend_error;
         use crate::http::service::service_v2::BackendErrorCheck;
-        use crate::preprocessor::OpenAIPreprocessor;
         use dynamo_frontend_protocols::common::llm_backend::{BackendOutput, FinishReason};
         use dynamo_frontend_protocols::common::metrics::ANNOTATION_PAYLOAD_USAGE;
         use dynamo_frontend_protocols::openai::ParsingOptions;
@@ -1593,6 +1592,7 @@ mod tests {
             NvCreateChatCompletionRequest, NvCreateChatCompletionResponse,
         };
         use dynamo_frontend_protocols::types::Annotated;
+        use dynamo_preprocessor::OpenAIPreprocessor;
         use dynamo_runtime::engine::AsyncEngineContext;
         use dynamo_telemetry::request_trace::payload_stream::scan_aggregate_with_future;
         use futures::{Stream, StreamExt};

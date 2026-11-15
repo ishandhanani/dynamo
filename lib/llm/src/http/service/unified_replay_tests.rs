@@ -9,8 +9,8 @@ use std::sync::Arc;
 use dynamo_model_card::model_card::ModelDeploymentCard;
 use futures::StreamExt;
 
-use crate::preprocessor::OpenAIPreprocessor;
-use crate::preprocessor::test_fixtures::UnifiedReplayEngine;
+use dynamo_preprocessor::OpenAIPreprocessor;
+use dynamo_preprocessor::test_fixtures::UnifiedReplayEngine;
 
 async fn start_unified_replay(
     family: &str,

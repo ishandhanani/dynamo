@@ -18,7 +18,6 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::{Duration, Instant};
 
-use crate::backend::ExecutionContext;
 use crate::kv_router::publisher::{KvEventPublisher, KvEventSourceConfig, WorkerMetricsPublisher};
 use anyhow::{Context, Result, bail};
 use dynamo_frontend_protocols::TokenIdType;
@@ -38,6 +37,7 @@ use dynamo_mocker::services::bootstrap::{
     ParticipantRegistration, connect_to_prefill,
 };
 use dynamo_mocker::services::zmq_events::ZmqKvEventSink;
+use dynamo_preprocessor::backend::ExecutionContext;
 use dynamo_protocols::types::{CompletionUsage, PromptTokensDetails};
 use dynamo_runtime::DistributedRuntime;
 use dynamo_runtime::error::{DynamoError, ErrorType};

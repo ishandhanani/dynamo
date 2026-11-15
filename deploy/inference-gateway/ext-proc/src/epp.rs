@@ -25,10 +25,10 @@ use dynamo_kv_router::config::try_kv_router_config_from_dynamo_env;
 use dynamo_llm::discovery::ModelManager;
 use dynamo_llm::kv_router::prefill_router::PrefillReservation;
 use dynamo_llm::kv_router::{FindBestMatchOutcome, ManagedKvRouter, PrefillRouter};
-use dynamo_llm::preprocessor::OpenAIPreprocessor;
 use dynamo_llm::tokenizers::Encoding;
 use dynamo_llm::worker_type::WorkerType;
 use dynamo_model_card::model_card::ModelDeploymentCard;
+use dynamo_preprocessor::OpenAIPreprocessor;
 use dynamo_protocols::types::Prompt;
 use dynamo_router_protocol::worker::WorkerWithDpRank;
 use dynamo_runtime::discovery::{
@@ -807,7 +807,7 @@ impl Router {
 ///
 /// Negative priorities are clamped to `0.0` so a low-priority hint never
 /// pushes a request behind FCFS arrivals (matches the standalone preprocessor
-/// in `lib/llm/src/preprocessor.rs`). Falls back to the deprecated
+/// in `lib/preprocessor/src/lib.rs`). Falls back to the deprecated
 /// `latency_sensitivity` alias for callers still on the old field name.
 /// Returns `0.0` when `nvext` is absent. Shared by the chat and completion
 /// paths since both carry the same `nvext` block.
@@ -834,7 +834,7 @@ fn extract_strict_priority(nvext: Option<&NvExt>) -> u32 {
 ///
 /// A request carrying `required_taints` must reach the same hard
 /// placement check the replaced shared/FFI preprocessing applied
-/// (`lib/llm/src/preprocessor.rs`); dropping this here would let a request
+/// (`lib/preprocessor/src/lib.rs`); dropping this here would let a request
 /// with a hard constraint land on a worker that does not satisfy it.
 /// Returns an empty (no-op) `RoutingConstraints` when absent. Shared by the
 /// chat and completion paths since both carry the same `nvext` block.

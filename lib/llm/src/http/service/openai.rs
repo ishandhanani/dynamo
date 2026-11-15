@@ -55,10 +55,6 @@ use super::{
     response_headers::{RESPONSE_HEADERS_CONTEXT_KEY, ResponseHeaders},
     service_v2::{self, BackendErrorCheck},
 };
-use crate::preprocessor::{
-    PRESERVE_OMITTED_MAX_TOKENS_CONTEXT_KEY, REQUEST_PARSING_OPTIONS_CONTEXT_KEY,
-    decode_base64_to_floats,
-};
 use dynamo_frontend_protocols::ValidateRequest;
 use dynamo_frontend_protocols::common::extensions::{
     AGENT_CONTEXT_CONTEXT_KEY, AgentContext, InputTrigger, NvExt as CommonNvExt,
@@ -103,6 +99,10 @@ use dynamo_http_server::{
     metrics::{CancellationLabels, Endpoint, ErrorType},
 };
 use dynamo_model_card::request_template::{RequestTemplate, resolve_request_model};
+use dynamo_preprocessor::{
+    PRESERVE_OMITTED_MAX_TOKENS_CONTEXT_KEY, REQUEST_PARSING_OPTIONS_CONTEXT_KEY,
+    decode_base64_to_floats,
+};
 use dynamo_protocols::types::ChatCompletionMessageContent;
 use dynamo_protocols::types::ChatCompletionMessageToolCallChunk;
 use dynamo_protocols::types::ChatCompletionStreamResponseDelta;
@@ -404,7 +404,7 @@ pub(super) fn media_refusal(
     request: &NvCreateChatCompletionRequest,
 ) -> Option<MediaRefusal> {
     media_refusal_for_content_type(state, || {
-        crate::preprocessor::request_media_content_types(&request.inner.messages)
+        dynamo_preprocessor::request_media_content_types(&request.inner.messages)
             .first()
             .copied()
     })
@@ -4235,7 +4235,7 @@ async fn chat_completions(
     // Beam route, before generic validation (which rejects what this normalizes): a
     // legacy `builtin_tools` declaration is promoted into `tools` (see
     // `tool_choice::declare_legacy_builtin_tools_for_beam`).
-    crate::preprocessor::tool_choice::declare_legacy_builtin_tools_for_beam(
+    dynamo_preprocessor::tool_choice::declare_legacy_builtin_tools_for_beam(
         &mut request,
         parsing_options.tool_call_parser.as_deref(),
         parsing_options.reasoning_parser.as_deref(),
@@ -4274,7 +4274,7 @@ async fn chat_completions(
     // Any force_nonempty_content=true request: surface reasoning as content when
     // the turn produced none. See `wants_reasoning_as_content_when_empty`.
     let move_reasoning_to_content_when_empty =
-        crate::preprocessor::OpenAIPreprocessor::wants_reasoning_as_content_when_empty(
+        dynamo_preprocessor::OpenAIPreprocessor::wants_reasoning_as_content_when_empty(
             request.chat_template_args.as_ref(),
         );
     let parsing_options = parsing_options
@@ -4645,7 +4645,7 @@ fn request_stream_can_defer_all_output(
     parsing_options: &ParsingOptions,
     chat_template_args: Option<&HashMap<String, serde_json::Value>>,
 ) -> bool {
-    crate::preprocessor::OpenAIPreprocessor::stream_can_defer_all_output(
+    dynamo_preprocessor::OpenAIPreprocessor::stream_can_defer_all_output(
         parsing_options.tool_call_parser.as_deref(),
         parsing_options.reasoning_parser.as_deref(),
         chat_template_args,
@@ -5077,7 +5077,7 @@ async fn responses(
     // `wants_reasoning_as_content_when_empty`, but the aggregating branch reads
     // this flag instead.
     let move_reasoning_to_content_when_empty =
-        crate::preprocessor::OpenAIPreprocessor::wants_reasoning_as_content_when_empty(
+        dynamo_preprocessor::OpenAIPreprocessor::wants_reasoning_as_content_when_empty(
             request.chat_template_args.as_ref(),
         );
     let parsing_options = parsing_options

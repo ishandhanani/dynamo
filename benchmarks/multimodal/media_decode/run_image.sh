@@ -12,4 +12,4 @@ cd "${REPO_ROOT}"
 export RUN_IMAGE_DECODE_SWEEP=1
 export DYNAMO_REQUIRE_LIBJPEG_TURBO_TEST=1
 
-exec cargo bench -p dynamo-llm --bench image_decode -- "$@"
+exec cargo bench -p dynamo-preprocessor --bench image_decode -- "$@"

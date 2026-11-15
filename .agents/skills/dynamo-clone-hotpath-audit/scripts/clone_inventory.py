@@ -26,8 +26,8 @@ TEST_PATH_MARKERS = (
 )
 
 HOT_PATH_RULES = (
-    ("lib/llm/src/backend.rs", 10, "llm request backend"),
-    ("lib/llm/src/preprocessor", 9, "llm request preprocessing"),
+    ("lib/preprocessor/src/backend.rs", 10, "llm request backend"),
+    ("lib/preprocessor/src", 9, "llm request preprocessing"),
     ("lib/llm/src/http", 8, "http request path"),
     ("lib/llm/src/grpc", 8, "grpc request path"),
     ("lib/frontend-protocols/src", 7, "protocol conversion"),

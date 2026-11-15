@@ -32,7 +32,7 @@ def runtime_structural_tag_options(
 
 
 # Published by the vLLM worker (dynamo.vllm.main.publish_vllm_structural_tag_reasoning_policy)
-# and read by the Rust preprocessor (lib/llm/src/preprocessor/structural_tag.rs).
+# and read by the Rust preprocessor (lib/preprocessor/src/structural_tag.rs).
 TOOL_CALL_STRUCTURAL_TAG_EXCLUDES_REASONING_RUNTIME_KEY = (
     "tool_call_structural_tag_excludes_reasoning"
 )

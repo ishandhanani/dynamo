@@ -8,6 +8,7 @@ members = [
     "lib/frontend-protocols",
     "lib/model-card",
     "lib/telemetry",
+    "lib/preprocessor",
     "lib/rl",
     "lib/runtime",
     "lib/tokens",
@@ -90,6 +91,7 @@ dynamo-lora = { path = "lib/lora", version = "1.8.0" }
 dynamo-frontend-protocols = { path = "lib/frontend-protocols", version = "1.8.0" }
 dynamo-model-card = { path = "lib/model-card", version = "1.8.0" }
 dynamo-telemetry = { path = "lib/telemetry", version = "1.8.0" }
+dynamo-preprocessor = { path = "lib/preprocessor", version = "1.8.0" }
 dynamo-sglang-generate = { path = "lib/generate-formats/sglang", version = "1.8.0" }
 dynamo-vllm-generate = { path = "lib/generate-formats/vllm", version = "1.8.0" }
 dynamo-rl = { path = "lib/rl", version = "1.8.0" }
