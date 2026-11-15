@@ -1,0 +1,65 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+[package]
+name = "dynamo-telemetry"
+description = "Request trace, forward-pass metrics trace and stream recorders, with the sinks that write their records"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+homepage.workspace = true
+repository.workspace = true
+
+[features]
+# S3 destination for the request-trace sink. dynamo-llm forwards its own request-trace-s3
+# feature here.
+request-trace-s3 = ["dep:object_store", "dep:uuid"]
+# Exports the finish-reason metadata hooks that dynamo-llm's request_trace_finish_metadata
+# bench drives. dynamo-llm forwards its own request-trace-bench feature here.
+request-trace-bench = []
+
+[dependencies]
+# repo
+dynamo-frontend-protocols = { workspace = true }
+dynamo-kv-hashing = { workspace = true }
+dynamo-model-card = { workspace = true }
+dynamo-runtime = { workspace = true }
+dynamo-tokens = { workspace = true }
+dynamo-worker-selection = { workspace = true }
+
+# published
+dynamo-protocols = { workspace = true }
+
+# workspace
+anyhow = { workspace = true }
+async-nats = { workspace = true }
+async-trait = { workspace = true }
+axum = { workspace = true }
+bytes = { workspace = true }
+futures = { workspace = true }
+opentelemetry = { workspace = true }
+opentelemetry-otlp = { workspace = true }
+opentelemetry_sdk = { workspace = true }
+parking_lot = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }
+tokio-util = { workspace = true }
+tracing = { workspace = true }
+uuid = { workspace = true, optional = true }
+
+bytemuck = "1.22"
+flate2 = { version = "1" }
+# The S3 sink builds its own client; dynamo-lora uses the same crate for its sources.
+object_store = { version = "0.12.4", features = ["aws"], optional = true }
+rmp-serde = "1.3"
+
+[dev-dependencies]
+approx = "0.5"
+rand = { workspace = true }
+serial_test = "3"
+temp-env = { version = "0.3.6", features = ["async_closure"] }
+tempfile = { workspace = true }
+tokio = { workspace = true, features = ["test-util"] }
+uuid = { workspace = true }

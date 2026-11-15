@@ -33,8 +33,8 @@ const FPM_VERSION: i32 = 1;
 const IDLE_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(1);
 
 fn report_fpm_trace_init(
-    result: anyhow::Result<Option<crate::fpm_trace::FpmTrace>>,
-) -> Option<crate::fpm_trace::FpmTrace> {
+    result: anyhow::Result<Option<dynamo_telemetry::fpm_trace::FpmTrace>>,
+) -> Option<dynamo_telemetry::fpm_trace::FpmTrace> {
     match result {
         Ok(trace) => trace,
         Err(error) => {
@@ -47,13 +47,13 @@ fn report_fpm_trace_init(
     }
 }
 
-async fn init_fpm_trace(component: &Component) -> Option<crate::fpm_trace::FpmTrace> {
+async fn init_fpm_trace(component: &Component) -> Option<dynamo_telemetry::fpm_trace::FpmTrace> {
     let namespace = component.namespace().name();
     let component_name = component.name().to_string();
     let producer_id = component.drt().connection_id().to_string();
     let runtime_id = component.drt().runtime().id().to_string();
     report_fpm_trace_init(
-        crate::fpm_trace::init_from_env_with_shutdown(
+        dynamo_telemetry::fpm_trace::init_from_env_with_shutdown(
             &runtime_id,
             &namespace,
             &component_name,
@@ -72,7 +72,7 @@ where
     tap(payload.clone());
 }
 
-fn tap_relay_fpm(payload: &bytes::Bytes, trace: Option<&crate::fpm_trace::FpmTrace>) {
+fn tap_relay_fpm(payload: &bytes::Bytes, trace: Option<&dynamo_telemetry::fpm_trace::FpmTrace>) {
     if let Some(trace) = trace {
         tap_relay_fpm_with(payload, |payload| {
             trace.publish_payload(payload);
@@ -87,7 +87,7 @@ where
     tap(bytes::Bytes::copy_from_slice(payload));
 }
 
-fn tap_direct_fpm(payload: &[u8], trace: Option<&crate::fpm_trace::FpmTrace>) {
+fn tap_direct_fpm(payload: &[u8], trace: Option<&dynamo_telemetry::fpm_trace::FpmTrace>) {
     if let Some(trace) = trace {
         tap_direct_fpm_with(payload, |payload| {
             trace.publish_payload(payload);
@@ -134,7 +134,7 @@ impl FpmEventRelay {
         zmq_endpoint: String,
         publisher: EventPublisher,
         cancel: CancellationToken,
-        trace: Option<crate::fpm_trace::FpmTrace>,
+        trace: Option<dynamo_telemetry::fpm_trace::FpmTrace>,
     ) {
         let socket = match connect_sub_socket(&zmq_endpoint, None).await {
             Ok(socket) => socket,

@@ -16,8 +16,8 @@ use dynamo_runtime::transports::nats;
 use tokio::sync::{broadcast, mpsc};
 use tokio_util::sync::CancellationToken;
 
-use crate::telemetry::jsonl::{JsonlSinkOptions, JsonlWriter};
-use crate::telemetry::jsonl_gz::{JsonlGzipSinkOptions, JsonlGzipWriter};
+use crate::jsonl::{JsonlSinkOptions, JsonlWriter};
+use crate::jsonl_gz::{JsonlGzipSinkOptions, JsonlGzipWriter};
 
 use super::{
     RequestTraceFileFormat, RequestTracePolicy, RequestTraceRecord, RequestTraceSinkKind, config,
@@ -578,8 +578,8 @@ mod tests {
     use flate2::read::MultiGzDecoder;
     use tempfile::tempdir;
 
+    use crate::jsonl_gz::segment_path;
     use crate::request_trace::RequestReplayMetrics;
-    use crate::telemetry::jsonl_gz::segment_path;
 
     use super::*;
     use crate::request_trace::RequestTraceEventType;

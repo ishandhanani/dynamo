@@ -26,6 +26,7 @@ nccl = ["block-manager", "dynamo-llm/nccl", "cudarc/nccl"]  # Enable NCCL collec
 
 [dependencies]
 dynamo-llm = { path = "../../llm" }
+dynamo-telemetry = { path = "../../telemetry" }
 dynamo-runtime = { path = "../../runtime" }
 
 anyhow = { version = "1" }

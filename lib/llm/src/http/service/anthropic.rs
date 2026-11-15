@@ -743,8 +743,8 @@ async fn anthropic_messages(
     );
     // Clients get `tool_use_id`s, not backend IDs; request traces record them.
     request.insert(
-        crate::request_trace::CLIENT_TOOL_CALL_IDS_CONTEXT_KEY,
-        crate::request_trace::ClientToolCallIds(
+        dynamo_telemetry::request_trace::CLIENT_TOOL_CALL_IDS_CONTEXT_KEY,
+        dynamo_telemetry::request_trace::ClientToolCallIds(
             dynamo_frontend_protocols::anthropic::types::tool_use_id,
         ),
     );

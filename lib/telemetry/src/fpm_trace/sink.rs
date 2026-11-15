@@ -15,7 +15,7 @@ use tokio::sync::broadcast;
 
 use dynamo_runtime::utils::GracefulTaskGuard;
 
-use crate::telemetry::jsonl_gz::{JsonlGzipSinkOptions, JsonlGzipWriter};
+use crate::jsonl_gz::{JsonlGzipSinkOptions, JsonlGzipWriter};
 
 use super::config::{
     DEFAULT_JSONL_BUFFER_BYTES, DEFAULT_JSONL_FLUSH_INTERVAL_MS, FpmTraceMode, FpmTracePolicy,
@@ -468,7 +468,7 @@ mod tests {
     use tokio_util::sync::CancellationToken;
 
     use super::*;
-    use crate::telemetry::jsonl_gz::segment_path;
+    use crate::jsonl_gz::segment_path;
 
     fn source() -> FpmTraceSource {
         FpmTraceSource {

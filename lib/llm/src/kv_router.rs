@@ -1480,7 +1480,11 @@ impl KvRouter {
         // so every caller of this method (routing hosts, prefill reservations, the
         // Python binding) emits exactly one row.
         if let (Some(request_id), Some(trace)) = (context_id, response.selection_trace.take()) {
-            crate::request_trace::emit_router_selection(request_id, self.worker_type(), trace);
+            dynamo_telemetry::request_trace::emit_router_selection(
+                request_id,
+                self.worker_type(),
+                trace,
+            );
         }
         // Indexing failures never affect routing.
         if let (Some(session_id), Some(block_hashes)) =

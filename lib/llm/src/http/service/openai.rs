@@ -1261,12 +1261,12 @@ fn copy_context_metadata<T: Send + Sync + 'static, U: Send + Sync + 'static>(
     source: &Context<T>,
     target: &mut Context<U>,
 ) {
-    if crate::request_trace::is_enabled()
+    if dynamo_telemetry::request_trace::is_enabled()
         && let Ok(x_request_id) =
-            source.get::<String>(crate::request_trace::X_REQUEST_ID_CONTEXT_KEY)
+            source.get::<String>(dynamo_telemetry::request_trace::X_REQUEST_ID_CONTEXT_KEY)
     {
         target.insert(
-            crate::request_trace::X_REQUEST_ID_CONTEXT_KEY,
+            dynamo_telemetry::request_trace::X_REQUEST_ID_CONTEXT_KEY,
             x_request_id.as_ref().clone(),
         );
     }
@@ -2718,9 +2718,10 @@ async fn handler_chat_completions(
                 return Err(error);
             }
         };
-    if let Some(captured) = crate::request_trace::payload::capture_http_headers(&headers) {
+    if let Some(captured) = dynamo_telemetry::request_trace::payload::capture_http_headers(&headers)
+    {
         request.insert(
-            crate::request_trace::payload::HTTP_HEADERS_CONTEXT_KEY,
+            dynamo_telemetry::request_trace::payload::HTTP_HEADERS_CONTEXT_KEY,
             captured,
         );
     }
@@ -4820,9 +4821,10 @@ async fn handler_responses(
         context_from_headers_with_input_trigger(request, request_id, &headers, |request| {
             Some(classify_response_request(request))
         })?;
-    if let Some(captured) = crate::request_trace::payload::capture_http_headers(&headers) {
+    if let Some(captured) = dynamo_telemetry::request_trace::payload::capture_http_headers(&headers)
+    {
         request.insert(
-            crate::request_trace::payload::HTTP_HEADERS_CONTEXT_KEY,
+            dynamo_telemetry::request_trace::payload::HTTP_HEADERS_CONTEXT_KEY,
             captured,
         );
     }
@@ -5026,12 +5028,12 @@ async fn responses(
     }
     // Clients get public tool names and namespaces, not backend aliases;
     // request traces record them. Skip the map clone when traces are off.
-    if crate::request_trace::policy().emit_request_end_records()
+    if dynamo_telemetry::request_trace::policy().emit_request_end_records()
         && let Some(tool_names) = response_params.tool_names.clone()
     {
         request.insert(
-            crate::request_trace::CLIENT_TOOL_NAMES_CONTEXT_KEY,
-            crate::request_trace::ClientToolNames(std::sync::Arc::new(tool_names)),
+            dynamo_telemetry::request_trace::CLIENT_TOOL_NAMES_CONTEXT_KEY,
+            dynamo_telemetry::request_trace::ClientToolNames(std::sync::Arc::new(tool_names)),
         );
     }
 

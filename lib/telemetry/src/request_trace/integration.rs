@@ -186,7 +186,7 @@ where
         return stream;
     };
 
-    let (stream, done) = crate::telemetry::stream::notify_on_completion(stream);
+    let (stream, done) = crate::stream::notify_on_completion(stream);
     tokio::spawn(async move {
         done.await;
         trace_state.emit();

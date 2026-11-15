@@ -2346,6 +2346,7 @@ dependencies = [
  "dynamo-scheduler",
  "dynamo-session-affinity",
  "dynamo-slot-tracker",
+ "dynamo-telemetry",
  "dynamo-tokenizers",
  "dynamo-tokens",
  "dynamo-worker-selection",
@@ -2368,12 +2369,8 @@ dependencies = [
  "ndarray",
  "nix 0.26.4",
  "nixl-sys",
- "object_store 0.12.5",
  "offset-allocator",
  "oneshot",
- "opentelemetry",
- "opentelemetry-otlp",
- "opentelemetry_sdk",
  "parking_lot",
  "prometheus",
  "prost 0.13.5",
@@ -2854,6 +2851,37 @@ dependencies = [
  "regex",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "dynamo-telemetry"
+version = "1.8.0"
+dependencies = [
+ "anyhow",
+ "async-nats",
+ "async-trait",
+ "axum",
+ "bytemuck",
+ "bytes",
+ "dynamo-frontend-protocols",
+ "dynamo-kv-hashing",
+ "dynamo-model-card",
+ "dynamo-protocols 10.0.1",
+ "dynamo-runtime",
+ "dynamo-tokens",
+ "dynamo-worker-selection",
+ "flate2",
+ "futures",
+ "opentelemetry",
+ "opentelemetry-otlp",
+ "opentelemetry_sdk",
+ "parking_lot",
+ "rmp-serde",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tokio-util",
+ "tracing",
 ]
 
 [[package]]
@@ -4798,6 +4826,7 @@ dependencies = [
  "dlpark",
  "dynamo-llm",
  "dynamo-runtime",
+ "dynamo-telemetry",
  "pyo3",
  "pyo3-async-runtimes",
  "serde",

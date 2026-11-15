@@ -40,9 +40,9 @@ bench = ["dynamo-kv-router/bench"]
 ckf-diagnostics = []
 kv-router-stress = ["dep:clap", "dep:indicatif", "bench"]
 mm-routing = ["dep:dynamo-multimodal", "dep:llm-multimodal", "dep:llm-tokenizer"]
-request-trace-bench = []
-# S3 destination for the request-trace sink, reusing the existing object_store client.
-request-trace-s3 = []
+request-trace-bench = ["dynamo-telemetry/request-trace-bench"]
+# S3 destination for the request-trace sink, which lives in dynamo-telemetry.
+request-trace-s3 = ["dynamo-telemetry/request-trace-s3"]
 
 [[bench]]
 name = "tokenizer_simple"
@@ -97,6 +97,7 @@ dynamo-router-protocol = { workspace = true }
 dynamo-scheduler = { workspace = true }
 dynamo-session-affinity = { workspace = true }
 dynamo-slot-tracker = { workspace = true }
+dynamo-telemetry = { workspace = true }
 dynamo-worker-selection = { workspace = true }
 dynamo-memory = { workspace = true }
 dynamo-mocker = { workspace = true, features = ["zmq-events"] }
@@ -144,9 +145,6 @@ tokio = { workspace = true }
 tokio-stream = { workspace = true, features = ["net"] }
 tokio-util = { workspace = true }
 tracing = { workspace = true }
-opentelemetry = { workspace = true }
-opentelemetry_sdk = { workspace = true }
-opentelemetry-otlp = { workspace = true }
 validator = { workspace = true }
 url = { workspace = true }
 uuid = { workspace = true }
@@ -161,8 +159,6 @@ offset-allocator = "0.2"
 rayon = "1"
 bincode = { version = "2.0.1", features = ["serde", "derive"] }
 
-# lora
-object_store = { version = "0.12.4", features = ["aws", "gcp", "azure", "http"] }
 
 # input/text
 dialoguer = { version = "0.11", default-features = false, features = [
@@ -262,7 +258,6 @@ dynamo-lora = { workspace = true, features = ["testing"] }
 dynamo-kv-router = { workspace = true, features = ["testing"] }
 dynamo-runtime = { workspace = true, features = ["testing"] }
 tokio = { workspace = true, features = ["test-util"] }
-approx = "0.5"
 assert_matches = "1.5"
 criterion = { version = "0.5", features = ["html_reports"] }
 hf-hub = { workspace = true }

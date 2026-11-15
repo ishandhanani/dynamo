@@ -323,7 +323,7 @@ mod tests {
     use serde_json::Value;
 
     use super::*;
-    use crate::telemetry::jsonl_gz::segment_path;
+    use crate::jsonl_gz::segment_path;
 
     fn full_policy(path: &Path) -> FpmTracePolicy {
         FpmTracePolicy {

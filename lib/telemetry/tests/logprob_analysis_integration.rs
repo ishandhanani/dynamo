@@ -7,8 +7,8 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use dynamo_frontend_protocols::openai::chat_completions::NvCreateChatCompletionStreamResponse;
-use dynamo_llm::perf::logprobs::analyze_logprob_sensitivity;
-use dynamo_llm::perf::{RecordedStream, TimestampedResponse};
+use dynamo_telemetry::perf::logprobs::analyze_logprob_sensitivity;
+use dynamo_telemetry::perf::{RecordedStream, TimestampedResponse};
 
 use dynamo_protocols::types::{
     ChatChoiceLogprobs, ChatChoiceStream, ChatCompletionMessageContent,

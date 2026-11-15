@@ -306,7 +306,8 @@ areas:
   - lib/frontend-protocols/src/types.rs
   - lib/model-card/
   - lib/model-card/src/local_model/
-  - lib/llm/src/perf/
+  - lib/telemetry/
+  - lib/telemetry/src/perf/
   - lib/llm/src/utils/
   - lib/llm/tests/
   - lib/runtime/
@@ -351,7 +352,11 @@ areas:
   - dev/docker-observability-xpu.yml
   - dev/docker-observability.yml
   - dev/observability/
-  - lib/llm/src/telemetry/
+  - lib/telemetry/src/bus.rs
+  - lib/telemetry/src/jsonl.rs
+  - lib/telemetry/src/jsonl_gz.rs
+  - lib/telemetry/src/lib.rs
+  - lib/telemetry/src/stream.rs
   - lib/runtime/src/metrics.rs
   - lib/runtime/src/metrics/
 - label: fault-tolerance
@@ -880,7 +885,7 @@ shared:
   owners:
   - frontend
   - diffusion
-- glob: lib/llm/src/request_trace/
+- glob: lib/telemetry/src/request_trace/
   owners:
   - runtime
   - agents

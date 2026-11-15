@@ -25,9 +25,9 @@
 mod tests {
     use dynamo_frontend_protocols::openai::chat_completions::NvCreateChatCompletionRequest;
     use dynamo_frontend_protocols::openai::chat_completions::NvCreateChatCompletionResponse;
-    use dynamo_llm::request_trace::init_from_env_with_shutdown;
-    use dynamo_llm::request_trace::payload;
     use dynamo_runtime::transports::nats;
+    use dynamo_telemetry::request_trace::init_from_env_with_shutdown;
+    use dynamo_telemetry::request_trace::payload;
     use futures::StreamExt;
     use serde_json::Value;
     use std::sync::Arc;

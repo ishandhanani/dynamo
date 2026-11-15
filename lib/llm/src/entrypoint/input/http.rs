@@ -118,7 +118,7 @@ impl HttpFrontend {
         // is taken before initialization because `spawn_workers` reads the
         // registration count to decide whether the process-wide sinks follow
         // this runtime's token.
-        let active_input = crate::request_trace::ActiveInput::register();
+        let active_input = dynamo_telemetry::request_trace::ActiveInput::register();
 
         super::initialize_input(&distributed_runtime, &engine_config).await;
 
