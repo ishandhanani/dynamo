@@ -22,7 +22,7 @@ use dynamo_runtime::{
     protocols::{EndpointId, annotated::Annotated, maybe_error::MaybeError},
 };
 
-use crate::kv_router::worker_set_target::{WorkerSetTarget, WorkerSetTargetId};
+use crate::worker_set_target::{WorkerSetTarget, WorkerSetTargetId};
 use dynamo_frontend_protocols::common::{
     llm_backend::{LLMEngineOutput, PreprocessedRequest},
     preprocessor::TraceLink,
@@ -188,7 +188,7 @@ impl EncoderRouter {
         let router = EncodePushRouter::from_client_with_options(
             client,
             RouterMode::RoundRobin,
-            crate::kv_router::plugins::push_router_options(),
+            crate::plugins::push_router_options(),
         )
         .await?;
         Ok(EncoderBinding {
@@ -332,7 +332,7 @@ impl EncoderRouter {
         }
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "testing"))]
     pub fn target_endpoint_id(&self) -> Option<dynamo_runtime::protocols::EndpointId> {
         self.target_tx
             .as_ref()
@@ -454,7 +454,7 @@ mod tests {
         storage::kv,
     };
 
-    use crate::kv_router::worker_set_target::CommittedWorkerSetTarget;
+    use crate::worker_set_target::CommittedWorkerSetTarget;
     use dynamo_frontend_protocols::common::preprocessor::MultimodalData;
     use dynamo_frontend_protocols::common::{OutputOptions, SamplingOptions, StopConditions};
     use dynamo_model_card::model_card::ModelDeploymentCard;

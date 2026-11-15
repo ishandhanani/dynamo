@@ -6,12 +6,10 @@ use std::{collections::HashMap, sync::Arc};
 use prometheus::IntCounter;
 
 use crate::{
-    kv_router::{
-        KvRouter,
-        metrics::RouterRequestMetrics,
-        prefill_router::BYPASS_REMOTE_PREFILL_ANNOTATION,
-        request_lease::{RequestAttemptLease, RequestAttemptRelease},
-    },
+    KvRouter,
+    metrics::RouterRequestMetrics,
+    prefill_router::BYPASS_REMOTE_PREFILL_ANNOTATION,
+    request_lease::{RequestAttemptLease, RequestAttemptRelease},
     routing_policy::AttemptLease,
 };
 use dynamo_admission::host::AbortCause;

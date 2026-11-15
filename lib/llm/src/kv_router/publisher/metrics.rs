@@ -150,7 +150,7 @@ mod tests {
     //! the exposition output. No `DistributedRuntime` and no NATS required.
 
     use super::*;
-    use crate::kv_router::metrics::test_fixtures::FakeHierarchy;
+    use dynamo_router_host::metrics::test_fixtures::FakeHierarchy;
     use dynamo_runtime::metrics::prometheus_names::{labels, name_prefix};
 
     fn exported_name(suffix: &str) -> String {

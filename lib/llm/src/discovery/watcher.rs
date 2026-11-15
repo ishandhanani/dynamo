@@ -26,10 +26,6 @@ use dynamo_renderer::PromptFormatter;
 use crate::{
     discovery::WorkerSet,
     entrypoint::{self, ChatEngineFactoryCallback},
-    kv_router::{
-        EncoderRouter, PrefillRouter, plugins::RouterPluginBuilder,
-        worker_set_target::CommittedWorkerSetTarget,
-    },
     worker_type::WorkerType,
 };
 use dynamo_frontend_protocols::common::preprocessor::PreprocessedEmbeddingRequest;
@@ -67,6 +63,10 @@ use dynamo_model_card::{
 };
 use dynamo_preprocessor::backend::Backend;
 use dynamo_preprocessor::{OpenAIPreprocessor, prompt::prompt_formatter_from_mdc};
+use dynamo_router_host::{
+    EncoderRouter, PrefillRouter, plugins::RouterPluginBuilder,
+    worker_set_target::CommittedWorkerSetTarget,
+};
 use dynamo_sync::load::{LoadThresholdHandle, RouterLoadSource, RoutingLoadContext};
 
 use super::readiness::normalize_legacy_prefill_topology;
@@ -712,7 +712,7 @@ impl ModelWatcher {
             worker_set.load_thresholds =
                 needs_preprocessed_routing.then_some(load_thresholds.clone());
             worker_set.prefill_router = prefill_chooser.clone().map(|router| {
-                router as Arc<dyn crate::kv_router::prefill_router::PrefillRouterLifecycle>
+                router as Arc<dyn dynamo_router_host::prefill_router::PrefillRouterLifecycle>
             });
             worker_set.encoder_router = encoder_chooser.clone();
 
@@ -906,7 +906,7 @@ impl ModelWatcher {
                 >::from_client_with_options(
                     client.clone(),
                     router_config.router_mode,
-                    crate::kv_router::plugins::push_router_options(),
+                    dynamo_router_host::plugins::push_router_options(),
                 )
                 .await?;
                 worker_set.embeddings_engine = Some(Arc::new(push_router));
@@ -919,7 +919,7 @@ impl ModelWatcher {
                 >::from_client_with_options(
                     client.clone(),
                     router_config.router_mode,
-                    crate::kv_router::plugins::push_router_options(),
+                    dynamo_router_host::plugins::push_router_options(),
                 )
                 .await?;
                 worker_set.classify_engine = Some(Arc::new(push_router));
@@ -932,7 +932,7 @@ impl ModelWatcher {
                 >::from_client_with_options(
                     client.clone(),
                     router_config.router_mode,
-                    crate::kv_router::plugins::push_router_options(),
+                    dynamo_router_host::plugins::push_router_options(),
                 )
                 .await?;
                 worker_set.pooling_engine = Some(Arc::new(push_router));
@@ -945,7 +945,7 @@ impl ModelWatcher {
                 >::from_client_with_options(
                     client.clone(),
                     router_config.router_mode,
-                    crate::kv_router::plugins::push_router_options(),
+                    dynamo_router_host::plugins::push_router_options(),
                 )
                 .await?;
                 worker_set.rerank_engine = Some(Arc::new(push_router));
@@ -958,7 +958,7 @@ impl ModelWatcher {
                 >::from_client_with_options(
                     client.clone(),
                     router_config.router_mode,
-                    crate::kv_router::plugins::push_router_options(),
+                    dynamo_router_host::plugins::push_router_options(),
                 )
                 .await?;
                 worker_set.chat_engine = Some(Arc::new(chat_router));
@@ -971,7 +971,7 @@ impl ModelWatcher {
                 >::from_client_with_options(
                     client.clone(),
                     router_config.router_mode,
-                    crate::kv_router::plugins::push_router_options(),
+                    dynamo_router_host::plugins::push_router_options(),
                 )
                 .await?;
                 worker_set.completions_engine = Some(Arc::new(completions_router));
@@ -984,7 +984,7 @@ impl ModelWatcher {
                 >::from_client_with_options(
                     client.clone(),
                     router_config.router_mode,
-                    crate::kv_router::plugins::push_router_options(),
+                    dynamo_router_host::plugins::push_router_options(),
                 )
                 .await?;
                 let admission = worker_set
@@ -1004,7 +1004,7 @@ impl ModelWatcher {
                 >::from_client_with_options(
                     client.clone(),
                     router_config.router_mode,
-                    crate::kv_router::plugins::push_router_options(),
+                    dynamo_router_host::plugins::push_router_options(),
                 )
                 .await?;
                 worker_set.videos_engine = Some(Arc::new(videos_router));
@@ -1017,7 +1017,7 @@ impl ModelWatcher {
                 >::from_client_with_options(
                     client.clone(),
                     router_config.router_mode,
-                    crate::kv_router::plugins::push_router_options(),
+                    dynamo_router_host::plugins::push_router_options(),
                 )
                 .await?;
                 worker_set.audios_engine = Some(Arc::new(audios_router));
@@ -1030,7 +1030,7 @@ impl ModelWatcher {
                 >::from_client_with_options(
                     client.clone(),
                     router_config.router_mode,
-                    crate::kv_router::plugins::push_router_options(),
+                    dynamo_router_host::plugins::push_router_options(),
                 )
                 .await?;
                 worker_set.transcriptions_engine = Some(Arc::new(transcriptions_router));
@@ -1044,7 +1044,7 @@ impl ModelWatcher {
                 >::from_client_with_options(
                     client.clone(),
                     router_config.router_mode,
-                    crate::kv_router::plugins::push_router_options(),
+                    dynamo_router_host::plugins::push_router_options(),
                 )
                 .await?;
                 worker_set.realtime_engine = Some(Arc::new(realtime_router));
@@ -1082,7 +1082,7 @@ impl ModelWatcher {
             >::from_client_with_options(
                 client,
                 router_config.router_mode,
-                crate::kv_router::plugins::push_router_options(),
+                dynamo_router_host::plugins::push_router_options(),
             )
             .await?;
 
@@ -1108,7 +1108,7 @@ impl ModelWatcher {
             >::from_client_with_options(
                     client,
                     router_config.router_mode,
-                    crate::kv_router::plugins::push_router_options(),
+                    dynamo_router_host::plugins::push_router_options(),
                 )
             .await?;
             worker_set.tensor_engine = Some(Arc::new(push_router));
@@ -1633,9 +1633,9 @@ fn worker_set_chat_preprocessor(
 mod tests {
     use super::*;
     use crate::discovery::Model;
-    use crate::session_affinity::SessionAffinityMode;
     use dynamo_model_card::local_model::runtime_config::VLLM_INFERENCE_V1_GENERATE_CAPABILITY;
     use dynamo_model_card::model_card::ModelDeploymentCard;
+    use dynamo_router_host::session_affinity::SessionAffinityMode;
     use dynamo_runtime::discovery::DiscoveryEvent;
     use dynamo_runtime::engine::AsyncEngine;
     use dynamo_runtime::pipeline::Error;

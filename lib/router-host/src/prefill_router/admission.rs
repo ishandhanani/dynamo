@@ -203,7 +203,7 @@ mod tests {
     };
 
     use super::*;
-    use crate::kv_router::prefill_router::cancellation::arm_for;
+    use crate::prefill_router::cancellation::arm_for;
 
     fn prefill_stream(
         items: Vec<Annotated<LLMEngineOutput>>,

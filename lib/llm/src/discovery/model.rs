@@ -1578,7 +1578,7 @@ mod tests {
         let (admitted_tx, admitted_rx) = watch::channel(Vec::new());
         let selected_card = Arc::new(unadmitted.card().clone());
         Arc::get_mut(&mut unadmitted).unwrap().set_topology_target(
-            crate::kv_router::worker_set_target::CommittedWorkerSetTarget {
+            dynamo_router_host::worker_set_target::CommittedWorkerSetTarget {
                 endpoint: component.endpoint("generate".to_string()),
                 group: "group-a".to_string(),
                 generation: 1,
@@ -1737,7 +1737,7 @@ mod tests {
 
     // -- Disaggregated prefill death tests --
 
-    use crate::kv_router::PrefillRouter;
+    use dynamo_router_host::PrefillRouter;
 
     /// Build a WorkerSet with a deactivated PrefillRouter simulating "was activated, now dead".
     /// worker_count defaults to 1 (no instance_count_rx -> in-process default).

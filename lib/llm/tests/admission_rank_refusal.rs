@@ -266,7 +266,7 @@ async fn a_full_rank_refuses_for_itself_and_the_same_router_reaches_its_sibling_
     let router = Router::from_client_with_options(
         client.clone(),
         RouterMode::RoundRobin,
-        dynamo_llm::kv_router::plugins::push_router_options(),
+        dynamo_router_host::plugins::push_router_options(),
     )
     .await
     .unwrap();

@@ -21,7 +21,7 @@ impl ControlClient {
         let client = PushRouter::<ControlMessage, Annotated<Value>>::from_client_with_options(
             client,
             Default::default(),
-            crate::kv_router::plugins::push_router_options(),
+            dynamo_router_host::plugins::push_router_options(),
         )
         .await?;
 

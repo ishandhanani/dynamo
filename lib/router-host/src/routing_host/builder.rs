@@ -30,8 +30,7 @@ use dynamo_worker_selection::host::{HostedWorkerPicker, SelectionConfig};
 
 use super::{HostedOccupancy, RoutingHost, RoutingPolicy};
 use crate::{
-    kv_router::{KvRouter, metrics::RouterRequestMetrics},
-    routing_policy::HostedCandidatePolicy,
+    KvRouter, metrics::RouterRequestMetrics, routing_policy::HostedCandidatePolicy,
     session_affinity::AffinityCoordinator,
 };
 use dynamo_frontend_protocols::common::llm_backend::LLMEngineOutput;
@@ -176,7 +175,7 @@ impl RoutingHostBuilder {
                 multimodal_cache_indexer,
                 multimodal_cache_key_extractor,
                 dispatch,
-                ..crate::kv_router::plugins::push_router_options()
+                ..crate::plugins::push_router_options()
             },
         )
         .await?;
@@ -268,7 +267,7 @@ pub(crate) fn hosted_picker(mode: RouterMode) -> anyhow::Result<HostedWorkerPick
         ),
         (mode, None) => anyhow::bail!("{mode:?} routing is not a routing-mode policy"),
     };
-    let factory = crate::kv_router::plugins::router_plugin_registry().resolve_type(policy_type)?;
+    let factory = crate::plugins::router_plugin_registry().resolve_type(policy_type)?;
     // Routing-mode policies read neither the role nor the partition.
     let policy = factory(
         &SelectionConfig::default(),

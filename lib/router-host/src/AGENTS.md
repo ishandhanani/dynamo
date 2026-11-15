@@ -1,19 +1,17 @@
-# lib/llm/src/kv_router
+# lib/router-host/src
 
-This module is the router's host layer around the `lib/router/kv-router` selection core. Read
-[`README.md`](README.md) before changing selection inputs, booking ownership, cancellation,
-prefill activation, or the encode and prefill hops; it explains the layer map, per-stage roles,
-and the booking lifecycle these rules protect.
+This crate (`dynamo-router-host`) is the router's host layer around the `lib/router/kv-router`
+selection core. Read [`README.md`](README.md) before changing selection inputs, booking
+ownership, cancellation, prefill activation, or the encode and prefill hops; it explains the
+layer map, per-stage roles, and the booking lifecycle these rules protect. What the crate may
+depend on is in [`../AGENTS.md`](../AGENTS.md).
 
 ## Module map
 
-- `kv_router.rs`: `KvRouter`. Estimates how much of a request each worker already has cached,
+- `lib.rs`: `KvRouter`. Estimates how much of a request each worker already has cached,
   then asks the scheduler to choose a worker. It selects and books, but never sends a request.
 - `embedded.rs`: connects discovered workers and their load to one `SelectionService` partition
   from `lib/router/kv-router`, and runs each selection through `SelectionCore`.
-- `publisher/`: worker side, not the request path: receives KV-cache events and worker metrics
-  from inference engines. It keeps its own metrics (`publisher/metrics.rs`) and imports nothing
-  from the rest of this module.
 - `metrics.rs`: Prometheus metrics of the request path.
 - `managed.rs`: `ManagedKvRouter`, a `KvRouter` together with the load context that owns its
   load tasks.
@@ -40,27 +38,33 @@ and the booking lifecycle these rules protect.
 - `worker_set_target.rs`: the worker set an encode or prefill hop targets, and the id its
   binding is keyed on. Discovery chooses the target.
 - `plugins.rs`: installs the linked router plugin registry.
-- `shared_cache.rs`: the HiCache shared KV cache client (SGLang + Mooncake). Not the request
-  path either: the model manager builds it and hands `KvRouter` a `SharedKvCache`.
+- `session_affinity/`: `AffinityCoordinator`, which pins or prefers a session's worker, and its
+  replica sync between routers.
+- `migration.rs`, `migration/`: `Migration`, the pipeline operator that retries a failed
+  request on another worker, and `migration/realtime/`, the replay journal of realtime sessions
+  (called by the HTTP realtime service in `dynamo-llm`).
+- `lora_routing.rs`, `routing_policy.rs`: the hosted candidate policy and the KV admission
+  policy hooks, and their LoRA implementations.
 
-The request path is this module without `publisher/` and `shared_cache.rs`, together with
-`../session_affinity/`, `../migration.rs`, `../lora_routing.rs` and `../routing_policy.rs`.
+Two neighbours stay in `dynamo-llm` under `lib/llm/src/kv_router/`: `publisher/`, the
+worker-side KV event publisher, and `shared_cache.rs`, the HiCache shared KV cache client
+(SGLang + Mooncake), which the model manager builds and hands `KvRouter` as a `SharedKvCache`.
 
 The state these stages read is kept up to date by the crate `dynamo-sync`
-([`lib/sync`](../../../sync/AGENTS.md)), not by this module:
+([`lib/sync`](../../sync/AGENTS.md)), not by this crate:
 
 - `indexer/`: tracks which KV-cache blocks each worker holds; lookups run in
   `lib/router/kv-router`.
 - `sequence.rs`, `sequence/`: runtime glue for active-sequence tracking and its replica sync.
 - `load/`: `ActiveLoad`, the load message workers publish on the event plane (written by
-  `publisher/`, read by `metrics_subscriber.rs`, `worker_monitor.rs`, and `pool_relay/`); the
+  the publisher, read by `metrics_subscriber.rs`, `worker_monitor.rs`, and `pool_relay/`); the
   subscription to it; the worker monitor; and `routing_load.rs`, the load context shared by a
   worker set's scheduler and its load metrics.
 - `membership/`, `runtime_configs.rs`: KV event-source membership and the watch of per-worker
   runtime configs.
 - `metrics.rs`: Prometheus metrics of the above.
 
-`../scheduler_load.rs` publishes the router's scheduler load for the Pool Relay.
+`lib/llm/src/scheduler_load.rs` publishes the router's scheduler load for the Pool Relay.
 
 ## Guardrails
 
@@ -87,7 +91,7 @@ The state these stages read is kept up to date by the crate `dynamo-sync`
   cancellation, or prefill activation.
 - `dynamo-sync` is below this crate and cannot import it. Pass what it needs in, as `KvRouter`
   does with the router-mode selectors of the remote indexer.
-- The request path imports no other module of this crate: not `discovery`, `entrypoint`, `http`,
+- This crate does not depend on `dynamo-llm`: not on `discovery`, `entrypoint`, `http`,
   `pool_relay`, `scheduler_load` or the publisher. Discovery builds the routers and passes in
   what they need from above: the model manager as `PrefillEndpointProvider`, and the Pool
   Relay's scheduler-load publisher as `SchedulerLoadPublisher`.
@@ -95,9 +99,8 @@ The state these stages read is kept up to date by the crate `dynamo-sync`
 ## Testing
 
 - Unit tests live beside the code: `routing_host/tests.rs` and the tests in `prefill_router/`.
-  On macOS run `cargo test -p dynamo-llm --no-default-features --lib kv_router::` (and
-  `cargo test -p dynamo-sync` for the state sync).
+  Run `cargo test -p dynamo-router-host` (and `cargo test -p dynamo-sync` for the state sync).
 - Some ZMQ, event-plane, and replica-sync tests bind local ports and can fail inside a sandbox
   or in a full parallel run. Rerun a failing one alone before treating it as a regression.
 - End-to-end router tests are described in the
-  [router testing guide](../../../../docs/fern/pages/developer-guide/knowledge-base/modular-components/router/router-testing.md).
+  [router testing guide](../../../docs/fern/pages/developer-guide/knowledge-base/modular-components/router/router-testing.md).

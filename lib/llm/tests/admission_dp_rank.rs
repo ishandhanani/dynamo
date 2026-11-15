@@ -366,7 +366,7 @@ async fn admission_applies_only_at_the_typed_backend_boundary() {
     let backend = PushRouter::<Ranked, Token>::from_client_with_options(
         backend,
         RouterMode::RoundRobin,
-        dynamo_llm::kv_router::plugins::push_router_options(),
+        dynamo_router_host::plugins::push_router_options(),
     )
     .await
     .unwrap();
@@ -379,7 +379,7 @@ async fn admission_applies_only_at_the_typed_backend_boundary() {
     let plain = PushRouter::<Plain, Reply>::from_client_with_options(
         plain,
         RouterMode::RoundRobin,
-        dynamo_llm::kv_router::plugins::push_router_options(),
+        dynamo_router_host::plugins::push_router_options(),
     )
     .await
     .unwrap();
@@ -392,7 +392,7 @@ async fn admission_applies_only_at_the_typed_backend_boundary() {
     let generic = PushRouter::<serde_json::Value, Reply>::from_client_with_options(
         generic,
         RouterMode::RoundRobin,
-        dynamo_llm::kv_router::plugins::push_router_options(),
+        dynamo_router_host::plugins::push_router_options(),
     )
     .await
     .unwrap();
@@ -404,7 +404,7 @@ async fn admission_applies_only_at_the_typed_backend_boundary() {
     let stream = PushRouter::<Plain, Reply>::from_client_with_options(
         stream,
         RouterMode::RoundRobin,
-        dynamo_llm::kv_router::plugins::push_router_options(),
+        dynamo_router_host::plugins::push_router_options(),
     )
     .await
     .unwrap();

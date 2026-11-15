@@ -11,10 +11,7 @@ use crate::{
     discovery::{ModelManager, ModelWatcher},
     engines::StreamingEngineAdapter,
     entrypoint::EngineConfig,
-    kv_router::{EncoderRouter, KvRouter, PrefillRouter, RoutingHost},
-    migration::Migration,
     namespace::NamespaceFilter,
-    session_affinity::{SessionAffinityMode, create_affinity_coordinator},
 };
 use dynamo_frontend_protocols::common::llm_backend::{
     BackendOutput, LLMEngineOutput, PreprocessedRequest,
@@ -33,6 +30,11 @@ use dynamo_http_server::metrics::Metrics;
 use dynamo_model_card::{model_card::ModelDeploymentCard, request_template::RequestTemplate};
 use dynamo_preprocessor::backend::{Backend, ExecutionContext};
 use dynamo_preprocessor::{OpenAIPreprocessor, prompt::prompt_formatter_from_mdc};
+use dynamo_router_host::{
+    EncoderRouter, KvRouter, PrefillRouter, RoutingHost,
+    migration::Migration,
+    session_affinity::{SessionAffinityMode, create_affinity_coordinator},
+};
 use dynamo_sync::{
     indexer::{preprocessed_multimodal_cache_keys, try_build_cache_indexer},
     load::RoutingLoadContext,
@@ -226,7 +228,7 @@ pub(crate) async fn build_preprocessed_routing_with_session_affinity_mode(
         })
         .flatten()
         .map(|(filter, estimator)| {
-            crate::lora_routing::LoraHostedPolicy::hosted(
+            dynamo_router_host::lora_routing::LoraHostedPolicy::hosted(
                 filter,
                 estimator,
                 router_mode,

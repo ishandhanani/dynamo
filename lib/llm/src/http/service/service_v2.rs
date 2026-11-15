@@ -24,7 +24,6 @@ use super::metrics::{
 };
 use super::worker_metrics::register_worker_metrics;
 use crate::discovery::ModelManager;
-use crate::kv_router::metrics::{RoutingOverheadMetrics, register_router_queue_metrics};
 use anyhow::Result;
 use derive_builder::Builder;
 use dynamo_http_server::lifecycle::{
@@ -36,6 +35,7 @@ use dynamo_model_card::endpoint_type::EndpointType;
 use dynamo_model_card::local_model::runtime_config::SGLANG_GENERATE_CAPABILITY;
 use dynamo_model_card::reasoning_field::ReasoningField;
 use dynamo_model_card::request_template::RequestTemplate;
+use dynamo_router_host::metrics::{RoutingOverheadMetrics, register_router_queue_metrics};
 use dynamo_runtime::DistributedRuntime;
 use dynamo_runtime::config::env_is_truthy;
 use dynamo_runtime::config::environment_names::llm as env_llm;

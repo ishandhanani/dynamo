@@ -107,7 +107,7 @@ impl PrefillRouter {
             .await?;
         let (outcome, booking) = admitted.into_parts();
         match outcome {
-            crate::kv_router::FindBestMatchOutcome::Routed { worker, .. } => {
+            crate::FindBestMatchOutcome::Routed { worker, .. } => {
                 let Some(booking) = booking else {
                     anyhow::bail!("prefill reservation admission did not return a booking");
                 };
@@ -117,7 +117,7 @@ impl PrefillRouter {
                     booking: Some(booking),
                 })
             }
-            crate::kv_router::FindBestMatchOutcome::QueueRejected { rejection } => {
+            crate::FindBestMatchOutcome::QueueRejected { rejection } => {
                 anyhow::bail!(
                     "prefill router policy-class queue rejection: policy_class={}, limit_kind={}, current={}, limit={}",
                     rejection.policy_class,
@@ -158,7 +158,7 @@ mod tests {
     use tokio::sync::watch;
 
     use super::*;
-    use crate::kv_router::{
+    use crate::{
         KvRouter, RoutingHost,
         prefill_router::{PrefillBinding, endpoints::TestEndpointProvider},
     };
@@ -340,15 +340,16 @@ mod tests {
         let shared = Arc::new(
             RoutingHost::builder(client, mode)
                 .load_context(load_context)
-                .dispatch(dispatch as crate::kv_router::LlmDispatch)
+                .dispatch(dispatch as crate::LlmDispatch)
                 .build()
                 .await
                 .unwrap(),
         );
         let prefill = PrefillRouter::disabled(Arc::new(TestEndpointProvider), mode, None);
-        prefill.binding.store(Some(Arc::new(
-            crate::kv_router::prefill_router::PrefillBinding {
-                target_id: crate::kv_router::worker_set_target::WorkerSetTargetId::Legacy(
+        prefill
+            .binding
+            .store(Some(Arc::new(crate::prefill_router::PrefillBinding {
+                target_id: crate::worker_set_target::WorkerSetTargetId::Legacy(
                     dynamo_runtime::protocols::EndpointId {
                         namespace: namespace.to_string(),
                         component: component.to_string(),
@@ -362,8 +363,7 @@ mod tests {
                 },
                 router: shared.clone(),
                 prefill_router_mode: mode,
-            },
-        )));
+            })));
         prefill.lifecycle.store(
             PrefillLifecycleState::Active as u8,
             std::sync::atomic::Ordering::Release,
@@ -408,7 +408,7 @@ mod tests {
                 workers_rx,
                 None,
                 16,
-                crate::kv_router::SelectionPolicySource::Registry,
+                crate::SelectionPolicySource::Registry,
                 Some(config),
                 None,
                 Some(WorkerType::Prefill),
@@ -427,9 +427,7 @@ mod tests {
             .await
             .unwrap();
         let binding = Arc::new(PrefillBinding {
-            target_id: crate::kv_router::worker_set_target::WorkerSetTargetId::Legacy(
-                endpoint_id.clone(),
-            ),
+            target_id: crate::worker_set_target::WorkerSetTargetId::Legacy(endpoint_id.clone()),
             endpoint_id,
             router: Arc::new(router),
             prefill_router_mode: RouterMode::KV,
@@ -450,7 +448,7 @@ mod tests {
 
     #[tokio::test]
     async fn binding_availability_tracks_local_inhibition_and_cancellation() {
-        use crate::kv_router::prefill_router::PrefillRouterLifecycle;
+        use crate::prefill_router::PrefillRouterLifecycle;
 
         let (router, chooser) = tracked_prefill_router().await;
         let endpoint = chooser.client().endpoint.id();
@@ -488,7 +486,7 @@ mod tests {
 
     #[tokio::test]
     async fn binding_availability_waits_for_rebind_publication() {
-        use crate::kv_router::prefill_router::PrefillRouterLifecycle;
+        use crate::prefill_router::PrefillRouterLifecycle;
         use std::sync::mpsc;
 
         let (router, chooser) = tracked_prefill_router().await;
@@ -496,8 +494,9 @@ mod tests {
         chooser.client().override_discovered_instances(vec![7]);
         let (replacement, _) = tracked_binding("availability-replacement").await;
         let mut target = router.target.lock();
-        *target =
-            Some(crate::kv_router::worker_set_target::WorkerSetTargetId::Legacy(original.clone()));
+        *target = Some(crate::worker_set_target::WorkerSetTargetId::Legacy(
+            original.clone(),
+        ));
         let (started_tx, started_rx) = mpsc::channel();
         let (result_tx, result_rx) = mpsc::channel();
         let reader_router = router.clone();

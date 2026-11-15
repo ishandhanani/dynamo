@@ -29,8 +29,9 @@ pub(super) enum ActivationSnapshot {
     Untargeted,
 }
 use crate::{
-    kv_router::{RoutingHost, SelectionPolicySource, worker_set_target::WorkerSetTarget},
+    RoutingHost, SelectionPolicySource,
     session_affinity::{SessionAffinityMode, create_affinity_coordinator},
+    worker_set_target::WorkerSetTarget,
 };
 use dynamo_frontend_protocols::common::timing::WORKER_TYPE_PREFILL;
 use dynamo_model_card::model_card::ModelDeploymentCard;
@@ -405,7 +406,7 @@ impl PrefillRouter {
                     .await?,
             )
         } else {
-            crate::kv_router::check_hint_policies_route_on_kv_path(
+            crate::check_hint_policies_route_on_kv_path(
                 prefill_router_mode,
                 &prefill_kv_config.clone().unwrap_or_default(),
                 &[dynamo_router_protocol::worker_type::WorkerType::Prefill],
@@ -661,7 +662,7 @@ impl PrefillRouter {
         }
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "testing"))]
     pub fn target_endpoint_id(&self) -> Option<dynamo_runtime::protocols::EndpointId> {
         self.target_tx
             .as_ref()
@@ -676,10 +677,8 @@ mod tests {
     use std::time::Duration;
 
     use super::*;
-    use crate::kv_router::prefill_router::{
-        PrefillRouterLifecycle, endpoints::TestEndpointProvider,
-    };
-    use crate::kv_router::worker_set_target::CommittedWorkerSetTarget;
+    use crate::prefill_router::{PrefillRouterLifecycle, endpoints::TestEndpointProvider};
+    use crate::worker_set_target::CommittedWorkerSetTarget;
     use dynamo_frontend_protocols::common::llm_backend::{LLMEngineOutput, PreprocessedRequest};
     use dynamo_kv_router::config::KvRouterConfig;
     use dynamo_model_card::router_config::RouterConfig;

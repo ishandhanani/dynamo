@@ -1177,7 +1177,7 @@ dynamo_frontend_router_queue_pending_requests{model=\"model\",policy_class=\"def
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "testing"))]
 pub mod test_fixtures {
     //! A metrics hierarchy for tests that register component metrics without a runtime.
 

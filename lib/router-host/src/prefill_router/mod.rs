@@ -24,12 +24,10 @@ use dynamo_worker_selection::host::ConditionalDisaggPolicy;
 use futures::stream::{self, StreamExt};
 
 use crate::{
-    kv_router::{
-        RoutingHost, SelectionPolicySource,
-        routing_host::PrefillDispatch,
-        worker_set_target::{WorkerSetTarget, WorkerSetTargetId},
-    },
+    RoutingHost, SelectionPolicySource,
+    routing_host::PrefillDispatch,
     session_affinity::{AffinityTarget, SessionAffinityMode},
+    worker_set_target::{WorkerSetTarget, WorkerSetTargetId},
 };
 use dynamo_frontend_protocols::common::{
     extensions::{SESSION_AFFINITY_CONTEXT_KEY, SessionAffinityId},
@@ -1355,7 +1353,7 @@ mod tests {
 
     #[tokio::test]
     async fn conditional_disagg_rejects_unknown_decode_target_before_fallback() {
-        use crate::kv_router::KvRouter;
+        use crate::KvRouter;
         use dynamo_model_card::local_model::runtime_config::ModelRuntimeConfig;
         use dynamo_runtime::{DistributedRuntime, Runtime, distributed::DistributedConfig};
 
@@ -1517,8 +1515,8 @@ mod tests {
 
     #[tokio::test]
     async fn generate_forwards_bypass_marker_only_to_opted_in_clients() {
-        use crate::kv_router::KvRouter;
-        use crate::kv_router::LlmDispatch;
+        use crate::KvRouter;
+        use crate::LlmDispatch;
         use dynamo_model_card::local_model::runtime_config::ModelRuntimeConfig;
         use dynamo_runtime::{DistributedRuntime, Runtime, distributed::DistributedConfig};
 

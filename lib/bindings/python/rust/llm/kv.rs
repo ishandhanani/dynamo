@@ -58,15 +58,15 @@ use rs::protocols::annotated::Annotated as RsAnnotated;
 use tracing::Instrument;
 
 use dynamo_model_card::router_config::LoadThresholdConfig as RsLoadThresholdConfig;
-use llm_rs::kv_router::RoutingHost;
+use dynamo_router_host::RoutingHost;
 type RsRoutingHost = RoutingHost;
-type RsManagedKvRouter = llm_rs::kv_router::ManagedKvRouter;
+type RsManagedKvRouter = dynamo_router_host::ManagedKvRouter;
 use dynamo_frontend_protocols::common::timing::RequestTracker;
 use dynamo_frontend_protocols::common::{OutputOptions, SamplingOptions, StopConditions};
-use llm_rs::kv_router::publisher::{KvEventSourceConfig, create_stored_blocks};
-use llm_rs::session_affinity::{
+use dynamo_router_host::session_affinity::{
     MAX_SESSION_AFFINITY_TTL_SECS, SessionAffinityMode as RsSessionAffinityMode,
 };
+use llm_rs::kv_router::publisher::{KvEventSourceConfig, create_stored_blocks};
 
 use super::ais_callback::create_ais_prefill_load_estimator;
 use super::entrypoint::AisPerfConfig;
@@ -2182,7 +2182,7 @@ async fn create_kv_router_from_endpoint(
     } else {
         plugins
     };
-    let plugins = llm_rs::kv_router::plugins::RouterPluginBuilder::new(plugins);
+    let plugins = dynamo_router_host::plugins::RouterPluginBuilder::new(plugins);
     let kv_router = model_manager
         .kv_chooser_for_with_plugins_and_client(
             client,
@@ -2199,7 +2199,7 @@ async fn create_kv_router_from_endpoint(
         )
         .await?;
 
-    Ok(llm_rs::kv_router::ManagedKvRouter::new(
+    Ok(dynamo_router_host::ManagedKvRouter::new(
         load_context,
         kv_router,
     ))
@@ -2643,12 +2643,12 @@ impl KvRouter {
                 .map_err(to_pyerr)?;
             let (outcome, booking) = admitted.into_parts();
             let (best_worker, overlap_blocks) = match outcome {
-                llm_rs::kv_router::FindBestMatchOutcome::Routed {
+                dynamo_router_host::FindBestMatchOutcome::Routed {
                     worker,
                     overlap_blocks,
                     ..
                 } => (worker, overlap_blocks),
-                llm_rs::kv_router::FindBestMatchOutcome::QueueRejected { rejection } => {
+                dynamo_router_host::FindBestMatchOutcome::QueueRejected { rejection } => {
                     return Err(crate::errors::queue_rejection_to_pyerr(rejection));
                 }
             };

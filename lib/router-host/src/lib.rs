@@ -1,6 +1,17 @@
 // SPDX-FileCopyrightText: Copyright (c) 2024-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
+//! # Dynamo Router Host
+//!
+//! The router's request path. It embeds the selection core of `lib/router/kv-router` and adds
+//! what a running request needs around it: session affinity, booking ownership, dispatch,
+//! cancellation, migration, and the optional encode and prefill hops. `README.md` next to this
+//! file has the layer map and the booking lifecycle.
+//!
+//! The model catalog (`dynamo_llm::discovery`) builds the routers of this crate and passes in
+//! what they need from above. This crate depends on `dynamo-sync`, which keeps the state it
+//! reads up to date, and never on `dynamo-llm`.
+
 use std::{
     collections::{HashMap, HashSet},
     sync::Arc,
@@ -67,13 +78,22 @@ mod managed;
 pub mod metrics;
 pub mod plugins;
 pub mod prefill_router;
-pub mod publisher;
 mod request_lease;
 mod routing_host;
 pub(crate) use routing_host::hosted_picker;
 pub(crate) use routing_host::hosted_request;
-pub mod shared_cache;
 pub mod worker_set_target;
+
+pub mod lora_routing;
+pub mod migration;
+mod routing_policy;
+pub mod session_affinity;
+
+// Only the tracing guard of the shared test helpers is used here.
+#[cfg(test)]
+#[allow(dead_code)]
+#[path = "../../runtime/src/test_utils.rs"]
+mod test_utils;
 
 pub use encoder_router::EncoderRouter;
 pub use managed::ManagedKvRouter;
@@ -451,7 +471,7 @@ pub enum FindBestMatchOutcome {
 }
 
 #[derive(Debug, Clone, Copy)]
-pub(super) enum FindBestMatchAdmission {
+pub(crate) enum FindBestMatchAdmission {
     WithAdmission,
     WithoutAdmission,
 }
@@ -461,11 +481,11 @@ pub(super) enum FindBestMatchAdmission {
 /// cleanup.
 #[doc(hidden)]
 pub struct AdmittedFindBestMatchOutcome {
-    pub(super) outcome: FindBestMatchOutcome,
-    pub(super) booking: Option<BookingHandle>,
+    pub(crate) outcome: FindBestMatchOutcome,
+    pub(crate) booking: Option<BookingHandle>,
     /// The selected worker's scheduler-load snapshot; set only by advisory
     /// probes (`FindBestMatchAdmission::WithoutAdmission`), which never book.
-    pub(super) advisory_load: Option<dynamo_scheduler::host::AdvisoryWorkerLoad>,
+    pub(crate) advisory_load: Option<dynamo_scheduler::host::AdvisoryWorkerLoad>,
 }
 
 impl AdmittedFindBestMatchOutcome {

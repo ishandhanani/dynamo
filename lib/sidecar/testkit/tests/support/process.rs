@@ -115,7 +115,7 @@ impl Environment {
             Router::from_client_with_options(
                 client,
                 RouterMode::RoundRobin,
-                dynamo_llm::kv_router::plugins::push_router_options(),
+                dynamo_router_host::plugins::push_router_options(),
             )
             .await
             .unwrap(),

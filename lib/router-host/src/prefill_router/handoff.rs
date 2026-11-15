@@ -15,7 +15,7 @@ use tokio::task::JoinHandle;
 use tracing::Instrument;
 
 use super::PrefillError;
-use crate::kv_router::UnknownPolicyClassRefusal;
+use crate::UnknownPolicyClassRefusal;
 use dynamo_frontend_protocols::{
     common::llm_backend::{FinishReason, LLMEngineOutput},
     response_merge::{PREFILL_OUTPUT_ANNOTATION, PrefillNeed},
@@ -887,9 +887,7 @@ mod tests {
         use dynamo_scheduler::host::KvSchedulerError;
 
         let refusal = || {
-            crate::kv_router::map_scheduler_error(KvSchedulerError::UnknownPolicyClass(
-                "priority".to_string(),
-            ))
+            crate::map_scheduler_error(KvSchedulerError::UnknownPolicyClass("priority".to_string()))
         };
         let refusal_error = refusal()
             .downcast_ref::<dynamo_runtime::error::DynamoError>()

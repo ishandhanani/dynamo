@@ -30,15 +30,15 @@ use futures::stream::{self, StreamExt};
 use tracing::Instrument;
 
 use crate::{
-    kv_router::{
-        KvRouter, metrics::RouterRequestMetrics, request_lease::RequestAttemptRelease,
-        to_worker_selection_session_context,
-    },
+    KvRouter,
+    metrics::RouterRequestMetrics,
+    request_lease::RequestAttemptRelease,
     routing_policy::{HostedCandidatePolicy, check_candidate_policy},
     session_affinity::{
         AffinityCoordinator, AffinityTarget, Hold, SessionAffinityMode, affinity_id,
         explicit_target, from_table, invalid_argument, subagent_group_affinity_id,
     },
+    to_worker_selection_session_context,
 };
 use dynamo_frontend_protocols::common::preprocessor::PreprocessedRequest;
 use dynamo_frontend_protocols::common::{

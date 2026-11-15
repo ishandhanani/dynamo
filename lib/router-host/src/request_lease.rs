@@ -558,7 +558,7 @@ mod tests {
     async fn replica_observer_forwards_live_callbacks_without_retaining_manager() {
         use dynamo_router_protocol::worker::WorkerWithDpRank;
 
-        use crate::kv_router::tests::tracked_router;
+        use crate::tests::tracked_router;
         use dynamo_sync::sequence::SequenceRequest;
 
         let router = tracked_router("replica-lease-observer").await;
@@ -630,7 +630,7 @@ mod tests {
     async fn attempt_release_frees_booking_when_another_path_owns_cleanup() {
         use dynamo_router_protocol::worker::WorkerWithDpRank;
 
-        use crate::kv_router::tests::tracked_router;
+        use crate::tests::tracked_router;
         use dynamo_sync::sequence::SequenceRequest;
 
         let router = tracked_router("attempt-release-lost-claim").await;

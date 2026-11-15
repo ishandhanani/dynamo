@@ -13,7 +13,7 @@ use dynamo_scheduler::host::{KvSchedulerError, RoutingConstraints, SchedulingReq
 use dynamo_worker_selection::host::HostedWorkerPicker;
 
 use crate::{
-    kv_router::hosted_request,
+    hosted_request,
     routing_policy::{
         CandidateSelection, ExecutionRequirements, ExecutionStage, HostedCandidatePolicy,
         KvAdmissionPolicy,
@@ -132,7 +132,7 @@ impl LoraHostedPolicy {
         if !matches!(mode, RouterMode::RoundRobin | RouterMode::Random) {
             anyhow::bail!("LoRA filtering is unsupported with {mode:?} routing");
         }
-        let picker = crate::kv_router::hosted_picker(mode)?;
+        let picker = crate::hosted_picker(mode)?;
         Ok(Arc::new(Self {
             filter,
             estimator,

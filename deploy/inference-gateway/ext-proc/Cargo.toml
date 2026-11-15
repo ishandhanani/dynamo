@@ -17,6 +17,7 @@ path = "src/bin/dynamo-ext-proc.rs"
 
 [dependencies]
 dynamo-router-policies = { workspace = true }
+dynamo-router-host = { workspace = true }
 dynamo-preprocessor = { workspace = true }
 dynamo-frontend-protocols = { workspace = true }
 async-trait = { workspace = true }

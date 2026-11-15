@@ -11,7 +11,7 @@ use std::{
 };
 
 use super::builder::{check_hint_policies_route_on_kv_path, hosted_picker};
-use crate::kv_router::SelectionPolicySource;
+use crate::SelectionPolicySource;
 use dynamo_kv_router::config::KvRouterConfig;
 use dynamo_kv_router::plugins::request_classifier::{
     ClassifierError, ClassifyEvent, ClassifyFuture, ClassifyRequest, RequestClassifier, WorkerView,
@@ -33,7 +33,7 @@ use dynamo_scheduler::host::RoutingConstraints;
 use tokio::sync::{Notify, mpsc, watch};
 
 use super::*;
-use crate::{kv_router::routing_host::request_guard::RouteObservation, migration::Migration};
+use crate::{migration::Migration, routing_host::request_guard::RouteObservation};
 use dynamo_frontend_protocols::common::{
     extensions::{AgentContextBuilder, SESSION_AFFINITY_CONTEXT_KEY, SessionAffinityId},
     preprocessor::{MmRoutingInfo, RoutingHints},
@@ -1259,7 +1259,7 @@ struct KvHitSnapshot {
     reused: u64,
 }
 
-fn kv_hit_snapshot(metrics: &crate::kv_router::metrics::RouterRequestMetrics) -> KvHitSnapshot {
+fn kv_hit_snapshot(metrics: &crate::metrics::RouterRequestMetrics) -> KvHitSnapshot {
     // The fixture request carries no tracker, so the guard labels it `aggregated`.
     let phase = RequestPhase::Aggregated.as_str();
     let model = "test";
@@ -1378,9 +1378,8 @@ fn cancelled_frame() -> Annotated<LLMEngineOutput> {
 #[serial_test::serial]
 async fn kv_cache_hit_counts_immediately_once_in_selection_phase(#[case] reused: u64) {
     let (router, runtime) = router(None).await;
-    let metrics = crate::kv_router::metrics::RouterRequestMetrics::for_test(
-        &dynamo_runtime::MetricsRegistry::new(),
-    );
+    let metrics =
+        crate::metrics::RouterRequestMetrics::for_test(&dynamo_runtime::MetricsRegistry::new());
     let tracker = Arc::new(RequestTracker::new());
     let permit = tracker.set_phase(RequestPhase::Prefill).await;
     let mut req = request();
@@ -2414,7 +2413,7 @@ async fn router_with_recorded_dispatch_affinity_and_classifier(
         workers,
         None,
         16,
-        crate::kv_router::SelectionPolicySource::Registry,
+        crate::SelectionPolicySource::Registry,
         Some(config),
         None,
         "decode",
@@ -3190,7 +3189,7 @@ async fn tracked_admission_without_lifecycle_bypasses_classifier() {
         .unwrap();
     assert!(matches!(
         outcome,
-        crate::kv_router::FindBestMatchOutcome::Routed { .. }
+        crate::FindBestMatchOutcome::Routed { .. }
     ));
     assert_eq!(calls.load(Ordering::Relaxed), 0);
     router
@@ -5643,9 +5642,8 @@ impl SelectedWorkerCapture {
 #[serial_test::serial]
 async fn kv_session_affinity_hit_logs_selected_worker_and_records_kv_metrics() {
     let (mut router, runtime) = router_with_workers(Some(Duration::from_secs(10)), &[7]).await;
-    router.request_metrics = crate::kv_router::metrics::RouterRequestMetrics::for_test(
-        &dynamo_runtime::MetricsRegistry::new(),
-    );
+    router.request_metrics =
+        crate::metrics::RouterRequestMetrics::for_test(&dynamo_runtime::MetricsRegistry::new());
     let session_id = SessionAffinityId::new("kv-affinity-hit-observability");
     bind_affinity_target(&router, &session_id, AffinityTarget::new(7, Some(0))).await;
     let hit_rate_samples = router.request_metrics.kv_hit_rate.get_sample_count();

@@ -18,7 +18,7 @@
 //!
 //! - [`RemoteIndexerMetrics`]: failed queries and writes against a remote indexer.
 //!
-//! The request path's metrics are in `kv_router::metrics`.
+//! The request path's metrics are in `dynamo_router_host::metrics`.
 
 use std::sync::{Arc, LazyLock, OnceLock};
 

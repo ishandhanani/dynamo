@@ -465,7 +465,7 @@ fn register_core(m: &Bound<'_, PyModule>) -> PyResult<()> {
 pub(crate) fn router_plugins(config: &KvRouterConfig) -> anyhow::Result<RouterPlugins> {
     #[cfg(feature = "custom-policy")]
     {
-        Ok(dynamo_llm::kv_router::plugins::router_plugin_registry().resolve_plugins(config)?)
+        Ok(dynamo_router_host::plugins::router_plugin_registry().resolve_plugins(config)?)
     }
 
     #[cfg(not(feature = "custom-policy"))]
@@ -480,7 +480,7 @@ pub(crate) fn router_plugins(config: &KvRouterConfig) -> anyhow::Result<RouterPl
                 "request_classifier is configured, but no router plugin catalog is installed; rebuild with --features custom-policy"
             );
         }
-        Ok(dynamo_llm::kv_router::plugins::router_plugin_registry().resolve_plugins(config)?)
+        Ok(dynamo_router_host::plugins::router_plugin_registry().resolve_plugins(config)?)
     }
 }
 
@@ -488,7 +488,7 @@ pub(crate) fn router_plugins(config: &KvRouterConfig) -> anyhow::Result<RouterPl
 #[test]
 fn builtin_default_does_not_require_custom_frontend() {
     let config = KvRouterConfig::default();
-    let registry = dynamo_llm::kv_router::plugins::router_plugin_registry();
+    let registry = dynamo_router_host::plugins::router_plugin_registry();
     assert!(registry.resolve(&config).unwrap().is_some());
     let plugins = router_plugins(&config).unwrap();
     assert!(plugins.worker_selection().is_some());
@@ -497,7 +497,7 @@ fn builtin_default_does_not_require_custom_frontend() {
 
 #[cfg(feature = "select-service")]
 pub(crate) fn linked_worker_selection_policy_registry() -> RouterPluginRegistry {
-    dynamo_llm::kv_router::plugins::router_plugin_registry()
+    dynamo_router_host::plugins::router_plugin_registry()
 }
 
 #[cfg(feature = "custom-policy")]
@@ -510,7 +510,7 @@ fn register_core_with_router_plugins(m: &Bound<'_, PyModule>) -> PyResult<()> {
     dynamo_worker_selection_policy_catalog::register(&mut registry)
         .map_err(|error| PyRuntimeError::new_err(error.to_string()))?;
 
-    if !dynamo_llm::kv_router::plugins::install_router_plugin_registry(registry) {
+    if !dynamo_router_host::plugins::install_router_plugin_registry(registry) {
         return Err(PyRuntimeError::new_err(
             "router plugin registry already installed",
         ));
@@ -1955,7 +1955,7 @@ impl Endpoint {
                 rs::pipeline::PushRouter::<rmpv::Value, RsAnnotated<rmpv::Value>>::from_client_with_options(
                     client,
                     router_mode.into(),
-                    dynamo_llm::kv_router::plugins::push_router_options(),
+                    dynamo_router_host::plugins::push_router_options(),
                 )
                 .await
                 .map_err(to_pyerr)?;

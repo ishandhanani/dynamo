@@ -6,7 +6,7 @@ use dynamo_runtime::pipeline::SingleIn;
 use dynamo_worker_selection::host::ConditionalDisaggDecisionInput;
 
 use super::PrefillRouter;
-use crate::kv_router::routing_host::{RoutePlan, RoutePlanSignals, is_cancelled};
+use crate::routing_host::{RoutePlan, RoutePlanSignals, is_cancelled};
 use dynamo_frontend_protocols::common::{llm_backend::PreprocessedRequest, timing::RequestPhase};
 
 /// An admitted decode route selected by `RoutingHost` together with the

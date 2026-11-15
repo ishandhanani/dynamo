@@ -32,7 +32,7 @@ use dynamo_scheduler::host::{
 use dynamo_slot_tracker::host::{LocalWorkerLoad, ReplicaWorkerPolicy};
 use tokio_util::sync::CancellationToken;
 
-use crate::kv_router::metrics::{
+use crate::metrics::{
     ActiveSequenceIngressMetrics, ROUTER_QUEUE_METRICS, RouterQueueMetricHandles,
     RouterRequestMetrics,
 };

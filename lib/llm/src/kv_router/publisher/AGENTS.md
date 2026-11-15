@@ -1,5 +1,11 @@
 # KV Event Publisher Invariants
 
+The publisher is worker side: it runs next to the engine. It and `../shared_cache.rs` (the
+HiCache shared KV cache client) are what `dynamo-llm` keeps under `kv_router`. The router's
+request path is the crate `dynamo-router-host`: see
+[`lib/router-host/AGENTS.md`](../../../../router-host/AGENTS.md). Do not import it here outside
+tests; a later step moves the publisher to `dynamo-backend-common`.
+
 ## Shared processing
 
 Legacy and state-agent publishers should share decoding, normalization,

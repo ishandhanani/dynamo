@@ -17,7 +17,7 @@ use dynamo_scheduler::host::{PrefillLoadEstimator, RoutingConstraints};
 use dynamo_sync::{load::SchedulerLoadSender, runtime_configs::RuntimeConfigWatch};
 use tokio_util::sync::CancellationToken;
 
-use crate::kv_router::{KvRouter, SelectionPolicySource};
+use crate::{KvRouter, SelectionPolicySource};
 
 /// The per-endpoint state a prefill worker set shares with every other router of its endpoint,
 /// as far as [`PrefillRouter`](super::PrefillRouter) needs it: the runtime configs its workers

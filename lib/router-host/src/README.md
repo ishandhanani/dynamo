@@ -1,15 +1,15 @@
 # Router Host Layer
 
-This module is the router's host layer. It embeds the selection core from `lib/router/kv-router`
+This crate (`dynamo-router-host`) is the router's host layer. It embeds the selection core from `lib/router/kv-router`
 (scoring, queues, load tracking) and adds what a running request needs around it: session
 affinity, booking ownership, dispatch, cancellation, and the optional encode and prefill hops.
 For which processes embed it and where their boundaries are, see
-[`components/src/dynamo/router/AGENTS.md`](../../../../components/src/dynamo/router/AGENTS.md).
+[`components/src/dynamo/router/AGENTS.md`](../../../components/src/dynamo/router/AGENTS.md).
 The module map and the rules for changing this code are in [`AGENTS.md`](AGENTS.md).
 
 ## Layer map
 
-The frontend pipeline (`entrypoint/input/common.rs`, `PreprocessedRouting::build_pipeline`)
+The frontend pipeline (`lib/llm/src/entrypoint/input/common.rs`, `PreprocessedRouting::build_pipeline`)
 runs these stages in order:
 
 ```mermaid
@@ -43,7 +43,7 @@ RoutingHost
  │   ├─ Builtin                      round-robin, random, least-loaded
  │   ├─ Direct                       the worker the request names
  │   └─ DeviceAwareWeighted
- ├─ affinity: AffinityCoordinator    session affinity (optional; crate::session_affinity)
+ ├─ affinity: AffinityCoordinator    session affinity (optional; session_affinity)
  ├─ hosted_occupancy                 in-flight tracking for load-based builtin modes (optional)
  ├─ candidate_policy                 hosted worker selection hook (optional)
  └─ request_metrics
@@ -51,8 +51,8 @@ RoutingHost
 
 The state a `RoutingHost` reads (the index, the slot-tracker replicas, worker load, KV
 event-source membership, per-worker runtime configs) is kept up to date by the crate
-`dynamo-sync` ([`lib/sync`](../../../sync/AGENTS.md)), which is below this one and imports
-neither this module nor `discovery`.
+`dynamo-sync` ([`lib/sync`](../../sync/AGENTS.md)), which is below this one and imports
+neither this crate nor `discovery`.
 
 An optional hosted candidate policy selects a worker before dispatch. The legacy LoRA policy intersects eligible workers with currently available capacity and keeps its attempt lease in the request guard; transport fallback stays within those candidates. Hosted requests without a policy selection continue through the usual affinity and occupancy paths. KV routing uses a separate admission policy in its availability callback; the KV routing host holds no hosted candidate policy.
 
@@ -99,7 +99,7 @@ sequenceDiagram
 ```
 
 Discovery builds the pipeline once per Decode or Aggregated worker set
-(`discovery/watcher.rs`). Only a Decode set gets a real `PrefillRouter`; every other set gets a
+(`lib/llm/src/discovery/watcher.rs`). Only a Decode set gets a real `PrefillRouter`; every other set gets a
 disabled one that always passes requests through. Prefill worker sets, and Encode worker sets
 that serve no model type of their own, build no pipeline: they are reached only through these
 hops.
@@ -173,7 +173,7 @@ behavior. Worker sampling options are unaffected by this conservative accounting
   KV route uses it.
 - **Book**: queued, admitted, and booked as a reservation the core holds under a selection id.
   Used by `SelectionCore::select_and_reserve_with_policy_class` (the standalone selection
-  service), not by this module.
+  service), not by this crate.
 
 On the KV plane, a request annotated `query_instance_id` returns its selection without
 dispatching or updating router state. Builtin modes have no query path: they still select a
@@ -183,7 +183,7 @@ worker and dispatch the request.
 
 A booking belongs to the selection core's scheduler. A `Lease` admission returns it in a
 `BookingHandle`, which still releases it if dropped. `KvRequestCleanup` commits the handle and
-registers the booking with `RequestLeaseManager`; from then on this module is responsible for
+registers the booking with `RequestLeaseManager`; from then on this crate is responsible for
 releasing it.
 
 1. **Admit.** A `Lease` admission returns a `BookingHandle` for one scheduler attempt.
@@ -232,5 +232,6 @@ constraints, and for the `KvRouter` of the prefill worker set. It holds no `Mode
 `ModelManager::reconcile_discovery_topology` sets the target only when the namespace has
 exactly one prefill worker set and one decode worker set. The encoder target follows the
 `encoder_result_handoff` rules there. In Direct mode the prefill hop requires
-`routing.prefill_worker_id`. See [`../discovery/AGENTS.md`](../discovery/AGENTS.md) for worker-set
-admission and succession.
+`routing.prefill_worker_id`. See
+[`lib/llm/src/discovery/AGENTS.md`](../../llm/src/discovery/AGENTS.md) for worker-set admission
+and succession.

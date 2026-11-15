@@ -40,6 +40,7 @@ tonic-health-v14 = { workspace = true }
 serde_json = { workspace = true }
 dynamo-runtime = { workspace = true }
 dynamo-llm = { workspace = true }
+dynamo-router-host = { workspace = true }
 dynamo-sync = { workspace = true }
 dynamo-preprocessor = { workspace = true }
 dynamo-frontend-protocols = { workspace = true }

@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use super::*;
-use crate::kv_router::{
+use crate::{
     FindBestMatchAdmission,
     routing_host::{kv_selection::SelectionOutcome, request_guard::RouteObservation},
 };
