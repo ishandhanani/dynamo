@@ -216,7 +216,7 @@ pub struct RoutingData {
 
 impl RequestTracker {
     /// Apply metadata forwarded by a standalone router to this request's tracker.
-    pub(crate) fn ingest_routing_data(&self, data: RoutingData) {
+    pub fn ingest_routing_data(&self, data: RoutingData) {
         if let Some(timing) = data.timing {
             self.set_external_timing(timing);
         }
@@ -286,7 +286,7 @@ impl RequestTracker {
         *self.request_finish_time.lock() = Some(Instant::now());
     }
 
-    pub(crate) fn record_finish_if_missing(&self) {
+    pub fn record_finish_if_missing(&self) {
         self.request_finish_time
             .lock()
             .get_or_insert_with(Instant::now);
