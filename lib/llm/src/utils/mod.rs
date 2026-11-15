@@ -4,4 +4,3 @@
 pub mod lora;
 
 pub use lora::lora_name_to_id;
-pub(crate) mod retry;

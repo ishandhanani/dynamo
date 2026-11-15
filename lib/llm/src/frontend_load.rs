@@ -14,8 +14,8 @@ use dynamo_runtime::transports::event_plane::EventPublisher;
 use tokio_util::sync::CancellationToken;
 
 use crate::discovery::ModelManager;
-use crate::utils::retry::{Backoff, FailureStreak};
 use dynamo_http_server::metrics::Metrics;
+use dynamo_runtime::utils::retry::{Backoff, FailureStreak};
 
 pub(crate) const FRONTEND_LOAD_TOPIC: &str = "frontend_load";
 pub(crate) const FRONTEND_LOAD_PUBLISH_INTERVAL: Duration = Duration::from_secs(1);

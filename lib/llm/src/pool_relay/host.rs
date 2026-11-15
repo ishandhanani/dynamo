@@ -73,8 +73,8 @@ use super::serving_load::ServingLoadAggregator;
 use super::topology::{TopologyPublisher, TopologySnapshot};
 use super::wan::grpc::{GrpcTransport, PoolRelayGrpcConfig};
 use crate::scheduler_load::SCHEDULER_LOAD_SUBJECT;
-use crate::utils::retry::{Backoff, FailureStreak};
 use dynamo_model_card::local_model::runtime_config::ModelRuntimeConfig;
+use dynamo_runtime::utils::retry::{Backoff, FailureStreak};
 #[cfg(feature = "ckf-diagnostics")]
 use dynamo_sync::indexer::WorkerQueryHealthSnapshot;
 use dynamo_sync::indexer::{

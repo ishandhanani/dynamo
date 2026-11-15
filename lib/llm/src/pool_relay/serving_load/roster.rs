@@ -21,7 +21,7 @@ use futures::{Stream, StreamExt};
 use tokio_stream::StreamMap;
 use tokio_util::sync::CancellationToken;
 
-use crate::utils::retry::{Backoff, FailureStreak};
+use dynamo_runtime::utils::retry::{Backoff, FailureStreak};
 
 const REWATCH_INITIAL: Duration = Duration::from_millis(100);
 const REWATCH_MAX: Duration = Duration::from_secs(5);

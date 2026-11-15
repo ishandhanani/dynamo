@@ -18,7 +18,7 @@ use dynamo_scheduler::host::ModelLoadResponse;
 use dynamo_slot_tracker::host::{SchedulerGroup, SchedulerLoad};
 use tokio_util::sync::CancellationToken;
 
-use crate::utils::retry::{Backoff, FailureStreak};
+use dynamo_runtime::utils::retry::{Backoff, FailureStreak};
 
 /// Router scheduler views of per-worker load, consumed by the Pool Relay.
 ///
