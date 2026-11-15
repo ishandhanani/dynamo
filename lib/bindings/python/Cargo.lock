@@ -2106,6 +2106,7 @@ dependencies = [
  "dynamo-model-card",
  "dynamo-protocols 10.0.1",
  "dynamo-rl",
+ "dynamo-router-protocol",
  "dynamo-runtime",
  "futures",
  "opentelemetry",

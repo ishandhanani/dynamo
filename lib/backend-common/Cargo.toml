@@ -29,6 +29,7 @@ dynamo-model-card = { workspace = true }
 dynamo-kv-hints = { workspace = true }
 dynamo-protocols = { workspace = true }
 dynamo-rl = { workspace = true }
+dynamo-router-protocol = { workspace = true }
 
 anyhow = { workspace = true }
 async-stream = { workspace = true }

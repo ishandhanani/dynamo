@@ -12,7 +12,7 @@ use dynamo_runtime::{
 use dynamo_slot_tracker::host::SequencePublishQueueError;
 use tokio::sync::watch;
 
-use crate::worker_type::WorkerType;
+use dynamo_router_protocol::worker_type::WorkerType;
 use dynamo_sync::sequence::ActiveSequenceEventPublisher;
 
 const COMPLETION_CHANNEL_CAPACITY: usize = 4096;
