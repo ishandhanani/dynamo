@@ -10,8 +10,8 @@
 
 use std::collections::HashSet;
 
-use crate::worker_type::WorkerType;
 use dynamo_model_card::model_card::ModelDeploymentCard;
+use dynamo_router_protocol::worker_type::WorkerType;
 
 /// The readiness-relevant projection of one WorkerSet: one distinct worker card shape
 /// with the number of live workers behind it.

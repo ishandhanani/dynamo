@@ -5,10 +5,10 @@ use std::collections::{HashMap, HashSet};
 
 use dynamo_runtime::protocols::EndpointId;
 
-use crate::worker_type::WorkerType;
 use dynamo_frontend_protocols::common::timing::WORKER_TYPE_DECODE;
 use dynamo_model_card::local_model::runtime_config::ModelRuntimeConfig;
 use dynamo_model_card::model_type::ModelType;
+use dynamo_router_protocol::worker_type::WorkerType;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum WorkerGroupState {

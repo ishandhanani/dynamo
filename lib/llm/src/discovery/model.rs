@@ -163,9 +163,9 @@ struct NamespaceReadinessEval {
     ready: bool,
     has_legacy: bool,
     legacy_live_workers: usize,
-    present: std::collections::HashSet<crate::worker_type::WorkerType>,
-    missing: std::collections::HashSet<crate::worker_type::WorkerType>,
-    ambiguous: std::collections::HashSet<crate::worker_type::WorkerType>,
+    present: std::collections::HashSet<dynamo_router_protocol::worker_type::WorkerType>,
+    missing: std::collections::HashSet<dynamo_router_protocol::worker_type::WorkerType>,
+    ambiguous: std::collections::HashSet<dynamo_router_protocol::worker_type::WorkerType>,
 }
 
 type WorkerSetMap = HashMap<String, Arc<WorkerSet>>;
@@ -441,8 +441,8 @@ impl Model {
     fn ws_type_and_needs(
         ws: &WorkerSet,
     ) -> Option<(
-        crate::worker_type::WorkerType,
-        Vec<Vec<crate::worker_type::WorkerType>>,
+        dynamo_router_protocol::worker_type::WorkerType,
+        Vec<Vec<dynamo_router_protocol::worker_type::WorkerType>>,
     )> {
         let card = ws.card();
         card.worker_type.map(|wt| (wt, card.needs.clone()))
@@ -1139,7 +1139,7 @@ mod tests {
         watch::Sender<Vec<u64>>,
     ) {
         let mut card = ModelDeploymentCard::default();
-        card.worker_type = Some(crate::worker_type::WorkerType::Aggregated);
+        card.worker_type = Some(dynamo_router_protocol::worker_type::WorkerType::Aggregated);
         card.kv_cache_block_size = block_size;
         card.lora = lora_name.map(|name| LoraInfo {
             name: name.to_string(),
@@ -1367,7 +1367,7 @@ mod tests {
             None,
         )
         .unwrap();
-        card.worker_type = Some(crate::worker_type::WorkerType::Aggregated);
+        card.worker_type = Some(dynamo_router_protocol::worker_type::WorkerType::Aggregated);
         card.runtime_config.runtime_data.insert(
             dynamo_model_card::local_model::runtime_config::SGLANG_GENERATE_CAPABILITY.to_string(),
             true.into(),
@@ -1448,7 +1448,7 @@ mod tests {
                 card.worker_type = None;
             },
             |card| {
-                card.worker_type = Some(crate::worker_type::WorkerType::Prefill);
+                card.worker_type = Some(dynamo_router_protocol::worker_type::WorkerType::Prefill);
             },
             |card| {
                 card.lora = Some(LoraInfo {
@@ -1457,7 +1457,9 @@ mod tests {
                 });
             },
             |card| {
-                card.needs = vec![vec![crate::worker_type::WorkerType::Prefill]];
+                card.needs = vec![vec![
+                    dynamo_router_protocol::worker_type::WorkerType::Prefill,
+                ]];
             },
             |card| {
                 card.runtime_config
@@ -1797,7 +1799,7 @@ mod tests {
     /// sender closes, which is all `is_displayable` reads.
     fn make_encode_worker_set(namespace: &str, mdcsum: &str) -> Arc<WorkerSet> {
         let mut card = ModelDeploymentCard::default();
-        card.worker_type = Some(crate::worker_type::WorkerType::Encode);
+        card.worker_type = Some(dynamo_router_protocol::worker_type::WorkerType::Encode);
         let (_tx, rx) = watch::channel(vec![1_u64]);
         let mut ws = WorkerSet::new(namespace.to_string(), mdcsum.to_string(), card);
         ws.set_instance_watcher(rx);
@@ -1863,7 +1865,7 @@ mod tests {
     // worker's two-alternative needs and the rejection of cards with no
     // declared `worker_type`.
 
-    use crate::worker_type::WorkerType;
+    use dynamo_router_protocol::worker_type::WorkerType;
 
     /// Build a WorkerSet with an explicit worker_type / needs and a live
     /// worker count (via a watch channel).

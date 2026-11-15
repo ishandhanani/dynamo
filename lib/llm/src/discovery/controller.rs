@@ -20,8 +20,8 @@ use futures::{FutureExt, StreamExt};
 use tokio::{sync::watch, task::JoinSet, time::Instant};
 use tokio_util::sync::CancellationToken;
 
-use crate::namespace::NamespaceFilter;
 use dynamo_model_card::model_card::ModelDeploymentCard;
+use dynamo_runtime::namespace::NamespaceFilter;
 
 use super::worker_inventory::{WorkerGroupObservation, WorkerGroupState};
 
@@ -2045,7 +2045,7 @@ mod tests {
             let mut desired = instance(id, "same");
             let mut card = ModelDeploymentCard::with_name_only("model");
             card.source_path = Some("same".to_string());
-            card.worker_type = Some(crate::worker_type::WorkerType::Aggregated);
+            card.worker_type = Some(dynamo_router_protocol::worker_type::WorkerType::Aggregated);
             card.runtime_config.max_num_seqs = Some(1);
             card.runtime_config
                 .runtime_data
@@ -2624,8 +2624,8 @@ mod tests {
 
     #[tokio::test]
     async fn inventory_preserves_encode_topology_and_generation_timing_attribution() {
-        use crate::worker_type::WorkerType;
         use dynamo_model_card::model_type::ModelType;
+        use dynamo_router_protocol::worker_type::WorkerType;
 
         for (capabilities, timing_type) in [
             (ModelType::Chat, "decode"),

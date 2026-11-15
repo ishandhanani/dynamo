@@ -379,7 +379,7 @@ impl WorkerSet {
     pub fn is_encode_set(&self) -> bool {
         matches!(
             self.card.worker_type,
-            Some(crate::worker_type::WorkerType::Encode),
+            Some(dynamo_router_protocol::worker_type::WorkerType::Encode),
         )
     }
 
@@ -953,7 +953,7 @@ mod tests {
 
     fn make_encode_worker_set() -> WorkerSet {
         let mut card = ModelDeploymentCard::default();
-        card.worker_type = Some(crate::worker_type::WorkerType::Encode);
+        card.worker_type = Some(dynamo_router_protocol::worker_type::WorkerType::Encode);
         WorkerSet::new("ns1".to_string(), "abc".to_string(), card)
     }
 
@@ -980,9 +980,9 @@ mod tests {
         assert!(ws.is_prefill_set());
 
         for role in [
-            crate::worker_type::WorkerType::Prefill,
-            crate::worker_type::WorkerType::Decode,
-            crate::worker_type::WorkerType::Aggregated,
+            dynamo_router_protocol::worker_type::WorkerType::Prefill,
+            dynamo_router_protocol::worker_type::WorkerType::Decode,
+            dynamo_router_protocol::worker_type::WorkerType::Aggregated,
         ] {
             let mut card = ModelDeploymentCard::default();
             card.worker_type = Some(role);

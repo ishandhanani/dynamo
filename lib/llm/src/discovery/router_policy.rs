@@ -10,7 +10,7 @@ use parking_lot::Mutex;
 use serde::Serialize;
 use uuid::Uuid;
 
-use crate::worker_type::WorkerType;
+use dynamo_router_protocol::worker_type::WorkerType;
 
 /// One concrete process-local router. Rebuilding the same endpoint creates a new ID.
 #[derive(Clone, Serialize)]

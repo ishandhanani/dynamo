@@ -26,7 +26,6 @@ use dynamo_renderer::PromptFormatter;
 use crate::{
     discovery::WorkerSet,
     entrypoint::{self, ChatEngineFactoryCallback},
-    worker_type::WorkerType,
 };
 use dynamo_frontend_protocols::common::preprocessor::PreprocessedEmbeddingRequest;
 use dynamo_frontend_protocols::common::timing::WORKER_TYPE_DECODE;
@@ -67,6 +66,7 @@ use dynamo_router_host::{
     EncoderRouter, PrefillRouter, plugins::RouterPluginBuilder,
     worker_set_target::CommittedWorkerSetTarget,
 };
+use dynamo_router_protocol::worker_type::WorkerType;
 use dynamo_sync::load::{LoadThresholdHandle, RouterLoadSource, RoutingLoadContext};
 
 use super::readiness::normalize_legacy_prefill_topology;
@@ -74,7 +74,7 @@ use super::{
     ModelManager,
     controller::{ControllerHost, DesiredInstance, GroupKey, GroupSpec, ModelDiscoveryController},
 };
-use crate::namespace::{NamespaceFilter, NamespacePrefixMode};
+use dynamo_runtime::namespace::{NamespaceFilter, NamespacePrefixMode};
 use tokio_util::sync::CancellationToken;
 
 /// Constructs a collision-free WorkerSet storage key from its exact endpoint,
@@ -1587,7 +1587,7 @@ fn lora_projection_fingerprint(card: &ModelDeploymentCard) -> anyhow::Result<Str
         "aliases": &card.aliases,
         "lora": &card.lora,
         "base_capacity": card.runtime_config.max_gpu_lora_count,
-        "requires_registration": card.runtime_config.runtime_flag_enabled(crate::lora::LORA_REQUIRES_REGISTRATION),
+        "requires_registration": card.runtime_config.runtime_flag_enabled(dynamo_lora::LORA_REQUIRES_REGISTRATION),
     });
     canonicalize_json_object_keys(&mut value);
     Ok(blake3::hash(&serde_json::to_vec(&value)?).to_string())
@@ -1614,7 +1614,7 @@ pub(super) fn qwen_video_contract_digest(card: &ModelDeploymentCard) -> Option<S
 
 fn worker_set_chat_preprocessor(
     card: &ModelDeploymentCard,
-    tokenizer: crate::tokenizers::Tokenizer,
+    tokenizer: dynamo_tokenizers::Tokenizer,
     cancellation: &CancellationToken,
 ) -> anyhow::Result<Arc<OpenAIPreprocessor>> {
     let PromptFormatter::OAI(formatter) =
