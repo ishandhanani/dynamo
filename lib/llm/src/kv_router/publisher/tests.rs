@@ -2322,8 +2322,8 @@ mod test_event_dedup_filter {
 mod worker_metrics_tests {
     use std::time::Duration;
 
-    use crate::sync::load::ActiveLoad;
     use anyhow::Result;
+    use dynamo_sync::load::ActiveLoad;
 
     use super::super::worker_metrics::{WorkerMetricsPublisher, WorkerMetricsSink};
 
@@ -2378,10 +2378,10 @@ mod worker_metrics_tests {
 #[cfg(all(test, feature = "integration"))]
 mod test_integration_publisher {
     use super::*;
-    use crate::sync::load::ActiveLoad;
-    use crate::sync::load::KV_METRICS_SUBJECT;
     use dynamo_runtime::distributed_test_utils::create_test_drt_async;
     use dynamo_runtime::transports::event_plane::{EventPublisher, EventSubscriber};
+    use dynamo_sync::load::ActiveLoad;
+    use dynamo_sync::load::KV_METRICS_SUBJECT;
 
     #[tokio::test]
     #[ignore] // Mark as ignored as requested, because CI's integrations still don't have NATS

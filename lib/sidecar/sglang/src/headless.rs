@@ -10,13 +10,13 @@ use std::time::Duration;
 use anyhow::{Context, Result, bail, ensure};
 use dynamo_backend_common::{CommonArgs, DisaggregationMode, DynamoError};
 use dynamo_llm::kv_router::publisher::{KvEventPublisher, KvEventSourceConfig};
-use dynamo_llm::sync::runtime_configs::{RuntimeConfigWatch, runtime_config_watch};
 use dynamo_model_card::local_model::runtime_config::ModelRuntimeConfig;
 use dynamo_runtime::component::Endpoint;
 use dynamo_runtime::config::HealthStatus;
 use dynamo_runtime::distributed::DistributedRuntime;
 use dynamo_runtime::prelude::DistributedRuntimeProvider;
 use dynamo_sidecar_common::{GrpcEndpoint, GrpcTransportConfig};
+use dynamo_sync::runtime_configs::{RuntimeConfigWatch, runtime_config_watch};
 use serde::Deserialize;
 use serde_json::Value;
 use tokio::time::Instant;
@@ -602,9 +602,9 @@ mod tests {
     #[tokio::test]
     async fn local_zmq_events_keep_global_rank_and_leader_identity_without_serving() {
         use dynamo_kv_events::event::{KV_EVENT_SUBJECT, RouterEvent};
-        use dynamo_llm::sync::membership::KvEventSource;
         use dynamo_runtime::discovery::{DiscoveryInstance, DiscoveryQuery, EventSourceQuery};
         use dynamo_runtime::transports::event_plane::EventSubscriber;
+        use dynamo_sync::membership::KvEventSource;
         use futures::SinkExt;
 
         let runtime = Runtime::from_current().unwrap();

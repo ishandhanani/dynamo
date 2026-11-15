@@ -161,12 +161,12 @@ mod tests {
     use crate::{
         discovery::ModelManager,
         kv_router::{KvRouter, RoutingHost, prefill_router::PrefillBinding},
-        sync::load::{RouterLoadSource, RoutingLoadContext},
         worker_type::WorkerType,
     };
     use dynamo_frontend_protocols::common::{
         FinishReason, llm_backend::LLMEngineOutput, preprocessor::PreprocessedRequest,
     };
+    use dynamo_sync::load::{RouterLoadSource, RoutingLoadContext};
 
     type LlmResponse = dynamo_runtime::protocols::annotated::Annotated<LLMEngineOutput>;
 
@@ -331,7 +331,7 @@ mod tests {
         let load_context = RoutingLoadContext::start(
             client.clone(),
             RouterLoadSource::Prefill,
-            crate::sync::load::LoadThresholdHandle::new(Default::default()),
+            dynamo_sync::load::LoadThresholdHandle::new(Default::default()),
             &client.endpoint.drt().child_token(),
             None,
         )

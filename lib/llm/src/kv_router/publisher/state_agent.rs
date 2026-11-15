@@ -53,20 +53,18 @@ use futures::StreamExt;
 use tokio::sync::{Mutex, mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
 
-use crate::{
-    kv_router::{WORKER_KV_INDEXER_BUFFER_SIZE, metrics::kv_publisher_metrics},
-    sync::{
-        direct_zmq_sub_pool::{DirectZmqSubPool, DirectZmqSubRegistration, RawZmqFrames},
-        indexer::{KvStateAgentStatusCell, start_worker_kv_query_endpoint_with_status},
-        membership::kv_state_agent::{
-            KV_STATE_ATTACHMENT_TOPIC_V2, KV_STATE_EVENT_TOPIC_V2, KV_STATE_SOURCE_TOPIC_V2,
-            KvStateAttachmentAdvertisement, KvStateIngressProtocol, KvStateSourceAdvertisement,
-            attachment_record_id,
-        },
-    },
-};
+use crate::kv_router::{WORKER_KV_INDEXER_BUFFER_SIZE, metrics::kv_publisher_metrics};
 use dynamo_runtime::transports::zmq::sockets::{
     MultipartMessage, SubSocket, connect_sub_socket, multipart_message,
+};
+use dynamo_sync::{
+    direct_zmq_sub_pool::{DirectZmqSubPool, DirectZmqSubRegistration, RawZmqFrames},
+    indexer::{KvStateAgentStatusCell, start_worker_kv_query_endpoint_with_status},
+    membership::kv_state_agent::{
+        KV_STATE_ATTACHMENT_TOPIC_V2, KV_STATE_EVENT_TOPIC_V2, KV_STATE_SOURCE_TOPIC_V2,
+        KvStateAttachmentAdvertisement, KvStateIngressProtocol, KvStateSourceAdvertisement,
+        attachment_record_id,
+    },
 };
 
 use super::{

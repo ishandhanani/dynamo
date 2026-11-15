@@ -2075,7 +2075,7 @@ impl Client {
             let error_key = key.clone();
             let error_value = value.clone();
             let wait = async move {
-                let mut rx = llm_rs::sync::runtime_configs::runtime_config_watch(
+                let mut rx = dynamo_sync::runtime_configs::runtime_config_watch(
                     &endpoint,
                     endpoint.drt().primary_token(),
                 )
@@ -2152,7 +2152,7 @@ impl Client {
             let _guard = lifecycle.clone().drop_guard();
             let mut last_matches: Vec<u64> = Vec::new();
             let wait = async {
-                let mut rx = llm_rs::sync::runtime_configs::runtime_config_watch(
+                let mut rx = dynamo_sync::runtime_configs::runtime_config_watch(
                     &endpoint,
                     lifecycle.clone(),
                 )

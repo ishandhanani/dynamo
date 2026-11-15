@@ -42,8 +42,8 @@ use crate::pool_relay::pool_registry::{
 use crate::pool_relay::publication::RegistryPublicationSource;
 use crate::pool_relay::serving_load::ServingLoadSnapshot;
 use crate::pool_relay::topology::TopologyPublisher;
-use crate::sync::load::ActiveLoad;
 use dynamo_model_card::local_model::runtime_config::ModelRuntimeConfig;
+use dynamo_sync::load::ActiveLoad;
 
 const IO_TIMEOUT: Duration = Duration::from_secs(5);
 const WORKER_ID: u64 = 7;

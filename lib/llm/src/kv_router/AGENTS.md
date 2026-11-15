@@ -36,19 +36,19 @@ and the booking lifecycle these rules protect.
 - `plugins.rs`: installs the linked router plugin registry.
 - `shared_cache.rs`: the HiCache shared KV cache client (SGLang + Mooncake).
 
-The state these stages read is kept up to date by [`../sync`](../sync.rs), not by this module:
+The state these stages read is kept up to date by the crate `dynamo-sync`
+([`lib/sync`](../../../sync/AGENTS.md)), not by this module:
 
-- `sync/indexer/`: tracks which KV-cache blocks each worker holds; lookups run in
+- `indexer/`: tracks which KV-cache blocks each worker holds; lookups run in
   `lib/router/kv-router`.
-- `sync/sequence.rs`, `sync/sequence/`: runtime glue for active-sequence tracking and its
-  replica sync.
-- `sync/load/`: `ActiveLoad`, the load message workers publish on the event plane (written by
+- `sequence.rs`, `sequence/`: runtime glue for active-sequence tracking and its replica sync.
+- `load/`: `ActiveLoad`, the load message workers publish on the event plane (written by
   `publisher/`, read by `metrics_subscriber.rs`, `worker_monitor.rs`, and `pool_relay/`); the
   subscription to it; the worker monitor; and `routing_load.rs`, the load context shared by a
   worker set's scheduler and its load metrics.
-- `sync/membership/`, `sync/runtime_configs.rs`: KV event-source membership and the watch of
-  per-worker runtime configs.
-- `sync/metrics.rs`: Prometheus metrics of the above.
+- `membership/`, `runtime_configs.rs`: KV event-source membership and the watch of per-worker
+  runtime configs.
+- `metrics.rs`: Prometheus metrics of the above.
 
 `../scheduler_load.rs` publishes the router's scheduler load for the Pool Relay.
 
@@ -75,14 +75,14 @@ The state these stages read is kept up to date by [`../sync`](../sync.rs), not b
   `prefill_router/mod.rs`, or the two hosts score decode differently.
 - Keep `README.md` in step with changes to the layer map, per-stage roles, booking lifecycle,
   cancellation, or prefill activation.
-- `../sync` must not import this module, `discovery`, or any other module of this crate. Pass
-  what it needs in, as `KvRouter` does with the router-mode selectors of the remote indexer.
+- `dynamo-sync` is below this crate and cannot import it. Pass what it needs in, as `KvRouter`
+  does with the router-mode selectors of the remote indexer.
 
 ## Testing
 
 - Unit tests live beside the code: `routing_host/tests.rs` and the tests in `prefill_router/`.
   On macOS run `cargo test -p dynamo-llm --no-default-features --lib kv_router::` (and
-  `sync::` for the state sync).
+  `cargo test -p dynamo-sync` for the state sync).
 - Some ZMQ, event-plane, and replica-sync tests bind local ports and can fail inside a sandbox
   or in a full parallel run. Rerun a failing one alone before treating it as a regression.
 - End-to-end router tests are described in the

@@ -27,7 +27,6 @@ use crate::{
     discovery::WorkerSet,
     entrypoint::{self, ChatEngineFactoryCallback},
     kv_router::{EncoderRouter, PrefillRouter, plugins::RouterPluginBuilder},
-    sync::load::{LoadThresholdHandle, RouterLoadSource, RoutingLoadContext},
     worker_type::WorkerType,
 };
 use dynamo_frontend_protocols::common::preprocessor::PreprocessedEmbeddingRequest;
@@ -65,6 +64,7 @@ use dynamo_model_card::{
 };
 use dynamo_preprocessor::backend::Backend;
 use dynamo_preprocessor::{OpenAIPreprocessor, prompt::prompt_formatter_from_mdc};
+use dynamo_sync::load::{LoadThresholdHandle, RouterLoadSource, RoutingLoadContext};
 
 use super::readiness::normalize_legacy_prefill_topology;
 use super::{

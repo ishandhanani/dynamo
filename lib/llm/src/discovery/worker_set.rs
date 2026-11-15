@@ -20,7 +20,6 @@ use tokio_util::sync::CancellationToken;
 use crate::{
     discovery::allocator::AllocatorTrimOnDrop,
     kv_router::{EncoderRouter, prefill_router::PrefillRouterLifecycle},
-    sync::load::{LoadThresholdHandle, RoutingLoadContext},
 };
 use dynamo_frontend_protocols::types::{
     RealtimeBidirectionalEngine,
@@ -37,6 +36,7 @@ use dynamo_frontend_protocols::types::{
 };
 use dynamo_model_card::model_card::ModelDeploymentCard;
 use dynamo_preprocessor::OpenAIPreprocessor;
+use dynamo_sync::load::{LoadThresholdHandle, RoutingLoadContext};
 
 type StreamingEngine<Req, Resp> = Arc<dyn AsyncEngine<SingleIn<Req>, ManyOut<Resp>, Error>>;
 

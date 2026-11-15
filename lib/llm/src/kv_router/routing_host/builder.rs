@@ -33,10 +33,10 @@ use crate::{
     lora::{LoadEstimator, LoraFilter},
     routing_policy::HostedCandidatePolicy,
     session_affinity::AffinityCoordinator,
-    sync::load::RoutingLoadContext,
 };
 use dynamo_frontend_protocols::common::llm_backend::LLMEngineOutput;
 use dynamo_frontend_protocols::common::preprocessor::PreprocessedRequest;
+use dynamo_sync::load::RoutingLoadContext;
 
 /// The transport a [`RoutingHost`] sends through.
 type LlmPushRouter = PushRouter<PreprocessedRequest, Annotated<LLMEngineOutput>>;

@@ -29,10 +29,10 @@ use crate::{
     discovery::{ModelManager, WorkerSetTarget},
     kv_router::{RoutingHost, SelectionPolicySource},
     session_affinity::{SessionAffinityMode, create_affinity_coordinator},
-    sync::load::{LoadThresholdHandle, RouterLoadSource, RoutingLoadContext},
 };
 use dynamo_frontend_protocols::common::timing::WORKER_TYPE_PREFILL;
 use dynamo_model_card::model_card::ModelDeploymentCard;
+use dynamo_sync::load::{LoadThresholdHandle, RouterLoadSource, RoutingLoadContext};
 
 /// How the prefill worker set wants to be routed to, resolved from its cards.
 #[derive(Debug)]

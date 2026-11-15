@@ -31,8 +31,8 @@ use parking_lot::Mutex;
 use tokio::sync::{OwnedSemaphorePermit, Semaphore, broadcast, mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
 
-use crate::sync::indexer::{RecoveryResetReason, RecoveryTarget};
-use crate::sync::membership::PublisherId;
+use dynamo_sync::indexer::{RecoveryResetReason, RecoveryTarget};
+use dynamo_sync::membership::PublisherId;
 
 use super::host::PoolRelayError;
 
@@ -1474,8 +1474,8 @@ mod tests {
     use tokio::sync::watch;
 
     use super::*;
-    use crate::sync::indexer::{WorkerQueryClient, WorkerQueryTransport};
-    use crate::sync::membership::{
+    use dynamo_sync::indexer::{WorkerQueryClient, WorkerQueryTransport};
+    use dynamo_sync::membership::{
         KvEventSource, KvSourceMembershipView, KvSourceStatus, KvStateEndpointResolution,
     };
 

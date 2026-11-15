@@ -11,8 +11,8 @@ use dynamo_runtime::component::Endpoint;
 use dynamo_runtime::traits::DistributedRuntimeProvider;
 use dynamo_runtime::transports::event_plane::EventPublisher;
 
-use crate::sync::load::ActiveLoad;
-use crate::sync::load::KV_METRICS_SUBJECT;
+use dynamo_sync::load::ActiveLoad;
+use dynamo_sync::load::KV_METRICS_SUBJECT;
 
 const PUBLISH_DEBOUNCE: Duration = Duration::from_millis(1);
 
