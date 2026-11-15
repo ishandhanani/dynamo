@@ -60,13 +60,10 @@ pub use dynamo_scheduler::host::OverlapScoresResponse;
 // (removed with it in 1.10).
 pub use dynamo_kv_router::protocols;
 
-pub mod active_load;
 pub(crate) mod embedded;
 pub mod encoder_router;
-pub mod indexer;
 mod managed;
 pub mod metrics;
-pub(crate) mod metrics_subscriber;
 pub mod plugins;
 pub mod prefill_router;
 pub mod publisher;
@@ -74,28 +71,24 @@ mod request_lease;
 mod routing_host;
 pub(crate) use routing_host::hosted_picker;
 pub(crate) use routing_host::hosted_request;
-pub(crate) mod routing_load;
-pub mod sequence;
 pub mod shared_cache;
-pub mod sync_metrics;
-
-pub use active_load::ActiveLoad;
-pub use metrics_subscriber::KV_METRICS_SUBJECT;
 
 pub use encoder_router::EncoderRouter;
-pub use indexer::Indexer;
 pub use managed::ManagedKvRouter;
 pub use prefill_router::PrefillRouter;
 pub(crate) use routing_host::{EVERY_ROLE, check_hint_policies_route_on_kv_path};
 pub use routing_host::{
     KvPushRouter, LlmDispatch, MultimodalCache, RoutingHost, RoutingHostBuilder,
 };
-pub use routing_load::{RouterLoadSource, RoutingLoadContext, SchedulerLoadSender};
 
 use crate::{
-    discovery::{KvSourceMembershipWatch, RuntimeConfigWatch},
-    kv_router::indexer::KvEventSourceRequirement,
-    kv_router::sequence::{SequenceError, SequenceRequest},
+    sync::{
+        indexer::{self, Indexer, KvEventSourceRequirement},
+        load::SchedulerLoadSender,
+        membership::KvSourceMembershipWatch,
+        runtime_configs::RuntimeConfigWatch,
+        sequence::{SequenceError, SequenceRequest},
+    },
     worker_type::WorkerType,
 };
 use dynamo_model_card::local_model::runtime_config::ModelRuntimeConfig;
@@ -833,7 +826,7 @@ impl KvRouter {
         });
 
         let client_for_registration = client.clone();
-        let registration_availability_provider: sync_metrics::RegistrationAvailabilityProvider =
+        let registration_availability_provider: crate::sync::metrics::RegistrationAvailabilityProvider =
             Arc::new(move || client_for_registration.available_instance_ids());
 
         let client_for_availability = client.clone();
@@ -2707,7 +2700,7 @@ mod tests {
         let endpoint = component.endpoint("backend");
         let client = endpoint.client().await.unwrap();
         let (_tx, workers) = watch::channel(HashMap::from([(7, ModelRuntimeConfig::default())]));
-        let membership = crate::discovery::KvSourceMembershipCoordinator::start(
+        let membership = crate::sync::membership::KvSourceMembershipCoordinator::start(
             endpoint.id(),
             workers.clone(),
             component.drt().discovery(),

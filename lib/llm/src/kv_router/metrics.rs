@@ -38,7 +38,7 @@
 //!
 //! The metrics of the code that keeps the router's view of workers up to date (worker load,
 //! worker status, KV and active-sequence ingress, the remote indexer) are in
-//! [`super::sync_metrics`].
+//! [`crate::sync::metrics`].
 //!
 //! See also: `docs/fern/pages/reference/observability/metrics-catalog.mdx` (Router metrics section).
 
@@ -1071,7 +1071,7 @@ impl ApproximateLruMetrics {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::kv_router::sync_metrics::test_fixtures::gather_pef;
+    use crate::sync::metrics::test_fixtures::gather_pef;
 
     #[test]
     fn router_request_metrics_register_with_component_labels() {

@@ -15,7 +15,7 @@ use dynamo_runtime::component::Client;
 use dynamo_runtime::engine::EngineContextGuard;
 use dynamo_runtime::pipeline::WorkerLoadMonitor;
 
-use crate::discovery::{KvWorkerMonitor, LoadThresholdHandle, RoutableThresholds};
+use crate::sync::load::{KvWorkerMonitor, LoadThresholdHandle, RoutableThresholds};
 use dynamo_frontend_protocols::common::timing::{WORKER_TYPE_DECODE, WORKER_TYPE_PREFILL};
 use dynamo_router_protocol::worker_type::WorkerType;
 

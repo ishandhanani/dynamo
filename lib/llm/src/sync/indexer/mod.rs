@@ -275,7 +275,7 @@ fn predict_on_route_side_indexer(
 }
 
 #[cfg(test)]
-pub(super) mod test_util {
+pub(crate) mod test_util {
     use dynamo_kv_events::event::{
         KvCacheEvent, KvCacheEventData, KvCacheStoreData, KvCacheStoredBlockData, RouterEvent,
     };

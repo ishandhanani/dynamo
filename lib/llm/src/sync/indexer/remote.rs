@@ -27,8 +27,8 @@ use futures::StreamExt;
 use parking_lot::RwLock;
 use tokio::sync::Mutex;
 
-use crate::kv_router::indexer::reply::{IndexerQueryReply, IndexerRecordRoutingDecisionReply};
-use crate::kv_router::sync_metrics::RemoteIndexerMetrics;
+use crate::sync::indexer::reply::{IndexerQueryReply, IndexerRecordRoutingDecisionReply};
+use crate::sync::metrics::RemoteIndexerMetrics;
 
 use super::{Indexer, TieredMatchDetails};
 
@@ -559,8 +559,8 @@ fn service_key(component: &Component) -> ServiceKey {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::kv_router::indexer::test_util::store_event;
-    use crate::kv_router::indexer::{LowerTierIndexers, SideIndexer};
+    use crate::sync::indexer::test_util::store_event;
+    use crate::sync::indexer::{LowerTierIndexers, SideIndexer};
     use std::time::Duration;
 
     use dynamo_kv_events::residency::StorageTier;

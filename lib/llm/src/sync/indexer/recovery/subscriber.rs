@@ -21,11 +21,10 @@ use super::{
     direct_zmq::run_direct_zmq_supervisor, source_health, start_state_agent_router,
     worker_query::WorkerQueryClient,
 };
-use crate::{
-    discovery::{KvSourceMembershipView, KvSourceMembershipWatch, KvSourceStatus},
-    kv_router::{
-        Indexer, indexer::KvEventSourceRequirement, sync_metrics::RouterWorkerStatusMetrics,
-    },
+use crate::sync::{
+    indexer::{Indexer, KvEventSourceRequirement},
+    membership::{KvSourceMembershipView, KvSourceMembershipWatch, KvSourceStatus},
+    metrics::RouterWorkerStatusMetrics,
 };
 use dynamo_router_protocol::worker_type::WorkerType;
 
@@ -642,7 +641,7 @@ mod tests {
 
     use dynamo_router_protocol::worker::WorkerWithDpRank;
 
-    use crate::discovery::{KvEventSource, KvStateEndpointResolution};
+    use crate::sync::membership::{KvEventSource, KvStateEndpointResolution};
 
     fn metric_view(status: KvSourceStatus, capability: Option<bool>) -> KvSourceMembershipView {
         let serving_endpoint = EndpointId {

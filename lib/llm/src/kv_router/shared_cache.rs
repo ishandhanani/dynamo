@@ -25,7 +25,9 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use tokio_util::sync::CancellationToken;
 
-use crate::{discovery::RuntimeConfigWatch, kv_router::metrics::RoutingOverheadMetrics};
+use crate::{
+    kv_router::metrics::RoutingOverheadMetrics, sync::runtime_configs::RuntimeConfigWatch,
+};
 use dynamo_kv_events::residency::StorageTier;
 use dynamo_kv_hashing::ExternalSequenceBlockHash;
 use dynamo_kv_indexer::host::{

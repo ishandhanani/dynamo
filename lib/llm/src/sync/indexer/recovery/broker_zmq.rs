@@ -31,9 +31,9 @@ use super::{
     },
     worker_query::WorkerQueryClient,
 };
-use crate::{
-    discovery::{KvSourceMembershipView, KvSourceMembershipWatch},
-    kv_router::sync_metrics::{KvZmqIngressMetrics, RouterWorkerStatusMetrics},
+use crate::sync::{
+    membership::{KvSourceMembershipView, KvSourceMembershipWatch},
+    metrics::{KvZmqIngressMetrics, RouterWorkerStatusMetrics},
 };
 
 const INITIAL_BACKOFF: Duration = Duration::from_millis(100);

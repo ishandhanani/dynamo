@@ -9,7 +9,7 @@ use std::{
 use dynamo_runtime::pipeline::Error;
 use dynamo_scheduler::host::{RoutingConstraints, SchedulingRequest};
 
-use crate::discovery::RuntimeConfigWatch;
+use crate::sync::runtime_configs::RuntimeConfigWatch;
 use dynamo_frontend_protocols::common::preprocessor::PreprocessedRequest;
 use dynamo_model_card::local_model::runtime_config::ModelRuntimeConfig;
 

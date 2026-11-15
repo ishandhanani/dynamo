@@ -15,7 +15,7 @@
 //! scheduling request, eligibility, and host hooks (`dynamo-scheduler`), candidate rows
 //! (`dynamo-worker-selection`), queue rejection (`dynamo-admission`), the fullness rule and
 //! the scheduler-load replica wire (`dynamo-slot-tracker`), and the active-load message
-//! workers publish on the event plane (`dynamo-llm`, `kv_router::ActiveLoad`: its publisher
+//! workers publish on the event plane (`dynamo-llm`, `sync::load::ActiveLoad`: its publisher
 //! and every reader live there).
 
 pub mod attempt;

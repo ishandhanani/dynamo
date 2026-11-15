@@ -18,7 +18,7 @@
 //!
 //! - [`RemoteIndexerMetrics`]: failed queries and writes against a remote indexer.
 //!
-//! The request path's metrics are in [`super::metrics`].
+//! The request path's metrics are in `kv_router::metrics`.
 
 use std::sync::{Arc, LazyLock, OnceLock};
 
@@ -295,7 +295,7 @@ impl RouterWorkerStatusMetrics {
 
     pub fn watch_workers(
         &self,
-        workers: crate::discovery::RuntimeConfigWatch,
+        workers: crate::sync::runtime_configs::RuntimeConfigWatch,
         worker_type: &'static str,
         cancellation: tokio_util::sync::CancellationToken,
         available_workers: Option<RegistrationAvailabilityProvider>,

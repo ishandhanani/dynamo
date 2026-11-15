@@ -23,7 +23,7 @@ use super::{
     Indexer, KvEventSourceRequirement, KvEventSubscriptionHandle, ServedIndexerMode,
     ensure_served_indexer_service, start_subscriber,
 };
-use crate::discovery::KvSourceMembershipWatch;
+use crate::sync::membership::KvSourceMembershipWatch;
 
 pub(crate) struct RuntimeIngressArgs<'a> {
     pub endpoint: &'a Endpoint,

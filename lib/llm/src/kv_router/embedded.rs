@@ -32,12 +32,12 @@ use dynamo_scheduler::host::{
 use dynamo_slot_tracker::host::{LocalWorkerLoad, ReplicaWorkerPolicy};
 use tokio_util::sync::CancellationToken;
 
-use crate::discovery::RuntimeConfigWatch;
 use crate::kv_router::metrics::{
     ActiveSequenceIngressMetrics, ROUTER_QUEUE_METRICS, RouterQueueMetricHandles,
     RouterRequestMetrics,
 };
-use crate::kv_router::sync_metrics::{RegistrationAvailabilityProvider, WORKER_LOAD_METRICS};
+use crate::sync::metrics::{RegistrationAvailabilityProvider, WORKER_LOAD_METRICS};
+use crate::sync::runtime_configs::RuntimeConfigWatch;
 use dynamo_model_card::local_model::runtime_config::ModelRuntimeConfig;
 
 /// Inputs the embedded backend needs from the router at construction.
@@ -61,7 +61,7 @@ pub(crate) struct EmbeddedSelectionArgs {
     pub ingress: Arc<dyn KvEventIngress>,
     /// Scheduler-owned load snapshots for the worker monitor's overload
     /// detection.
-    pub scheduler_load: crate::kv_router::routing_load::SchedulerLoadSender,
+    pub scheduler_load: crate::sync::load::routing_load::SchedulerLoadSender,
     /// Endpoint whose event plane carries replica sync when
     /// `router_replica_sync` is set.
     pub endpoint: dynamo_runtime::component::Endpoint,
@@ -182,7 +182,7 @@ pub(crate) struct EmbeddedSelection {
     /// Keeps the service (listeners, sweep, replica sync) alive for as long as
     /// the router holds the partition.
     service: Arc<SelectionService>,
-    _worker_registration: Arc<super::sync_metrics::RouterWorkerRegistration>,
+    _worker_registration: Arc<crate::sync::metrics::RouterWorkerRegistration>,
     partition: SelectionPartition,
     affinity: OnceLock<crate::session_affinity::AffinityCoordinator>,
     worker_type: &'static str,
@@ -196,7 +196,7 @@ pub(crate) struct EmbeddedSelection {
 /// `SchedulerLoadSender`, which feeds `KvWorkerMonitor`, and its per-worker
 /// load to the frontend gauges.
 struct SenderLoadSink {
-    sender: crate::kv_router::routing_load::SchedulerLoadSender,
+    sender: crate::sync::load::routing_load::SchedulerLoadSender,
     worker_type: &'static str,
 }
 
@@ -224,8 +224,8 @@ impl EmbeddedSelection {
         workers_with_configs: RuntimeConfigWatch,
         request_leases: Option<Arc<dyn dynamo_slot_tracker::host::ReplicaRequestLeaseObserver>>,
         cancellation_token: CancellationToken,
-    ) -> Result<(Self, crate::kv_router::sequence::ReplicaIngress)> {
-        let worker_registration = super::sync_metrics::RouterWorkerStatusMetrics::from_component(
+    ) -> Result<(Self, crate::sync::sequence::ReplicaIngress)> {
+        let worker_registration = crate::sync::metrics::RouterWorkerStatusMetrics::from_component(
             args.endpoint.component(),
         )
         .watch_workers(
@@ -240,7 +240,7 @@ impl EmbeddedSelection {
         // Replica sync rides the runtime event plane. Worker-origin completion
         // marks are consumed even when router-to-router replica sync is
         // disabled; only publishing is gated.
-        let (mut channels, replica_ingress) = crate::kv_router::sequence::host_replica_channels(
+        let (mut channels, replica_ingress) = crate::sync::sequence::host_replica_channels(
             &args.endpoint,
             args.router_id,
             args.kv_router_config.router_replica_sync,
@@ -641,7 +641,7 @@ mod tests {
     #[test]
     fn local_load_observation_sets_worker_gauges() {
         let sink = SenderLoadSink {
-            sender: crate::kv_router::routing_load::SchedulerLoadSender::disabled(
+            sender: crate::sync::load::routing_load::SchedulerLoadSender::disabled(
                 CancellationToken::new(),
             ),
             worker_type: "decode",

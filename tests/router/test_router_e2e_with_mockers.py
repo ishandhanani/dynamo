@@ -85,7 +85,7 @@ NUM_REQUESTS = 100
 BLOCK_SIZE = 16
 ROUTER_OVERLOAD_DEBUG_DYN_LOG = (
     "info,"
-    "dynamo_llm::discovery::worker_monitor=debug,"
+    "dynamo_llm::sync=debug,"
     "dynamo_llm::kv_router=debug,"
     "dynamo_runtime::pipeline::network::egress::push_router=debug,"
     "dynamo_llm::mocker=debug"
@@ -1127,7 +1127,11 @@ def test_mocker_disagg_startup_lifecycle(
     enable_disagg_bootstrap,
 ):
     """A unique P/D topology activates for every meaningful discovery order."""
-    monkeypatch.setenv("DYN_LOG", "info,dynamo_llm::discovery=debug")
+    monkeypatch.setenv(
+        "DYN_LOG",
+        "info,dynamo_llm::discovery=debug,dynamo_llm::sync::load::worker_monitor=debug,"
+        "dynamo_llm::sync::membership=debug,dynamo_llm::sync::runtime_configs=debug",
+    )
     namespace = f"test-namespace-{generate_random_suffix()}"
     frontend_port = allocate_frontend_ports(request, 1)[0]
     mocker_args = {

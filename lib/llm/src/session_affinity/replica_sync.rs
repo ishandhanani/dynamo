@@ -19,7 +19,7 @@ use tokio::{
 };
 use tokio_util::sync::CancellationToken;
 
-use crate::direct_zmq_fan_in::{
+use crate::sync::direct_zmq_fan_in::{
     ContinuityMode, FanInEvent, FanInObservation, start_direct_zmq_fan_in,
 };
 use dynamo_session_affinity::host::{

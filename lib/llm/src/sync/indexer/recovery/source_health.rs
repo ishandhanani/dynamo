@@ -11,9 +11,9 @@ use dynamo_runtime::protocols::EndpointId;
 use tokio::{sync::oneshot, time::Instant};
 use tokio_util::sync::CancellationToken;
 
-use crate::{
-    discovery::{KvSourceMembershipView, KvSourceMembershipWatch, KvSourceStatus},
-    kv_router::indexer::KvEventSourceRequirement,
+use crate::sync::{
+    indexer::KvEventSourceRequirement,
+    membership::{KvSourceMembershipView, KvSourceMembershipWatch, KvSourceStatus},
 };
 use dynamo_router_protocol::worker_type::WorkerType;
 
@@ -422,7 +422,7 @@ mod tests {
     use dynamo_router_protocol::worker::WorkerWithDpRank;
 
     use super::*;
-    use crate::discovery::{KvEventSource, KvStateEndpointResolution};
+    use crate::sync::membership::{KvEventSource, KvStateEndpointResolution};
 
     fn endpoint() -> EndpointId {
         EndpointId {
@@ -471,7 +471,7 @@ mod tests {
     fn ambiguous(worker_id: WorkerId, dp_rank: u32) -> (WorkerWithDpRank, KvSourceStatus) {
         (
             WorkerWithDpRank::new(worker_id, dp_rank),
-            KvSourceStatus::Ambiguous(crate::discovery::KvSourceAmbiguity::Incarnations {
+            KvSourceStatus::Ambiguous(crate::sync::membership::KvSourceAmbiguity::Incarnations {
                 publisher_ids: vec![1, 2],
             }),
         )

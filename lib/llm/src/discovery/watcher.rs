@@ -24,12 +24,10 @@ use dynamo_scheduler::host::PrefillLoadEstimator;
 use dynamo_renderer::PromptFormatter;
 
 use crate::{
-    discovery::{LoadThresholdHandle, WorkerSet},
+    discovery::WorkerSet,
     entrypoint::{self, ChatEngineFactoryCallback},
-    kv_router::{
-        EncoderRouter, PrefillRouter, RouterLoadSource, RoutingLoadContext,
-        plugins::RouterPluginBuilder,
-    },
+    kv_router::{EncoderRouter, PrefillRouter, plugins::RouterPluginBuilder},
+    sync::load::{LoadThresholdHandle, RouterLoadSource, RoutingLoadContext},
     worker_type::WorkerType,
 };
 use dynamo_frontend_protocols::common::preprocessor::PreprocessedEmbeddingRequest;

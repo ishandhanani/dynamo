@@ -54,16 +54,15 @@ use tokio::sync::{Mutex, mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
 
 use crate::{
-    direct_zmq_sub_pool::{DirectZmqSubPool, DirectZmqSubRegistration, RawZmqFrames},
-    discovery::kv_state_agent::{
-        KV_STATE_ATTACHMENT_TOPIC_V2, KV_STATE_EVENT_TOPIC_V2, KV_STATE_SOURCE_TOPIC_V2,
-        KvStateAttachmentAdvertisement, KvStateIngressProtocol, KvStateSourceAdvertisement,
-        attachment_record_id,
-    },
-    kv_router::{
-        WORKER_KV_INDEXER_BUFFER_SIZE,
+    kv_router::{WORKER_KV_INDEXER_BUFFER_SIZE, metrics::kv_publisher_metrics},
+    sync::{
+        direct_zmq_sub_pool::{DirectZmqSubPool, DirectZmqSubRegistration, RawZmqFrames},
         indexer::{KvStateAgentStatusCell, start_worker_kv_query_endpoint_with_status},
-        metrics::kv_publisher_metrics,
+        membership::kv_state_agent::{
+            KV_STATE_ATTACHMENT_TOPIC_V2, KV_STATE_EVENT_TOPIC_V2, KV_STATE_SOURCE_TOPIC_V2,
+            KvStateAttachmentAdvertisement, KvStateIngressProtocol, KvStateSourceAdvertisement,
+            attachment_record_id,
+        },
     },
 };
 use dynamo_runtime::transports::zmq::sockets::{

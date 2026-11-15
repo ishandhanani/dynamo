@@ -82,7 +82,7 @@ def _make_process_env(**extra: str) -> dict[str, str]:
         "dynamo_scheduler=debug,"
         "dynamo_admission=debug,"
         "dynamo_worker_selection=debug,"
-        "dynamo_llm::kv_router=debug"
+        "dynamo_llm::sync=debug,dynamo_llm::kv_router=debug"
     )
     env["DYN_NAMESPACE"] = NAMESPACE
     env["DYN_REQUEST_PLANE"] = "tcp"

@@ -2,8 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! The active-load message workers publish on the event plane. Its publisher
-//! (`kv_router::publisher::worker_metrics`) and every reader (`kv_router::metrics_subscriber`,
-//! `discovery::worker_monitor`, `pool_relay`) live in this crate; no router crate names it.
+//! (`kv_router::publisher::worker_metrics`) and every reader (`sync::load::metrics_subscriber`,
+//! `sync::load::worker_monitor`, `pool_relay`) live in this crate; no router crate names it.
 
 use dynamo_router_protocol::worker::{DpRank, WorkerId};
 use serde::{Deserialize, Serialize};

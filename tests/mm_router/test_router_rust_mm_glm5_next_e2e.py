@@ -158,7 +158,7 @@ def _make_process_env(namespace: str, **extra: str) -> dict[str, str]:
     env["DYN_LOG"] = (
         "info,mm_routing=debug,"
         "dynamo_kv_router::scheduling=debug,"
-        "dynamo_llm::kv_router=debug"
+        "dynamo_llm::sync=debug,dynamo_llm::kv_router=debug"
     )
     env["DYN_NAMESPACE"] = namespace
     env["DYN_REQUEST_PLANE"] = "tcp"

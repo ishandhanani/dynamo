@@ -11,11 +11,11 @@ use arc_swap::ArcSwap;
 use dashmap::DashMap;
 use dynamo_slot_tracker::host::SchedulerLoadSnapshot;
 
-use crate::kv_router::ActiveLoad;
-use crate::kv_router::RouterLoadSource;
-use crate::kv_router::metrics_subscriber::KvMetricsSubscriber;
-use crate::kv_router::routing_load::SchedulerLoadReceiver;
-use crate::kv_router::sync_metrics::WORKER_LOAD_METRICS;
+use crate::sync::load::ActiveLoad;
+use crate::sync::load::RouterLoadSource;
+use crate::sync::load::metrics_subscriber::KvMetricsSubscriber;
+use crate::sync::load::routing_load::SchedulerLoadReceiver;
+use crate::sync::metrics::WORKER_LOAD_METRICS;
 use dynamo_http_server::metrics::WORKER_LAST_INPUT_SEQUENCE_TOKENS_GAUGE;
 use dynamo_http_server::metrics::WORKER_LAST_INTER_TOKEN_LATENCY_GAUGE;
 use dynamo_http_server::metrics::WORKER_LAST_TIME_TO_FIRST_TOKEN_GAUGE;
@@ -23,7 +23,7 @@ use dynamo_model_card::router_config::LoadThresholdConfig;
 use dynamo_runtime::component::Client;
 use dynamo_runtime::pipeline::{WorkerLoadMonitor, async_trait};
 
-use super::runtime_config_watch;
+use crate::sync::runtime_configs::runtime_config_watch;
 
 const UNSET_DP_RANK_LABEL: &str = "none";
 
@@ -666,9 +666,8 @@ impl RoutableThresholds {
 /// Cloning shares state via internal Arc-wrapped fields. This allows multiple pipelines
 /// (e.g., chat and completions) to share the same monitor instance.
 ///
-/// Prometheus metrics are exposed via [`WORKER_LOAD_METRICS`] (defined in `kv_router::sequence`),
-/// which should be registered with the HTTP service's Prometheus registry using
-/// [`register_worker_load_metrics`](crate::kv_router::metrics::register_worker_load_metrics).
+/// Prometheus metrics are exposed via [`WORKER_LOAD_METRICS`] (defined in `sync::metrics`),
+/// which the HTTP service registers with its Prometheus registry.
 ///
 #[derive(Clone)]
 pub struct KvWorkerMonitor {
@@ -1232,7 +1231,7 @@ mod tests {
         WorkerLoadState, cleanup_worker_metrics, collect_overloaded_workers,
         overload_reconciliation_needed, publish_overloaded_instances_if_needed,
     };
-    use crate::kv_router::ActiveLoad;
+    use crate::sync::load::ActiveLoad;
     use dynamo_router_protocol::worker::WorkerWithDpRank;
     use dynamo_slot_tracker::host::{BusyThresholds, SchedulerLoadSnapshot};
     use std::collections::HashSet;

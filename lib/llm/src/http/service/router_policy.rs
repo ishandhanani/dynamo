@@ -244,7 +244,7 @@ mod tests {
 
     #[tokio::test]
     async fn busy_threshold_subresource_and_legacy_route_share_model_state() {
-        use crate::discovery::{LoadThresholdHandle, WorkerSet};
+        use crate::{discovery::WorkerSet, sync::load::LoadThresholdHandle};
         use dynamo_model_card::router_config::LoadThresholdConfig;
 
         let manager = Arc::new(ModelManager::new());
@@ -353,7 +353,7 @@ mod tests {
     /// to the other WorkerSets and reports their thresholds.
     #[tokio::test]
     async fn busy_threshold_writes_skip_direct_routing_worker_sets() {
-        use crate::discovery::{LoadThresholdHandle, WorkerSet};
+        use crate::{discovery::WorkerSet, sync::load::LoadThresholdHandle};
         use dynamo_model_card::router_config::LoadThresholdConfig;
 
         let manager = Arc::new(ModelManager::new());

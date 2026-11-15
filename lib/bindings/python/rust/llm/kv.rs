@@ -1968,7 +1968,7 @@ mod metric_worker_type_tests {
 
         assert_eq!(
             router.load_context().source(),
-            llm_rs::kv_router::RouterLoadSource::Encode
+            llm_rs::sync::load::RouterLoadSource::Encode
         );
         assert!(router.load_context().monitor().is_none());
         assert!(!router.load_context().scheduler_load_sender().is_enabled());
@@ -2115,7 +2115,7 @@ async fn create_kv_router_from_endpoint(
                     card.runtime_config.enable_eagle,
                     worker_role,
                     policy_worker_role,
-                    llm_rs::kv_router::RouterLoadSource::from_worker_type(
+                    llm_rs::sync::load::RouterLoadSource::from_worker_type(
                         card.effective_worker_type(),
                     ),
                 )
@@ -2141,19 +2141,19 @@ async fn create_kv_router_from_endpoint(
                     if metric_worker_type
                         == dynamo_frontend_protocols::common::timing::WORKER_TYPE_PREFILL
                     {
-                        llm_rs::kv_router::RouterLoadSource::Prefill
+                        llm_rs::sync::load::RouterLoadSource::Prefill
                     } else {
-                        llm_rs::kv_router::RouterLoadSource::Aggregated
+                        llm_rs::sync::load::RouterLoadSource::Aggregated
                     },
                 )
             }
         }
     };
 
-    let load_context = llm_rs::kv_router::RoutingLoadContext::start(
+    let load_context = llm_rs::sync::load::RoutingLoadContext::start(
         client.clone(),
         load_source,
-        llm_rs::discovery::LoadThresholdHandle::new(load_threshold_config),
+        llm_rs::sync::load::LoadThresholdHandle::new(load_threshold_config),
         &endpoint.component().drt().child_token(),
         None,
     )

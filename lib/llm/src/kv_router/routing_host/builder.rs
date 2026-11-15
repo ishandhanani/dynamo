@@ -29,10 +29,11 @@ use dynamo_worker_selection::host::{HostedWorkerPicker, SelectionConfig};
 
 use super::{HostedOccupancy, RoutingHost, RoutingPolicy};
 use crate::{
-    kv_router::{KvRouter, RoutingLoadContext, metrics::RouterRequestMetrics},
+    kv_router::{KvRouter, metrics::RouterRequestMetrics},
     lora::{LoadEstimator, LoraFilter},
     routing_policy::HostedCandidatePolicy,
     session_affinity::AffinityCoordinator,
+    sync::load::RoutingLoadContext,
 };
 use dynamo_frontend_protocols::common::llm_backend::LLMEngineOutput;
 use dynamo_frontend_protocols::common::preprocessor::PreprocessedRequest;

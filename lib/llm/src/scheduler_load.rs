@@ -22,7 +22,7 @@ use crate::utils::retry::{Backoff, FailureStreak};
 
 /// Router scheduler views of per-worker load, consumed by the Pool Relay.
 ///
-/// Kept separate from [`KV_METRICS_SUBJECT`](crate::kv_router::KV_METRICS_SUBJECT) so one router's view never
+/// Kept separate from [`KV_METRICS_SUBJECT`](crate::sync::load::KV_METRICS_SUBJECT) so one router's view never
 /// overwrites another router's worker-overload state.
 pub const SCHEDULER_LOAD_SUBJECT: &str = "scheduler_load";
 

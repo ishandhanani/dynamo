@@ -5,8 +5,8 @@ use dynamo_kv_events::event::RouterEvent;
 use dynamo_router_protocol::worker::{DpRank, WorkerId};
 use std::future::Future;
 
-use crate::discovery::PublisherId;
-use crate::kv_router::Indexer;
+use crate::sync::indexer::Indexer;
+use crate::sync::membership::PublisherId;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum RecoveryResetReason {

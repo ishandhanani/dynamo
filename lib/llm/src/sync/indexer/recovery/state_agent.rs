@@ -40,17 +40,17 @@ use tokio::{
 };
 use tokio_util::sync::CancellationToken;
 
-use crate::discovery::kv_state_agent::{
+use crate::sync::membership::kv_state_agent::{
     KV_STATE_ATTACHMENT_TOPIC_V2, KV_STATE_EVENT_TOPIC_V2, KV_STATE_SOURCE_TOPIC_V2,
     KvStateAttachmentAdvertisement, KvStateSourceAdvertisement, attachment_record_id,
 };
-use crate::{
+use crate::sync::{
     direct_zmq_fan_in::{
         ContinuityMode, FanInEvent, FanInObservation, start_direct_zmq_fan_in_async,
     },
     direct_zmq_sub_pool::KV_ZMQ_RCVHWM,
-    discovery::{KvSourceMembershipView, KvSourceMembershipWatch, KvSourceStatus},
-    kv_router::Indexer,
+    indexer::Indexer,
+    membership::{KvSourceMembershipView, KvSourceMembershipWatch, KvSourceStatus},
 };
 
 use super::{
@@ -2422,7 +2422,7 @@ mod tests {
     use tokio_util::sync::CancellationToken;
 
     use super::*;
-    use crate::discovery::{
+    use crate::sync::membership::{
         KvEventSource, KvSourceMembershipView, KvStateEndpointResolution,
         kv_state_agent::{
             KvStateIngressProtocol, KvStateProjectionResolution, KvStateUnknownReason,

@@ -26,9 +26,10 @@ pub(super) enum ActivationSnapshot {
     Untargeted,
 }
 use crate::{
-    discovery::{LoadThresholdHandle, ModelManager, WorkerSetTarget},
-    kv_router::{RouterLoadSource, RoutingHost, RoutingLoadContext, SelectionPolicySource},
+    discovery::{ModelManager, WorkerSetTarget},
+    kv_router::{RoutingHost, SelectionPolicySource},
     session_affinity::{SessionAffinityMode, create_affinity_coordinator},
+    sync::load::{LoadThresholdHandle, RouterLoadSource, RoutingLoadContext},
 };
 use dynamo_frontend_protocols::common::timing::WORKER_TYPE_PREFILL;
 use dynamo_model_card::model_card::ModelDeploymentCard;

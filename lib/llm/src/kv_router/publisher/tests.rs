@@ -2322,7 +2322,7 @@ mod test_event_dedup_filter {
 mod worker_metrics_tests {
     use std::time::Duration;
 
-    use crate::kv_router::ActiveLoad;
+    use crate::sync::load::ActiveLoad;
     use anyhow::Result;
 
     use super::super::worker_metrics::{WorkerMetricsPublisher, WorkerMetricsSink};
@@ -2378,8 +2378,8 @@ mod worker_metrics_tests {
 #[cfg(all(test, feature = "integration"))]
 mod test_integration_publisher {
     use super::*;
-    use crate::kv_router::ActiveLoad;
-    use crate::kv_router::KV_METRICS_SUBJECT;
+    use crate::sync::load::ActiveLoad;
+    use crate::sync::load::KV_METRICS_SUBJECT;
     use dynamo_runtime::distributed_test_utils::create_test_drt_async;
     use dynamo_runtime::transports::event_plane::{EventPublisher, EventSubscriber};
 

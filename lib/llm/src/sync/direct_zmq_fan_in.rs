@@ -18,7 +18,7 @@ use futures::{FutureExt, StreamExt};
 use tokio::{sync::mpsc, task::JoinHandle};
 use tokio_util::sync::CancellationToken;
 
-use crate::direct_zmq_sub_pool::{
+use crate::sync::direct_zmq_sub_pool::{
     DirectZmqSubConnection, DirectZmqSubItem, DirectZmqSubPool, endpoints_per_sub_from_env,
 };
 

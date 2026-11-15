@@ -32,7 +32,7 @@ use super::publication::{
     TerminalFailure, publication_lease,
 };
 use super::serving_load::PoolServingLoad;
-use crate::kv_router::ActiveLoad;
+use crate::sync::load::ActiveLoad;
 use dynamo_model_card::local_model::runtime_config::ModelRuntimeConfig;
 
 const DEFAULT_CKF_ALLOCATION_CONCURRENCY: usize = 2;

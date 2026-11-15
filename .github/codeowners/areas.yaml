@@ -78,7 +78,15 @@ areas:
   - lib/llm/src/kv_router.rs
   - lib/llm/src/kv_router/
   - lib/llm/src/routing_policy.rs
-  - lib/llm/src/kv_router/indexer/
+  - lib/llm/src/scheduler_load.rs
+  - lib/llm/src/sync/indexer/
+  - lib/llm/src/sync/sequence.rs
+  - lib/llm/src/sync/sequence/
+  - lib/llm/src/sync/load/active_load.rs
+  - lib/llm/src/sync/load/metrics_subscriber.rs
+  - lib/llm/src/sync/load/routing_load.rs
+  - lib/llm/src/sync/metrics.rs
+  - lib/llm/src/sync/metrics/
   - lib/llm/src/kv_router/prefill_router/
   - lib/llm/src/kv_router/publisher/
   - tests/router/
@@ -1159,7 +1167,7 @@ shared:
   owners:
   - kv-memory
   - observability
-- glob: lib/llm/src/discovery/worker_monitor.rs
+- glob: lib/llm/src/sync/load/worker_monitor.rs
   owners:
   - runtime
   - epp
@@ -1192,7 +1200,7 @@ shared:
   owners:
   - router
   - epp
-- glob: lib/llm/src/kv_router/routing_load.rs
+- glob: lib/llm/src/sync/load/routing_load.rs
   owners:
   - router
   - epp

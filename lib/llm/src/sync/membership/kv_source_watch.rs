@@ -22,8 +22,9 @@ use tokio_util::sync::CancellationToken;
 
 use super::{
     KvEventSource, KvSourceMembership, KvSourceMembershipView, KvStateEndpointResolution,
-    RuntimeConfigWatch, resolve_kv_state_endpoint,
+    resolve_kv_state_endpoint,
 };
+use crate::sync::runtime_configs::RuntimeConfigWatch;
 
 struct BoundSourceStream {
     stream: dynamo_runtime::discovery::DiscoveryStream,
@@ -328,7 +329,7 @@ mod tests {
     };
 
     use super::*;
-    use crate::discovery::{KvSourceAmbiguity, KvSourceStatus};
+    use crate::sync::membership::{KvSourceAmbiguity, KvSourceStatus};
     use dynamo_model_card::local_model::runtime_config::ModelRuntimeConfig;
 
     fn endpoint(name: &str) -> EndpointId {

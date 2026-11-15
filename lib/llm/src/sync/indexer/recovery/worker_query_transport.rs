@@ -18,7 +18,7 @@ use dynamo_runtime::{
 };
 use futures::StreamExt;
 
-use crate::kv_router::indexer::reply::WorkerKvQueryReply;
+use crate::sync::indexer::reply::WorkerKvQueryReply;
 
 #[async_trait]
 pub(crate) trait WorkerQueryTransport: Send + Sync {

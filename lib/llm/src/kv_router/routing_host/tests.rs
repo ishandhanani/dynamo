@@ -35,9 +35,10 @@ use tokio::sync::{Notify, mpsc, watch};
 use super::*;
 use crate::lora::{LoadEstimator, LoraFilter};
 use crate::{
-    kv_router::{RoutingLoadContext, routing_host::request_guard::RouteObservation},
+    kv_router::routing_host::request_guard::RouteObservation,
     lora::{LoraReplicaConfig, LoraRoutingTable, LoraStateTracker},
     migration::Migration,
+    sync::load::RoutingLoadContext,
 };
 use dynamo_frontend_protocols::common::{
     extensions::{AgentContextBuilder, SESSION_AFFINITY_CONTEXT_KEY, SessionAffinityId},
@@ -61,8 +62,8 @@ fn request() -> PreprocessedRequest {
 async fn test_load_context(client: &Client) -> Arc<RoutingLoadContext> {
     RoutingLoadContext::start(
         client.clone(),
-        crate::kv_router::RouterLoadSource::Aggregated,
-        crate::discovery::LoadThresholdHandle::new(Default::default()),
+        crate::sync::load::RouterLoadSource::Aggregated,
+        crate::sync::load::LoadThresholdHandle::new(Default::default()),
         &client.endpoint.drt().child_token(),
         None,
     )

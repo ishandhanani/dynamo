@@ -46,6 +46,7 @@ router:
       - any-glob-to-any-file:
           - components/src/dynamo/router/**
           - lib/llm/src/kv_router/**
+          - lib/llm/src/sync/**
 
 frontend:
   - changed-files:

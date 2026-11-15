@@ -34,13 +34,13 @@ use super::{
     },
     worker_query::WorkerQueryClient,
 };
-use crate::{
+use crate::sync::{
     direct_zmq_sub_pool::{
         DirectZmqSubConnection, DirectZmqSubItem, DirectZmqSubPool, ENDPOINTS_PER_SUB_ENV,
         KV_ZMQ_RCVHWM, endpoints_per_sub_from_env,
     },
-    discovery::{KvSourceId, KvSourceMembershipView, KvSourceMembershipWatch},
-    kv_router::sync_metrics::{KvZmqIngressMetrics, RouterWorkerStatusMetrics},
+    membership::{KvSourceId, KvSourceMembershipView, KvSourceMembershipWatch},
+    metrics::{KvZmqIngressMetrics, RouterWorkerStatusMetrics},
 };
 
 const INITIAL_BACKOFF: Duration = Duration::from_millis(100);
