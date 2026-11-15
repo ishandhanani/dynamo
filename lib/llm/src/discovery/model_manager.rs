@@ -38,8 +38,8 @@ use dynamo_runtime::{
 
 use crate::{
     kv_router::{
-        KvRouter, SelectionPolicySource, shared_cache::HicacheSharedKvCache,
-        worker_set_target::WorkerSetTarget,
+        KvRouter, SelectionPolicySource, prefill_router::PrefillEndpointProvider,
+        shared_cache::HicacheSharedKvCache, worker_set_target::WorkerSetTarget,
     },
     lora::{
         LoadEstimatorSubscription, LoraFilter, LoraRoutingTable, LoraStateTracker,
@@ -2970,6 +2970,78 @@ impl ModelManager {
         };
 
         Ok(Some(constraints))
+    }
+}
+
+/// The prefill hop reads its endpoint's shared state, and builds its `KvRouter`, through this
+/// manager. Each method is the inherent one of the same name.
+#[async_trait::async_trait]
+impl PrefillEndpointProvider for ModelManager {
+    async fn get_or_create_runtime_config_watcher(
+        &self,
+        endpoint: &Endpoint,
+    ) -> anyhow::Result<RuntimeConfigWatch> {
+        ModelManager::get_or_create_runtime_config_watcher(self, endpoint).await
+    }
+
+    fn worker_supports_runtime_capability(
+        &self,
+        endpoint_id: &EndpointId,
+        worker_id: WorkerId,
+        capability: &str,
+    ) -> bool {
+        ModelManager::worker_supports_runtime_capability(self, endpoint_id, worker_id, capability)
+    }
+
+    fn get_disaggregated_endpoint(
+        &self,
+        endpoint_id: &EndpointId,
+        worker_id: WorkerId,
+    ) -> Option<DisaggregatedEndpoint> {
+        ModelManager::get_disaggregated_endpoint(self, endpoint_id, worker_id)
+    }
+
+    fn get_data_parallel_size(&self, endpoint_id: &EndpointId, worker_id: WorkerId) -> Option<u32> {
+        ModelManager::get_data_parallel_size(self, endpoint_id, worker_id)
+    }
+
+    fn get_kv_transfer_routing_constraints(
+        &self,
+        endpoint_id: &EndpointId,
+        worker_id: WorkerId,
+    ) -> anyhow::Result<Option<RoutingConstraints>> {
+        ModelManager::get_kv_transfer_routing_constraints(self, endpoint_id, worker_id)
+    }
+
+    async fn kv_chooser_for_with_policy_and_client(
+        &self,
+        client: Client,
+        kv_cache_block_size: u32,
+        policy: SelectionPolicySource,
+        kv_router_config: Option<KvRouterConfig>,
+        prefill_load_estimator: Option<Arc<dyn PrefillLoadEstimator>>,
+        worker_role: Option<WorkerType>,
+        metric_worker_type: &'static str,
+        model_name: Option<String>,
+        is_eagle: bool,
+        scheduler_load: dynamo_sync::load::SchedulerLoadSender,
+        cancellation_token: CancellationToken,
+    ) -> anyhow::Result<Arc<KvRouter>> {
+        ModelManager::kv_chooser_for_with_policy_and_client(
+            self,
+            client,
+            kv_cache_block_size,
+            policy,
+            kv_router_config,
+            prefill_load_estimator,
+            worker_role,
+            metric_worker_type,
+            model_name,
+            is_eagle,
+            scheduler_load,
+            cancellation_token,
+        )
+        .await
     }
 }
 

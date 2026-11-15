@@ -158,9 +158,9 @@ mod tests {
     use tokio::sync::watch;
 
     use super::*;
-    use crate::{
-        discovery::ModelManager,
-        kv_router::{KvRouter, RoutingHost, prefill_router::PrefillBinding},
+    use crate::kv_router::{
+        KvRouter, RoutingHost,
+        prefill_router::{PrefillBinding, endpoints::TestEndpointProvider},
     };
     use dynamo_frontend_protocols::common::{
         FinishReason, llm_backend::LLMEngineOutput, preprocessor::PreprocessedRequest,
@@ -345,7 +345,7 @@ mod tests {
                 .await
                 .unwrap(),
         );
-        let prefill = PrefillRouter::disabled(Arc::new(ModelManager::new()), mode, None);
+        let prefill = PrefillRouter::disabled(Arc::new(TestEndpointProvider), mode, None);
         prefill.binding.store(Some(Arc::new(
             crate::kv_router::prefill_router::PrefillBinding {
                 target_id: crate::kv_router::worker_set_target::WorkerSetTargetId::Legacy(
@@ -439,7 +439,7 @@ mod tests {
 
     async fn tracked_prefill_router() -> (Arc<PrefillRouter>, Arc<KvRouter>) {
         let (binding, chooser) = tracked_binding("primary").await;
-        let router = PrefillRouter::disabled(Arc::new(ModelManager::new()), RouterMode::KV, None);
+        let router = PrefillRouter::disabled(Arc::new(TestEndpointProvider), RouterMode::KV, None);
         router.binding.store(Some(binding));
         router.lifecycle.store(
             PrefillLifecycleState::Active as u8,

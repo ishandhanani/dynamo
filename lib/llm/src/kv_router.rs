@@ -731,7 +731,7 @@ impl KvRouter {
         let index_inputs = prepared.prepare_inputs();
         let hint_policies = prepared.hint_policies().clone();
         let policy_factory = prepared.factory;
-        // ModelManager gates client construction as well, but preserve the capability boundary for
+        // The model manager gates client construction as well, but preserve the capability boundary for
         // direct KvRouter callers.
         let shared_cache = if index_inputs.contains(WorkerInputs::CACHE) {
             shared_cache
