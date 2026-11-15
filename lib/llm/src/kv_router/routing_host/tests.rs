@@ -4307,6 +4307,7 @@ async fn two_worker_migration_harness(
         None,
         None,
         load_context.scheduler_load_sender(),
+        None,
         load_context.cancellation_token(),
     )
     .await

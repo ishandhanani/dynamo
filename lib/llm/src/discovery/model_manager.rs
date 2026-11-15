@@ -2506,6 +2506,7 @@ impl ModelManager {
             self.lora_enabled
                 .then(|| crate::lora_routing::LoraKvPolicy::kv(lora_domain.filter.clone())),
             scheduler_load,
+            Some(crate::scheduler_load::start_scheduler_load_publisher),
             cancellation_token,
         )
         .await?;

@@ -61,6 +61,7 @@ pub use dynamo_scheduler::host::OverlapScoresResponse;
 pub use dynamo_kv_router::protocols;
 
 pub(crate) mod embedded;
+pub use embedded::SchedulerLoadPublisher;
 pub mod encoder_router;
 mod managed;
 pub mod metrics;
@@ -685,6 +686,8 @@ impl KvRouter {
             shared_cache,
             lora_filter.map(crate::lora_routing::LoraKvPolicy::kv),
             scheduler_load,
+            // The Pool Relay's scheduler-load publisher is passed in by the model manager.
+            None,
             parent_token,
         )
         .await
@@ -707,6 +710,7 @@ impl KvRouter {
         shared_cache: Option<Arc<dyn SharedKvCache>>,
         admission_policy: Option<Arc<dyn crate::routing_policy::KvAdmissionPolicy>>,
         scheduler_load: SchedulerLoadSender,
+        scheduler_load_publisher: Option<SchedulerLoadPublisher>,
         parent_token: CancellationToken,
     ) -> Result<Self> {
         let mut kv_router_config = kv_router_config.unwrap_or_default();
@@ -862,6 +866,7 @@ impl KvRouter {
                 router_id: endpoint.drt().discovery().instance_id(),
                 policy_factory,
                 hint_policies,
+                scheduler_load_publisher,
             },
             workers_with_configs.clone(),
             Some(request_leases.replica_observer()),
