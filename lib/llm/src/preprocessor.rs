@@ -4533,7 +4533,7 @@ impl OpenAIPreprocessor {
                     &mut media_map,
                     task.modality,
                     task.slot_idx,
-                    MultimodalData::Decoded(rdma_descriptor),
+                    MultimodalData::Decoded(rdma_descriptor.try_into()?),
                 )?;
             }
         }
@@ -14307,7 +14307,7 @@ responses_tools: None,
                 panic!("video must reach the media loader and be decoded");
             };
             assert!(
-                descriptor.content_hash().is_none(),
+                descriptor.content_hash_key().is_none(),
                 "adjacent videos must reach the media loader with hashing disabled"
             );
         }
