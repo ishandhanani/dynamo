@@ -1042,7 +1042,7 @@ impl HttpService {
     }
 
     fn start_frontend_load_publisher(&self, cancel_token: &CancellationToken) {
-        if !crate::pool_relay::serving_load_publishing_enabled() {
+        if !dynamo_sync::load::serving_load_publishing_enabled() {
             return;
         }
         let Some(target) = &self.frontend_load_target else {

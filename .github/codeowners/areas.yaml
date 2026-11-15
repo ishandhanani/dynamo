@@ -84,6 +84,7 @@ areas:
   - lib/sync/src/load/active_load.rs
   - lib/sync/src/load/metrics_subscriber.rs
   - lib/sync/src/load/routing_load.rs
+  - lib/sync/src/load/serving_load.rs
   - lib/sync/src/metrics.rs
   - lib/sync/src/metrics/
   - lib/backend-common/src/kv_publisher/
@@ -1207,6 +1208,10 @@ shared:
   owners:
   - router
   - epp
+- glob: lib/sync/src/load/serving_load.rs
+  owners:
+  - router
+  - global-router
 - glob: lib/llm/src/kv_router/shared_cache.rs
   owners:
   - router
