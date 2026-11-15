@@ -2090,6 +2090,51 @@ dependencies = [
 ]
 
 [[package]]
+name = "dynamo-frontend-protocols"
+version = "1.8.0"
+dependencies = [
+ "anyhow",
+ "async-stream",
+ "axum",
+ "base64 0.22.1",
+ "bytes",
+ "chrono",
+ "derive_builder",
+ "dynamo-admission",
+ "dynamo-http-server",
+ "dynamo-kv-hashing",
+ "dynamo-kv-hints",
+ "dynamo-lora",
+ "dynamo-model-card",
+ "dynamo-parsers",
+ "dynamo-parsers-v2",
+ "dynamo-protocols 10.0.1",
+ "dynamo-renderer",
+ "dynamo-router-protocol",
+ "dynamo-runtime",
+ "dynamo-scheduler",
+ "dynamo-tokenizers",
+ "futures",
+ "half",
+ "minijinja",
+ "parking_lot",
+ "percent-encoding",
+ "rmp-serde",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "thiserror 2.0.18",
+ "tokio",
+ "tokio-util",
+ "tracing",
+ "url",
+ "utoipa 5.5.0",
+ "uuid",
+ "validator",
+ "xxhash-rust",
+]
+
+[[package]]
 name = "dynamo-global-common"
 version = "1.8.0"
 dependencies = [
@@ -2276,6 +2321,7 @@ dependencies = [
  "dynamo-admission",
  "dynamo-decisions",
  "dynamo-error",
+ "dynamo-frontend-protocols",
  "dynamo-global-common",
  "dynamo-global-discovery-client",
  "dynamo-global-view-broadcaster",
@@ -2329,7 +2375,6 @@ dependencies = [
  "opentelemetry-otlp",
  "opentelemetry_sdk",
  "parking_lot",
- "percent-encoding",
  "prometheus",
  "prost 0.13.5",
  "rand 0.9.4",

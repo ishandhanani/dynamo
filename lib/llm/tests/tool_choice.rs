@@ -1,8 +1,8 @@
 // SPDX-FileCopyrightText: Copyright (c) 2025-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-use dynamo_llm::protocols::common;
-use dynamo_llm::protocols::common::llm_backend::BackendOutput;
+use dynamo_frontend_protocols::common;
+use dynamo_frontend_protocols::common::llm_backend::BackendOutput;
 use dynamo_protocols::types::{
     ChatCompletionMessageContent, ChatCompletionNamedToolChoice, ChatCompletionRequestMessage,
     ChatCompletionRequestUserMessage, ChatCompletionRequestUserMessageContent,
@@ -17,9 +17,9 @@ fn get_text(content: &ChatCompletionMessageContent) -> &str {
         ChatCompletionMessageContent::Parts(_) => "",
     }
 }
-use dynamo_llm::protocols::openai::DeltaGeneratorExt;
-use dynamo_llm::protocols::openai::chat_completions::NvCreateChatCompletionRequest;
-use dynamo_llm::protocols::openai::chat_completions::NvCreateChatCompletionStreamResponse;
+use dynamo_frontend_protocols::openai::DeltaGeneratorExt;
+use dynamo_frontend_protocols::openai::chat_completions::NvCreateChatCompletionRequest;
+use dynamo_frontend_protocols::openai::chat_completions::NvCreateChatCompletionStreamResponse;
 use dynamo_parsers::tool_calling::jail::{Annotated as JailAnnotated, JailedStream};
 
 // The jail moved to dynamo-parsers, where it operates on the shared
@@ -82,9 +82,9 @@ fn create_test_request() -> NvCreateChatCompletionRequest {
 }
 
 async fn apply_jail_transformation(
-    raw_response: dynamo_llm::protocols::openai::chat_completions::NvCreateChatCompletionStreamResponse,
+    raw_response: dynamo_frontend_protocols::openai::chat_completions::NvCreateChatCompletionStreamResponse,
     tool_choice: Option<ChatCompletionToolChoiceOption>,
-) -> dynamo_llm::protocols::openai::chat_completions::NvCreateChatCompletionStreamResponse {
+) -> dynamo_frontend_protocols::openai::chat_completions::NvCreateChatCompletionStreamResponse {
     use futures::StreamExt;
 
     let mut builder = JailedStream::builder();
@@ -108,10 +108,11 @@ async fn apply_jail_transformation(
 
 async fn apply_jail_transformation_streaming(
     raw_responses: Vec<
-        dynamo_llm::protocols::openai::chat_completions::NvCreateChatCompletionStreamResponse,
+        dynamo_frontend_protocols::openai::chat_completions::NvCreateChatCompletionStreamResponse,
     >,
     tool_choice: Option<ChatCompletionToolChoiceOption>,
-) -> Vec<dynamo_llm::protocols::openai::chat_completions::NvCreateChatCompletionStreamResponse> {
+) -> Vec<dynamo_frontend_protocols::openai::chat_completions::NvCreateChatCompletionStreamResponse>
+{
     use futures::StreamExt;
 
     let mut builder = JailedStream::builder();
@@ -493,12 +494,12 @@ fn test_no_tool_choice_outputs_normal_text() {
 fn make_text_chunk(
     text: &str,
     finish: bool,
-) -> dynamo_llm::protocols::openai::chat_completions::NvCreateChatCompletionStreamResponse {
+) -> dynamo_frontend_protocols::openai::chat_completions::NvCreateChatCompletionStreamResponse {
     use dynamo_protocols::types::{
         ChatChoiceStream, ChatCompletionMessageContent, ChatCompletionStreamResponseDelta, Role,
     };
     #[allow(deprecated)]
-    dynamo_llm::protocols::openai::chat_completions::NvCreateChatCompletionStreamResponse {
+    dynamo_frontend_protocols::openai::chat_completions::NvCreateChatCompletionStreamResponse {
         message_boundary: None,
         inner: dynamo_protocols::types::CreateChatCompletionStreamResponse {
             id: "test-named-parser".to_string(),
@@ -537,11 +538,12 @@ fn make_text_chunk(
 /// Apply jail with both a tool_call_parser and a named_tool_filter, returning all chunks.
 async fn apply_jail_named_with_parser(
     chunks: Vec<
-        dynamo_llm::protocols::openai::chat_completions::NvCreateChatCompletionStreamResponse,
+        dynamo_frontend_protocols::openai::chat_completions::NvCreateChatCompletionStreamResponse,
     >,
     parser: &str,
     named_tool: &str,
-) -> Vec<dynamo_llm::protocols::openai::chat_completions::NvCreateChatCompletionStreamResponse> {
+) -> Vec<dynamo_frontend_protocols::openai::chat_completions::NvCreateChatCompletionStreamResponse>
+{
     use futures::StreamExt;
 
     let jail = JailedStream::builder()
@@ -625,7 +627,8 @@ async fn apply_jail_with_parser_and_choice(
     payload: &str,
     parser: &str,
     tool_choice: Option<ChatCompletionToolChoiceOption>,
-) -> Vec<dynamo_llm::protocols::openai::chat_completions::NvCreateChatCompletionStreamResponse> {
+) -> Vec<dynamo_frontend_protocols::openai::chat_completions::NvCreateChatCompletionStreamResponse>
+{
     use futures::StreamExt;
 
     let chunks = vec![make_text_chunk(payload, false), make_text_chunk("", true)];
@@ -650,7 +653,8 @@ async fn apply_structural_tag_jail_with_parser_and_choice(
     payload: &str,
     parser: &str,
     tool_choice: Option<ChatCompletionToolChoiceOption>,
-) -> Vec<dynamo_llm::protocols::openai::chat_completions::NvCreateChatCompletionStreamResponse> {
+) -> Vec<dynamo_frontend_protocols::openai::chat_completions::NvCreateChatCompletionStreamResponse>
+{
     use futures::StreamExt;
 
     let chunks = vec![make_text_chunk(payload, false), make_text_chunk("", true)];
@@ -686,7 +690,7 @@ async fn apply_structural_tag_jail_with_parser_and_choice(
 
 /// Collect every emitted tool call across all chunks in the response stream.
 fn collect_tool_calls(
-    responses: &[dynamo_llm::protocols::openai::chat_completions::NvCreateChatCompletionStreamResponse],
+    responses: &[dynamo_frontend_protocols::openai::chat_completions::NvCreateChatCompletionStreamResponse],
 ) -> Vec<(String, String)> {
     let mut out = Vec::new();
     for r in responses {
@@ -1161,7 +1165,7 @@ async fn test_harmony_tool_choice_named_wrong_tool_filtered() {
 }
 
 async fn assert_responses_preserves_forced_calls(response: NvCreateChatCompletionStreamResponse) {
-    use dynamo_llm::protocols::{
+    use dynamo_frontend_protocols::{
         Annotated,
         openai::{
             ParsingOptions,

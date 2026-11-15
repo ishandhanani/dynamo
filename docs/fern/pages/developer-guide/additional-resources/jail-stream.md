@@ -20,13 +20,13 @@ The `JailedStream` is a standalone implementation for handling "jail" detection 
 ## Implementation
 
 ### Location
-- Main implementation: `lib/llm/src/protocols/openai/chat_completions/jail.rs`
-- Examples: `lib/llm/src/protocols/openai/chat_completions/jail_example.rs`
+- Main implementation: `lib/frontend-protocols/src/openai/chat_completions/jail.rs`
+- Examples: `lib/frontend-protocols/src/openai/chat_completions/jail_example.rs`
 
 ### Usage
 
 ```rust
-use crate::protocols::openai::chat_completions::jail::JailedStream;
+use dynamo_frontend_protocols::openai::chat_completions::jail::JailedStream;
 use dynamo_runtime::engine::{AsyncEngineContextProvider, ResponseStream};
 
 // Get your ResponseStream with context

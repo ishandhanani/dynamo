@@ -5,6 +5,7 @@
 members = [
     "lib/llm",
     "lib/lora",
+    "lib/frontend-protocols",
     "lib/model-card",
     "lib/rl",
     "lib/runtime",
@@ -85,6 +86,7 @@ dynamo-runtime = { path = "lib/runtime", version = "1.8.0" }
 dynamo-global-discovery-client = { path = "lib/global-discovery-client", version = "1.8.0" }
 dynamo-llm = { path = "lib/llm", version = "1.8.0", default-features = false }
 dynamo-lora = { path = "lib/lora", version = "1.8.0" }
+dynamo-frontend-protocols = { path = "lib/frontend-protocols", version = "1.8.0" }
 dynamo-model-card = { path = "lib/model-card", version = "1.8.0" }
 dynamo-sglang-generate = { path = "lib/generate-formats/sglang", version = "1.8.0" }
 dynamo-vllm-generate = { path = "lib/generate-formats/vllm", version = "1.8.0" }

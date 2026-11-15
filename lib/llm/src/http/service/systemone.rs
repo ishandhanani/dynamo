@@ -29,14 +29,14 @@ use super::{
 use crate::{
     discovery::{SystemOneExecutionSelection, SystemOneSelectionError},
     generate_format::{Bound, ClientRequest, GenerateExchange, Worker},
-    protocols::{
-        Annotated,
-        common::{
-            llm_backend::LLMEngineOutput, preprocessor::PreprocessedRequest, timing::RequestTracker,
-        },
-        response_merge::PREFILL_OUTPUT_ANNOTATION,
-        systemone::{build_native_score_request, parse_candidate_scores},
+};
+use dynamo_frontend_protocols::{
+    Annotated,
+    common::{
+        llm_backend::LLMEngineOutput, preprocessor::PreprocessedRequest, timing::RequestTracker,
     },
+    response_merge::PREFILL_OUTPUT_ANNOTATION,
+    systemone::{build_native_score_request, parse_candidate_scores},
 };
 use dynamo_http_server::{
     disconnect::create_connection_monitor,

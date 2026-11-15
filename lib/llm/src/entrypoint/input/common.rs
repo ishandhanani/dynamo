@@ -17,17 +17,19 @@ use crate::{
     migration::Migration,
     namespace::NamespaceFilter,
     preprocessor::{OpenAIPreprocessor, prompt::prompt_formatter_from_mdc},
-    protocols::common::llm_backend::{BackendOutput, LLMEngineOutput, PreprocessedRequest},
     session_affinity::{SessionAffinityMode, create_affinity_coordinator},
-    types::{
-        Annotated,
-        openai::{
-            chat_completions::{
-                NvCreateChatCompletionRequest, NvCreateChatCompletionStreamResponse,
-                OpenAIChatCompletionsStreamingEngine,
-            },
-            completions::{NvCreateCompletionRequest, NvCreateCompletionResponse},
+};
+use dynamo_frontend_protocols::common::llm_backend::{
+    BackendOutput, LLMEngineOutput, PreprocessedRequest,
+};
+use dynamo_frontend_protocols::types::{
+    Annotated,
+    openai::{
+        chat_completions::{
+            NvCreateChatCompletionRequest, NvCreateChatCompletionStreamResponse,
+            OpenAIChatCompletionsStreamingEngine,
         },
+        completions::{NvCreateCompletionRequest, NvCreateCompletionResponse},
     },
 };
 use dynamo_http_server::metrics::Metrics;

@@ -19,6 +19,7 @@ dynamo-vllm-generate = { workspace = true }
 
 [dev-dependencies]
 dynamo-model-card = { workspace = true }
+dynamo-frontend-protocols = { workspace = true }
 dynamo-sglang-generate = { workspace = true, features = ["testkit"] }
 dynamo-http-server = { workspace = true }
 dynamo-runtime = { workspace = true }

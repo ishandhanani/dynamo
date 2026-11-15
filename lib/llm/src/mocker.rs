@@ -20,10 +20,10 @@ use std::time::{Duration, Instant};
 
 use crate::backend::ExecutionContext;
 use crate::kv_router::publisher::{KvEventPublisher, KvEventSourceConfig, WorkerMetricsPublisher};
-use crate::protocols::TokenIdType;
-use crate::protocols::common::FinishReason;
-use crate::protocols::common::llm_backend::{LLMEngineOutput, PreprocessedRequest};
 use anyhow::{Context, Result, bail};
+use dynamo_frontend_protocols::TokenIdType;
+use dynamo_frontend_protocols::common::FinishReason;
+use dynamo_frontend_protocols::common::llm_backend::{LLMEngineOutput, PreprocessedRequest};
 use dynamo_kv_events::event::KvCacheEvent;
 use dynamo_kv_events::residency::StorageTier;
 use dynamo_mocker::common::handoff::HandoffId;
@@ -1470,8 +1470,8 @@ pub async fn make_mocker_engine(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::protocols::common::llm_backend::PreprocessedRequest;
-    use crate::protocols::common::{OutputOptions, SamplingOptions, StopConditions};
+    use dynamo_frontend_protocols::common::llm_backend::PreprocessedRequest;
+    use dynamo_frontend_protocols::common::{OutputOptions, SamplingOptions, StopConditions};
     use dynamo_mocker::common::protocols::{EngineType, MockerConfig, WorkerType};
     use dynamo_runtime::pipeline::context::Controller;
     use dynamo_runtime::pipeline::{AsyncEngine, SingleIn};
@@ -1557,7 +1557,7 @@ mod tests {
     }
 
     fn dp_rank_request(room: Option<u64>, rank: Option<u32>) -> PreprocessedRequest {
-        use crate::protocols::common::preprocessor::{BootstrapInfo, RoutingHints};
+        use dynamo_frontend_protocols::common::preprocessor::{BootstrapInfo, RoutingHints};
 
         let mut request = prefill_request();
         request.routing = Some(RoutingHints {
@@ -1650,7 +1650,7 @@ mod tests {
 
     #[tokio::test]
     async fn sequential_decode_starts_from_transferred_prompt_kv() {
-        use crate::protocols::common::preprocessor::PrefillResult;
+        use dynamo_frontend_protocols::common::preprocessor::PrefillResult;
         use dynamo_mocker::common::protocols::{ForwardPassSnapshot, FpmPublisher, FpmSink};
         use dynamo_mocker::live::LiveEngineConfig;
 
@@ -1742,7 +1742,7 @@ mod tests {
 
     #[tokio::test]
     async fn client_input_errors_fail_in_stream_without_marking_worker_down() {
-        use crate::protocols::common::preprocessor::RoutingHints;
+        use dynamo_frontend_protocols::common::preprocessor::RoutingHints;
         use dynamo_runtime::error::ErrorClass;
 
         let args = MockerConfig::from_value(serde_json::json!({
