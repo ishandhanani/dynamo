@@ -95,7 +95,7 @@ impl RouterPluginBuilder {
         Self { plugins }
     }
 
-    pub(crate) fn validate_config(
+    pub fn validate_config(
         &self,
         config: &dynamo_kv_router::config::KvRouterConfig,
     ) -> anyhow::Result<()> {
@@ -109,18 +109,18 @@ impl RouterPluginBuilder {
         Ok(())
     }
 
-    pub(crate) fn has_custom_worker_selection(&self) -> bool {
+    pub fn has_custom_worker_selection(&self) -> bool {
         self.plugins.has_custom_worker_selection()
     }
 
-    pub(crate) fn selection_policy(&self) -> SelectionPolicySource {
+    pub fn selection_policy(&self) -> SelectionPolicySource {
         self.plugins.worker_selection().cloned().map_or(
             SelectionPolicySource::Registry,
             SelectionPolicySource::Factory,
         )
     }
 
-    pub(crate) fn install(&self, router: &KvRouter) -> anyhow::Result<()> {
+    pub fn install(&self, router: &KvRouter) -> anyhow::Result<()> {
         if let Some(factory) = self.plugins.request_classifier() {
             router.install_request_classifier(factory(router.request_classifier_context()))?;
         }

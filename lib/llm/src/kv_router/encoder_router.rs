@@ -79,7 +79,7 @@ impl Drop for EncoderRouter {
 impl EncoderRouter {
     /// Returns `None` when this router does not target the group, and an empty
     /// set when it targets the endpoint but its binding is not yet available.
-    pub(crate) fn available_worker_ids_for(
+    pub fn available_worker_ids_for(
         &self,
         group_id: &str,
         endpoint: &EndpointId,
@@ -145,7 +145,7 @@ impl EncoderRouter {
         Self::new_inner(model_name, namespace, None)
     }
 
-    pub(crate) fn new_with_task_guard(
+    pub fn new_with_task_guard(
         model_name: String,
         namespace: String,
         task_guard: dynamo_runtime::engine::EngineContextGuard,
@@ -306,7 +306,7 @@ impl EncoderRouter {
     /// Update the desired Encode endpoint. Clearing is synchronous so requests
     /// holding an older catalog snapshot stop using a removed endpoint before
     /// the new catalog is published.
-    pub(crate) fn set_target(&self, target: Option<WorkerSetTarget>) {
+    pub fn set_target(&self, target: Option<WorkerSetTarget>) {
         let target_id = target.as_ref().map(WorkerSetTarget::id);
         let mut current = self.target.lock();
         if *current == target_id {
@@ -333,7 +333,7 @@ impl EncoderRouter {
     }
 
     #[cfg(test)]
-    pub(crate) fn target_endpoint_id(&self) -> Option<dynamo_runtime::protocols::EndpointId> {
+    pub fn target_endpoint_id(&self) -> Option<dynamo_runtime::protocols::EndpointId> {
         self.target_tx
             .as_ref()
             .and_then(|tx| tx.borrow().as_ref().map(|target| target.endpoint().id()))

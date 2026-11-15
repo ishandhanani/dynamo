@@ -36,7 +36,7 @@ use dynamo_runtime::pipeline::{
 };
 use dynamo_runtime::protocols::annotated::Annotated;
 
-pub(crate) mod realtime;
+pub mod realtime;
 
 /// Accessors the migration RetryManager needs from a response chunk.
 /// `token_ids` lets it replay already-delivered tokens; `worker_trace_link`
@@ -45,7 +45,7 @@ pub(crate) mod realtime;
 /// decoder state so a retry can restore withheld text and buffered token IDs;
 /// `completion_usage_mut` lets it take the replayed tokens back out of a retried
 /// attempt's reported prompt.
-pub(crate) trait HasTokenIds {
+pub trait HasTokenIds {
     fn token_ids(&self) -> &[TokenIdType];
     fn worker_trace_link(
         &self,
@@ -153,7 +153,7 @@ fn migratable_error_in_chain<'a>(err: &'a (dyn StdError + 'static)) -> Option<&'
 }
 
 /// Check if an error chain indicates the request should be migrated.
-pub(crate) fn is_migratable(err: &(dyn StdError + 'static)) -> bool {
+pub fn is_migratable(err: &(dyn StdError + 'static)) -> bool {
     migratable_error_in_chain(err).is_some()
 }
 
@@ -290,7 +290,7 @@ impl Migration {
     /// disambiguate between the `Operator` impls on `Migration` since
     /// the response type doesn't appear in the struct.
     #[allow(clippy::type_complexity)]
-    pub(crate) fn into_operator_for<Resp>(
+    pub fn into_operator_for<Resp>(
         self: &Arc<Self>,
     ) -> Arc<
         PipelineOperator<

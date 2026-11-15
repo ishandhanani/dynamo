@@ -327,7 +327,7 @@ struct PrefillBuildContext {
     task_guard: Option<dynamo_runtime::engine::EngineContextGuard>,
 }
 
-pub(crate) trait PrefillRouterLifecycle: Send + Sync {
+pub trait PrefillRouterLifecycle: Send + Sync {
     fn set_target(&self, target: Option<WorkerSetTarget>);
     /// Returns `None` when this router does not target the group, and an empty
     /// set when it targets the endpoint but its binding is not yet available.
@@ -796,11 +796,11 @@ fn independent_prefill_context(
 }
 
 impl PrefillRouter {
-    pub(crate) fn conditional_disagg_enabled(&self) -> bool {
+    pub fn conditional_disagg_enabled(&self) -> bool {
         self.conditional_disagg_policy.is_enabled()
     }
 
-    pub(crate) fn set_decode_routing_host(&self, routing_host: Arc<RoutingHost>) -> Result<()> {
+    pub fn set_decode_routing_host(&self, routing_host: Arc<RoutingHost>) -> Result<()> {
         match self.decode_routing_host.set(routing_host) {
             Ok(()) => Ok(()),
             Err(routing_host)

@@ -23,16 +23,16 @@ const RECOVERY_TIMEOUT: Duration = Duration::from_secs(5);
 
 #[derive(Debug, thiserror::Error)]
 #[error("realtime worker stream ended unexpectedly")]
-pub(crate) struct UnexpectedEnd;
+pub struct UnexpectedEnd;
 
-pub(crate) struct RealtimeRecovery {
+pub struct RealtimeRecovery {
     journal: Option<Journal>,
     attempts: AttemptBudget,
     deadline: Option<Instant>,
 }
 
 impl RealtimeRecovery {
-    pub(crate) fn new(session: &RealtimeClientEventSessionUpdate, migration_limit: u32) -> Self {
+    pub fn new(session: &RealtimeClientEventSessionUpdate, migration_limit: u32) -> Self {
         Self {
             journal: (migration_limit > 0)
                 .then(|| Journal::new(session))
@@ -42,17 +42,14 @@ impl RealtimeRecovery {
         }
     }
 
-    pub(crate) fn start_attempt(&mut self) -> anyhow::Result<()> {
+    pub fn start_attempt(&mut self) -> anyhow::Result<()> {
         self.attempts
             .take()
             .map(|_| ())
             .ok_or_else(|| anyhow::anyhow!("realtime migration limit exhausted"))
     }
 
-    pub(crate) fn retry(
-        &mut self,
-        error: anyhow::Error,
-    ) -> anyhow::Result<DynamoRealtimeClientEvent> {
+    pub fn retry(&mut self, error: anyhow::Error) -> anyhow::Result<DynamoRealtimeClientEvent> {
         let is_retryable = is_migratable(error.as_ref()) || error.is::<UnexpectedEnd>();
         let Some(journal) = self.journal.as_mut().filter(|j| j.can_recover()) else {
             return Err(error);
@@ -73,15 +70,15 @@ impl RealtimeRecovery {
             .ok_or_else(|| anyhow::anyhow!("realtime replay unavailable"))
     }
 
-    pub(crate) fn deadline(&self) -> Option<Instant> {
+    pub fn deadline(&self) -> Option<Instant> {
         self.deadline
     }
 
-    pub(crate) fn is_replaying(&self) -> bool {
+    pub fn is_replaying(&self) -> bool {
         self.deadline.is_some()
     }
 
-    pub(crate) fn next_replay(&mut self) -> anyhow::Result<Option<DynamoRealtimeClientEvent>> {
+    pub fn next_replay(&mut self) -> anyhow::Result<Option<DynamoRealtimeClientEvent>> {
         let Some(deadline) = self.deadline else {
             return Ok(None);
         };
@@ -104,20 +101,20 @@ impl RealtimeRecovery {
         Ok(event)
     }
 
-    pub(crate) fn record(&mut self, event: &DynamoRealtimeClientEvent) {
+    pub fn record(&mut self, event: &DynamoRealtimeClientEvent) {
         if let Some(journal) = self.journal.as_mut() {
             journal.record(event);
         }
     }
 
-    pub(crate) fn reconcile(&mut self, event: &mut RealtimeServerEvent) -> anyhow::Result<bool> {
+    pub fn reconcile(&mut self, event: &mut RealtimeServerEvent) -> anyhow::Result<bool> {
         match self.journal.as_mut() {
             Some(journal) => journal.reconcile(event).map_err(anyhow::Error::msg),
             None => Ok(true),
         }
     }
 
-    pub(crate) fn stream_ended(&self) -> anyhow::Result<()> {
+    pub fn stream_ended(&self) -> anyhow::Result<()> {
         if self.journal.as_ref().is_some_and(Journal::can_recover) {
             Err(UnexpectedEnd.into())
         } else {

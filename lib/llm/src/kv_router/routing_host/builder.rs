@@ -82,10 +82,7 @@ impl RoutingHost {
 }
 
 impl RoutingHostBuilder {
-    pub(crate) fn candidate_policy(
-        mut self,
-        policy: Option<Arc<dyn HostedCandidatePolicy>>,
-    ) -> Self {
+    pub fn candidate_policy(mut self, policy: Option<Arc<dyn HostedCandidatePolicy>>) -> Self {
         self.candidate_policy = policy;
         self
     }
@@ -284,7 +281,7 @@ pub(crate) fn hosted_picker(mode: RouterMode) -> anyhow::Result<HostedWorkerPick
 }
 
 /// Every worker role a frontend routes.
-pub(crate) const EVERY_ROLE: [WorkerType; 4] = [
+pub const EVERY_ROLE: [WorkerType; 4] = [
     WorkerType::Aggregated,
     WorkerType::Prefill,
     WorkerType::Decode,
@@ -294,7 +291,7 @@ pub(crate) const EVERY_ROLE: [WorkerType; 4] = [
 /// Reject a non-KV routing mode for `roles` when one of them lists `hints` in its `worker_selection`
 /// entry. Hints run at booking, which only the KV path does, so another mode would drop them
 /// silently. Default hints are passive and never require the KV path.
-pub(crate) fn check_hint_policies_route_on_kv_path(
+pub fn check_hint_policies_route_on_kv_path(
     router_mode: RouterMode,
     config: &KvRouterConfig,
     roles: &[WorkerType],

@@ -158,7 +158,7 @@ impl PrefillRouter {
 }
 
 impl PrefillRouter {
-    pub(crate) fn disabled_with_session_affinity_mode(
+    pub fn disabled_with_session_affinity_mode(
         endpoints: Arc<dyn PrefillEndpointProvider>,
         decode_router_mode: RouterMode,
         session_affinity_ttl_secs: Option<u64>,
@@ -190,7 +190,7 @@ impl PrefillRouter {
     }
 
     #[expect(clippy::too_many_arguments)]
-    pub(crate) fn new_with_selection_policy(
+    pub fn new_with_selection_policy(
         activation_rx: Option<oneshot::Receiver<Endpoint>>,
         endpoints: Arc<dyn PrefillEndpointProvider>,
         decode_router_mode: RouterMode,
@@ -609,7 +609,7 @@ impl PrefillRouter {
     /// Update the desired Prefill endpoint. Clearing is synchronous so requests
     /// holding an older catalog snapshot bypass a removed endpoint before the
     /// replacement catalog is published.
-    pub(crate) fn set_target(&self, target: Option<WorkerSetTarget>) {
+    pub fn set_target(&self, target: Option<WorkerSetTarget>) {
         let target_id = target.as_ref().map(WorkerSetTarget::id);
         let mut current = self.target.lock();
         if *current == target_id {
@@ -662,7 +662,7 @@ impl PrefillRouter {
     }
 
     #[cfg(test)]
-    pub(crate) fn target_endpoint_id(&self) -> Option<dynamo_runtime::protocols::EndpointId> {
+    pub fn target_endpoint_id(&self) -> Option<dynamo_runtime::protocols::EndpointId> {
         self.target_tx
             .as_ref()
             .and_then(|tx| tx.borrow().as_ref().map(|target| target.endpoint().id()))

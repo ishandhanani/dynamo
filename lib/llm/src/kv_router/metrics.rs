@@ -1178,7 +1178,7 @@ dynamo_frontend_router_queue_pending_requests{model=\"model\",policy_class=\"def
 }
 
 #[cfg(test)]
-pub(crate) mod test_fixtures {
+pub mod test_fixtures {
     //! A metrics hierarchy for tests that register component metrics without a runtime.
 
     use dynamo_runtime::MetricsRegistry;
@@ -1186,7 +1186,7 @@ pub(crate) mod test_fixtures {
 
     /// Stand-in for the DRT → Namespace → Component chain, without a live runtime.
     /// `connection_id` is what drives the auto-injected `worker_id` const label.
-    pub(crate) struct FakeHierarchy {
+    pub struct FakeHierarchy {
         basename: String,
         parents: Vec<FakeHierarchy>,
         pub(crate) registry: MetricsRegistry,
@@ -1195,7 +1195,7 @@ pub(crate) mod test_fixtures {
 
     impl FakeHierarchy {
         /// Mirror a component-level hierarchy: `["" (drt), namespace, component]`.
-        pub(crate) fn component(namespace: &str, component: &str, connection_id: u64) -> Self {
+        pub fn component(namespace: &str, component: &str, connection_id: u64) -> Self {
             Self {
                 basename: component.to_string(),
                 parents: vec![Self::bare(""), Self::bare(namespace)],
@@ -1214,7 +1214,7 @@ pub(crate) mod test_fixtures {
         }
 
         /// Render what a `/metrics` scrape of this hierarchy would return.
-        pub(crate) fn expfmt(&self) -> String {
+        pub fn expfmt(&self) -> String {
             self.registry.prometheus_expfmt_combined().unwrap()
         }
     }

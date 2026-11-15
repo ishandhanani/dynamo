@@ -48,7 +48,7 @@ fn max_entries_from(raw: Result<String, VarError>) -> Result<usize, Error> {
     }
 }
 
-pub(crate) async fn create_affinity_coordinator(
+pub async fn create_affinity_coordinator(
     ttl: Option<Duration>,
     mode: SessionAffinityMode,
     client: Client,

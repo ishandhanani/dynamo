@@ -71,7 +71,7 @@ impl AffinityCoordinator {
         }
     }
 
-    pub(crate) async fn enable_replica_sync(
+    pub async fn enable_replica_sync(
         &self,
         client: dynamo_runtime::component::Client,
     ) -> Result<(), Error> {

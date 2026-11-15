@@ -99,20 +99,20 @@ pub(crate) fn check_stage(
     Ok(())
 }
 
-pub(crate) struct LoraHostedPolicy {
+pub struct LoraHostedPolicy {
     filter: Arc<LoraFilter>,
     estimator: Arc<LoadEstimator>,
     picker: HostedWorkerPicker,
     runtime_configs: Option<RuntimeConfigWatch>,
 }
 
-pub(crate) struct LoraKvPolicy {
+pub struct LoraKvPolicy {
     filter: Arc<LoraFilter>,
     runtime_enabled: bool,
 }
 
 impl LoraKvPolicy {
-    pub(crate) fn kv(filter: Arc<LoraFilter>) -> Arc<dyn KvAdmissionPolicy> {
+    pub fn kv(filter: Arc<LoraFilter>) -> Arc<dyn KvAdmissionPolicy> {
         Arc::new(Self {
             filter,
             runtime_enabled: dynamo_runtime::config::env_is_truthy(
@@ -123,7 +123,7 @@ impl LoraKvPolicy {
 }
 
 impl LoraHostedPolicy {
-    pub(crate) fn hosted(
+    pub fn hosted(
         filter: Arc<LoraFilter>,
         estimator: Arc<LoadEstimator>,
         mode: RouterMode,

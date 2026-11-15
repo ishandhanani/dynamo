@@ -20,7 +20,7 @@ pub mod http;
 pub mod generate_format;
 pub mod kv_router;
 pub mod lora;
-mod lora_routing;
+pub mod lora_routing;
 pub mod migration;
 pub mod mocker;
 pub mod namespace;

@@ -17,12 +17,12 @@ use tokio_util::sync::CancellationToken;
 /// A topology hop must retain the provider's admission and configuration, even
 /// when other cards share its endpoint or the endpoint is reused by a successor.
 #[derive(Clone)]
-pub(crate) struct CommittedWorkerSetTarget {
-    pub(crate) endpoint: Endpoint,
-    pub(crate) group: String,
-    pub(crate) generation: u64,
-    pub(crate) card: Arc<ModelDeploymentCard>,
-    pub(crate) admitted_ids: watch::Receiver<Vec<u64>>,
+pub struct CommittedWorkerSetTarget {
+    pub endpoint: Endpoint,
+    pub group: String,
+    pub generation: u64,
+    pub card: Arc<ModelDeploymentCard>,
+    pub admitted_ids: watch::Receiver<Vec<u64>>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -41,7 +41,7 @@ impl WorkerSetTargetId {
 }
 
 #[derive(Clone)]
-pub(crate) enum WorkerSetTarget {
+pub enum WorkerSetTarget {
     Committed(CommittedWorkerSetTarget),
     /// Explicit endpoint constructors predate controller-owned admission.
     Legacy(Endpoint),

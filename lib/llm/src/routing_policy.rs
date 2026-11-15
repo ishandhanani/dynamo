@@ -15,13 +15,13 @@ use dynamo_sync::runtime_configs::RuntimeConfigWatch;
 
 pub(crate) type AttemptLease = Box<dyn Send + Sync>;
 
-pub(crate) struct CandidateSelection {
+pub struct CandidateSelection {
     pub worker: u64,
     pub fallback: HashSet<u64>,
     pub lease: Option<AttemptLease>,
 }
 
-pub(crate) trait HostedCandidatePolicy: Send + Sync {
+pub trait HostedCandidatePolicy: Send + Sync {
     /// `Ok(None)` defers to normal selection; policy rejections return `Err`, never fallback.
     fn select(
         &self,
@@ -40,7 +40,7 @@ pub(crate) trait HostedCandidatePolicy: Send + Sync {
     ) -> Result<(), Error>;
 }
 
-pub(crate) trait KvAdmissionPolicy: Send + Sync {
+pub trait KvAdmissionPolicy: Send + Sync {
     fn restrict(
         &self,
         request: &PreprocessedRequest,

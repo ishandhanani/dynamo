@@ -73,12 +73,12 @@ mod routing_host;
 pub(crate) use routing_host::hosted_picker;
 pub(crate) use routing_host::hosted_request;
 pub mod shared_cache;
-pub(crate) mod worker_set_target;
+pub mod worker_set_target;
 
 pub use encoder_router::EncoderRouter;
 pub use managed::ManagedKvRouter;
 pub use prefill_router::PrefillRouter;
-pub(crate) use routing_host::{EVERY_ROLE, check_hint_policies_route_on_kv_path};
+pub use routing_host::{EVERY_ROLE, check_hint_policies_route_on_kv_path};
 pub use routing_host::{
     KvPushRouter, LlmDispatch, MultimodalCache, RoutingHost, RoutingHostBuilder,
 };
@@ -133,7 +133,7 @@ impl SelectionPolicySource {
     /// in [`DEFAULT_ROUTING_GROUP`]) once and read its required inputs. An
     /// already `Prepared` source is returned as-is, so chained callers never
     /// invoke the factory a second time for that partition.
-    pub(crate) fn prepare(
+    pub fn prepare(
         self,
         config: &KvRouterConfig,
         worker_type: WorkerType,
@@ -694,7 +694,7 @@ impl KvRouter {
     }
 
     #[allow(clippy::too_many_arguments)]
-    pub(crate) async fn new_with_worker_role_and_scheduler_load(
+    pub async fn new_with_worker_role_and_scheduler_load(
         endpoint: Endpoint,
         client: Client,
         workers_with_configs: RuntimeConfigWatch,
@@ -949,7 +949,7 @@ impl KvRouter {
             .begin_request_lifecycle(request_id)
     }
 
-    pub(crate) fn set_teardown_task_guard(
+    pub fn set_teardown_task_guard(
         &mut self,
         task_guard: dynamo_runtime::engine::EngineContextGuard,
     ) {
