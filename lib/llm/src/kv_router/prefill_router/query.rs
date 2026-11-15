@@ -348,7 +348,7 @@ mod tests {
         let prefill = PrefillRouter::disabled(Arc::new(ModelManager::new()), mode, None);
         prefill.binding.store(Some(Arc::new(
             crate::kv_router::prefill_router::PrefillBinding {
-                target_id: crate::discovery::WorkerSetTargetId::Legacy(
+                target_id: crate::kv_router::worker_set_target::WorkerSetTargetId::Legacy(
                     dynamo_runtime::protocols::EndpointId {
                         namespace: namespace.to_string(),
                         component: component.to_string(),
@@ -427,7 +427,9 @@ mod tests {
             .await
             .unwrap();
         let binding = Arc::new(PrefillBinding {
-            target_id: crate::discovery::WorkerSetTargetId::Legacy(endpoint_id.clone()),
+            target_id: crate::kv_router::worker_set_target::WorkerSetTargetId::Legacy(
+                endpoint_id.clone(),
+            ),
             endpoint_id,
             router: Arc::new(router),
             prefill_router_mode: RouterMode::KV,
@@ -494,9 +496,8 @@ mod tests {
         chooser.client().override_discovered_instances(vec![7]);
         let (replacement, _) = tracked_binding("availability-replacement").await;
         let mut target = router.target.lock();
-        *target = Some(crate::discovery::WorkerSetTargetId::Legacy(
-            original.clone(),
-        ));
+        *target =
+            Some(crate::kv_router::worker_set_target::WorkerSetTargetId::Legacy(original.clone()));
         let (started_tx, started_rx) = mpsc::channel();
         let (result_tx, result_rx) = mpsc::channel();
         let reader_router = router.clone();

@@ -1578,7 +1578,7 @@ mod tests {
         let (admitted_tx, admitted_rx) = watch::channel(Vec::new());
         let selected_card = Arc::new(unadmitted.card().clone());
         Arc::get_mut(&mut unadmitted).unwrap().set_topology_target(
-            super::super::worker_set::CommittedWorkerSetTarget {
+            crate::kv_router::worker_set_target::CommittedWorkerSetTarget {
                 endpoint: component.endpoint("generate".to_string()),
                 group: "group-a".to_string(),
                 generation: 1,

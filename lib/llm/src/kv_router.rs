@@ -72,6 +72,7 @@ mod routing_host;
 pub(crate) use routing_host::hosted_picker;
 pub(crate) use routing_host::hosted_request;
 pub mod shared_cache;
+pub(crate) mod worker_set_target;
 
 pub use encoder_router::EncoderRouter;
 pub use managed::ManagedKvRouter;

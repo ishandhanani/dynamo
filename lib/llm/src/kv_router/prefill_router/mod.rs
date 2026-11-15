@@ -24,8 +24,12 @@ use dynamo_worker_selection::host::ConditionalDisaggPolicy;
 use futures::stream::{self, StreamExt};
 
 use crate::{
-    discovery::{ModelManager, WorkerSetTarget, WorkerSetTargetId},
-    kv_router::{RoutingHost, SelectionPolicySource, routing_host::PrefillDispatch},
+    discovery::ModelManager,
+    kv_router::{
+        RoutingHost, SelectionPolicySource,
+        routing_host::PrefillDispatch,
+        worker_set_target::{WorkerSetTarget, WorkerSetTargetId},
+    },
     session_affinity::{AffinityTarget, SessionAffinityMode},
 };
 use dynamo_frontend_protocols::common::{

@@ -37,7 +37,10 @@ use dynamo_runtime::{
 };
 
 use crate::{
-    kv_router::{KvRouter, SelectionPolicySource, shared_cache::HicacheSharedKvCache},
+    kv_router::{
+        KvRouter, SelectionPolicySource, shared_cache::HicacheSharedKvCache,
+        worker_set_target::WorkerSetTarget,
+    },
     lora::{
         LoadEstimatorSubscription, LoraFilter, LoraRoutingTable, LoraStateTracker,
         load_estimator::LoadEstimator,
@@ -2696,11 +2699,7 @@ impl ModelManager {
             .then(|| prefill_providers[0].clone());
         for worker_set in &decode_consumers {
             if let Some(router) = &worker_set.prefill_router {
-                router.set_target(
-                    prefill_target
-                        .clone()
-                        .map(super::WorkerSetTarget::Committed),
-                );
+                router.set_target(prefill_target.clone().map(WorkerSetTarget::Committed));
             }
         }
 
@@ -2734,7 +2733,7 @@ impl ModelManager {
                 routing_enabled
                     .then(|| unique_encode.clone())
                     .flatten()
-                    .map(super::WorkerSetTarget::Committed),
+                    .map(WorkerSetTarget::Committed),
             );
         }
     }
@@ -3023,7 +3022,7 @@ mod tests {
             ids: Arc<parking_lot::Mutex<HashSet<u64>>>,
         }
         impl crate::kv_router::prefill_router::PrefillRouterLifecycle for Hop {
-            fn set_target(&self, _: Option<crate::discovery::WorkerSetTarget>) {}
+            fn set_target(&self, _: Option<WorkerSetTarget>) {}
 
             fn available_worker_ids_for(
                 &self,
@@ -4512,13 +4511,15 @@ mod tests {
             card.mdcsum().to_string(),
             card.clone(),
         );
-        worker_set.set_topology_target(crate::discovery::CommittedWorkerSetTarget {
-            group: endpoint.id().to_string(),
-            endpoint,
-            generation: 1,
-            card: Arc::new(card),
-            admitted_ids: tokio::sync::watch::channel(Vec::new()).1,
-        });
+        worker_set.set_topology_target(
+            crate::kv_router::worker_set_target::CommittedWorkerSetTarget {
+                group: endpoint.id().to_string(),
+                endpoint,
+                generation: 1,
+                card: Arc::new(card),
+                admitted_ids: tokio::sync::watch::channel(Vec::new()).1,
+            },
+        );
         if role != WorkerType::Decode {
             return (worker_set, None, None);
         }

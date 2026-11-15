@@ -26,8 +26,8 @@ pub(super) enum ActivationSnapshot {
     Untargeted,
 }
 use crate::{
-    discovery::{ModelManager, WorkerSetTarget},
-    kv_router::{RoutingHost, SelectionPolicySource},
+    discovery::ModelManager,
+    kv_router::{RoutingHost, SelectionPolicySource, worker_set_target::WorkerSetTarget},
     session_affinity::{SessionAffinityMode, create_affinity_coordinator},
 };
 use dynamo_frontend_protocols::common::timing::WORKER_TYPE_PREFILL;
@@ -674,8 +674,8 @@ mod tests {
     use std::time::Duration;
 
     use super::*;
-    use crate::discovery::CommittedWorkerSetTarget;
     use crate::kv_router::prefill_router::PrefillRouterLifecycle;
+    use crate::kv_router::worker_set_target::CommittedWorkerSetTarget;
     use dynamo_frontend_protocols::common::llm_backend::{LLMEngineOutput, PreprocessedRequest};
     use dynamo_kv_router::config::KvRouterConfig;
     use dynamo_model_card::router_config::RouterConfig;
