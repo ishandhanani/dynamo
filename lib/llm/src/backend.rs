@@ -37,7 +37,6 @@ use dynamo_runtime::{
     protocols::{annotated::Annotated, maybe_error::MaybeError},
 };
 
-use crate::tokenizers::{DecodeStream, Tokenizer};
 use dynamo_frontend_protocols::{
     TokenIdType,
     common::{
@@ -51,6 +50,7 @@ use dynamo_frontend_protocols::{
     },
 };
 use dynamo_protocols::types::StopReason;
+use dynamo_tokenizers::{DecodeStream, Tokenizer};
 
 /// Represents the output stream from the execution engine
 pub type ExecutionOutputStream = Annotated<LLMEngineOutput>;
@@ -1393,13 +1393,13 @@ impl Decoder {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::tokenizers::traits;
     use dynamo_frontend_protocols::common::llm_backend::TopLogprob;
     use dynamo_frontend_protocols::common::{OutputOptions, SamplingOptions};
     use dynamo_frontend_protocols::openai::{
         DeltaGeneratorExt, chat_completions::DeltaGenerator, delta_common::DeltaGeneratorOptions,
     };
     use dynamo_runtime::pipeline::{AsyncEngine, Error, ResponseStream};
+    use dynamo_tokenizers::traits;
     use futures::StreamExt;
     use std::sync::Arc;
 
@@ -1430,13 +1430,13 @@ mod tests {
     struct FailingDecoder;
 
     impl traits::Encoder for FailingDecoder {
-        fn encode(&self, _input: &str) -> anyhow::Result<crate::tokenizers::Encoding> {
-            Ok(crate::tokenizers::Encoding::Sp(vec![]))
+        fn encode(&self, _input: &str) -> anyhow::Result<dynamo_tokenizers::Encoding> {
+            Ok(dynamo_tokenizers::Encoding::Sp(vec![]))
         }
         fn encode_batch(
             &self,
             _inputs: &[&str],
-        ) -> anyhow::Result<Vec<crate::tokenizers::Encoding>> {
+        ) -> anyhow::Result<Vec<dynamo_tokenizers::Encoding>> {
             Ok(vec![])
         }
     }
@@ -1458,14 +1458,14 @@ mod tests {
     struct CandidateDecoder;
 
     impl traits::Encoder for CandidateDecoder {
-        fn encode(&self, _input: &str) -> anyhow::Result<crate::tokenizers::Encoding> {
-            Ok(crate::tokenizers::Encoding::Sp(vec![]))
+        fn encode(&self, _input: &str) -> anyhow::Result<dynamo_tokenizers::Encoding> {
+            Ok(dynamo_tokenizers::Encoding::Sp(vec![]))
         }
 
         fn encode_batch(
             &self,
             _inputs: &[&str],
-        ) -> anyhow::Result<Vec<crate::tokenizers::Encoding>> {
+        ) -> anyhow::Result<Vec<dynamo_tokenizers::Encoding>> {
             Ok(vec![])
         }
     }
@@ -1509,7 +1509,7 @@ mod tests {
         }))
         .unwrap();
         let tokenizer: Arc<dyn traits::Tokenizer> =
-            Arc::new(crate::tokenizers::HuggingFaceTokenizer::from_tokenizer(hf));
+            Arc::new(dynamo_tokenizers::HuggingFaceTokenizer::from_tokenizer(hf));
 
         for boundary in ["length", "eof", "text", "hidden_token", "visible_token"] {
             for stop in [None, Some("a")] {
@@ -1816,7 +1816,7 @@ mod tests {
             .unwrap();
         let replacement_id = tokenizer.token_to_id("\u{fffd}suffix").unwrap();
         let tokenizer: Arc<dyn traits::Tokenizer> = Arc::new(
-            crate::tokenizers::HuggingFaceTokenizer::from_tokenizer(tokenizer),
+            dynamo_tokenizers::HuggingFaceTokenizer::from_tokenizer(tokenizer),
         );
         let backend = Backend::from_tokenizer(Tokenizer::from(tokenizer));
         // TinyLlama's byte-fallback IDs for E2 82 AC encode the euro sign together.
@@ -2290,7 +2290,7 @@ mod tests {
                     // include_stop_str_in_output alone must not expose EOS IDs;
                     // no_stop_trim must retain strings even when it is false.
                     let mut decoder = Decoder::new(
-                        crate::tokenizers::DecodeStream::new(tokenizer, &[], false),
+                        dynamo_tokenizers::DecodeStream::new(tokenizer, &[], false),
                         stops,
                         kind != "string",
                         no_stop_trim,
@@ -2353,7 +2353,7 @@ mod tests {
                     ..Default::default()
                 };
                 let mut decoder = Decoder::new(
-                    crate::tokenizers::DecodeStream::new(tokenizer, &[], false),
+                    dynamo_tokenizers::DecodeStream::new(tokenizer, &[], false),
                     stops,
                     false,
                     false,
@@ -2399,7 +2399,7 @@ mod tests {
     #[test]
     fn test_decoder_process_token_ids_propagates_decode_error() {
         let tokenizer: Arc<dyn traits::Tokenizer> = Arc::new(FailingDecoder);
-        let decode_stream = crate::tokenizers::DecodeStream::new(tokenizer, &[], false);
+        let decode_stream = dynamo_tokenizers::DecodeStream::new(tokenizer, &[], false);
         let stop_conditions = StopConditions::default();
 
         let mut decoder = Decoder::new(
@@ -2430,7 +2430,7 @@ mod tests {
     #[test]
     fn test_decoder_error_message_format_for_finish_reason() {
         let tokenizer: Arc<dyn traits::Tokenizer> = Arc::new(FailingDecoder);
-        let decode_stream = crate::tokenizers::DecodeStream::new(tokenizer, &[], false);
+        let decode_stream = dynamo_tokenizers::DecodeStream::new(tokenizer, &[], false);
         let stop_conditions = StopConditions::default();
 
         let mut decoder = Decoder::new(
@@ -2471,13 +2471,13 @@ mod tests {
     struct JailingTokenizer;
 
     impl traits::Encoder for JailingTokenizer {
-        fn encode(&self, _input: &str) -> anyhow::Result<crate::tokenizers::Encoding> {
-            Ok(crate::tokenizers::Encoding::Sp(vec![]))
+        fn encode(&self, _input: &str) -> anyhow::Result<dynamo_tokenizers::Encoding> {
+            Ok(dynamo_tokenizers::Encoding::Sp(vec![]))
         }
         fn encode_batch(
             &self,
             _inputs: &[&str],
-        ) -> anyhow::Result<Vec<crate::tokenizers::Encoding>> {
+        ) -> anyhow::Result<Vec<dynamo_tokenizers::Encoding>> {
             Ok(vec![])
         }
     }
@@ -2873,13 +2873,13 @@ mod tests {
     struct SingleOTokenizer;
 
     impl traits::Encoder for SingleOTokenizer {
-        fn encode(&self, _input: &str) -> anyhow::Result<crate::tokenizers::Encoding> {
-            Ok(crate::tokenizers::Encoding::Sp(vec![]))
+        fn encode(&self, _input: &str) -> anyhow::Result<dynamo_tokenizers::Encoding> {
+            Ok(dynamo_tokenizers::Encoding::Sp(vec![]))
         }
         fn encode_batch(
             &self,
             _inputs: &[&str],
-        ) -> anyhow::Result<Vec<crate::tokenizers::Encoding>> {
+        ) -> anyhow::Result<Vec<dynamo_tokenizers::Encoding>> {
             Ok(vec![])
         }
     }

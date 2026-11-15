@@ -16,8 +16,8 @@ use llm_multimodal::{ModelMetadata, ModelRegistry};
 use llm_tokenizer::traits::Tokenizer as ModelTokenizer;
 use llm_tokenizer::{Decoder, Encoder, Encoding, HuggingFaceTokenizer, SpecialTokens};
 
-use crate::tokenizers::traits::Tokenizer as RuntimeTokenizer;
 use dynamo_frontend_protocols::TokenIdType;
+use dynamo_tokenizers::traits::Tokenizer as RuntimeTokenizer;
 
 use super::{glm5_next, nemotron};
 

@@ -13,8 +13,8 @@ use super::{
     config::read_model_config,
     image::{ImagePromptKind, ImageRoutingBackend, ImageRoutingRuntime},
 };
-use crate::tokenizers::traits::Tokenizer;
 use dynamo_frontend_protocols::TokenIdType;
+use dynamo_tokenizers::traits::Tokenizer;
 
 pub(in crate::preprocessor) const MODEL_TYPE: &str = "NemotronH_Nano_Omni_Reasoning_V3";
 pub(in crate::preprocessor) const IMAGE_START: &str = "<img>";
@@ -685,13 +685,13 @@ fn json_usize(config: &serde_json::Value, path: &[&str]) -> Option<usize> {
 
 #[cfg(test)]
 mod tests {
-    use crate::tokenizers::{Encoding, traits::DecodeResult};
+    use dynamo_tokenizers::{Encoding, traits::DecodeResult};
 
     use super::*;
 
     struct VideoTokenizer;
 
-    impl crate::tokenizers::traits::Encoder for VideoTokenizer {
+    impl dynamo_tokenizers::traits::Encoder for VideoTokenizer {
         fn encode(&self, input: &str) -> anyhow::Result<Encoding> {
             let ids = match input {
                 VIDEO_CONTEXT_WITH_SEPARATOR => vec![1060, 24073, 1561],
@@ -713,7 +713,7 @@ mod tests {
         }
     }
 
-    impl crate::tokenizers::traits::Decoder for VideoTokenizer {
+    impl dynamo_tokenizers::traits::Decoder for VideoTokenizer {
         fn decode(
             &self,
             _token_ids: &[TokenIdType],

@@ -30,13 +30,13 @@ use dynamo_runtime::engine::{AsyncEngine, AsyncEngineContext, AsyncEngineContext
 use dynamo_runtime::pipeline::{Context as PipelineContext, Error, ManyOut, SingleIn};
 use dynamo_runtime::protocols::annotated::Annotated;
 
-use crate::tokenizers::traits::Tokenizer;
 use dynamo_frontend_protocols::common::llm_backend::{BackendOutput, PreprocessedRequest};
 use dynamo_frontend_protocols::common::{OutputOptions, SamplingOptions, StopConditions};
 use dynamo_frontend_protocols::openai::chat_completions::{
     NvCreateChatCompletionRequest, NvCreateChatCompletionStreamResponse,
 };
 use dynamo_renderer::{OAIChatLikeRequest, OAIPromptFormatter};
+use dynamo_tokenizers::traits::Tokenizer;
 
 /// Maximum asynchronous warmup lifetime after the client turn completes.
 /// Started synchronous preprocessing may outlive this deadline.
@@ -763,7 +763,7 @@ mod tests {
             "model": {"type": "BPE", "vocab": vocab, "merges": [], "byte_fallback": true}
         }))
         .unwrap();
-        Arc::new(crate::tokenizers::HuggingFaceTokenizer::from_tokenizer(hf))
+        Arc::new(dynamo_tokenizers::HuggingFaceTokenizer::from_tokenizer(hf))
     }
 
     #[tokio::test]
@@ -1175,8 +1175,8 @@ mod tests {
 
     #[tokio::test]
     async fn cancellation_during_tokenization_prevents_dispatch() {
-        use crate::tokenizers::traits::{Decoder, Encoder};
-        use crate::tokenizers::{DecodeResult, EncodeSegment, Encoding};
+        use dynamo_tokenizers::traits::{Decoder, Encoder};
+        use dynamo_tokenizers::{DecodeResult, EncodeSegment, Encoding};
 
         struct BlockingTokenizer {
             inner: Arc<dyn Tokenizer>,

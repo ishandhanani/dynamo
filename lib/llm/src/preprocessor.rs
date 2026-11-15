@@ -63,7 +63,6 @@ use tracing::{self, Instrument};
 #[cfg(feature = "mm-routing")]
 use crate::preprocessor::media::MediaFetcherPolicy;
 use crate::preprocessor::media::{MediaLoader, max_data_url_bytes};
-use crate::tokenizers::Encoding;
 use dynamo_frontend_protocols::common::preprocessor::{
     MultimodalData, MultimodalDataMap, MultimodalItemRef, MultimodalUuidMap,
     PreprocessedRequestBuilder, RoutingHints,
@@ -85,6 +84,7 @@ use dynamo_model_card::media_config::MediaFetcher;
 #[cfg(feature = "mm-routing")]
 use dynamo_model_card::model_card::ModelInfoType;
 use dynamo_model_card::model_card::{ModelDeploymentCard, ModelInfo, PromptFormatterArtifact};
+use dynamo_tokenizers::Encoding;
 
 use dynamo_parsers::{
     ReasoningParser, ReasoningParserType, reasoning::ParserResult,
@@ -96,7 +96,6 @@ use dynamo_runtime::pipeline::{
 };
 use dynamo_runtime::protocols::annotated::{Annotated, AnnotationsProvider};
 
-use crate::tokenizers::traits::Tokenizer;
 use dynamo_frontend_protocols::{
     TokenIdType,
     common::{
@@ -116,6 +115,7 @@ use dynamo_frontend_protocols::{
         embeddings::{NvCreateEmbeddingRequest, NvCreateEmbeddingResponse},
     },
 };
+use dynamo_tokenizers::traits::Tokenizer;
 
 use crate::preprocessor::prompt::{
     MediaRequestExt, apply_continue_final_message, prompt_formatter_from_mdc,
@@ -1147,7 +1147,7 @@ fn encode_routing_segment(
     text: &str,
     allow_special: bool,
 ) -> Result<Vec<TokenIdType>> {
-    let segment = crate::tokenizers::EncodeSegment::new(text, allow_special);
+    let segment = dynamo_tokenizers::EncodeSegment::new(text, allow_special);
     Ok(tokenizer.encode_segments(&[segment])?.token_ids().to_vec())
 }
 
@@ -1985,7 +1985,7 @@ impl EmbeddingTokenizerState {
         }
 
         let initialized = self.model_card.embedding_tokenizer_with_options(
-            crate::tokenizers::TokenizerOptions { add_special_tokens },
+            dynamo_tokenizers::TokenizerOptions { add_special_tokens },
         )?;
         let initialized: Arc<dyn Tokenizer> = (*initialized).clone();
         Ok(tokenizer.get_or_init(|| initialized).clone())
@@ -2909,7 +2909,7 @@ impl OpenAIPreprocessor {
 
     pub(crate) fn new_for_completions(
         mdc: ModelDeploymentCard,
-        tokenizer: crate::tokenizers::Tokenizer,
+        tokenizer: dynamo_tokenizers::Tokenizer,
     ) -> Result<Arc<Self>> {
         let PromptFormatter::OAI(formatter) = PromptFormatter::no_op();
         Self::new_with_parts_inner(mdc, formatter, tokenizer, None, None, false)
@@ -2918,7 +2918,7 @@ impl OpenAIPreprocessor {
     pub fn new_with_parts(
         mdc: ModelDeploymentCard,
         formatter: Arc<dyn OAIPromptFormatter>,
-        tokenizer: crate::tokenizers::Tokenizer,
+        tokenizer: dynamo_tokenizers::Tokenizer,
     ) -> Result<Arc<Self>> {
         Self::new_with_parts_and_cancel(mdc, formatter, tokenizer, None)
     }
@@ -2927,7 +2927,7 @@ impl OpenAIPreprocessor {
     pub fn new_with_parts_and_cancel(
         mdc: ModelDeploymentCard,
         formatter: Arc<dyn OAIPromptFormatter>,
-        tokenizer: crate::tokenizers::Tokenizer,
+        tokenizer: dynamo_tokenizers::Tokenizer,
         speculative_prefill_cancel: Option<CancellationToken>,
     ) -> Result<Arc<Self>> {
         Self::new_with_parts_inner(
@@ -2943,7 +2943,7 @@ impl OpenAIPreprocessor {
     fn new_with_parts_inner(
         mdc: ModelDeploymentCard,
         formatter: Arc<dyn OAIPromptFormatter>,
-        tokenizer: crate::tokenizers::Tokenizer,
+        tokenizer: dynamo_tokenizers::Tokenizer,
         embedding_tokenizers: Option<EmbeddingTokenizerState>,
         speculative_prefill_cancel: Option<CancellationToken>,
         validate_chat_parsers: bool,
@@ -11548,7 +11548,7 @@ mod tests {
 
     struct SystemOneCountingTokenizer(Arc<std::sync::atomic::AtomicUsize>);
 
-    impl crate::tokenizers::traits::Encoder for SystemOneCountingTokenizer {
+    impl dynamo_tokenizers::traits::Encoder for SystemOneCountingTokenizer {
         fn encode(&self, input: &str) -> anyhow::Result<Encoding> {
             self.0.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             Ok(Encoding::Sp(input.bytes().map(u32::from).collect()))
@@ -11559,13 +11559,13 @@ mod tests {
         }
     }
 
-    impl crate::tokenizers::traits::Decoder for SystemOneCountingTokenizer {
+    impl dynamo_tokenizers::traits::Decoder for SystemOneCountingTokenizer {
         fn decode(
             &self,
             _token_ids: &[TokenIdType],
             _skip_special_tokens: bool,
-        ) -> anyhow::Result<crate::tokenizers::traits::DecodeResult> {
-            Ok(crate::tokenizers::traits::DecodeResult::Complete(
+        ) -> anyhow::Result<dynamo_tokenizers::traits::DecodeResult> {
+            Ok(dynamo_tokenizers::traits::DecodeResult::Complete(
                 String::new(),
             ))
         }
@@ -13166,7 +13166,7 @@ responses_tools: None,
 
     struct HiddenStopTokenizer;
 
-    impl crate::tokenizers::traits::Encoder for HiddenStopTokenizer {
+    impl dynamo_tokenizers::traits::Encoder for HiddenStopTokenizer {
         fn encode(&self, input: &str) -> anyhow::Result<Encoding> {
             match input {
                 "<|call|>" => Ok(Encoding::Sp(vec![HARMONY_CALL_TOKEN_ID])),
@@ -13180,13 +13180,13 @@ responses_tools: None,
         }
     }
 
-    impl crate::tokenizers::traits::Decoder for HiddenStopTokenizer {
+    impl dynamo_tokenizers::traits::Decoder for HiddenStopTokenizer {
         fn decode(
             &self,
             _token_ids: &[TokenIdType],
             _skip_special_tokens: bool,
-        ) -> anyhow::Result<crate::tokenizers::traits::DecodeResult> {
-            Ok(crate::tokenizers::traits::DecodeResult::Complete(
+        ) -> anyhow::Result<dynamo_tokenizers::traits::DecodeResult> {
+            Ok(dynamo_tokenizers::traits::DecodeResult::Complete(
                 String::new(),
             ))
         }
@@ -13632,7 +13632,7 @@ responses_tools: None,
     }
 
     #[cfg(feature = "mm-routing")]
-    impl crate::tokenizers::traits::Encoder for RoutingTestTokenizer {
+    impl dynamo_tokenizers::traits::Encoder for RoutingTestTokenizer {
         fn encode(&self, input: &str) -> anyhow::Result<Encoding> {
             let ids = match input {
                 "<image>" => vec![18],
@@ -13649,7 +13649,7 @@ responses_tools: None,
 
         fn encode_segments(
             &self,
-            segments: &[crate::tokenizers::EncodeSegment<'_>],
+            segments: &[dynamo_tokenizers::EncodeSegment<'_>],
         ) -> anyhow::Result<Encoding> {
             let mut ids = Vec::new();
             for segment in segments {
@@ -13679,13 +13679,13 @@ responses_tools: None,
     }
 
     #[cfg(feature = "mm-routing")]
-    impl crate::tokenizers::traits::Decoder for RoutingTestTokenizer {
+    impl dynamo_tokenizers::traits::Decoder for RoutingTestTokenizer {
         fn decode(
             &self,
             _token_ids: &[TokenIdType],
             _skip_special_tokens: bool,
-        ) -> anyhow::Result<crate::tokenizers::traits::DecodeResult> {
-            Ok(crate::tokenizers::traits::DecodeResult::Complete(
+        ) -> anyhow::Result<dynamo_tokenizers::traits::DecodeResult> {
+            Ok(dynamo_tokenizers::traits::DecodeResult::Complete(
                 String::new(),
             ))
         }

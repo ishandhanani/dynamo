@@ -299,7 +299,7 @@ pub fn prompt_formatter_from_mdc(mdc: &ModelDeploymentCard) -> Result<PromptForm
                 )
             })?;
             let mut config: ChatTemplate = serde_json::from_str(&contents).inspect_err(|err| {
-                crate::log_json_err(&file.display().to_string(), &contents, err)
+                dynamo_tokenizers::log_json_err(&file.display().to_string(), &contents, err)
             })?;
 
             // Some HF models (e.g. Llama-4-Maverick) store the chat template in a
