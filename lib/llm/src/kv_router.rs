@@ -8,7 +8,7 @@ use std::{
 };
 
 use anyhow::Result;
-use dynamo_kv_events::event::{KV_EVENT_SUBJECT, RouterEvent};
+use dynamo_kv_events::event::RouterEvent;
 use dynamo_kv_hashing::multimodal::BlockExtraInfo;
 use dynamo_kv_hashing::routing::{BlockHashOptions, TokensWithHashes, compute_block_hash_for_seq};
 use dynamo_kv_hints::KvHint;
@@ -496,9 +496,6 @@ fn cache_hit_for_worker(
             .unwrap_or(0.0),
     }
 }
-
-// for worker-local kvindexer query
-pub const WORKER_KV_INDEXER_BUFFER_SIZE: usize = 1024; // store 1024 most recent events in worker buffer
 
 /// Context marking a router's refusal of an unknown policy class when the request enters its
 /// class. It wraps the unchanged `DynamoError` and displays as it, so hosts see the same class,

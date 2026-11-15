@@ -162,7 +162,7 @@ A log statement that does not pin a target reports its module path, so its targe
 | `dynamo_llm::discovery::runtime_configs` | `dynamo_sync::runtime_configs` |
 | `dynamo_llm::{direct_zmq_fan_in, direct_zmq_sub_pool}` | `dynamo_sync::{direct_zmq_fan_in, direct_zmq_sub_pool}` |
 
-Statements that pin a target keep it: the request-trace sinks still log under `dynamo_llm::request_trace`.
+Statements that pin a target keep it: the request-trace sinks still log under `dynamo_llm::request_trace`. Removed with no replacement: `kv_router::WORKER_KV_INDEXER_BUFFER_SIZE`, which is now private to the KV event publisher.
 
   > **Migrate:** Replace each `dynamo_llm::<pre-split path>` import with the owner path from the first table and add the owner crate to your `Cargo.toml`. A `DYN_LOG` filter scoped to `dynamo_llm` or to one of its modules must name the new crate from the second table. There is no runtime alias, so the old directive no longer selects the moved statements.
 

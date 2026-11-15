@@ -8,7 +8,7 @@ use anyhow::Result;
 use tokio::sync::{mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
 
-use dynamo_kv_events::event::KvCacheEvent;
+use dynamo_kv_events::event::{KV_EVENT_SUBJECT, KvCacheEvent};
 #[cfg(test)]
 use dynamo_kv_events::event::{
     KvCacheEventData, KvCacheRemoveData, KvCacheStoreData, KvCacheStoredBlockData, RouterEvent,
@@ -34,9 +34,6 @@ use dynamo_runtime::discovery::{DiscoverySpec, EventScope};
 use dynamo_runtime::protocols::EndpointId;
 use dynamo_runtime::traits::DistributedRuntimeProvider;
 
-use crate::kv_router::{
-    KV_EVENT_SUBJECT, WORKER_KV_INDEXER_BUFFER_SIZE, metrics::KvPublisherMetrics,
-};
 use dynamo_sync::indexer::start_worker_kv_query_endpoint;
 use dynamo_sync::membership::KvEventSource as DiscoveredKvEventSource;
 
@@ -44,6 +41,7 @@ mod attachment_owner;
 mod batching;
 mod dedup;
 mod event_processor;
+mod metrics;
 mod multimodal_embedding_cache;
 mod sinks;
 mod state_agent;
@@ -63,6 +61,7 @@ pub use dynamo_sync::membership::kv_state_agent::KvStateIngressProtocol;
 #[cfg(test)]
 use event_processor::run_event_processor_loop;
 use event_processor::start_event_processor;
+use metrics::KvPublisherMetrics;
 pub use multimodal_embedding_cache::MultimodalEmbeddingCachePublisher;
 use sinks::EventPlanePublisher;
 pub use state_agent::{
@@ -76,6 +75,8 @@ pub use state_agent_host::{
 pub use worker_metrics::WorkerMetricsPublisher;
 use zmq_listener::start_zmq_listener;
 
+/// Events the worker-local KV indexer keeps for router queries (the most recent ones).
+const WORKER_KV_INDEXER_BUFFER_SIZE: usize = 1024;
 const MAX_BATCHING_TIMEOUT_MS: u64 = 15_000;
 pub const DEFAULT_BATCHING_TIMEOUT_MS: Option<u64> = None;
 const DEFAULT_MAX_BATCH_BLOCKS: usize = 128;
