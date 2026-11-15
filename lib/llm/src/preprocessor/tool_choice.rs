@@ -8,7 +8,8 @@ use std::borrow::Cow;
 use crate::preprocessor::structural_tag::{
     SelectedStructuralTagBuilder, requires_native_tool_call_format,
 };
-use crate::preprocessor::{OpenAIPreprocessor, PreprocessedRequest, PromptReasoningPrefill};
+use crate::preprocessor::{OpenAIPreprocessor, PromptReasoningPrefill};
+use crate::protocols::common::preprocessor::PreprocessedRequest;
 use crate::protocols::openai::chat_completions::NvCreateChatCompletionRequest;
 use crate::protocols::openai::chat_completions::tool_parser_v2::is_beam_parser;
 use crate::protocols::openai::common_ext::CommonExtProvider;
