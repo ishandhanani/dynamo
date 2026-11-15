@@ -21,10 +21,10 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
-use dynamo_llm::kv_router::publisher::WorkerMetricsPublisher;
 use parking_lot::Mutex;
 
 use crate::engine::ComponentSnapshot;
+use crate::kv_publisher::WorkerMetricsPublisher;
 use crate::metrics::ComponentGauges;
 
 /// Fan-out target for per-rank `ComponentSnapshot` writes from engine

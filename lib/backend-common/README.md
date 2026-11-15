@@ -399,6 +399,12 @@ lib/backend-common/
         run.rs           # `pub fn run(engine, config) -> anyhow::Result<()>`
         adapter.rs       # EngineAdapter — bridges LLMEngine to AsyncEngine;
                          #   cancellation monitor + debug stream validator
+        admission_gate.rs  # WorkerAdmissionGate + AdmissionEngine: one admission
+        admission_gate/    #   gate per backend worker, in front of the engine
+        first_token.rs   # FirstTokenSource / FirstTokenNotifier
+        kv_publisher/    # KvEventPublisher, WorkerMetricsPublisher, ZMQ listener
+                         #   and recovery, KV state agent (see its AGENTS.md)
+        fpm_publisher.rs # FpmEventRelay / FpmDirectPublisher (forward-pass metrics)
         args.rs          # CommonArgs — shared CLI flags every engine flattens
         disagg.rs        # DisaggregationMode enum + clap value-parser
         error.rs         # Re-exports DynamoError / ErrorType / BackendError

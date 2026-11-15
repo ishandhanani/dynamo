@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright (c) 2024-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-use dynamo_llm::admission_gate::WorkerAdmissionGate;
+use dynamo_backend_common::admission_gate::WorkerAdmissionGate;
 use dynamo_model_card::local_model::{
     LocalModel, register_model_card, update_model_taints as update_model_taints_rs,
 };
@@ -1125,7 +1125,7 @@ struct Endpoint {
 #[pyclass(name = "FirstTokenSource")]
 #[derive(Clone)]
 struct PyFirstTokenSource {
-    inner: llm_rs::first_token::FirstTokenSource,
+    inner: dynamo_backend_common::first_token::FirstTokenSource,
 }
 
 #[pymethods]
@@ -1724,9 +1724,12 @@ impl Endpoint {
         let endpoint = self.inner.clone();
         crate::future_into_py(py, async move {
             Ok(
-                llm_rs::first_token::FirstTokenSource::for_endpoint(&endpoint, worker_type.into())
-                    .await
-                    .map(|inner| PyFirstTokenSource { inner }),
+                dynamo_backend_common::first_token::FirstTokenSource::for_endpoint(
+                    &endpoint,
+                    worker_type.into(),
+                )
+                .await
+                .map(|inner| PyFirstTokenSource { inner }),
             )
         })
     }

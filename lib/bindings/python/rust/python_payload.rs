@@ -6,7 +6,7 @@ use std::sync::OnceLock;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use bytes::Bytes;
-use dynamo_llm::admission_gate::{AdmissionRequest, AdmissionResponse, ResponseOutput};
+use dynamo_backend_common::admission_gate::{AdmissionRequest, AdmissionResponse, ResponseOutput};
 use dynamo_runtime::dynamo_nvtx_range;
 use dynamo_runtime::pipeline::PipelineError;
 use dynamo_runtime::pipeline::network::{
@@ -883,7 +883,7 @@ mod tests {
     // `accepted` once the stream has it.
 
     use super::WaitClassification;
-    use dynamo_llm::admission_gate::ResponseOutput;
+    use dynamo_backend_common::admission_gate::ResponseOutput;
 
     const INTERIM: ResponseOutput = ResponseOutput::INTERIM;
     const TOKEN: ResponseOutput = ResponseOutput {

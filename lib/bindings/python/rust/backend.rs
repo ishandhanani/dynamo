@@ -19,6 +19,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex as StdMutex};
 
 use async_trait::async_trait;
+use dynamo_backend_common::admission_gate::WorkerAdmissionGate;
 use dynamo_backend_common::{
     AsyncEngineContext, BackendError, ComponentSnapshot,
     DisaggregationMode as RsDisaggregationMode, DynamoError, EngineConfig as RsEngineConfig,
@@ -27,7 +28,6 @@ use dynamo_backend_common::{
     PreprocessedRequest, RawEngine, RuntimeConfig as RsRuntimeConfig,
     SnapshotPublisher as RsSnapshotPublisher, Worker as RsWorker, WorkerConfig as RsWorkerConfig,
 };
-use dynamo_llm::admission_gate::WorkerAdmissionGate;
 use dynamo_model_card::local_model::runtime_config::StructuralTagConfig as RsStructuralTagConfig;
 use dynamo_model_card::model_type::ModelInput as RsModelInput;
 use dynamo_runtime as rs;

@@ -36,7 +36,7 @@ use tokio_stream::{Stream, StreamExt, wrappers::ReceiverStream};
 
 use tokio::sync::mpsc;
 
-use dynamo_llm::admission_gate::{
+use dynamo_backend_common::admission_gate::{
     AdmissionRequest, AdmissionResponse, ResponseOutput, WorkerAdmissionGate,
 };
 use dynamo_runtime::engine::AsyncEngineContext;
@@ -1203,7 +1203,7 @@ mod tests {
     #[test]
     fn a_producer_ahead_of_the_gate_keeps_the_decisive_frame_classified() {
         use crate::python_payload::WaitClassification;
-        use dynamo_llm::admission_gate::AdmissionResponse;
+        use dynamo_backend_common::admission_gate::AdmissionResponse;
 
         let token = ResponseOutput {
             generated_token: true,

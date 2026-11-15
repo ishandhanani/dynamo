@@ -80,7 +80,7 @@ impl FirstTokenSource {
         Self::from_publisher_result_with_metrics(worker_id, publisher, metrics)
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "testing"))]
     pub fn from_publisher(
         publisher: ActiveSequenceEventPublisher,
         worker_id: u64,

@@ -30,6 +30,7 @@ crate-type = ["cdylib", "staticlib"]
 cbindgen = "0.27"
 
 [dependencies]
+dynamo-backend-common = { path = "../../backend-common" }
 dynamo-kv-events = { path = "../../kv-events" }
 dynamo-kv-hashing = { path = "../../kv-hashing" }
 dynamo-runtime = { path = "../../runtime" }

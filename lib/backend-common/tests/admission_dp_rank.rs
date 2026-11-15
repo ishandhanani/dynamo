@@ -27,7 +27,7 @@ use async_trait::async_trait;
 use futures::StreamExt;
 use serde::{Deserialize, Serialize};
 
-use dynamo_llm::admission_gate::{
+use dynamo_backend_common::admission_gate::{
     AdmissionEngine, AdmissionRequest, AdmissionResponse, ResponseOutput, WorkerAdmissionGate,
 };
 use dynamo_runtime::{

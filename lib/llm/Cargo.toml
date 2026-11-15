@@ -60,6 +60,7 @@ required-features = ["request-trace-bench"]
 dynamo-router-policies = { workspace = true }
 dynamo-frontend-protocols = { workspace = true }
 # repo
+dynamo-backend-common = { workspace = true }
 dynamo-http-server = { workspace = true }
 dynamo-global-discovery-client = { workspace = true }
 dynamo-admission = { workspace = true }
@@ -200,6 +201,7 @@ rmp-serde = "1.3"
 sysinfo = { workspace = true }
 
 [dev-dependencies]
+dynamo-backend-common = { workspace = true, features = ["testing"] }
 dynamo-frontend-protocols = { workspace = true, features = ["testing"] }
 dynamo-preprocessor = { workspace = true, features = ["testing"] }
 dynamo-sync = { workspace = true, features = ["testing"] }

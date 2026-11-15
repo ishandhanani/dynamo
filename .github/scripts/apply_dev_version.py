@@ -48,8 +48,8 @@ SUBCRATE_CARGO_TARGETS = [
     "lib/bindings/python/codegen/Cargo.toml",
 ]
 
-# Direct path deps on workspace crates, e.g. backend-common's
-# `dynamo-llm = { path = "../llm", default-features = false }` (cargo cannot
+# Direct path deps on workspace crates, e.g. the TRT-LLM sidecar's
+# `dynamo-llm = { path = "../../llm", default-features = false }` (cargo cannot
 # express `workspace = true` + `default-features = false`). Main keeps them
 # BARE; `cargo publish` needs a version on each. There is NO hand-kept list:
 # workspace_pin_manifests() discovers every publishable root-workspace member,
@@ -626,7 +626,7 @@ def set_release_version(
     for rel in SUBCRATE_CARGO_TARGETS:
         if _exists(rel):
             _require(rel, set_cargo(root / rel, old, semver), semver)
-    # Workspace-version path-dep pins (e.g. backend-common's dynamo-llm). Main
+    # Workspace-version path-dep pins (e.g. the TRT-LLM sidecar's dynamo-llm). Main
     # keeps these BARE; the release cut stamps them so the release branch's
     # cargo publish (crates.io GA) works. Discovered, not listed.
     for p in workspace_pin_manifests(root):

@@ -61,12 +61,12 @@ use dynamo_model_card::router_config::LoadThresholdConfig as RsLoadThresholdConf
 use dynamo_router_host::RoutingHost;
 type RsRoutingHost = RoutingHost;
 type RsManagedKvRouter = dynamo_router_host::ManagedKvRouter;
+use dynamo_backend_common::kv_publisher::{KvEventSourceConfig, create_stored_blocks};
 use dynamo_frontend_protocols::common::timing::RequestTracker;
 use dynamo_frontend_protocols::common::{OutputOptions, SamplingOptions, StopConditions};
 use dynamo_router_host::session_affinity::{
     MAX_SESSION_AFFINITY_TTL_SECS, SessionAffinityMode as RsSessionAffinityMode,
 };
-use llm_rs::kv_router::publisher::{KvEventSourceConfig, create_stored_blocks};
 
 use super::ais_callback::create_ais_prefill_load_estimator;
 use super::entrypoint::AisPerfConfig;
@@ -1168,7 +1168,7 @@ pub fn compute_block_hash_for_seq_py(
 
 #[pyclass]
 pub(crate) struct WorkerMetricsPublisher {
-    inner: Arc<llm_rs::kv_router::publisher::WorkerMetricsPublisher>,
+    inner: Arc<dynamo_backend_common::kv_publisher::WorkerMetricsPublisher>,
 }
 
 #[pymethods]
@@ -1176,7 +1176,7 @@ impl WorkerMetricsPublisher {
     #[new]
     fn new() -> PyResult<Self> {
         let inner =
-            llm_rs::kv_router::publisher::WorkerMetricsPublisher::new().map_err(to_pyerr)?;
+            dynamo_backend_common::kv_publisher::WorkerMetricsPublisher::new().map_err(to_pyerr)?;
         Ok(Self {
             inner: inner.into(),
         })
@@ -1220,14 +1220,14 @@ impl WorkerMetricsPublisher {
 
 #[pyclass]
 pub(crate) struct MultimodalEmbeddingCachePublisher {
-    inner: Arc<llm_rs::kv_router::publisher::MultimodalEmbeddingCachePublisher>,
+    inner: Arc<dynamo_backend_common::kv_publisher::MultimodalEmbeddingCachePublisher>,
 }
 
 #[pymethods]
 impl MultimodalEmbeddingCachePublisher {
     #[new]
     fn new() -> Self {
-        let inner = llm_rs::kv_router::publisher::MultimodalEmbeddingCachePublisher::new();
+        let inner = dynamo_backend_common::kv_publisher::MultimodalEmbeddingCachePublisher::new();
         Self {
             inner: inner.into(),
         }
@@ -1260,7 +1260,7 @@ impl MultimodalEmbeddingCachePublisher {
 
 #[pyclass]
 pub(crate) struct KvEventPublisher {
-    inner: Arc<llm_rs::kv_router::publisher::KvEventPublisher>,
+    inner: Arc<dynamo_backend_common::kv_publisher::KvEventPublisher>,
     kv_block_size: usize,
     dp_rank: DpRank,
     warning_count: Arc<AtomicU32>,
@@ -1299,7 +1299,7 @@ impl KvEventPublisher {
     /// engine without going through the Python-side `__init__` (which
     /// requires an `Endpoint` and rebuilds the publisher from scratch).
     pub(crate) fn from_arc(
-        inner: Arc<llm_rs::kv_router::publisher::KvEventPublisher>,
+        inner: Arc<dynamo_backend_common::kv_publisher::KvEventPublisher>,
         dp_rank: DpRank,
     ) -> Self {
         let kv_block_size = inner.kv_block_size() as usize;
@@ -1400,7 +1400,7 @@ impl KvEventPublisher {
     ///         so every event token at or above 1,000,000 is excluded from the
     ///         index. Otherwise only values that do not fit in 32 bits are.
     #[new]
-    #[pyo3(signature = (endpoint, worker_id=None, kv_block_size=0, dp_rank=0, enable_local_indexer=false, zmq_endpoint=None, zmq_topic=None, batching_timeout_ms=llm_rs::kv_router::publisher::DEFAULT_BATCHING_TIMEOUT_MS, image_token_id=None, kv_state_endpoint=None, video_token_id=None, engine_owned_mm_identity=false))]
+    #[pyo3(signature = (endpoint, worker_id=None, kv_block_size=0, dp_rank=0, enable_local_indexer=false, zmq_endpoint=None, zmq_topic=None, batching_timeout_ms=dynamo_backend_common::kv_publisher::DEFAULT_BATCHING_TIMEOUT_MS, image_token_id=None, kv_state_endpoint=None, video_token_id=None, engine_owned_mm_identity=false))]
     #[allow(clippy::too_many_arguments)]
     fn new(
         endpoint: Endpoint,
@@ -1432,7 +1432,7 @@ impl KvEventPublisher {
         }
 
         let inner =
-            llm_rs::kv_router::publisher::KvEventPublisher::new_with_local_indexer_and_worker_id_at(
+            dynamo_backend_common::kv_publisher::KvEventPublisher::new_with_local_indexer_and_worker_id_at(
                 endpoint.inner.clone(),
                 kv_state_endpoint
                     .as_deref()

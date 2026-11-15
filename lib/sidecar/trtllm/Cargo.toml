@@ -12,8 +12,10 @@ repository.workspace = true
 description = "Dynamo TensorRT-LLM sidecar backend — drives an out-of-process TensorRT-LLM engine over its OpenEngine gRPC service through the backend-common LLMEngine trait."
 
 [package.metadata.cargo-machete]
-# Referenced by protobuf code generated into OUT_DIR.
-ignored = ["prost", "prost-types"]
+# prost, prost-types: referenced by protobuf code generated into OUT_DIR.
+# dynamo-llm: no source names it since the KV event publisher moved to
+# dynamo-backend-common; the `mm-routing` feature below still forwards to it.
+ignored = ["prost", "prost-types", "dynamo-llm"]
 
 [[bin]]
 name = "dynamo-trtllm-sidecar"
