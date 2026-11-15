@@ -20,9 +20,9 @@ pub mod mm_routing;
 mod glm5_next_tests;
 pub mod prompt;
 pub mod speculative_prefill;
-pub(crate) mod structural_tag;
+pub mod structural_tag;
 pub use structural_tag::structural_tag_parser_names;
-pub(crate) mod tool_choice;
+pub mod tool_choice;
 pub mod tools;
 use anyhow::Context;
 use anyhow::{Result, bail};
@@ -152,27 +152,27 @@ fn routing_priorities(hints: Option<&AgentHints>) -> (Option<f64>, Option<u32>, 
 
 #[derive(Debug, thiserror::Error)]
 #[error("prompt has {tokens} tokens but the remaining System One prompt limit is {limit}")]
-pub(crate) struct SystemOnePromptTooLong {
+pub struct SystemOnePromptTooLong {
     pub(crate) tokens: usize,
     pub(crate) limit: usize,
 }
 
 #[derive(Debug, thiserror::Error)]
 #[error("prompt validation needs {bytes} encoded text bytes; the remaining limit is {limit}")]
-pub(crate) struct SystemOneEncodingTooLarge {
+pub struct SystemOneEncodingTooLarge {
     pub(crate) bytes: usize,
     pub(crate) limit: usize,
 }
 
 #[derive(Debug, thiserror::Error)]
 #[error("{0}")]
-pub(crate) struct SystemOneModelIncompatible(pub(crate) &'static str);
+pub struct SystemOneModelIncompatible(pub &'static str);
 
 #[derive(Debug, thiserror::Error)]
 #[error(
     "model tokenizer supports only the first {validated_candidates} of {requested_candidates} candidate labels for this request as distinct single tokens at the answer position; reduce candidates or select another model"
 )]
-pub(crate) struct SystemOneCandidateLabelsIncompatible {
+pub struct SystemOneCandidateLabelsIncompatible {
     pub(crate) validated_candidates: usize,
     pub(crate) requested_candidates: usize,
 }
@@ -492,7 +492,7 @@ fn multimodal_content_parts(
 /// Media content types (`audio_url`, `input_audio`, `image_url`, `video_url`) carried by any
 /// message of a chat request, current turn or history, in sorted order. Empty
 /// for a text-only request.
-pub(crate) fn request_media_content_types(
+pub fn request_media_content_types(
     messages: &[ChatCompletionRequestMessage],
 ) -> std::collections::BTreeSet<&'static str> {
     messages
@@ -517,7 +517,7 @@ fn image_content_part_url(
 /// vector. The byte length must be a multiple of 4; trailing bytes are
 /// rejected. Shared by the tokens-path postprocessor and the HTTP embedding
 /// handler, which converts leftover Base64 payloads to Float when requested.
-pub(crate) fn decode_base64_to_floats(encoded: &str) -> Result<Vec<f32>, String> {
+pub fn decode_base64_to_floats(encoded: &str) -> Result<Vec<f32>, String> {
     use base64::{Engine as _, engine::general_purpose::STANDARD};
     let bytes = STANDARD
         .decode(encoded)
@@ -629,7 +629,7 @@ mod embedding_base64_transport_tests {
 
 pub const ANNOTATION_FORMATTED_PROMPT: &str = "formatted_prompt";
 pub const ANNOTATION_TOKEN_IDS: &str = "token_ids";
-pub(crate) const DEFAULT_THINKING_MODE_RUNTIME_KEY: &str = "default_thinking_mode";
+pub const DEFAULT_THINKING_MODE_RUNTIME_KEY: &str = "default_thinking_mode";
 
 /// Drain a standalone router's forwarded `routing_data` onto this request's tracker so the
 /// frontend's timing/worker/token surfaces populate, then drop the field to keep it off the
@@ -1652,9 +1652,8 @@ static DIM_FETCH_HTTP_CLIENT: std::sync::LazyLock<reqwest::Client> =
             .expect("dim-fetch http client construction failed")
     });
 
-pub(crate) const PRESERVE_OMITTED_MAX_TOKENS_CONTEXT_KEY: &str =
-    "dynamo.llm.preserve_omitted_max_tokens";
-pub(crate) const REQUEST_PARSING_OPTIONS_CONTEXT_KEY: &str = "dynamo.llm.request_parsing_options";
+pub const PRESERVE_OMITTED_MAX_TOKENS_CONTEXT_KEY: &str = "dynamo.llm.preserve_omitted_max_tokens";
+pub const REQUEST_PARSING_OPTIONS_CONTEXT_KEY: &str = "dynamo.llm.request_parsing_options";
 
 const EMBEDDING_ADD_SPECIAL_TOKENS_ENV: &str = "DYN_EMBEDDING_TOKENIZATION_ADD_SPECIAL_TOKENS";
 
@@ -2067,7 +2066,7 @@ pub struct OpenAIPreprocessor {
     routing_prepend_bos: Option<dynamo_frontend_protocols::TokenIdType>,
 }
 
-pub(crate) const LORA_NAME_CONTEXT_KEY: &str = "discovery.lora_name";
+pub const LORA_NAME_CONTEXT_KEY: &str = "discovery.lora_name";
 
 /// Exclusive bound for client token ids: the larger of the model's vocab size
 /// and the tokenizer's largest id plus one, so ids that only the model or only
@@ -2544,7 +2543,7 @@ impl OpenAIPreprocessor {
         Ok(())
     }
 
-    pub(crate) fn has_structured_response_format<R: OAIChatLikeRequest>(request: &R) -> bool {
+    pub fn has_structured_response_format<R: OAIChatLikeRequest>(request: &R) -> bool {
         request.response_format().is_some_and(|format| {
             format
                 .get_attr("type")
@@ -2907,7 +2906,7 @@ impl OpenAIPreprocessor {
         )
     }
 
-    pub(crate) fn new_for_completions(
+    pub fn new_for_completions(
         mdc: ModelDeploymentCard,
         tokenizer: dynamo_tokenizers::Tokenizer,
     ) -> Result<Arc<Self>> {
@@ -3376,7 +3375,7 @@ impl OpenAIPreprocessor {
     /// Render a System One question through the model's normal chat template and resolve
     /// candidate labels that each add exactly one distinct token at the answer position.
     /// Reject over-budget prompts before repeating tokenization for candidate labels.
-    pub(crate) fn render_systemone_question(
+    pub fn render_systemone_question(
         &self,
         model: &str,
         content: &str,
@@ -7323,7 +7322,7 @@ impl OpenAIPreprocessor {
     /// `enable_thinking` is intentionally not consulted here: when thinking is
     /// off, reasoning parsing is disabled, so `reasoning_content` is always empty
     /// and the move is vacuous rather than suppressed.
-    pub(crate) fn wants_reasoning_as_content_when_empty(
+    pub fn wants_reasoning_as_content_when_empty(
         chat_template_args: Option<&std::collections::HashMap<String, serde_json::Value>>,
     ) -> bool {
         chat_template_args.is_some_and(|args| {
@@ -7357,7 +7356,7 @@ impl OpenAIPreprocessor {
     /// and may withhold output. This is conservative in the same direction as
     /// the guided-JSON gap: a template that does close the prompt gets extra
     /// comment frames on an opt-in path.
-    pub(crate) fn stream_can_defer_all_output(
+    pub fn stream_can_defer_all_output(
         tool_call_parser: Option<&str>,
         reasoning_parser: Option<&str>,
         chat_template_args: Option<&std::collections::HashMap<String, serde_json::Value>>,
@@ -7652,7 +7651,7 @@ impl OpenAIPreprocessor {
     /// For MiniMax M3: disabled when chat_template_args contains
     ///   "thinking_mode": "disabled", matching SGLang's MiniMax M3 request
     ///   convention.
-    pub(crate) fn request_disables_reasoning_with_family(
+    pub fn request_disables_reasoning_with_family(
         request: &NvCreateChatCompletionRequest,
         tool_parser: Option<&str>,
         reasoning_parser: Option<&str>,

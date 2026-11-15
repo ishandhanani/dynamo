@@ -46,7 +46,7 @@ impl OpenAIPreprocessor {
     /// Kimi-style dynamic declarations carried by system messages.
     /// Assistant-output constraints apply to assistant content and do not revoke
     /// an `auto` request's ability to choose a tool call.
-    pub(crate) fn tool_call_parsing_enabled(request: &NvCreateChatCompletionRequest) -> bool {
+    pub fn tool_call_parsing_enabled(request: &NvCreateChatCompletionRequest) -> bool {
         if !request.inner.has_effective_tools() {
             return false;
         }
@@ -447,7 +447,7 @@ impl OpenAIPreprocessor {
 /// `tools` is added to `tools`, so the prompt, the turn grammar and the parser all see
 /// one tool set. Entries that are names, or objects already declared, are left to the
 /// renderer, which validates them. Returns how many tools were added.
-pub(crate) fn declare_legacy_builtin_tools_for_beam(
+pub fn declare_legacy_builtin_tools_for_beam(
     request: &mut NvCreateChatCompletionRequest,
     tool_call_parser: Option<&str>,
     reasoning_parser: Option<&str>,
@@ -635,7 +635,7 @@ fn has_response_format_constraint(request: &NvCreateChatCompletionRequest) -> bo
         .is_some_and(|format| !matches!(format, ResponseFormat::Text))
 }
 
-pub(crate) fn convert_tool_choice(tool_choice: &ChatCompletionToolChoiceOption) -> ToolChoice {
+pub fn convert_tool_choice(tool_choice: &ChatCompletionToolChoiceOption) -> ToolChoice {
     match tool_choice {
         ChatCompletionToolChoiceOption::None => ToolChoice::None,
         ChatCompletionToolChoiceOption::Auto => ToolChoice::Auto,
@@ -653,7 +653,7 @@ pub(crate) fn convert_tool_choice(tool_choice: &ChatCompletionToolChoiceOption) 
 /// or Kimi's bare function-schema form. This view is used only by validation,
 /// parser, and guided-decoding policy; dynamic declarations stay at their
 /// original message positions for prompt rendering and KV-cache correctness.
-pub(crate) fn effective_tools(
+pub fn effective_tools(
     request: &CreateChatCompletionRequest,
 ) -> Result<Cow<'_, [ChatCompletionTool]>, DynamoError> {
     validate::validated_effective_tools(request)
@@ -700,7 +700,7 @@ pub(crate) fn guided_tool_constraint(
 
 /// Derive the guided-tool constraint from an effective tool set the caller has
 /// already normalized and validated through [`effective_tools`].
-pub(crate) fn guided_tool_constraint_with_effective_tools(
+pub fn guided_tool_constraint_with_effective_tools(
     request: &NvCreateChatCompletionRequest,
     tool_call_parser: Option<&str>,
     reasoning_parser: Option<&str>,

@@ -75,7 +75,7 @@ fn resolve_reasoning_boundary(
 }
 
 #[derive(Clone, Copy)]
-pub(crate) enum SelectedStructuralTagBuilder {
+pub enum SelectedStructuralTagBuilder {
     V1(v1::StructuralTagBuilder),
     V2(v2::StructuralTagBuilder),
 }
@@ -219,13 +219,13 @@ pub(super) fn uses_gpt_oss_required_array(
 /// (`http::service::apply_request_tool_call_parsing_options`) must consult this
 /// function; neither may re-derive eligibility, mode, scope, or registry
 /// availability independently.
-pub(crate) enum StructuralTagDecision {
+pub enum StructuralTagDecision {
     Required(SelectedStructuralTagBuilder),
     NotApplicable,
 }
 
 impl StructuralTagDecision {
-    pub(crate) fn is_required(&self) -> bool {
+    pub fn is_required(&self) -> bool {
         matches!(self, Self::Required(_))
     }
 }
@@ -240,7 +240,7 @@ impl StructuralTagDecision {
 /// (`http::service::apply_request_tool_call_parsing_options`) must propagate
 /// this error rather than falling back to `NotApplicable`, or an invalid forced
 /// choice would silently install a structural tag anyway.
-pub(crate) fn structural_tag_decision(
+pub fn structural_tag_decision(
     (parser_name, reasoning_parser): (Option<&str>, Option<&str>),
     tool_choice: &ToolChoice,
     tools: &[ToolDefinition],

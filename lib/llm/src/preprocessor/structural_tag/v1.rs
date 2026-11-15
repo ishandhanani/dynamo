@@ -8,7 +8,7 @@ use dynamo_parsers::tool_calling::{
 use super::{ResolvedReasoningBoundary, StructuralTagBuildRequest};
 
 #[derive(Clone, Copy)]
-pub(crate) struct StructuralTagBuilder(&'static InnerBuilder);
+pub struct StructuralTagBuilder(&'static InnerBuilder);
 
 impl StructuralTagBuilder {
     pub(super) fn for_parser(parser_name: &str) -> Option<Self> {

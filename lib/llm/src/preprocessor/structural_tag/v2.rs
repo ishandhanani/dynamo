@@ -16,7 +16,7 @@ use dynamo_frontend_protocols::openai::chat_completions::tool_parser_v2;
 use super::StructuralTagBuildRequest;
 
 #[derive(Clone, Copy)]
-pub(crate) struct StructuralTagBuilder(&'static InnerBuilder);
+pub struct StructuralTagBuilder(&'static InnerBuilder);
 
 impl StructuralTagBuilder {
     pub(super) fn for_parser(parser_name: &str) -> Option<Self> {
