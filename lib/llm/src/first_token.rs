@@ -81,7 +81,7 @@ impl FirstTokenSource {
     }
 
     #[cfg(test)]
-    pub(crate) fn from_publisher(
+    pub fn from_publisher(
         publisher: ActiveSequenceEventPublisher,
         worker_id: u64,
         worker_type: WorkerType,
