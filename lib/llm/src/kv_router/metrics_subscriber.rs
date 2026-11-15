@@ -20,7 +20,6 @@ use parking_lot::Mutex;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
-use super::KV_METRICS_SUBJECT;
 use crate::kv_router::ActiveLoad;
 use crate::{
     direct_zmq_fan_in::{
@@ -28,6 +27,9 @@ use crate::{
     },
     direct_zmq_sub_pool::KV_ZMQ_RCVHWM,
 };
+
+// for metric publishing (push-based)
+pub const KV_METRICS_SUBJECT: &str = "kv_metrics";
 
 const MAX_PENDING_ACTIVE_LOADS: usize = 100_000;
 /// Every direct-ZMQ source task pushes into this mailbox. Sharding by worker spreads those

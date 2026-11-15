@@ -28,14 +28,17 @@ pub(crate) use ingress::{RuntimeIngress, RuntimeIngressArgs};
 use tokio_util::sync::CancellationToken;
 
 mod embedding_cache;
+mod event_source_requirement;
 mod ingress;
 mod recovery;
 pub mod remote;
 pub(crate) mod reply;
 
 pub use self::embedding_cache::{
-    EmbeddingCacheIndexer, preprocessed_multimodal_cache_keys, try_build_cache_indexer,
+    EmbeddingCacheIndexer, MULTIMODAL_EMBEDDING_CACHE_SUBJECT, MultimodalEmbeddingCacheEvent,
+    MultimodalEmbeddingCacheUpdate, preprocessed_multimodal_cache_keys, try_build_cache_indexer,
 };
+pub(crate) use self::event_source_requirement::KvEventSourceRequirement;
 use self::remote::RemoteIndexer;
 pub use self::remote::{ServedIndexerHandle, ServedIndexerMode, ensure_served_indexer_service};
 #[cfg(feature = "ckf-diagnostics")]

@@ -36,7 +36,7 @@ use dynamo_runtime::{
 
 use crate::{
     kv_router::{
-        KvEventSourceRequirement, KvRouter, SelectionPolicySource,
+        KvRouter, SelectionPolicySource, indexer::KvEventSourceRequirement,
         shared_cache::HicacheSharedKvCache,
     },
     lora::state_tracker::{LoraWorkerObservation, LoraWorkerProjection},

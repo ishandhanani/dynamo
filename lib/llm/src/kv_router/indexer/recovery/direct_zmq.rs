@@ -40,7 +40,7 @@ use crate::{
         KV_ZMQ_RCVHWM, endpoints_per_sub_from_env,
     },
     discovery::{KvSourceId, KvSourceMembershipView, KvSourceMembershipWatch},
-    kv_router::metrics::{KvZmqIngressMetrics, RouterWorkerStatusMetrics},
+    kv_router::sync_metrics::{KvZmqIngressMetrics, RouterWorkerStatusMetrics},
 };
 
 const INITIAL_BACKOFF: Duration = Duration::from_millis(100);

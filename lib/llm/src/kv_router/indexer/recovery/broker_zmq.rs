@@ -33,7 +33,7 @@ use super::{
 };
 use crate::{
     discovery::{KvSourceMembershipView, KvSourceMembershipWatch},
-    kv_router::metrics::{KvZmqIngressMetrics, RouterWorkerStatusMetrics},
+    kv_router::sync_metrics::{KvZmqIngressMetrics, RouterWorkerStatusMetrics},
 };
 
 const INITIAL_BACKOFF: Duration = Duration::from_millis(100);

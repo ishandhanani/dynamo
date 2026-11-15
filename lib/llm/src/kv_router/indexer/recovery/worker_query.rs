@@ -1177,7 +1177,7 @@ mod tests {
         },
         kv_router::{
             indexer::{Indexer, LowerTierIndexers},
-            metrics::RouterWorkerStatusMetrics,
+            sync_metrics::RouterWorkerStatusMetrics,
         },
     };
     use dynamo_model_card::{
@@ -3370,7 +3370,7 @@ mod tests {
                 "test-model".to_string(),
                 "decode",
                 super::super::subscriber::MismatchMetricScope::Router(
-                    crate::kv_router::KvEventSourceRequirement::Unknown,
+                    crate::kv_router::indexer::KvEventSourceRequirement::Unknown,
                 ),
                 cancel.child_token(),
                 Some(startup_tx),

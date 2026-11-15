@@ -19,7 +19,9 @@ use tokio_util::sync::CancellationToken;
 
 use crate::{
     direct_zmq_fan_in::{ContinuityMode, FanInEvent, start_direct_zmq_fan_in},
-    kv_router::{ACTIVE_SEQUENCES_SUBJECT, metrics::ActiveSequenceZmqIngressMetrics},
+    kv_router::{
+        sequence::ACTIVE_SEQUENCES_SUBJECT, sync_metrics::ActiveSequenceZmqIngressMetrics,
+    },
 };
 
 const DIRECT_ZMQ_ENV: &str = "DYN_ROUTER_ACTIVE_SEQUENCE_DIRECT_ZMQ";

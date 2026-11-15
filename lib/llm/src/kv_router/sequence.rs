@@ -35,9 +35,11 @@ use tokio::sync::mpsc;
 use tokio::time::Instant;
 use tokio_util::sync::CancellationToken;
 
-use crate::kv_router::ACTIVE_SEQUENCES_SUBJECT;
 #[cfg(test)]
 use dynamo_runtime::transports::event_plane::MsgpackCodec;
+
+// for inter-router comms
+pub const ACTIVE_SEQUENCES_SUBJECT: &str = "active_sequences_events";
 
 // Match the existing standalone replica-sync queue. Lifecycle callers enqueue without awaiting;
 // if the queue is full, the newest event is dropped without blocking the local mutation.

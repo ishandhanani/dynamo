@@ -13,9 +13,9 @@ use tokio_util::sync::CancellationToken;
 
 use crate::{
     discovery::{KvSourceMembershipView, KvSourceMembershipWatch, KvSourceStatus},
-    kv_router::KvEventSourceRequirement,
-    worker_type::WorkerType,
+    kv_router::indexer::KvEventSourceRequirement,
 };
+use dynamo_router_protocol::worker_type::WorkerType;
 
 const SOURCE_JOIN_GRACE: Duration = Duration::from_secs(30);
 

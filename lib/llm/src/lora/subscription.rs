@@ -72,7 +72,7 @@ async fn subscribe_to_events(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::kv_router::ACTIVE_SEQUENCES_SUBJECT;
+    use crate::kv_router::sequence::ACTIVE_SEQUENCES_SUBJECT;
     use dynamo_router_protocol::worker::WorkerWithDpRank;
     use dynamo_runtime::config::environment_names::zmq_broker as broker_env;
     use dynamo_runtime::distributed::DistributedConfig;

@@ -63,10 +63,7 @@ use dedup::{EventDedupFilter, EventDedupPolicy};
 #[cfg(test)]
 use event_processor::run_event_processor_loop;
 use event_processor::start_event_processor;
-pub use multimodal_embedding_cache::{
-    MultimodalEmbeddingCacheEvent, MultimodalEmbeddingCachePublisher,
-    MultimodalEmbeddingCacheUpdate,
-};
+pub use multimodal_embedding_cache::MultimodalEmbeddingCachePublisher;
 use sinks::EventPlanePublisher;
 pub use state_agent::{
     KvStateAgent, KvStateAgentAttachmentConfig, KvStateAgentConfig, KvStateAgentSlotConfig,

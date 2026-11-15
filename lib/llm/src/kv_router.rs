@@ -3,7 +3,6 @@
 
 use std::{
     collections::{HashMap, HashSet},
-    fmt,
     sync::Arc,
     time::Instant,
 };
@@ -78,8 +77,10 @@ pub(crate) use routing_host::hosted_request;
 pub(crate) mod routing_load;
 pub mod sequence;
 pub mod shared_cache;
+pub mod sync_metrics;
 
 pub use active_load::ActiveLoad;
+pub use metrics_subscriber::KV_METRICS_SUBJECT;
 
 pub use encoder_router::EncoderRouter;
 pub use indexer::Indexer;
@@ -93,6 +94,7 @@ pub use routing_load::{RouterLoadSource, RoutingLoadContext, SchedulerLoadSender
 
 use crate::{
     discovery::{KvSourceMembershipWatch, RuntimeConfigWatch},
+    kv_router::indexer::KvEventSourceRequirement,
     kv_router::sequence::{SequenceError, SequenceRequest},
     worker_type::WorkerType,
 };
@@ -438,60 +440,6 @@ pub(crate) fn to_worker_selection_session_context(
     .with_agent_headers(agent_headers.clone())
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum KvEventSourceRequirement {
-    NotRequired,
-    CacheAwareRouting,
-    ConditionalDisaggDecodeCache,
-    Unknown,
-}
-
-impl KvEventSourceRequirement {
-    pub(crate) fn derive(
-        worker_role: Option<WorkerType>,
-        config: &KvRouterConfig,
-        inputs: WorkerInputs,
-    ) -> Self {
-        if !inputs.reads_kv_index() || config.use_remote_indexer || !config.use_kv_events {
-            return Self::NotRequired;
-        }
-
-        match worker_role {
-            Some(WorkerType::Decode) if config.conditional_disagg_enabled => {
-                Self::ConditionalDisaggDecodeCache
-            }
-            Some(_) => Self::CacheAwareRouting,
-            None => Self::Unknown,
-        }
-    }
-
-    pub(crate) fn as_str(self) -> &'static str {
-        match self {
-            Self::NotRequired => "not_required",
-            Self::CacheAwareRouting => "cache_aware_routing",
-            Self::ConditionalDisaggDecodeCache => "conditional_disagg_decode_cache",
-            Self::Unknown => "unknown",
-        }
-    }
-
-    pub(crate) fn requires_source(self) -> bool {
-        matches!(
-            self,
-            Self::CacheAwareRouting | Self::ConditionalDisaggDecodeCache
-        )
-    }
-
-    pub(crate) fn should_subscribe(self) -> bool {
-        self != Self::NotRequired
-    }
-}
-
-impl fmt::Display for KvEventSourceRequirement {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str(self.as_str())
-    }
-}
-
 pub enum FindBestMatchOutcome {
     Routed {
         worker: WorkerWithDpRank,
@@ -557,13 +505,6 @@ fn cache_hit_for_worker(
             .unwrap_or(0.0),
     }
 }
-
-// for metric publishing (push-based)
-pub const KV_METRICS_SUBJECT: &str = "kv_metrics";
-pub const MULTIMODAL_EMBEDDING_CACHE_SUBJECT: &str = "multimodal_embedding_cache";
-
-// for inter-router comms
-pub const ACTIVE_SEQUENCES_SUBJECT: &str = "active_sequences_events";
 
 // for worker-local kvindexer query
 pub const WORKER_KV_INDEXER_BUFFER_SIZE: usize = 1024; // store 1024 most recent events in worker buffer
@@ -892,7 +833,7 @@ impl KvRouter {
         });
 
         let client_for_registration = client.clone();
-        let registration_availability_provider: metrics::RegistrationAvailabilityProvider =
+        let registration_availability_provider: sync_metrics::RegistrationAvailabilityProvider =
             Arc::new(move || client_for_registration.available_instance_ids());
 
         let client_for_availability = client.clone();

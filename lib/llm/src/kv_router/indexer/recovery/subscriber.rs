@@ -23,9 +23,11 @@ use super::{
 };
 use crate::{
     discovery::{KvSourceMembershipView, KvSourceMembershipWatch, KvSourceStatus},
-    kv_router::{Indexer, KvEventSourceRequirement, metrics::RouterWorkerStatusMetrics},
-    worker_type::WorkerType,
+    kv_router::{
+        Indexer, indexer::KvEventSourceRequirement, sync_metrics::RouterWorkerStatusMetrics,
+    },
 };
+use dynamo_router_protocol::worker_type::WorkerType;
 
 const SUBSCRIPTION_INITIAL_BACKOFF: Duration = Duration::from_millis(100);
 const SUBSCRIPTION_MAX_BACKOFF: Duration = Duration::from_secs(5);

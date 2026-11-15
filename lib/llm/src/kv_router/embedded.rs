@@ -34,9 +34,10 @@ use tokio_util::sync::CancellationToken;
 
 use crate::discovery::RuntimeConfigWatch;
 use crate::kv_router::metrics::{
-    ActiveSequenceIngressMetrics, ROUTER_QUEUE_METRICS, RegistrationAvailabilityProvider,
-    RouterQueueMetricHandles, RouterRequestMetrics, WORKER_LOAD_METRICS,
+    ActiveSequenceIngressMetrics, ROUTER_QUEUE_METRICS, RouterQueueMetricHandles,
+    RouterRequestMetrics,
 };
+use crate::kv_router::sync_metrics::{RegistrationAvailabilityProvider, WORKER_LOAD_METRICS};
 use dynamo_model_card::local_model::runtime_config::ModelRuntimeConfig;
 
 /// Inputs the embedded backend needs from the router at construction.
@@ -181,7 +182,7 @@ pub(crate) struct EmbeddedSelection {
     /// Keeps the service (listeners, sweep, replica sync) alive for as long as
     /// the router holds the partition.
     service: Arc<SelectionService>,
-    _worker_registration: Arc<super::metrics::RouterWorkerRegistration>,
+    _worker_registration: Arc<super::sync_metrics::RouterWorkerRegistration>,
     partition: SelectionPartition,
     affinity: OnceLock<crate::session_affinity::AffinityCoordinator>,
     worker_type: &'static str,
@@ -224,14 +225,15 @@ impl EmbeddedSelection {
         request_leases: Option<Arc<dyn dynamo_slot_tracker::host::ReplicaRequestLeaseObserver>>,
         cancellation_token: CancellationToken,
     ) -> Result<(Self, crate::kv_router::sequence::ReplicaIngress)> {
-        let worker_registration =
-            super::metrics::RouterWorkerStatusMetrics::from_component(args.endpoint.component())
-                .watch_workers(
-                    workers_with_configs.clone(),
-                    args.metric_worker_type,
-                    cancellation_token.clone(),
-                    Some(args.registration_availability_provider),
-                );
+        let worker_registration = super::sync_metrics::RouterWorkerStatusMetrics::from_component(
+            args.endpoint.component(),
+        )
+        .watch_workers(
+            workers_with_configs.clone(),
+            args.metric_worker_type,
+            cancellation_token.clone(),
+            Some(args.registration_availability_provider),
+        );
         let worker_type = args.worker_role.unwrap_or(WorkerType::Aggregated);
         let key = embedded_partition_key(args.model_name.as_deref());
 

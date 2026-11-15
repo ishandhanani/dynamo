@@ -28,7 +28,7 @@ use parking_lot::RwLock;
 use tokio::sync::Mutex;
 
 use crate::kv_router::indexer::reply::{IndexerQueryReply, IndexerRecordRoutingDecisionReply};
-use crate::kv_router::metrics::RemoteIndexerMetrics;
+use crate::kv_router::sync_metrics::RemoteIndexerMetrics;
 
 use super::{Indexer, TieredMatchDetails};
 

@@ -20,11 +20,10 @@ use dynamo_scheduler::host::{IndexRegistry, KvEventIngress};
 use tokio_util::sync::CancellationToken;
 
 use super::{
-    Indexer, KvEventSubscriptionHandle, ServedIndexerMode, ensure_served_indexer_service,
-    start_subscriber,
+    Indexer, KvEventSourceRequirement, KvEventSubscriptionHandle, ServedIndexerMode,
+    ensure_served_indexer_service, start_subscriber,
 };
 use crate::discovery::KvSourceMembershipWatch;
-use crate::kv_router::KvEventSourceRequirement;
 
 pub(crate) struct RuntimeIngressArgs<'a> {
     pub endpoint: &'a Endpoint,
