@@ -19,7 +19,7 @@ use super::SharedCacheStatusTracker;
 use super::tracker::{
     CacheStatusTracker, EventSource, RemoveEventInput, StorageTier, StoreEventInput,
 };
-use crate::utils::zmq::{connect_sub_socket, multipart_message};
+use dynamo_runtime::transports::zmq::sockets::{connect_sub_socket, multipart_message};
 
 /// Event batch received from vLLM/TensorRT-LLM (array format)
 /// Format: [timestamp, [events], data_parallel_rank]

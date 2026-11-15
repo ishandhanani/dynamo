@@ -29,6 +29,8 @@ use tokio::{
 };
 use tokio_util::sync::CancellationToken;
 
+pub mod sockets;
+
 pub type MultipartMessage = Vec<Vec<u8>>;
 
 /// Returns whether `endpoint` needs `ZMQ_IPV6`.

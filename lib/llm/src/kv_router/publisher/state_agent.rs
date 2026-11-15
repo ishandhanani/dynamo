@@ -65,7 +65,9 @@ use crate::{
         indexer::{KvStateAgentStatusCell, start_worker_kv_query_endpoint_with_status},
         metrics::kv_publisher_metrics,
     },
-    utils::zmq::{MultipartMessage, SubSocket, connect_sub_socket, multipart_message},
+};
+use dynamo_runtime::transports::zmq::sockets::{
+    MultipartMessage, SubSocket, connect_sub_socket, multipart_message,
 };
 
 use super::{

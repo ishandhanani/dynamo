@@ -2,7 +2,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 pub mod lora;
-pub mod zmq;
 
 pub use lora::lora_name_to_id;
 pub(crate) mod retry;

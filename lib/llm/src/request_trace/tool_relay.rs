@@ -15,7 +15,7 @@ use dynamo_runtime::transports::event_plane::EventPublisher;
 use futures::StreamExt;
 use tokio_util::sync::CancellationToken;
 
-use crate::utils::zmq::{PullSocket, bind_pull_socket, multipart_message};
+use dynamo_runtime::transports::zmq::sockets::{PullSocket, bind_pull_socket, multipart_message};
 
 use super::DEFAULT_TOOL_EVENTS_TOPIC;
 use crate::request_trace::{RequestTraceRecord, RequestTraceToolEventIngress};
@@ -150,7 +150,7 @@ mod tests {
         RequestTraceEventSource, RequestTraceEventType, RequestTraceSchema, RequestTraceToolEvent,
         RequestTraceToolStatus,
     };
-    use crate::utils::zmq::{connect_push_socket, send_multipart_direct};
+    use dynamo_runtime::transports::zmq::sockets::{connect_push_socket, send_multipart_direct};
 
     fn reserve_open_port() -> TcpListener {
         TcpListener::bind("127.0.0.1:0").expect("failed to reserve TCP port")
