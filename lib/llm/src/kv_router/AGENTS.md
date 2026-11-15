@@ -11,8 +11,10 @@ and the booking lifecycle these rules protect.
   then asks the scheduler to choose a worker. It selects and books, but never sends a request.
 - `embedded.rs`: connects discovered workers and their load to one `SelectionService` partition
   from `lib/router/kv-router`, and runs each selection through `SelectionCore`.
-- `publisher/`: receives KV-cache events and worker metrics from inference engines.
-- `metrics.rs`: Prometheus metrics of the request path and of the publisher.
+- `publisher/`: worker side, not the request path: receives KV-cache events and worker metrics
+  from inference engines. It keeps its own metrics (`publisher/metrics.rs`) and imports nothing
+  from the rest of this module.
+- `metrics.rs`: Prometheus metrics of the request path.
 - `managed.rs`: `ManagedKvRouter`, a `KvRouter` together with the load context that owns its
   load tasks.
 - `request_lease.rs`: one request-liveness coordinator and reaper per `KvRouter`. Holds booking
@@ -32,9 +34,17 @@ and the booking lifecycle these rules protect.
   - `handoff.rs`: keeps prefill running while decode runs and reports prefill failures.
   - `conditional_bypass.rs`: conditional disaggregation's decision to skip remote prefill.
   - `query.rs`: `reserve_prefill_worker`, the prefill-only booking used by the Runtime EPP.
+  - `endpoints.rs`: `PrefillEndpointProvider`, the only way the prefill hop reaches the model
+    manager: per-worker runtime-config lookups and the `KvRouter` of the prefill worker set.
 - `encoder_router.rs`: `EncoderRouter`, the optional encode hop for multimodal inputs.
+- `worker_set_target.rs`: the worker set an encode or prefill hop targets, and the id its
+  binding is keyed on. Discovery chooses the target.
 - `plugins.rs`: installs the linked router plugin registry.
-- `shared_cache.rs`: the HiCache shared KV cache client (SGLang + Mooncake).
+- `shared_cache.rs`: the HiCache shared KV cache client (SGLang + Mooncake). Not the request
+  path either: the model manager builds it and hands `KvRouter` a `SharedKvCache`.
+
+The request path is this module without `publisher/` and `shared_cache.rs`, together with
+`../session_affinity/`, `../migration.rs`, `../lora_routing.rs` and `../routing_policy.rs`.
 
 The state these stages read is kept up to date by the crate `dynamo-sync`
 ([`lib/sync`](../../../sync/AGENTS.md)), not by this module:
@@ -77,6 +87,10 @@ The state these stages read is kept up to date by the crate `dynamo-sync`
   cancellation, or prefill activation.
 - `dynamo-sync` is below this crate and cannot import it. Pass what it needs in, as `KvRouter`
   does with the router-mode selectors of the remote indexer.
+- The request path imports no other module of this crate: not `discovery`, `entrypoint`, `http`,
+  `pool_relay`, `scheduler_load` or the publisher. Discovery builds the routers and passes in
+  what they need from above: the model manager as `PrefillEndpointProvider`, and the Pool
+  Relay's scheduler-load publisher as `SchedulerLoadPublisher`.
 
 ## Testing
 
