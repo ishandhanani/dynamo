@@ -2081,7 +2081,7 @@ mod tests {
         let mut request = create_mock_request(1);
         request.routing = Some(RoutingHints {
             lora_name: Some("dyn-lora-0123456789abcdef0123456789abcdef".to_string()),
-            lora_resolution_version: Some(crate::lora::runtime::RUNTIME_LORA_PROTOCOL_VERSION),
+            lora_resolution_version: Some(dynamo_lora::runtime::RUNTIME_LORA_PROTOCOL_VERSION),
             ..Default::default()
         });
         let context = Arc::new(Controller::new(context_id));
@@ -4071,24 +4071,24 @@ mod tests {
     /// legible as "othere".
     struct LetterTokenizer;
 
-    impl crate::tokenizers::traits::Encoder for LetterTokenizer {
-        fn encode(&self, _input: &str) -> anyhow::Result<crate::tokenizers::Encoding> {
-            Ok(crate::tokenizers::Encoding::Sp(vec![]))
+    impl dynamo_tokenizers::traits::Encoder for LetterTokenizer {
+        fn encode(&self, _input: &str) -> anyhow::Result<dynamo_tokenizers::Encoding> {
+            Ok(dynamo_tokenizers::Encoding::Sp(vec![]))
         }
         fn encode_batch(
             &self,
             _inputs: &[&str],
-        ) -> anyhow::Result<Vec<crate::tokenizers::Encoding>> {
+        ) -> anyhow::Result<Vec<dynamo_tokenizers::Encoding>> {
             Ok(vec![])
         }
     }
 
-    impl crate::tokenizers::traits::Decoder for LetterTokenizer {
+    impl dynamo_tokenizers::traits::Decoder for LetterTokenizer {
         fn decode(
             &self,
             token_ids: &[TokenIdType],
             _skip_special_tokens: bool,
-        ) -> anyhow::Result<crate::tokenizers::traits::DecodeResult> {
+        ) -> anyhow::Result<dynamo_tokenizers::traits::DecodeResult> {
             let text: String = token_ids
                 .iter()
                 .map(|&id| match id {
@@ -4098,15 +4098,15 @@ mod tests {
                     other => panic!("unexpected token id in LetterTokenizer: {other}"),
                 })
                 .collect();
-            Ok(crate::tokenizers::traits::DecodeResult::Complete(text))
+            Ok(dynamo_tokenizers::traits::DecodeResult::Complete(text))
         }
     }
 
-    impl crate::tokenizers::traits::Tokenizer for LetterTokenizer {}
+    impl dynamo_tokenizers::traits::Tokenizer for LetterTokenizer {}
 
     fn letter_backend() -> Arc<dynamo_preprocessor::backend::Backend> {
-        let tokenizer: Arc<dyn crate::tokenizers::traits::Tokenizer> = Arc::new(LetterTokenizer);
-        dynamo_preprocessor::backend::Backend::from_tokenizer(crate::tokenizers::Tokenizer::from(
+        let tokenizer: Arc<dyn dynamo_tokenizers::traits::Tokenizer> = Arc::new(LetterTokenizer);
+        dynamo_preprocessor::backend::Backend::from_tokenizer(dynamo_tokenizers::Tokenizer::from(
             tokenizer,
         ))
     }
@@ -4289,9 +4289,9 @@ mod tests {
             }, "merges": [], "byte_fallback": true}
         }))
         .unwrap();
-        let tokenizer: Arc<dyn crate::tokenizers::traits::Tokenizer> =
-            Arc::new(crate::tokenizers::HuggingFaceTokenizer::from_tokenizer(hf));
-        dynamo_preprocessor::backend::Backend::from_tokenizer(crate::tokenizers::Tokenizer::from(
+        let tokenizer: Arc<dyn dynamo_tokenizers::traits::Tokenizer> =
+            Arc::new(dynamo_tokenizers::HuggingFaceTokenizer::from_tokenizer(hf));
+        dynamo_preprocessor::backend::Backend::from_tokenizer(dynamo_tokenizers::Tokenizer::from(
             tokenizer,
         ))
     }

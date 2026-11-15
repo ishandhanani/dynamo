@@ -161,11 +161,11 @@ mod tests {
     use crate::{
         discovery::ModelManager,
         kv_router::{KvRouter, RoutingHost, prefill_router::PrefillBinding},
-        worker_type::WorkerType,
     };
     use dynamo_frontend_protocols::common::{
         FinishReason, llm_backend::LLMEngineOutput, preprocessor::PreprocessedRequest,
     };
+    use dynamo_router_protocol::worker_type::WorkerType;
     use dynamo_sync::load::{RouterLoadSource, RoutingLoadContext};
 
     type LlmResponse = dynamo_runtime::protocols::annotated::Annotated<LLMEngineOutput>;

@@ -33,18 +33,16 @@ use dynamo_scheduler::host::RoutingConstraints;
 use tokio::sync::{Notify, mpsc, watch};
 
 use super::*;
-use crate::lora::{LoadEstimator, LoraFilter};
-use crate::{
-    kv_router::routing_host::request_guard::RouteObservation,
-    lora::{LoraReplicaConfig, LoraRoutingTable, LoraStateTracker},
-    migration::Migration,
-};
+use crate::{kv_router::routing_host::request_guard::RouteObservation, migration::Migration};
 use dynamo_frontend_protocols::common::{
     extensions::{AgentContextBuilder, SESSION_AFFINITY_CONTEXT_KEY, SessionAffinityId},
     preprocessor::{MmRoutingInfo, RoutingHints},
     timing::RequestTracker,
 };
 use dynamo_http_server::metrics::Metrics;
+use dynamo_lora::{
+    LoadEstimator, LoraFilter, LoraReplicaConfig, LoraRoutingTable, LoraStateTracker,
+};
 use dynamo_model_card::local_model::runtime_config::ModelRuntimeConfig;
 use dynamo_sync::load::RoutingLoadContext;
 
@@ -136,15 +134,15 @@ async fn builtin_host_constructs_only_declared_capabilities() {
 
     let mut runtime_request = request();
     runtime_request.routing = Some(RoutingHints {
-        lora_name: Some(crate::lora::runtime::adapter_key(
+        lora_name: Some(dynamo_lora::runtime::adapter_key(
             "test",
             "custom:///opaque",
         )),
         base_model_name: Some("test".into()),
-        lora_source_uri: Some(crate::lora::runtime::RuntimeLoraSourceUri::new(
+        lora_source_uri: Some(dynamo_lora::runtime::RuntimeLoraSourceUri::new(
             "custom:///opaque".into(),
         )),
-        lora_resolution_version: Some(crate::lora::runtime::RUNTIME_LORA_PROTOCOL_VERSION),
+        lora_resolution_version: Some(dynamo_lora::runtime::RUNTIME_LORA_PROTOCOL_VERSION),
         ..Default::default()
     });
     let error = match host.generate(Context::new(runtime_request)).await {
@@ -581,7 +579,7 @@ async fn builtin_lora_keeps_separate_selection_and_cleanup() {
     let mut incomplete_request = request();
     incomplete_request.routing = Some(RoutingHints {
         lora_name: Some("adapter".into()),
-        lora_source_uri: Some(crate::lora::runtime::RuntimeLoraSourceUri::new(
+        lora_source_uri: Some(dynamo_lora::runtime::RuntimeLoraSourceUri::new(
             "custom:///opaque".into(),
         )),
         ..Default::default()
@@ -597,15 +595,15 @@ async fn builtin_lora_keeps_separate_selection_and_cleanup() {
 
     let mut runtime_request = request();
     runtime_request.routing = Some(RoutingHints {
-        lora_name: Some(crate::lora::runtime::adapter_key(
+        lora_name: Some(dynamo_lora::runtime::adapter_key(
             "test",
             "custom:///opaque",
         )),
         base_model_name: Some("test".into()),
-        lora_source_uri: Some(crate::lora::runtime::RuntimeLoraSourceUri::new(
+        lora_source_uri: Some(dynamo_lora::runtime::RuntimeLoraSourceUri::new(
             "custom:///opaque".into(),
         )),
-        lora_resolution_version: Some(crate::lora::runtime::RUNTIME_LORA_PROTOCOL_VERSION),
+        lora_resolution_version: Some(dynamo_lora::runtime::RUNTIME_LORA_PROTOCOL_VERSION),
         backend_instance_id: Some(stale_worker),
         ..Default::default()
     });
@@ -689,11 +687,11 @@ async fn runtime_lora_pin_is_rechecked_after_transport_fallback() {
     config
         .set_engine_specific("runtime_lora_schemes", vec!["custom"])
         .unwrap();
-    let adapter = crate::lora::runtime::adapter_key("test", "custom:///opaque");
+    let adapter = dynamo_lora::runtime::adapter_key("test", "custom:///opaque");
     for worker in [101, 202] {
         tracker.handle_mdc_addition(
             WorkerWithDpRank::new(worker, 0),
-            &crate::lora::LoraInfo {
+            &dynamo_lora::LoraInfo {
                 name: adapter.clone(),
                 max_gpu_lora_count: Some(2),
             },
@@ -714,7 +712,7 @@ async fn runtime_lora_pin_is_rechecked_after_transport_fallback() {
     input.routing = Some(RoutingHints {
         lora_name: Some(adapter),
         base_model_name: Some("test".into()),
-        lora_source_uri: Some(crate::lora::runtime::RuntimeLoraSourceUri::new(
+        lora_source_uri: Some(dynamo_lora::runtime::RuntimeLoraSourceUri::new(
             "custom:///opaque".into(),
         )),
         lora_resolution_version: Some(2),
@@ -2361,7 +2359,7 @@ async fn kv_rejects_partial_runtime_metadata_before_dispatch() {
         router_with_recorded_dispatch("kv-partial-runtime-lora").await;
     let mut input = request();
     input.routing = Some(RoutingHints {
-        lora_name: Some(crate::lora::runtime::adapter_key(
+        lora_name: Some(dynamo_lora::runtime::adapter_key(
             "test",
             "custom:///opaque",
         )),
@@ -2904,7 +2902,7 @@ async fn runtime_lora_rechecks_worker_metadata_after_queued_selection() {
     for worker in [101, 202] {
         tracker.handle_mdc_addition(
             WorkerWithDpRank::new(worker, 0),
-            &crate::lora::LoraInfo {
+            &dynamo_lora::LoraInfo {
                 name: "adapter".into(),
                 max_gpu_lora_count: Some(2),
             },
@@ -2962,12 +2960,12 @@ async fn runtime_lora_rechecks_worker_metadata_after_queued_selection() {
     router.inner.client.override_instance_avail(vec![101, 202]);
     let mut input = request();
     input.routing = Some(RoutingHints {
-        lora_name: Some(crate::lora::runtime::adapter_key(
+        lora_name: Some(dynamo_lora::runtime::adapter_key(
             "test",
             "custom:///opaque",
         )),
         base_model_name: Some("test".into()),
-        lora_source_uri: Some(crate::lora::runtime::RuntimeLoraSourceUri::new(
+        lora_source_uri: Some(dynamo_lora::runtime::RuntimeLoraSourceUri::new(
             "custom:///opaque".into(),
         )),
         lora_resolution_version: Some(2),

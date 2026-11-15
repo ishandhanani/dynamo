@@ -378,7 +378,7 @@ impl PrefillRouter {
                     context.selection_policy.clone(),
                     prefill_kv_config,
                     context.prefill_load_estimator.clone(),
-                    Some(crate::worker_type::WorkerType::Prefill),
+                    Some(dynamo_router_protocol::worker_type::WorkerType::Prefill),
                     WORKER_TYPE_PREFILL,
                     Some(context.model_name.clone()),
                     advertisement.is_eagle,
@@ -406,7 +406,7 @@ impl PrefillRouter {
             crate::kv_router::check_hint_policies_route_on_kv_path(
                 prefill_router_mode,
                 &prefill_kv_config.clone().unwrap_or_default(),
-                &[crate::worker_type::WorkerType::Prefill],
+                &[dynamo_router_protocol::worker_type::WorkerType::Prefill],
             )?;
             let affinity = create_affinity_coordinator(
                 prefill_session_affinity_ttl,
@@ -1732,7 +1732,7 @@ mod tests {
         let runtime_request = || {
             let mut req = request();
             req.routing_mut().lora_resolution_version =
-                Some(crate::lora::runtime::RUNTIME_LORA_PROTOCOL_VERSION);
+                Some(dynamo_lora::runtime::RUNTIME_LORA_PROTOCOL_VERSION);
             req
         };
         drt.discovery()

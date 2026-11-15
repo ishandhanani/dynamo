@@ -675,7 +675,7 @@ mod tests {
         let downstream = Arc::new(CaptureEngine::default());
         let mut runtime_request = multimodal_request();
         runtime_request.routing_mut().lora_resolution_version =
-            Some(crate::lora::runtime::RUNTIME_LORA_PROTOCOL_VERSION);
+            Some(dynamo_lora::runtime::RUNTIME_LORA_PROTOCOL_VERSION);
         let result = router
             .generate(SingleIn::new(runtime_request.clone()), downstream.clone())
             .await;
@@ -705,7 +705,7 @@ mod tests {
         let text_request = downstream.request.lock().unwrap().take().unwrap();
         assert_eq!(
             text_request.routing.unwrap().lora_resolution_version,
-            Some(crate::lora::runtime::RUNTIME_LORA_PROTOCOL_VERSION)
+            Some(dynamo_lora::runtime::RUNTIME_LORA_PROTOCOL_VERSION)
         );
         assert!(text_request.encoder_result.is_none());
         assert_eq!(encoded_worker(&router).await, Some(ids[0]));

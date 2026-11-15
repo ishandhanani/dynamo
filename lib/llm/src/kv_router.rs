@@ -81,8 +81,8 @@ pub use routing_host::{
     KvPushRouter, LlmDispatch, MultimodalCache, RoutingHost, RoutingHostBuilder,
 };
 
-use crate::worker_type::WorkerType;
 use dynamo_model_card::local_model::runtime_config::ModelRuntimeConfig;
+use dynamo_router_protocol::worker_type::WorkerType;
 use dynamo_sync::{
     indexer::{self, Indexer, KvEventSourceRequirement},
     load::SchedulerLoadSender,
@@ -630,7 +630,7 @@ impl KvRouter {
         model_name: Option<String>,
         is_eagle: bool,
         shared_cache: Option<Arc<dyn SharedKvCache>>,
-        lora_filter: Option<Arc<crate::lora::LoraFilter>>,
+        lora_filter: Option<Arc<dynamo_lora::LoraFilter>>,
     ) -> Result<Self> {
         Self::new_with_worker_role(
             endpoint,
@@ -666,7 +666,7 @@ impl KvRouter {
         model_name: Option<String>,
         is_eagle: bool,
         shared_cache: Option<Arc<dyn SharedKvCache>>,
-        lora_filter: Option<Arc<crate::lora::LoraFilter>>,
+        lora_filter: Option<Arc<dynamo_lora::LoraFilter>>,
     ) -> Result<Self> {
         let parent_token = endpoint.component().drt().child_token();
         let scheduler_load = SchedulerLoadSender::disabled(parent_token.child_token());
@@ -3201,8 +3201,8 @@ mod tests {
 
     #[tokio::test]
     async fn queued_lora_requests_refresh_registration_without_widening_constraints() {
-        use crate::lora::state_tracker::LoraWorkerProjection;
-        use crate::lora::{LoraFilter, LoraReplicaConfig, LoraRoutingTable, LoraStateTracker};
+        use dynamo_lora::state_tracker::LoraWorkerProjection;
+        use dynamo_lora::{LoraFilter, LoraReplicaConfig, LoraRoutingTable, LoraStateTracker};
         use dynamo_model_card::model_card::LoraInfo;
 
         let tracker = LoraStateTracker::new();

@@ -7,13 +7,13 @@ use std::{
 };
 
 use dynamo_lora::policy::{LoadGuard, RequestPolicy, Stage};
+use dynamo_lora::{LoadEstimator, LoraFilter};
 use dynamo_runtime::pipeline::{Error, RouterMode};
 use dynamo_scheduler::host::{KvSchedulerError, RoutingConstraints, SchedulingRequest};
 use dynamo_worker_selection::host::HostedWorkerPicker;
 
 use crate::{
     kv_router::hosted_request,
-    lora::{LoadEstimator, LoraFilter},
     routing_policy::{
         CandidateSelection, ExecutionRequirements, ExecutionStage, HostedCandidatePolicy,
         KvAdmissionPolicy,
@@ -59,8 +59,8 @@ pub(crate) fn check_candidate_policy(
         ) {
             (Some(base), Some(source), Some(key)) => {
                 routing.lora_resolution_version
-                    == Some(crate::lora::runtime::RUNTIME_LORA_PROTOCOL_VERSION)
-                    && crate::lora::runtime::validate_runtime_lora_identity(
+                    == Some(dynamo_lora::runtime::RUNTIME_LORA_PROTOCOL_VERSION)
+                    && dynamo_lora::runtime::validate_runtime_lora_identity(
                         &request.model,
                         base,
                         source.as_str(),
@@ -344,7 +344,7 @@ impl KvAdmissionPolicy for LoraKvPolicy {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::lora::{LoraRoutingTable, LoraStateTracker};
+    use dynamo_lora::{LoraRoutingTable, LoraStateTracker};
 
     #[test]
     fn kv_policy_rejects_runtime_requests_when_runtime_loading_is_disabled() {
@@ -369,12 +369,12 @@ mod tests {
                     .build()
                     .unwrap();
                 request.routing = Some(RoutingHints {
-                    lora_name: Some(crate::lora::runtime::adapter_key(
+                    lora_name: Some(dynamo_lora::runtime::adapter_key(
                         "base",
                         "custom:///opaque",
                     )),
                     base_model_name: Some("base".into()),
-                    lora_source_uri: Some(crate::lora::runtime::RuntimeLoraSourceUri::new(
+                    lora_source_uri: Some(dynamo_lora::runtime::RuntimeLoraSourceUri::new(
                         "custom:///opaque".into(),
                     )),
                     lora_resolution_version: Some(2),
@@ -450,10 +450,10 @@ mod tests {
         request.routing = Some(RoutingHints {
             lora_name: Some("runtime-key".into()),
             base_model_name: Some("base".into()),
-            lora_source_uri: Some(crate::lora::runtime::RuntimeLoraSourceUri::new(
+            lora_source_uri: Some(dynamo_lora::runtime::RuntimeLoraSourceUri::new(
                 "custom:///opaque|reference".into(),
             )),
-            lora_resolution_version: Some(crate::lora::runtime::RUNTIME_LORA_PROTOCOL_VERSION),
+            lora_resolution_version: Some(dynamo_lora::runtime::RUNTIME_LORA_PROTOCOL_VERSION),
             ..Default::default()
         });
         assert_eq!(
@@ -476,15 +476,15 @@ mod tests {
             .build()
             .unwrap();
         let complete = RoutingHints {
-            lora_name: Some(crate::lora::runtime::adapter_key(
+            lora_name: Some(dynamo_lora::runtime::adapter_key(
                 "base",
                 "custom:///opaque",
             )),
             base_model_name: Some("base".into()),
-            lora_source_uri: Some(crate::lora::runtime::RuntimeLoraSourceUri::new(
+            lora_source_uri: Some(dynamo_lora::runtime::RuntimeLoraSourceUri::new(
                 "custom:///opaque".into(),
             )),
-            lora_resolution_version: Some(crate::lora::runtime::RUNTIME_LORA_PROTOCOL_VERSION),
+            lora_resolution_version: Some(dynamo_lora::runtime::RUNTIME_LORA_PROTOCOL_VERSION),
             ..Default::default()
         };
         for missing in 0..3 {
@@ -614,10 +614,10 @@ mod tests {
         request.routing = Some(RoutingHints {
             lora_name: Some(name),
             base_model_name: Some("base".into()),
-            lora_source_uri: Some(crate::lora::runtime::RuntimeLoraSourceUri::new(
+            lora_source_uri: Some(dynamo_lora::runtime::RuntimeLoraSourceUri::new(
                 "custom:///opaque".into(),
             )),
-            lora_resolution_version: Some(crate::lora::runtime::RUNTIME_LORA_PROTOCOL_VERSION),
+            lora_resolution_version: Some(dynamo_lora::runtime::RUNTIME_LORA_PROTOCOL_VERSION),
             ..Default::default()
         });
         let selection = policy
