@@ -13,10 +13,10 @@ use super::identity::{
     CanonicalModelId, CanonicalModelRegistration, ModelAlias, ModelTarget, WorkerRole,
 };
 use super::resolution::{ResolvedIndexerDomain, resolve_indexer_domain};
-use crate::worker_type::WorkerType;
 use dynamo_model_card::local_model::runtime_config::ModelRuntimeConfig;
 use dynamo_model_card::model_card::ModelDeploymentCard;
 use dynamo_model_card::model_type::ModelType;
+use dynamo_router_protocol::worker_type::WorkerType;
 
 #[cfg(test)]
 use super::{
@@ -957,8 +957,8 @@ fn same_membership(left: &EndpointMembership, right: &EndpointMembership) -> boo
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::worker_type::WorkerType;
     use dynamo_model_card::model_card::LoraInfo;
+    use dynamo_router_protocol::worker_type::WorkerType;
     use dynamo_runtime::discovery::ModelTaintsUpdate;
 
     fn card(name: &str, artifact: &str, block_size: u32) -> ModelDeploymentCard {

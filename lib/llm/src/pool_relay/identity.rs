@@ -10,7 +10,7 @@ use dynamo_router_protocol::identity::{IdentitySource, PoolId};
 use dynamo_runtime::protocols::EndpointId;
 use serde::{Deserialize, Deserializer, Serialize};
 
-use crate::worker_type::WorkerType;
+use dynamo_router_protocol::worker_type::WorkerType;
 
 fn validate_identity_text<E>(
     value: impl Into<String>,

@@ -2940,7 +2940,7 @@ mod tests {
         model: &str,
         artifact: &str,
         kv_state_endpoint: EndpointId,
-        worker_type: crate::worker_type::WorkerType,
+        worker_type: dynamo_router_protocol::worker_type::WorkerType,
     ) -> EndpointMembership {
         projected_membership_with_metadata(
             endpoint,
@@ -2961,7 +2961,7 @@ mod tests {
         model: &str,
         artifact: &str,
         kv_state_endpoint: EndpointId,
-        worker_type: Option<crate::worker_type::WorkerType>,
+        worker_type: Option<dynamo_router_protocol::worker_type::WorkerType>,
         aliases: Vec<String>,
         context_length: Option<u32>,
     ) -> EndpointMembership {
@@ -4011,7 +4011,7 @@ mod tests {
             "llama",
             "meta/llama",
             prefill_kv_endpoint,
-            crate::worker_type::WorkerType::Prefill,
+            dynamo_router_protocol::worker_type::WorkerType::Prefill,
         );
         let decode_membership = projected_membership_with_role(
             &decode_endpoint,
@@ -4019,7 +4019,7 @@ mod tests {
             "llama",
             "meta/llama",
             decode_kv_endpoint,
-            crate::worker_type::WorkerType::Decode,
+            dynamo_router_protocol::worker_type::WorkerType::Decode,
         );
         let prefill_endpoint_id = prefill_membership.endpoint.clone();
         let decode_endpoint_id = decode_membership.endpoint.clone();

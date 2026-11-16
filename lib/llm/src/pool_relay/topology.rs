@@ -17,9 +17,9 @@ use super::identity::{
     CanonicalModelId, CanonicalModelRegistration, KvQuerySemantics, ModelTarget,
     PoolCatalogSnapshot, WorkerRole,
 };
-use crate::worker_type::WorkerType;
 use dynamo_model_card::model_type::ModelType;
 use dynamo_model_card::readiness::{ReadinessUnit, evaluate_readiness};
+use dynamo_router_protocol::worker_type::WorkerType;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TopologyReadinessState {
