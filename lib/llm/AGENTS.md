@@ -1,6 +1,6 @@
 # lib/llm
 
-`dynamo-llm` is the frontend. It owns the OpenAI, Anthropic and System One HTTP service (`http`), the KServe gRPC service (`grpc`), the entrypoint that prepares an engine and runs an input (`entrypoint`), the frontend serving-load publisher (`frontend_load`), the `/generate` format registry (`generate_format`), and the adapter that runs a `dynamo-mocker` engine on the runtime (`mocker`). `utils::lora_name_to_id` backs the Python binding of the same name.
+`dynamo-llm` is the frontend. It owns the OpenAI, Anthropic and System One HTTP service (`http`), the KServe gRPC service (`grpc`), the entrypoint that prepares an engine and runs an input (`entrypoint`), and the frontend serving-load publisher (`frontend_load`). `utils::lora_name_to_id` backs the Python binding of the same name.
 
 The KV block manager (`block_manager`, `tokens`, `cuda`, `common::dtype`, `src/kernels`, behind the `block-manager` and `cuda` features) also still lives here. It is being removed separately; do not build on it.
 
@@ -14,16 +14,19 @@ Everything else that used to be in this crate is a crate of its own, and `dynamo
 | `dynamo-sync` | `lib/sync` | what keeps a router's view of its workers up to date: KV index ingest and recovery, active-sequence replica sync, worker load, KV event-source membership |
 | `dynamo-preprocessor` | `lib/preprocessor` | the preprocessor and the detokenizer (`backend`) |
 | `dynamo-telemetry` | `lib/telemetry` | request trace, sinks and recorders |
+| `dynamo-generate-format` | `lib/generate-format` | the contract an engine-native `/generate` format implements (`GenerateFormat`) and the registry the frontend selects one from |
 | `dynamo-frontend-protocols` | `lib/frontend-protocols` | the OpenAI, Anthropic, tensor and internal request and response types |
 | `dynamo-model-card` | `lib/model-card` | the model deployment card, the runtime config, the local model and the model types |
 
 - The chain is frontend -> discovery -> router host -> sync -> frontend-protocols -> model-card. `dynamo-preprocessor` and `dynamo-telemetry` sit beside `dynamo-sync`, above the protocols and the model card: discovery and the frontend depend on the preprocessor, the preprocessor and the router host on telemetry. No crate in the table depends on one above it.
-- Worker-side code is `dynamo-backend-common` (`lib/backend-common`): the admission gate, the first-token notifier, and the KV event and forward-pass-metrics publishers. It depends on `dynamo-sync` and what is below it, never on this crate; this crate depends on it for the mocker adapter and the worker entrypoint.
+- `dynamo-generate-format` sits beside `dynamo-sync` too, on `dynamo-frontend-protocols` and `dynamo-http-server`. This crate serves the installed formats (`http/service/format_generate.rs`); the format crates (`lib/generate-formats/*`) and their catalog depend on the contract and not on this crate, so the SGLang and vLLM sidecars that link a format do not link the frontend.
+- Worker-side code is `dynamo-backend-common` (`lib/backend-common`): the admission gate, the first-token notifier, and the KV event and forward-pass-metrics publishers. It depends on `dynamo-sync` and what is below it, never on this crate; this crate depends on it for the worker entrypoint.
+- The engine that serves a `dynamo-mocker` scheduler on the runtime is `dynamo-mocker-engine` (`lib/mocker/engine`), on `dynamo-backend-common`. This crate does not depend on it; the Python bindings call it.
 - The Pool Relay is `dynamo-pool-relay` (`lib/pool-relay`), on `dynamo-sync`. This crate does not depend on it.
 - Under all of them: `dynamo-http-server` (the HTTP server machinery and the request metrics) and `dynamo-error` (the error-class to HTTP status policy, feature `http`).
 - Cargo features `media-ffmpeg` and `mm-routing` forward to `dynamo-preprocessor`, and `request-trace-s3` and `request-trace-bench` to `dynamo-telemetry`; they gate no code here.
 - Log targets of moved code name the new crate (`dynamo_discovery::...`, `dynamo_router_host::...`); the v1.7.0 section of the deprecations page has the table.
-- Check: `cargo check -p dynamo-llm --all-targets`, `cargo test -p dynamo-llm --lib` or `--test <name>`, and `cargo tree -p <crate> | grep dynamo-llm` must print nothing for every crate below this one in the table and for `dynamo-backend-common` and `dynamo-pool-relay`.
+- Check: `cargo check -p dynamo-llm --all-targets`, `cargo test -p dynamo-llm --lib` or `--test <name>`, and `cargo tree -p <crate> | grep dynamo-llm` must print nothing for every crate below this one in the table and for `dynamo-backend-common`, `dynamo-pool-relay` and `dynamo-mocker-engine`. The sidecars, the mocker servers, the format crates and their catalog may name this crate only in dev-dependencies: `cargo tree -e normal -i dynamo-llm -p dynamo-vllm-sidecar` must find nothing.
 
 # Protocol Field Handling
 

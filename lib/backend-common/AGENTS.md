@@ -22,7 +22,7 @@ the raw path alongside the LLM `chat`/`completions`/`embedding`/etc.
 
 ## What The Crate Owns
 
-Besides the engine contract and the `Worker`, the crate owns the code that runs in a worker next to its engine. It moved here from `dynamo-llm`, so a worker gets it without linking the frontend, and `dynamo-llm` depends on this crate for it.
+Besides the engine contract and the `Worker`, the crate owns the code that runs in a worker next to its engine. It moved here from `dynamo-llm`, so a worker gets it without linking the frontend, and `dynamo-llm` (the worker entrypoint) and `dynamo-mocker-engine` (the mocker's KV and forward-pass publishers) depend on this crate for it.
 
 - `admission_gate` (`admission_gate.rs`, `admission_gate/metrics.rs`): one `WorkerAdmissionGate` per backend worker, in front of the engine; `AdmissionEngine` serves an engine through it.
 - `first_token` (`first_token.rs`): `FirstTokenSource` and `FirstTokenNotifier`, the worker-side first-token notification.
