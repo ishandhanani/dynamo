@@ -14,7 +14,6 @@ use crate::{
         FrontendRouteExtension,
         service_v2::{self, HttpService},
     },
-    kv_router::plugins::RouterPluginBuilder,
     namespace::NamespaceFilter,
 };
 use dynamo_frontend_protocols::types::openai::chat_completions::{
@@ -24,6 +23,7 @@ use dynamo_model_card::{
     endpoint_type::EndpointType, local_model::runtime_config::TokenizerBackend,
     model_type::ModelType, router_config::RouterConfig,
 };
+use dynamo_router_host::plugins::RouterPluginBuilder;
 use dynamo_runtime::DistributedRuntime;
 use dynamo_runtime::metrics::MetricsHierarchy;
 
@@ -105,10 +105,10 @@ impl HttpFrontend {
         let plugins = RouterPluginBuilder::new(self.plugins);
         let router_config = engine_config.local_model().router_config();
         plugins.validate_config(&router_config.kv_router_config)?;
-        crate::kv_router::check_hint_policies_route_on_kv_path(
+        dynamo_router_host::check_hint_policies_route_on_kv_path(
             router_config.router_mode,
             &router_config.kv_router_config,
-            &crate::kv_router::EVERY_ROLE,
+            &dynamo_router_host::EVERY_ROLE,
         )?;
 
         // Callers that reach the frontend without going through `run_input`

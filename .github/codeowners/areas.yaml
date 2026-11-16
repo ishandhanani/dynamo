@@ -29,7 +29,7 @@ areas:
   - lib/llm/src/http/service/
   - lib/llm/src/lora.rs
   - lib/llm/src/lora/
-  - lib/llm/src/lora_routing.rs
+  - lib/router-host/src/lora_routing.rs
   - lib/lora/
   - lib/preprocessor/src/lib.rs
   - lib/preprocessor/src/
@@ -75,9 +75,8 @@ areas:
   - lib/router/session-affinity/
   - lib/router/slot-tracker/
   - lib/router/worker-selection/
-  - lib/llm/src/kv_router.rs
+  - lib/router-host/
   - lib/llm/src/kv_router/
-  - lib/llm/src/routing_policy.rs
   - lib/llm/src/scheduler_load.rs
   - lib/sync/src/indexer/
   - lib/sync/src/sequence.rs
@@ -87,7 +86,6 @@ areas:
   - lib/sync/src/load/routing_load.rs
   - lib/sync/src/metrics.rs
   - lib/sync/src/metrics/
-  - lib/llm/src/kv_router/prefill_router/
   - lib/llm/src/kv_router/publisher/
   - tests/router/
   - tests/router/configs/
@@ -301,6 +299,9 @@ areas:
   - lib/bindings/python/
   - lib/error/
   - lib/llm/
+  - lib/router-host/src/migration.rs
+  - lib/router-host/src/migration/
+  - lib/router-host/src/session_affinity/
   - lib/sync/
   - lib/preprocessor/
   - lib/preprocessor/src/backend.rs
@@ -320,6 +321,7 @@ areas:
   - lib/telemetry/src/perf/
   - lib/llm/src/utils/
   - lib/llm/tests/
+  - lib/router-host/tests/
   - lib/runtime/
   - lib/runtime/benches/
   - lib/runtime/docs/
@@ -1193,11 +1195,11 @@ shared:
   owners:
   - frontend
   - observability
-- glob: lib/llm/src/kv_router/README.md
+- glob: lib/router-host/src/README.md
   owners:
   - router
   - epp
-- glob: lib/llm/src/kv_router/prefill_router/query.rs
+- glob: lib/router-host/src/prefill_router/query.rs
   owners:
   - router
   - epp
@@ -1209,7 +1211,7 @@ shared:
   owners:
   - router
   - kv-memory
-- glob: lib/llm/src/lora_routing.rs
+- glob: lib/router-host/src/lora_routing.rs
   owners:
   - frontend
   - router

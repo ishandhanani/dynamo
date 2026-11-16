@@ -1,0 +1,12 @@
+# lib/router-host
+
+`dynamo-router-host` is the router's request path: `KvRouter` (crate root) selects and books a worker through the selection core of `lib/router/kv-router`; `RoutingHost` (`routing_host`) dispatches and tracks the request until its booking is released; `PrefillRouter` (`prefill_router`) and `EncoderRouter` (`encoder_router`) are the optional hops in front of it; `session_affinity`, `migration`, `lora_routing` and `routing_policy` are the stages and policies they use. Read [`src/README.md`](src/README.md) for the layer map and the booking lifecycle, and [`src/AGENTS.md`](src/AGENTS.md) for the module map and the rules for changing this code.
+
+- Depends on (Dynamo crates): `dynamo-sync` (the state the request path reads) and `dynamo-runtime`; the router crates `dynamo-kv-router`, `dynamo-scheduler`, `dynamo-worker-selection`, `dynamo-slot-tracker`, `dynamo-kv-indexer`, `dynamo-kv-hashing`, `dynamo-kv-hints`, `dynamo-kv-events`, `dynamo-admission`, `dynamo-session-affinity`, `dynamo-router-protocol` and `dynamo-router-policies` (the linked plugin registry); `dynamo-lora`, `dynamo-model-card`, `dynamo-frontend-protocols`, `dynamo-telemetry` (the router-selection trace), `dynamo-http-server` (the request metrics handle) and the published `dynamo-protocols`.
+- Must not depend on: `dynamo-llm` or any crate above it. Discovery (`dynamo_llm::discovery`) builds the routers and passes in what they need from above: the model manager as `PrefillEndpointProvider`, the Pool Relay's scheduler-load publisher as `SchedulerLoadPublisher`, a shared cache client as `SharedKvCache`. Not the worker-side publisher either: it stays in `dynamo_llm::kv_router::publisher`.
+- Hosts import this crate directly; `dynamo-llm` does not re-export it.
+- No behaviour of selection, booking and release order, cancellation, affinity or the hops may change in a refactor. Metric names and labels, log message text and env vars defined here are contracts.
+- Log targets are `dynamo_router_host::...` (the crate root logs as `dynamo_router_host`). `DYN_LOG=dynamo_router_host=debug` shows the `[ROUTING]` lines.
+- Features: `testing` exports the test fixtures and test-only handles that `dynamo-llm`'s tests reuse.
+- Some tests start an in-memory distributed runtime and bind local ports; rerun a failing one alone before treating it as a regression.
+- Check: `cargo test -p dynamo-router-host`, `cargo check -p dynamo-router-host --all-targets`, and `cargo tree -p dynamo-router-host | grep dynamo-llm` must print nothing.

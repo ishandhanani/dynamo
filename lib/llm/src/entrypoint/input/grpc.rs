@@ -26,12 +26,12 @@ pub async fn run(
     engine_config: EngineConfig,
 ) -> anyhow::Result<()> {
     let router_config = engine_config.local_model().router_config();
-    crate::kv_router::plugins::RouterPluginBuilder::default()
+    dynamo_router_host::plugins::RouterPluginBuilder::default()
         .validate_config(&router_config.kv_router_config)?;
-    crate::kv_router::check_hint_policies_route_on_kv_path(
+    dynamo_router_host::check_hint_policies_route_on_kv_path(
         router_config.router_mode,
         &router_config.kv_router_config,
-        &crate::kv_router::EVERY_ROLE,
+        &dynamo_router_host::EVERY_ROLE,
     )?;
 
     let mut grpc_service_builder = kserve::KserveService::builder()

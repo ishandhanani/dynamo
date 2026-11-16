@@ -55,7 +55,7 @@ use tracing::Instrument;
 /// Error reasons that must never be attached as the cause of a pre-stream
 /// failure, because migration classification walks the whole cause chain.
 ///
-/// This must match `MIGRATION_BLOCKING_REASONS` in `lib/llm/src/migration.rs`.
+/// This must match `MIGRATION_BLOCKING_REASONS` in `lib/router-host/src/migration.rs`.
 pub(crate) const MIGRATION_SENSITIVE_ERROR_REASONS: &[&str] = &[
     "request.cancelled",
     "request.deadline_exceeded",
@@ -120,7 +120,7 @@ pub(crate) fn pre_stream_failure_error(error: StreamPrologueError) -> DynamoErro
 pub mod testing {
     use super::{DynamoError, StreamPrologueError};
 
-    /// The semantic reason set is pinned by a cross-crate test in `lib/llm/src/migration.rs`.
+    /// The semantic reason set is pinned by a cross-crate test in `lib/router-host/src/migration.rs`.
     pub fn migration_sensitive_error_reasons() -> &'static [&'static str] {
         super::MIGRATION_SENSITIVE_ERROR_REASONS
     }

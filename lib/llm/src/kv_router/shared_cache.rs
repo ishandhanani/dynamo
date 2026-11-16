@@ -25,13 +25,13 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use tokio_util::sync::CancellationToken;
 
-use crate::kv_router::metrics::RoutingOverheadMetrics;
 use dynamo_kv_events::residency::StorageTier;
 use dynamo_kv_hashing::ExternalSequenceBlockHash;
 use dynamo_kv_indexer::host::{
     KvRouterError, SessionPrefixIndexer, SessionResidencyOwner, SharedCacheBackend,
 };
 use dynamo_model_card::local_model::runtime_config::ModelRuntimeConfig;
+use dynamo_router_host::metrics::RoutingOverheadMetrics;
 use dynamo_router_protocol::worker::WorkerId;
 use dynamo_runtime::transports::zmq::sockets::{connect_sub_socket, multipart_message};
 use dynamo_scheduler::host::SharedKvCache;

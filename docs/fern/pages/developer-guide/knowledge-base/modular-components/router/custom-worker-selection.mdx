@@ -343,7 +343,7 @@ Rust embedders start with the host registry, which includes the default policy, 
 
 ```rust
 use dynamo_llm::entrypoint::input::http::HttpFrontend;
-use dynamo_llm::kv_router::plugins::router_plugin_registry;
+use dynamo_router_host::plugins::router_plugin_registry;
 
 let mut registry = router_plugin_registry();
 acme_routing_catalog::register(&mut registry)?;

@@ -1783,7 +1783,10 @@ mod tests {
             if public {
                 assert!(error.public_message().unwrap().contains(expected));
             }
-            assert!(!crate::migration::is_migratable(&error), "{expected}");
+            assert!(
+                !dynamo_router_host::migration::is_migratable(&error),
+                "{expected}"
+            );
             assert!(stream.next().await.is_none());
         }
     }
@@ -2221,7 +2224,7 @@ mod tests {
                         "token_ids_logprob and output length exceed the 65536 output candidate-entry budget"
                     )
                 );
-                assert!(!crate::migration::is_migratable(&error));
+                assert!(!dynamo_router_host::migration::is_migratable(&error));
                 assert!(stream.next().await.is_none());
                 assert_eq!(live.active_request_count(), 0);
             }

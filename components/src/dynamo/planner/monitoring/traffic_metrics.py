@@ -278,7 +278,7 @@ class PrometheusAPIClient:
         if self.metrics_source == "router":
             # TODO: Replace work_handler.REQUEST_DURATION_SECONDS with
             #       prometheus_names.router.REQUEST_DURATION_SECONDS once
-            #       RouterRequestMetrics in lib/llm/src/kv_router/metrics.rs
+            #       RouterRequestMetrics in lib/router-host/src/metrics.rs
             #       registers dynamo_component_router_request_duration_seconds.
             #       Until then this queries a non-existent metric and returns 0,
             #       which causes throughput planning to see

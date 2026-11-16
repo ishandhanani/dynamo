@@ -1006,7 +1006,7 @@ impl ResponseState {
             // `Length` is what the frontend's prefill router requires to chain
             // into decode: it returns any other terminal reason straight to the
             // caller as an already-complete request (see
-            // `kv_router::prefill_router::admission`). It is also accurate —
+            // `dynamo_router_host::prefill_router::admission`). It is also accurate —
             // the context request is capped at one token.
             finish_reason: Some(FinishReason::Length),
             // PrefillReady is the final response for a context request, so it

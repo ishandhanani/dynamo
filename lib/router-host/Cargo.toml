@@ -1,0 +1,75 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+[package]
+name = "dynamo-router-host"
+description = "The Dynamo router's request path: KvRouter, RoutingHost, the prefill and encode hops, session affinity and request migration around the selection core"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+homepage.workspace = true
+repository.workspace = true
+
+[features]
+# Exports the test fixtures and test-only handles that dynamo-llm's tests reuse.
+testing = []
+
+[dependencies]
+# repo
+dynamo-admission = { workspace = true }
+dynamo-frontend-protocols = { workspace = true }
+dynamo-http-server = { workspace = true }
+dynamo-kv-events = { workspace = true }
+dynamo-kv-hashing = { workspace = true }
+dynamo-kv-hints = { workspace = true }
+dynamo-kv-indexer = { workspace = true }
+dynamo-kv-router = { workspace = true }
+dynamo-lora = { workspace = true }
+dynamo-model-card = { workspace = true }
+dynamo-router-policies = { workspace = true }
+dynamo-router-protocol = { workspace = true }
+dynamo-runtime = { workspace = true }
+dynamo-scheduler = { workspace = true }
+dynamo-session-affinity = { workspace = true }
+dynamo-slot-tracker = { workspace = true }
+dynamo-sync = { workspace = true }
+dynamo-telemetry = { workspace = true }
+dynamo-worker-selection = { workspace = true }
+
+# workspace
+anyhow = { workspace = true }
+arc-swap = "1.9.1"
+async-stream = { workspace = true }
+async-trait = { workspace = true }
+dynamo-protocols = { workspace = true }
+futures = { workspace = true }
+parking_lot = { workspace = true }
+prometheus = { workspace = true }
+rand = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+tokio-util = { workspace = true }
+tracing = { workspace = true }
+uuid = { workspace = true }
+
+[dev-dependencies]
+dynamo-error = { workspace = true, features = ["http"] }
+dynamo-kv-router = { workspace = true, features = ["testing"] }
+dynamo-preprocessor = { workspace = true }
+dynamo-runtime = { workspace = true, features = ["testing"] }
+dynamo-sync = { workspace = true, features = ["testing"] }
+dynamo-tokenizers = { workspace = true }
+rstest = "0.18.2"
+serial_test = "3"
+temp-env = { version = "0.3.6", features = ["async_closure"] }
+tempfile = { workspace = true }
+tokenizers = { version = "0.23.2", default-features = false, features = [
+  "onig",
+  "esaxx_fast",
+  "rustls-tls",
+] }
+tokio-stream = { workspace = true }
+tracing-subscriber = { workspace = true }

@@ -646,7 +646,7 @@ pub mod kvbm {
 /// Metric names are composed as `"{METRIC_PREFIX}{frontend_service::*}"` at init time,
 /// then passed to `component.metrics().create_*()` which auto-prepends `dynamo_component_`,
 /// yielding e.g. `dynamo_component_router_requests_total`.
-/// See `lib/llm/src/kv_router/metrics.rs` `RouterRequestMetrics::from_component()`.
+/// See `lib/router-host/src/metrics.rs` `RouterRequestMetrics::from_component()`.
 pub mod router_request {
     /// Prefix prepended to `frontend_service::*` names to form router metric names.
     /// e.g. `"router_"` + `frontend_service::REQUESTS_TOTAL` → `"router_requests_total"`.
@@ -657,7 +657,7 @@ pub mod router_request {
 ///
 /// Combined with `name_prefix::ROUTER` ("dynamo_router") in `RoutingOverheadMetrics::register()`,
 /// yielding e.g. `dynamo_router_overhead_block_hashing_ms{router_id="..."}`.
-/// See `lib/llm/src/kv_router/metrics.rs`.
+/// See `lib/router-host/src/metrics.rs`.
 pub mod routing_overhead {
     /// Time spent computing block hashes
     pub const BLOCK_HASHING_MS: &str = "overhead_block_hashing_ms";

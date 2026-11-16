@@ -63,7 +63,7 @@ Upgrading? Pick the version you run today to see the dependency migration and th
 
 <span className="dynref-badge dynref-badge--blue">Behavioral</span> **Your own Rust code that constructs a round-robin, random or least-loaded `PushRouter` must pass the router-mode plugins** ([#17713](https://github.com/ai-dynamo/dynamo/pull/17713)). Without them, the router fails to build.
 
-  > **Migrate:** CLI, Python and Kubernetes deployments need no change. If your Rust code creates a `PushRouter` in one of these modes, replace `PushRouter::from_client(client, RouterMode::RoundRobin)` with `PushRouter::from_client_with_options(client, RouterMode::RoundRobin, dynamo_llm::kv_router::plugins::push_router_options())`. If your code depends only on `dynamo-runtime`, add `dynamo-llm`, or implement `InstanceSelector`.
+  > **Migrate:** CLI, Python and Kubernetes deployments need no change. If your Rust code creates a `PushRouter` in one of these modes, replace `PushRouter::from_client(client, RouterMode::RoundRobin)` with `PushRouter::from_client_with_options(client, RouterMode::RoundRobin, dynamo_router_host::plugins::push_router_options())`. If your code depends only on `dynamo-runtime`, add `dynamo-router-host`, or implement `InstanceSelector`.
 
 <span className="dynref-badge dynref-badge--red">Removed</span> **Removed the `power-of-two` Router mode.** `--router-mode power-of-two`, `DYN_ROUTER_MODE=power-of-two`, and a policy file that names the `power-of-two` worker-selection type now fail at startup, and the Rust `PushRouter::power_of_two_choices()` method is removed. A frontend that discovers a v1.5 or v1.6 worker advertising `power-of-two` reports an error naming the removal instead of routing to that worker set.
 
@@ -77,7 +77,7 @@ Upgrading? Pick the version you run today to see the dependency migration and th
 | `scheduling::{RequestClassifier, ClassifyRequest, ClassifyFuture, ClassifyEvent, ClassifierError, AbortCause, RequestClassifierContext, RequestProgress, ...}` and the same names under `scheduling::request_classifier` | `dynamo_kv_router::plugins::request_classifier::*` |
 | `scheduling::{WorkerSelectionConfig, WorkerSelectionInstance}`, `scheduling::policy_config::{RequestClassifierConfig, WorkerSelectionConfig, WorkerSelectionInstance}` | `plugins::worker_selection::{WorkerSelectionConfig, WorkerSelectionInstance}`, `plugins::request_classifier::RequestClassifierConfig` |
 | `WorkerSelectionPolicyRegistry`; `RouterPluginRegistry::register` | `RouterPluginRegistry`; `RouterPluginRegistry::register_worker_selection` |
-| `dynamo_llm::kv_router::{install_worker_selection_policy_registry, worker_selection_policy_registry}` | `dynamo_llm::kv_router::plugins::{install_router_plugin_registry, router_plugin_registry}` |
+| `dynamo_llm::kv_router::{install_worker_selection_policy_registry, worker_selection_policy_registry}` | `dynamo_router_host::plugins::{install_router_plugin_registry, router_plugin_registry}` |
 | `HttpFrontend::worker_selection_policy_factory` | `HttpFrontend::plugins(RouterPlugins::default().with_worker_selection(...))`, called before `request_classifier_factory`, because `plugins` replaces every plugin set earlier |
 
   > **Migrate:** Update `use` paths and registry calls in custom policy crates and catalogs. The types and traits are unchanged, so no other code changes are needed.
@@ -139,6 +139,8 @@ Removed with no replacement: the dummy shared-cache server, `services::shared_ca
 | `discovery::{RuntimeConfigWatch, runtime_config_watch}` | `dynamo_sync::runtime_configs` |
 | `kv_router::metrics::{WORKER_LOAD_METRICS, WorkerLoadMetrics, RemoteIndexerMetrics}` | `dynamo_sync::metrics` |
 | `kv_router::SCHEDULER_LOAD_SUBJECT` | `dynamo_llm::scheduler_load` |
+| The other `kv_router` crate-root items (`KvRouter`, `KvPushRouter`, `RoutingHost`, `PrefillRouter`, `EncoderRouter`, `ManagedKvRouter`, ...) and `kv_router::{encoder_router, metrics, plugins, prefill_router}` | `dynamo_router_host`, the crate root |
+| `session_affinity`, `migration` | `dynamo_router_host::{session_affinity, migration}` |
 
 A log statement that does not pin a target reports its module path, so its target follows the move.
 
@@ -161,6 +163,8 @@ A log statement that does not pin a target reports its module path, so its targe
 | `dynamo_llm::discovery::kv_source_watch` | `dynamo_sync::membership::kv_source_watch` |
 | `dynamo_llm::discovery::runtime_configs` | `dynamo_sync::runtime_configs` |
 | `dynamo_llm::{direct_zmq_fan_in, direct_zmq_sub_pool}` | `dynamo_sync::{direct_zmq_fan_in, direct_zmq_sub_pool}` |
+| `dynamo_llm::kv_router` and its `embedded`, `encoder_router`, `plugins`, `prefill_router`, `request_lease`, and `routing_host` modules | `dynamo_router_host`, under the same module names |
+| `dynamo_llm::{migration, session_affinity}` | `dynamo_router_host::{migration, session_affinity}` |
 
 Statements that pin a target keep it: the request-trace sinks still log under `dynamo_llm::request_trace`. Removed with no replacement: `kv_router::WORKER_KV_INDEXER_BUFFER_SIZE`, which is now private to the KV event publisher.
 
@@ -580,7 +584,7 @@ Statements that pin a target keep it: the request-trace sinks still log under `d
 
 <span className="dynref-badge dynref-badge--blue">Behavioral</span> **EPP default RUST_LOG changed from debug/kv_router=trace to info** ([#11550](https://github.com/ai-dynamo/dynamo/pull/11550)).
 
-  > **Migrate:** Explicitly set RUST_LOG=debug,dynamo_sync=trace,dynamo_llm::kv_router=trace on the EPP component if verbose KV-router trace logging is still required.
+  > **Migrate:** Explicitly set RUST_LOG=debug,dynamo_sync=trace,dynamo_router_host=trace,dynamo_llm::kv_router=trace on the EPP component if verbose KV-router trace logging is still required.
 
 <span className="dynref-badge dynref-badge--blue">Behavioral</span> **Monitoring scripts now target dynamo-system namespace by default instead of dynamo** ([#10771](https://github.com/ai-dynamo/dynamo/pull/10771)).
 

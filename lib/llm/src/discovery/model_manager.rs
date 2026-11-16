@@ -37,10 +37,7 @@ use dynamo_runtime::{
 };
 
 use crate::{
-    kv_router::{
-        KvRouter, SelectionPolicySource, prefill_router::PrefillEndpointProvider,
-        shared_cache::HicacheSharedKvCache, worker_set_target::WorkerSetTarget,
-    },
+    kv_router::shared_cache::HicacheSharedKvCache,
     lora::{
         LoadEstimatorSubscription, LoraFilter, LoraRoutingTable, LoraStateTracker,
         load_estimator::LoadEstimator,
@@ -68,6 +65,10 @@ use dynamo_model_card::{
     },
     model_card::ModelDeploymentCard,
     model_type::ModelType,
+};
+use dynamo_router_host::{
+    KvRouter, SelectionPolicySource, prefill_router::PrefillEndpointProvider,
+    worker_set_target::WorkerSetTarget,
 };
 use dynamo_sync::indexer::KvEventSourceRequirement;
 
@@ -2290,7 +2291,7 @@ impl ModelManager {
         metric_worker_type: &'static str,
         model_name: Option<String>,
         is_eagle: bool,
-    ) -> anyhow::Result<crate::kv_router::ManagedKvRouter> {
+    ) -> anyhow::Result<dynamo_router_host::ManagedKvRouter> {
         self.managed_kv_router_for_with_worker_role(
             endpoint,
             kv_cache_block_size,
@@ -2315,7 +2316,7 @@ impl ModelManager {
         metric_worker_type: &'static str,
         model_name: Option<String>,
         is_eagle: bool,
-    ) -> anyhow::Result<crate::kv_router::ManagedKvRouter> {
+    ) -> anyhow::Result<dynamo_router_host::ManagedKvRouter> {
         self.managed_kv_router_for_with_policy(
             endpoint,
             kv_cache_block_size,
@@ -2343,7 +2344,7 @@ impl ModelManager {
         metric_worker_type: &'static str,
         model_name: Option<String>,
         is_eagle: bool,
-    ) -> anyhow::Result<crate::kv_router::ManagedKvRouter> {
+    ) -> anyhow::Result<dynamo_router_host::ManagedKvRouter> {
         let client = endpoint.client().await?;
         let source = dynamo_sync::load::RouterLoadSource::from_worker_role_or_metric(
             worker_role,
@@ -2372,7 +2373,10 @@ impl ModelManager {
                 load_context.cancellation_token(),
             )
             .await?;
-        Ok(crate::kv_router::ManagedKvRouter::new(load_context, router))
+        Ok(dynamo_router_host::ManagedKvRouter::new(
+            load_context,
+            router,
+        ))
     }
 
     /// Construct and attach all configured plugins before publishing the router.
@@ -2381,7 +2385,7 @@ impl ModelManager {
         &self,
         client: Client,
         kv_cache_block_size: u32,
-        plugins: &crate::kv_router::plugins::RouterPluginBuilder,
+        plugins: &dynamo_router_host::plugins::RouterPluginBuilder,
         kv_router_config: Option<KvRouterConfig>,
         prefill_load_estimator: Option<Arc<dyn PrefillLoadEstimator>>,
         worker_role: Option<WorkerType>,
@@ -2503,8 +2507,9 @@ impl ModelManager {
             model_name,
             is_eagle,
             shared_cache,
-            self.lora_enabled
-                .then(|| crate::lora_routing::LoraKvPolicy::kv(lora_domain.filter.clone())),
+            self.lora_enabled.then(|| {
+                dynamo_router_host::lora_routing::LoraKvPolicy::kv(lora_domain.filter.clone())
+            }),
             scheduler_load,
             Some(crate::scheduler_load::start_scheduler_load_publisher),
             cancellation_token,
@@ -3094,7 +3099,7 @@ mod tests {
             endpoint: EndpointId,
             ids: Arc<parking_lot::Mutex<HashSet<u64>>>,
         }
-        impl crate::kv_router::prefill_router::PrefillRouterLifecycle for Hop {
+        impl dynamo_router_host::prefill_router::PrefillRouterLifecycle for Hop {
             fn set_target(&self, _: Option<WorkerSetTarget>) {}
 
             fn available_worker_ids_for(
@@ -4575,8 +4580,8 @@ mod tests {
         endpoint: Endpoint,
     ) -> (
         WorkerSet,
-        Option<Arc<crate::kv_router::PrefillRouter>>,
-        Option<Arc<crate::kv_router::EncoderRouter>>,
+        Option<Arc<dynamo_router_host::PrefillRouter>>,
+        Option<Arc<dynamo_router_host::EncoderRouter>>,
     ) {
         let card = topology_card(role);
         let mut worker_set = WorkerSet::new(
@@ -4585,7 +4590,7 @@ mod tests {
             card.clone(),
         );
         worker_set.set_topology_target(
-            crate::kv_router::worker_set_target::CommittedWorkerSetTarget {
+            dynamo_router_host::worker_set_target::CommittedWorkerSetTarget {
                 group: endpoint.id().to_string(),
                 endpoint,
                 generation: 1,
@@ -4598,7 +4603,7 @@ mod tests {
         }
 
         let (_activation_tx, activation_rx) = tokio::sync::oneshot::channel();
-        let prefill = crate::kv_router::PrefillRouter::new(
+        let prefill = dynamo_router_host::PrefillRouter::new(
             activation_rx,
             manager,
             RouterMode::RoundRobin,
@@ -4606,13 +4611,13 @@ mod tests {
             None,
             None,
             None,
-            crate::session_affinity::SessionAffinityMode::Hard,
+            dynamo_router_host::session_affinity::SessionAffinityMode::Hard,
             "topology-model".to_string(),
             worker_set.namespace().to_string(),
             dynamo_sync::load::LoadThresholdHandle::new(Default::default()),
             CancellationToken::new(),
         );
-        let encoder = crate::kv_router::EncoderRouter::new(
+        let encoder = dynamo_router_host::EncoderRouter::new(
             "topology-model".to_string(),
             worker_set.namespace().to_string(),
         );

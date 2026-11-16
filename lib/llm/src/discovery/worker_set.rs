@@ -14,13 +14,7 @@ use dynamo_runtime::protocols::EndpointId;
 use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
 
-use crate::{
-    discovery::allocator::AllocatorTrimOnDrop,
-    kv_router::{
-        EncoderRouter, prefill_router::PrefillRouterLifecycle,
-        worker_set_target::CommittedWorkerSetTarget,
-    },
-};
+use crate::discovery::allocator::AllocatorTrimOnDrop;
 use dynamo_frontend_protocols::types::{
     RealtimeBidirectionalEngine,
     generic::tensor::TensorStreamingEngine,
@@ -36,6 +30,10 @@ use dynamo_frontend_protocols::types::{
 };
 use dynamo_model_card::model_card::ModelDeploymentCard;
 use dynamo_preprocessor::OpenAIPreprocessor;
+use dynamo_router_host::{
+    EncoderRouter, prefill_router::PrefillRouterLifecycle,
+    worker_set_target::CommittedWorkerSetTarget,
+};
 use dynamo_sync::load::{LoadThresholdHandle, RoutingLoadContext};
 
 type StreamingEngine<Req, Resp> = Arc<dyn AsyncEngine<SingleIn<Req>, ManyOut<Resp>, Error>>;
