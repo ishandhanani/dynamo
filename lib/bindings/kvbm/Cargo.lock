@@ -2084,6 +2084,7 @@ dependencies = [
 name = "dynamo-error"
 version = "1.8.0"
 dependencies = [
+ "http 1.4.1",
  "serde",
  "serde_json",
 ]
@@ -2254,6 +2255,7 @@ dependencies = [
  "dialoguer",
  "dynamo-admission",
  "dynamo-decisions",
+ "dynamo-error",
  "dynamo-global-common",
  "dynamo-global-discovery-client",
  "dynamo-global-view-broadcaster",
