@@ -27,7 +27,6 @@ areas:
   - lib/llm/src/http/
   - lib/llm/src/http/service.rs
   - lib/llm/src/http/service/
-  - lib/llm/src/lora.rs
   - lib/discovery/src/lora.rs
   - lib/discovery/src/lora/
   - lib/discovery/src/pipeline.rs

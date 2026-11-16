@@ -513,7 +513,6 @@ requirements.txt                                                                
 /lib/bindings/kvbm/                                                                                     @ai-dynamo/dynamo-kv-memory-codeowners
 /lib/llm/src/grpc.rs                                                                                    @ai-dynamo/dynamo-frontend-codeowners
 /lib/llm/src/http.rs                                                                                    @ai-dynamo/dynamo-frontend-codeowners
-/lib/llm/src/lora.rs                                                                                    @ai-dynamo/dynamo-frontend-codeowners
 /tests/frontend/grpc/                                                                                   @ai-dynamo/dynamo-frontend-codeowners
 /lib/lora/src/routing/                                                                                  @ai-dynamo/dynamo-runtime-codeowners
 /lib/preprocessor/src/                                                                                  @ai-dynamo/dynamo-frontend-codeowners

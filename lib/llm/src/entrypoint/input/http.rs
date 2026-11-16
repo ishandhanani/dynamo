@@ -366,7 +366,7 @@ async fn run_watcher(
     // Start the LoRA allocation controller when LoRA serving is enabled. The
     // controller itself is additionally gated on the allocation config
     // (DYN_LORA_ALLOCATION_ENABLED) inside `start_lora_controller`.
-    if crate::lora::lora_serving_enabled() {
+    if dynamo_lora::lora_serving_enabled() {
         let cancel_token = runtime.primary_token();
         let _controller_handle = model_manager.start_lora_controller(cancel_token);
     }

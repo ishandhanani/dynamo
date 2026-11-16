@@ -150,7 +150,7 @@ async fn run_watcher(
     // Start the LoRA allocation controller when LoRA serving is enabled (mirrors http.rs;
     // additionally gated on DYN_LORA_ALLOCATION_ENABLED inside start_lora_controller). Without
     // this, gRPC LoRA deployments would never get dynamic placement (N3).
-    if crate::lora::lora_serving_enabled() {
+    if dynamo_lora::lora_serving_enabled() {
         let _controller_handle = model_manager.start_lora_controller(runtime.primary_token());
     }
 

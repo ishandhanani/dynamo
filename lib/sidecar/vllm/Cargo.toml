@@ -26,6 +26,7 @@ jemalloc = ["dynamo-sidecar-common/jemalloc"]
 
 [dependencies]
 dynamo-backend-common = { workspace = true }
+dynamo-lora = { workspace = true }
 dynamo-llm = { workspace = true }
 dynamo-preprocessor = { workspace = true }
 dynamo-frontend-protocols = { workspace = true }

@@ -4183,6 +4183,7 @@ dependencies = [
  "dynamo-backend-common",
  "dynamo-frontend-protocols",
  "dynamo-llm",
+ "dynamo-lora",
  "dynamo-model-card",
  "dynamo-preprocessor",
  "dynamo-router-protocol",

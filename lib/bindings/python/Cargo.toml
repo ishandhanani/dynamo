@@ -75,6 +75,7 @@ dynamo-sync = { path = "../../sync" }
 dynamo-preprocessor = { path = "../../preprocessor" }
 dynamo-frontend-protocols = { path = "../../frontend-protocols" }
 dynamo-error = { path = "../../error", features = ["http"] }
+dynamo-lora = { path = "../../lora" }
 dynamo-mocker = { path = "../../mocker" }
 dynamo-model-card = { path = "../../model-card" }
 dynamo-parsers = { version = "=11.0.11" }
