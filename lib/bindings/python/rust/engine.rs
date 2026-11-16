@@ -20,7 +20,9 @@ use tokio::sync::mpsc;
 use tokio_stream::{Stream, StreamExt, wrappers::ReceiverStream};
 use tokio_util::sync::CancellationToken;
 
-use dynamo_llm::admission_gate::{AdmissionRequest, AdmissionResponse, WorkerAdmissionGate};
+use dynamo_backend_common::admission_gate::{
+    AdmissionRequest, AdmissionResponse, WorkerAdmissionGate,
+};
 use dynamo_runtime::dynamo_nvtx_range;
 use dynamo_runtime::error::{BackendError, DynamoError, ErrorType};
 use dynamo_runtime::logging::get_distributed_tracing_context;

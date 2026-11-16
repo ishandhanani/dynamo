@@ -18,8 +18,10 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::{Duration, Instant};
 
-use crate::kv_router::publisher::{KvEventPublisher, KvEventSourceConfig, WorkerMetricsPublisher};
 use anyhow::{Context, Result, bail};
+use dynamo_backend_common::kv_publisher::{
+    KvEventPublisher, KvEventSourceConfig, WorkerMetricsPublisher,
+};
 use dynamo_frontend_protocols::TokenIdType;
 use dynamo_frontend_protocols::common::FinishReason;
 use dynamo_frontend_protocols::common::llm_backend::{LLMEngineOutput, PreprocessedRequest};
@@ -290,7 +292,7 @@ struct MockerExecutionContext {
     /// Keep ZMQ relay publishers alive until their engines finish shutting down.
     _relay_publishers: OnceCell<Vec<Option<KvEventPublisher>>>,
     /// Forward pass metrics publisher (kept alive for the engine lifetime).
-    _fpm_publisher: OnceCell<crate::fpm_publisher::FpmDirectPublisher>,
+    _fpm_publisher: OnceCell<dynamo_backend_common::fpm_publisher::FpmDirectPublisher>,
 }
 
 struct PreparedBootstrap {
@@ -508,24 +510,25 @@ impl MockerExecutionContext {
 
         // Create FPM publisher upfront and get per-dp-rank sink handles.
         let worker_id = component.drt().connection_id().to_string();
-        let (fpm_publisher, fpm_sinks) = match crate::fpm_publisher::FpmDirectPublisher::new(
-            endpoint.clone(),
-            worker_id,
-            self.engine_args.dp_size,
-        )
-        .await
-        {
-            Ok((publisher, sinks)) => (Some(publisher), sinks),
-            Err(e) => {
-                tracing::error!("Failed to start FPM publisher: {e}");
-                (
-                    None,
-                    (0..self.engine_args.dp_size)
-                        .map(|_| dynamo_mocker::common::protocols::FpmPublisher::default())
-                        .collect(),
-                )
-            }
-        };
+        let (fpm_publisher, fpm_sinks) =
+            match dynamo_backend_common::fpm_publisher::FpmDirectPublisher::new(
+                endpoint.clone(),
+                worker_id,
+                self.engine_args.dp_size,
+            )
+            .await
+            {
+                Ok((publisher, sinks)) => (Some(publisher), sinks),
+                Err(e) => {
+                    tracing::error!("Failed to start FPM publisher: {e}");
+                    (
+                        None,
+                        (0..self.engine_args.dp_size)
+                            .map(|_| dynamo_mocker::common::protocols::FpmPublisher::default())
+                            .collect(),
+                    )
+                }
+            };
 
         let (engines, relay_publishers, handoff_session_permits) =
             match self.start_engines(kv_endpoint, fpm_sinks).await {

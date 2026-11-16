@@ -246,7 +246,7 @@ impl Context {
 
     pub(crate) fn bind_first_token_source(
         &mut self,
-        source: &dynamo_llm::first_token::FirstTokenSource,
+        source: &dynamo_backend_common::first_token::FirstTokenSource,
         dp_rank: Option<u32>,
     ) {
         let Some(dp_rank) = dp_rank else {

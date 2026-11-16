@@ -8,7 +8,6 @@ use pyo3::prelude::*;
 use serde::Deserialize;
 use tokio::sync::OnceCell;
 
-use super::*;
 use crate::{Endpoint, to_pyerr};
 
 #[pyclass]
@@ -16,7 +15,7 @@ pub struct KvStateAgentHost {
     endpoint: dynamo_runtime::component::Endpoint,
     max_slots: usize,
     slots_per_socket: usize,
-    inner: Arc<OnceCell<Arc<llm_rs::kv_router::publisher::KvStateAgentHost>>>,
+    inner: Arc<OnceCell<Arc<dynamo_backend_common::kv_publisher::KvStateAgentHost>>>,
 }
 
 #[pymethods]
@@ -40,8 +39,8 @@ impl KvStateAgentHost {
         crate::future_into_py(py, async move {
             inner
                 .get_or_try_init(|| async move {
-                    llm_rs::kv_router::publisher::KvStateAgentHost::start(
-                        llm_rs::kv_router::publisher::KvStateAgentHostConfig {
+                    dynamo_backend_common::kv_publisher::KvStateAgentHost::start(
+                        dynamo_backend_common::kv_publisher::KvStateAgentHostConfig {
                             endpoint,
                             max_slots,
                             slots_per_socket,
@@ -81,7 +80,7 @@ impl KvStateAgentHost {
 }
 
 impl KvStateAgentHost {
-    fn started(&self) -> PyResult<Arc<llm_rs::kv_router::publisher::KvStateAgentHost>> {
+    fn started(&self) -> PyResult<Arc<dynamo_backend_common::kv_publisher::KvStateAgentHost>> {
         self.inner
             .get()
             .cloned()
@@ -115,8 +114,8 @@ struct AttachmentDescriptorInput {
 pub struct KvStateAttachmentOwner {
     endpoint: dynamo_runtime::component::Endpoint,
     worker_id: u64,
-    descriptors: Arc<Vec<llm_rs::kv_router::publisher::KvStateAttachmentDescriptor>>,
-    inner: Arc<OnceCell<Arc<llm_rs::kv_router::publisher::KvStateAttachmentOwner>>>,
+    descriptors: Arc<Vec<dynamo_backend_common::kv_publisher::KvStateAttachmentDescriptor>>,
+    inner: Arc<OnceCell<Arc<dynamo_backend_common::kv_publisher::KvStateAttachmentOwner>>>,
 }
 
 #[pymethods]
@@ -128,7 +127,7 @@ impl KvStateAttachmentOwner {
         let descriptors = inputs
             .into_iter()
             .map(|input| {
-                Ok(llm_rs::kv_router::publisher::KvStateAttachmentDescriptor {
+                Ok(dynamo_backend_common::kv_publisher::KvStateAttachmentDescriptor {
                     cache_owner_id: input.cache_owner_id.parse()?,
                     worker: dynamo_router_protocol::worker::WorkerWithDpRank {
                         worker_id,
@@ -166,7 +165,7 @@ impl KvStateAttachmentOwner {
         crate::future_into_py(py, async move {
             inner
                 .get_or_try_init(|| async move {
-                    llm_rs::kv_router::publisher::KvStateAttachmentOwner::start(
+                    dynamo_backend_common::kv_publisher::KvStateAttachmentOwner::start(
                         endpoint,
                         worker_id,
                         descriptors.as_ref().clone(),
@@ -186,7 +185,9 @@ impl KvStateAttachmentOwner {
 }
 
 impl KvStateAttachmentOwner {
-    fn started(&self) -> PyResult<Arc<llm_rs::kv_router::publisher::KvStateAttachmentOwner>> {
+    fn started(
+        &self,
+    ) -> PyResult<Arc<dynamo_backend_common::kv_publisher::KvStateAttachmentOwner>> {
         self.inner.get().cloned().ok_or_else(|| {
             PyRuntimeError::new_err("KvStateAttachmentOwner.start() must complete first")
         })

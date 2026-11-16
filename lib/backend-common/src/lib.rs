@@ -10,13 +10,24 @@
 //! Engines work directly with [`PreprocessedRequest`] and [`LLMEngineOutput`]
 //! — the same types the rest of the Rust pipeline uses.
 //!
+//! The crate also owns the services that run in a worker next to its engine:
+//! [`admission_gate`] (one admission gate per backend worker, in front of the engine),
+//! [`first_token`] (the first-token notification), [`kv_publisher`] (the KV event and
+//! worker metrics publishers, the ZMQ listener and its recovery, the KV state agent) and
+//! [`fpm_publisher`] (the forward-pass-metrics relay). It never depends on `dynamo-llm`;
+//! `dynamo-llm` depends on this crate.
+//!
 //! See `CLAUDE.md` in this crate for the design contract.
 
 mod adapter;
+pub mod admission_gate;
 pub mod args;
 pub mod disagg;
 pub mod engine;
 pub mod error;
+pub mod first_token;
+pub mod fpm_publisher;
+pub mod kv_publisher;
 pub mod metrics;
 mod publisher;
 mod rl;
@@ -29,6 +40,12 @@ mod topology;
 #[cfg(debug_assertions)]
 mod validate;
 pub mod worker;
+
+// Only the tracing guard of the shared test helpers is used here.
+#[cfg(test)]
+#[allow(dead_code)]
+#[path = "../../runtime/src/test_utils.rs"]
+mod test_utils;
 
 pub use args::CommonArgs;
 pub use disagg::DisaggregationMode;

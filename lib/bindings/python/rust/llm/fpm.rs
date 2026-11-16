@@ -3,9 +3,9 @@
 
 //! Python bindings for Forward Pass Metrics (FPM = ForwardPassMetrics) event plane integration.
 //!
-//! - `FpmEventRelay`: thin wrapper around `dynamo_llm::fpm_publisher::FpmEventRelay`
+//! - `FpmEventRelay`: thin wrapper around `dynamo_backend_common::fpm_publisher::FpmEventRelay`
 //!   (used by the vLLM adapter — ZMQ bridge from EngineCore child process).
-//! - `FpmDirectPublisher`: thin wrapper around `dynamo_llm::fpm_publisher::FpmDirectPublisher`
+//! - `FpmDirectPublisher`: thin wrapper around `dynamo_backend_common::fpm_publisher::FpmDirectPublisher`
 //!   (used by the TRT-LLM adapter — direct event-plane publish, no ZMQ hop).
 //! - `FpmEventSubscriber`: wraps `EventSubscriber::for_endpoint` for the consumer side.
 //!   Supports two mutually exclusive modes:
@@ -25,7 +25,6 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 use tokio_util::sync::CancellationToken;
 
-use super::*;
 use crate::Endpoint;
 use crate::to_pyerr;
 use dynamo_model_card::local_model::runtime_config::ModelRuntimeConfig;
@@ -231,7 +230,7 @@ fn fresh_fpm_snapshot(
 /// plane with automatic discovery registration.
 #[pyclass]
 pub(crate) struct FpmEventRelay {
-    inner: llm_rs::fpm_publisher::FpmEventRelay,
+    inner: dynamo_backend_common::fpm_publisher::FpmEventRelay,
 }
 
 #[pymethods]
@@ -248,7 +247,10 @@ impl FpmEventRelay {
         // Don't hold the GIL while blocking on the runtime; its tasks may need it.
         let inner = py
             .allow_threads(move || {
-                llm_rs::fpm_publisher::FpmEventRelay::new(endpoint.inner, zmq_endpoint)
+                dynamo_backend_common::fpm_publisher::FpmEventRelay::new(
+                    endpoint.inner,
+                    zmq_endpoint,
+                )
             })
             .map_err(to_pyerr)?;
         Ok(Self { inner })
@@ -276,7 +278,7 @@ pub(crate) struct FpmDirectPublisher {
     // per-rank serialization tasks and the event-plane publisher task. Held
     // by reference only — keep the field non-underscored so a future cleanup
     // pass does not delete it as "dead", which would leak every spawned task.
-    inner: llm_rs::fpm_publisher::FpmDirectPublisher,
+    inner: dynamo_backend_common::fpm_publisher::FpmDirectPublisher,
     publishers: Vec<FpmPublisher>,
 }
 
@@ -296,11 +298,13 @@ impl FpmDirectPublisher {
         // Don't hold the GIL while blocking on the runtime; its tasks may need it.
         let (inner, publishers) = py
             .allow_threads(move || {
-                rt.block_on(llm_rs::fpm_publisher::FpmDirectPublisher::new(
-                    endpoint.inner,
-                    worker_id,
-                    dp_size,
-                ))
+                rt.block_on(
+                    dynamo_backend_common::fpm_publisher::FpmDirectPublisher::new(
+                        endpoint.inner,
+                        worker_id,
+                        dp_size,
+                    ),
+                )
             })
             .map_err(to_pyerr)?;
         Ok(Self { inner, publishers })

@@ -46,8 +46,9 @@ depend on is in [`../AGENTS.md`](../AGENTS.md).
 - `lora_routing.rs`, `routing_policy.rs`: the hosted candidate policy and the KV admission
   policy hooks, and their LoRA implementations.
 
-Two neighbours stay in `dynamo-llm` under `lib/llm/src/kv_router/`: `publisher/`, the
-worker-side KV event publisher, and `shared_cache.rs`, the HiCache shared KV cache client
+Two neighbours live elsewhere: the worker-side KV event publisher is
+`dynamo_backend_common::kv_publisher` (`lib/backend-common/src/kv_publisher/`), and
+`lib/llm/src/kv_router/shared_cache.rs` in `dynamo-llm` is the HiCache shared KV cache client
 (SGLang + Mooncake), which the model manager builds and hands `KvRouter` as a `SharedKvCache`.
 
 The state these stages read is kept up to date by the crate `dynamo-sync`

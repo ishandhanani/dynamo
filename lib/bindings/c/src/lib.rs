@@ -8,12 +8,12 @@ use std::borrow::Cow;
 use std::ffi::CStr;
 use std::sync::atomic::{AtomicU32, Ordering};
 
+use dynamo_backend_common::kv_publisher::KvEventPublisher;
 use dynamo_kv_events::event::{
     KvCacheEvent, KvCacheEventData, KvCacheRemoveData, KvCacheStoreData, KvCacheStoredBlockData,
 };
 use dynamo_kv_hashing::ExternalSequenceBlockHash;
 use dynamo_kv_hashing::routing::{BlockHashOptions, compute_block_hash_for_seq};
-use dynamo_llm::kv_router::publisher::KvEventPublisher;
 use dynamo_runtime::discovery::DiscoveryQuery;
 use dynamo_runtime::{DistributedRuntime, Worker};
 

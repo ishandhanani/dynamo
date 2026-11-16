@@ -13,15 +13,13 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
-use dynamo_llm::admission_gate::{AdmissionEngine, WorkerAdmissionGate};
-use dynamo_llm::first_token::FirstTokenSource;
-use dynamo_llm::worker_type::WorkerType;
 use dynamo_model_card::local_model::runtime_config::{
     DisaggregatedEndpoint, ModelRuntimeConfig, StructuralTagConfig, TOPOLOGY_TAINT_PREFIX,
 };
 use dynamo_model_card::local_model::{LocalModel, LocalModelBuilder, update_model_taints};
 use dynamo_model_card::media_config::{MediaDecoder, MediaFetcher};
 use dynamo_model_card::model_type::{ModelInput, ModelType};
+use dynamo_router_protocol::worker_type::WorkerType;
 use dynamo_runtime::config::HealthStatus;
 use dynamo_runtime::engine_routes::EngineRouteCallback;
 use dynamo_runtime::pipeline::network::Ingress;
@@ -33,11 +31,13 @@ use dynamo_runtime::{DistributedRuntime, Runtime};
 use tokio_util::sync::CancellationToken;
 
 use crate::adapter::{EngineAdapter, RawEngineAdapter};
+use crate::admission_gate::{AdmissionEngine, WorkerAdmissionGate};
 use crate::disagg::DisaggregationMode;
 use crate::engine::{
     EngineConfig, KvEventSource, LLMEngine, MetricsBindings, MetricsCtx, RawEngine,
 };
 use crate::error::{BackendError, DynamoError, ErrorType};
+use crate::first_token::FirstTokenSource;
 use crate::publisher::{PublisherHandles, setup_publishers};
 
 /// Default grace-period in seconds between discovery unregister and engine drain.

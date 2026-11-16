@@ -17,15 +17,13 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use dynamo_llm::first_token::FirstTokenSource;
-use dynamo_llm::kv_router::publisher::{
-    KvEventPublisher, KvEventSourceConfig, WorkerMetricsPublisher,
-};
 use dynamo_runtime::component::Endpoint;
 use dynamo_runtime::protocols::EndpointId;
 
 use crate::engine::KvEventSource;
 use crate::error::{BackendError, DynamoError, ErrorType};
+use crate::first_token::FirstTokenSource;
+use crate::kv_publisher::{KvEventPublisher, KvEventSourceConfig, WorkerMetricsPublisher};
 use crate::metrics::{ComponentGauges, EngineMetrics};
 use crate::snapshot_publisher::SnapshotPublisher;
 

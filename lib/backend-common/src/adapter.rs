@@ -17,7 +17,6 @@ use std::time::{Duration, Instant};
 use async_trait::async_trait;
 use dynamo_frontend_protocols::common::llm_backend::LLMEngineOutput;
 use dynamo_frontend_protocols::common::preprocessor::PreprocessedRequest;
-use dynamo_llm::first_token::FirstTokenSource;
 use dynamo_runtime::engine::AsyncEngineContext;
 use dynamo_runtime::pipeline::{
     AsyncEngine, AsyncEngineContextProvider, Error, ManyOut, ResponseStream, SingleIn,
@@ -34,6 +33,7 @@ use tracing_opentelemetry::OpenTelemetrySpanExt;
 use crate::disagg::DisaggregationMode;
 use crate::engine::{FinishReason, FirstTokenNotifier, GenerateContext, LLMEngine, RawEngine};
 use crate::error::{BackendError, DynamoError, ErrorType};
+use crate::first_token::FirstTokenSource;
 
 const ABORT_TIMEOUT: Duration = Duration::from_secs(5);
 

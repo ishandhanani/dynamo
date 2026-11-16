@@ -23,32 +23,52 @@ integration = ["dynamo-runtime/integration"]
 
 [dependencies]
 dynamo-runtime = { workspace = true }
-dynamo-llm = { workspace = true }
 dynamo-frontend-protocols = { workspace = true }
 dynamo-model-card = { workspace = true }
 dynamo-kv-hints = { workspace = true }
+dynamo-kv-events = { workspace = true }
+dynamo-kv-hashing = { workspace = true }
+dynamo-kv-indexer = { workspace = true }
+dynamo-mocker = { workspace = true }
+dynamo-scheduler = { workspace = true }
+dynamo-slot-tracker = { workspace = true }
+dynamo-sync = { workspace = true }
+dynamo-telemetry = { workspace = true }
 dynamo-protocols = { workspace = true }
 dynamo-rl = { workspace = true }
+dynamo-router-protocol = { workspace = true }
 
 anyhow = { workspace = true }
+arc-swap = "1.9.1"
 async-stream = { workspace = true }
 async-trait = { workspace = true }
+blake3 = "1.8"
+bytes = { workspace = true }
 clap = { version = "4", features = ["derive", "env"] }
 futures = { workspace = true }
 opentelemetry = { workspace = true }
 parking_lot = { workspace = true }
 prometheus = { workspace = true }
+rand = { workspace = true }
+rmp-serde = "1.3"
 serde = { workspace = true }
 serde_json = { workspace = true }
+thiserror = { workspace = true }
+tmq = { workspace = true }
 tokio = { workspace = true }
 tokio-util = { workspace = true }
 tracing = { workspace = true }
 tracing-opentelemetry = { workspace = true }
+zmq = { workspace = true }
 
 [dev-dependencies]
+dynamo-router-host = { workspace = true, features = ["testing"] }
+dynamo-sync = { workspace = true, features = ["testing"] }
 reqwest = { workspace = true }
+rstest = "0.18.2"
 serde_json = { workspace = true }
 serial_test = "3"
 tempfile = { workspace = true }
 temp-env = { version = "0.3.6", features = ["async_closure"] }
+tokio-stream = { workspace = true }
 tracing-subscriber = { workspace = true }

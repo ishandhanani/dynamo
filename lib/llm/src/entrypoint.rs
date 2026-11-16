@@ -15,7 +15,8 @@ use std::sync::Arc;
 use dynamo_runtime::discovery::ModelCardInstanceId;
 use dynamo_scheduler::host::PrefillLoadEstimator;
 
-use crate::{admission_gate::WorkerAdmissionGate, engines::StreamingEngine};
+use crate::engines::StreamingEngine;
+use dynamo_backend_common::admission_gate::WorkerAdmissionGate;
 use dynamo_frontend_protocols::types::openai::chat_completions::OpenAIChatCompletionsStreamingEngine;
 use dynamo_model_card::{local_model::LocalModel, model_card::ModelDeploymentCard};
 use dynamo_preprocessor::backend::ExecutionContext;

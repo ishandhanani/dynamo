@@ -8,7 +8,7 @@
 //! Dynamo event plane with automatic discovery registration.
 //!
 //! This follows the same two-layer architecture as
-//! [`crate::kv_router::publisher::KvEventPublisher`], but is much simpler:
+//! [`crate::kv_publisher::KvEventPublisher`], but is much simpler:
 //! no event transformation, no batching, no local indexer — just raw byte relay.
 
 use std::sync::Arc;

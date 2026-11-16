@@ -3,11 +3,10 @@
 
 use std::{future::Future, pin::Pin, sync::Arc};
 
-use crate::{
+use crate::{engines::StreamingEngineAdapter, worker_type::WorkerType};
+use dynamo_backend_common::{
     admission_gate::AdmissionEngine,
-    engines::StreamingEngineAdapter,
     first_token::{FirstTokenNotifier, FirstTokenSource},
-    worker_type::WorkerType,
 };
 use dynamo_frontend_protocols::common::preprocessor::PreprocessedRequest;
 use dynamo_frontend_protocols::types::{

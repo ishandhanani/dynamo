@@ -86,7 +86,7 @@ areas:
   - lib/sync/src/load/routing_load.rs
   - lib/sync/src/metrics.rs
   - lib/sync/src/metrics/
-  - lib/llm/src/kv_router/publisher/
+  - lib/backend-common/src/kv_publisher/
   - tests/router/
   - tests/router/configs/
   - lib/router-plugins/
@@ -877,7 +877,7 @@ shared:
   owners:
   - backend-vllm
   - observability
-- glob: lib/llm/src/fpm_publisher.rs
+- glob: lib/backend-common/src/fpm_publisher.rs
   owners:
   - runtime
   - observability

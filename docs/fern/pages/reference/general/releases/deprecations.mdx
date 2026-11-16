@@ -141,6 +141,8 @@ Removed with no replacement: the dummy shared-cache server, `services::shared_ca
 | `kv_router::SCHEDULER_LOAD_SUBJECT` | `dynamo_llm::scheduler_load` |
 | The other `kv_router` crate-root items (`KvRouter`, `KvPushRouter`, `RoutingHost`, `PrefillRouter`, `EncoderRouter`, `ManagedKvRouter`, ...) and `kv_router::{encoder_router, metrics, plugins, prefill_router}` | `dynamo_router_host`, the crate root |
 | `session_affinity`, `migration` | `dynamo_router_host::{session_affinity, migration}` |
+| `admission_gate`, `first_token`, `fpm_publisher` | `dynamo_backend_common`, under the same module names |
+| `kv_router::publisher` | `dynamo_backend_common::kv_publisher` |
 
 A log statement that does not pin a target reports its module path, so its target follows the move.
 
@@ -165,6 +167,8 @@ A log statement that does not pin a target reports its module path, so its targe
 | `dynamo_llm::{direct_zmq_fan_in, direct_zmq_sub_pool}` | `dynamo_sync::{direct_zmq_fan_in, direct_zmq_sub_pool}` |
 | `dynamo_llm::kv_router` and its `embedded`, `encoder_router`, `plugins`, `prefill_router`, `request_lease`, and `routing_host` modules | `dynamo_router_host`, under the same module names |
 | `dynamo_llm::{migration, session_affinity}` | `dynamo_router_host::{migration, session_affinity}` |
+| `dynamo_llm::{admission_gate, first_token, fpm_publisher}` | `dynamo_backend_common::{admission_gate, first_token, fpm_publisher}` |
+| `dynamo_llm::kv_router::publisher` | `dynamo_backend_common::kv_publisher` |
 
 Statements that pin a target keep it: the request-trace sinks still log under `dynamo_llm::request_trace`. Removed with no replacement: `kv_router::WORKER_KV_INDEXER_BUFFER_SIZE`, which is now private to the KV event publisher.
 

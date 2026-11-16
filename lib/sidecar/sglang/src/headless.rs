@@ -8,8 +8,8 @@ use std::collections::HashMap;
 use std::time::Duration;
 
 use anyhow::{Context, Result, bail, ensure};
+use dynamo_backend_common::kv_publisher::{KvEventPublisher, KvEventSourceConfig};
 use dynamo_backend_common::{CommonArgs, DisaggregationMode, DynamoError};
-use dynamo_llm::kv_router::publisher::{KvEventPublisher, KvEventSourceConfig};
 use dynamo_model_card::local_model::runtime_config::ModelRuntimeConfig;
 use dynamo_runtime::component::Endpoint;
 use dynamo_runtime::config::HealthStatus;
