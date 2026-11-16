@@ -13,7 +13,6 @@ pub mod grpc;
 pub mod http;
 // pub mod key_value_store;
 pub mod generate_format;
-pub mod mocker;
 pub mod tokens;
 pub mod utils;
 

@@ -881,7 +881,7 @@ shared:
   owners:
   - runtime
   - observability
-- glob: lib/llm/src/mocker/
+- glob: lib/mocker/engine/
   owners:
   - runtime
   - performance

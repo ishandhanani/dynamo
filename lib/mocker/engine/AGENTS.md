@@ -1,0 +1,12 @@
+# lib/mocker/engine
+
+`dynamo-mocker-engine` serves a `dynamo-mocker` scheduler as a token engine on the Dynamo runtime. `make_mocker_engine` returns the engine (`dynamo_preprocessor::backend::ExecutionContext`) that `python -m dynamo.mocker` registers through the Python bindings. Once the endpoint's component is up, the crate root starts one `LiveEngine` per data-parallel rank, publishes KV events (through a `KvEventPublisher`, or over ZMQ when `zmq_kv_events_port` is set), worker load and forward-pass metrics, picks the rank of each request, replays recorded responses, and maps scheduler output to `LLMEngineOutput`. `handoff` runs the prefill and decode sides of a disaggregated handoff over the mocker's bootstrap transport, `metrics` exports the native engine metric families of the simulated engine (vLLM, SGLang, TensorRT-LLM names), and `sglang` shapes SGLang-native `/generate` responses.
+
+The scheduler, the KV manager, the performance model, the bootstrap transport, load generation and replay are `dynamo-mocker` (`lib/mocker`); this crate adds only what needs the runtime.
+
+- Depends on (Dynamo crates): `dynamo-mocker` (with `zmq-events`), `dynamo-backend-common` (`kv_publisher` and `fpm_publisher`), `dynamo-runtime`, `dynamo-frontend-protocols`, `dynamo-kv-events`, `dynamo-preprocessor` (only for the `ExecutionContext` alias of the engine type), and the published `dynamo-protocols`. Tests also use `dynamo-router-host` (`migration::is_migratable`) and `dynamo-kv-hashing`.
+- Must not depend on: `dynamo-llm`. `dynamo-mocker` cannot depend on this crate or hold this code: `dynamo-backend-common` depends on `dynamo-mocker`, and this crate depends on `dynamo-backend-common`.
+- The Python bindings are the only caller (`rust/llm/entrypoint.rs`). The mocker gRPC servers (`lib/mocker/servers/*`) and the `LLMEngine` example (`lib/backend-common/examples/mocker`) drive `dynamo-mocker` themselves and do not use this crate.
+- Token timing and output, handoff and KV event behaviour, metric names and labels, log message text and the `MockerConfig` fields read here are what tests, benchmarks and the planner rely on. A refactor must not change them.
+- The log target is `dynamo_mocker_engine` (it was `dynamo_llm::mocker`): every log statement is in the crate root. `DYN_LOG=dynamo_mocker_engine=debug` shows the adapter's lines.
+- Check: `cargo test -p dynamo-mocker-engine`, and `cargo tree -p dynamo-mocker-engine | grep 'dynamo-llm '` must print nothing.

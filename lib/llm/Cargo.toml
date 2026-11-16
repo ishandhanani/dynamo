@@ -75,7 +75,6 @@ dynamo-slot-tracker = { workspace = true }
 dynamo-sync = { workspace = true }
 dynamo-telemetry = { workspace = true }
 dynamo-memory = { workspace = true }
-dynamo-mocker = { workspace = true, features = ["zmq-events"] }
 dynamo-rl = { workspace = true }
 dynamo-runtime = { workspace = true }
 dynamo-tokenizers = { workspace = true }
@@ -214,6 +213,8 @@ mockito = "1.7.0"
 dynamo-bench = { path = "../bench", default-features = false, features = [
   "kv-router-stress-support",
 ] }
+# kv_router_bench replays the mocker's load sequences.
+dynamo-mocker = { workspace = true }
 tokio-tungstenite = "0.26"
 
 [[bin]]

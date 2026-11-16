@@ -21,6 +21,7 @@ members = [
     "lib/data-gen",
     "lib/kv-hashing",
     "lib/mocker",
+    "lib/mocker/engine",
     "lib/kv-events",
     "lib/router/admission",
     "lib/router/kv-hints",
@@ -120,6 +121,7 @@ dynamo-global-router-store-dynamodb = { path = "lib/global-router-store-dynamodb
 dynamo-http-server = { path = "lib/http-server", version = "1.8.0" }
 dynamo-memory = { path = "lib/memory", version = "1.8.0" }
 dynamo-mocker = { path = "lib/mocker", version = "1.8.0" }
+dynamo-mocker-engine = { path = "lib/mocker/engine", version = "1.8.0" }
 dynamo-kv-router = { path = "lib/router/kv-router", version = "1.8.0" }
 dynamo-router-protocol = { path = "lib/router/protocol", version = "1.8.0" }
 dynamo-scheduler = { path = "lib/router/scheduler", version = "1.8.0" }

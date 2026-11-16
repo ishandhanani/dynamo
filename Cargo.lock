@@ -3229,6 +3229,34 @@ dependencies = [
 ]
 
 [[package]]
+name = "dynamo-mocker-engine"
+version = "1.8.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "dynamo-backend-common",
+ "dynamo-frontend-protocols",
+ "dynamo-kv-events",
+ "dynamo-kv-hashing",
+ "dynamo-mocker",
+ "dynamo-preprocessor",
+ "dynamo-protocols 10.0.1",
+ "dynamo-router-host",
+ "dynamo-runtime",
+ "futures",
+ "prometheus",
+ "rand 0.9.4",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tokio-stream",
+ "tokio-util",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
 name = "dynamo-model-card"
 version = "1.8.0"
 dependencies = [

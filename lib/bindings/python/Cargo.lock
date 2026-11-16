@@ -2457,7 +2457,6 @@ dependencies = [
  "dynamo-kv-router",
  "dynamo-lora",
  "dynamo-memory",
- "dynamo-mocker",
  "dynamo-model-card",
  "dynamo-parsers",
  "dynamo-preprocessor",
@@ -2607,6 +2606,31 @@ dependencies = [
  "uuid",
  "validator",
  "zip",
+]
+
+[[package]]
+name = "dynamo-mocker-engine"
+version = "1.8.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "dynamo-backend-common",
+ "dynamo-frontend-protocols",
+ "dynamo-kv-events",
+ "dynamo-mocker",
+ "dynamo-preprocessor",
+ "dynamo-protocols 10.0.1",
+ "dynamo-runtime",
+ "futures",
+ "prometheus",
+ "rand 0.9.4",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tokio-stream",
+ "tokio-util",
+ "tracing",
+ "uuid",
 ]
 
 [[package]]
@@ -2872,6 +2896,7 @@ dependencies = [
  "dynamo-llm",
  "dynamo-lora",
  "dynamo-mocker",
+ "dynamo-mocker-engine",
  "dynamo-model-card",
  "dynamo-parsers",
  "dynamo-pool-relay",

@@ -88,7 +88,7 @@ ROUTER_OVERLOAD_DEBUG_DYN_LOG = (
     "dynamo_sync=debug,"
     "dynamo_router_host=debug,dynamo_backend_common::kv_publisher=debug,dynamo_discovery::shared_cache=debug,"
     "dynamo_runtime::pipeline::network::egress::push_router=debug,"
-    "dynamo_llm::mocker=debug"
+    "dynamo_mocker_engine=debug"
 )
 PLANNER_PROFILE_DATA_DIR = (
     Path(__file__).resolve().parents[2]

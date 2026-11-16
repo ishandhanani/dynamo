@@ -3,7 +3,7 @@
 
 //! Framed transport for mocker prefill/decode handoff sessions.
 //!
-//! Session and request ownership live in `dynamo-llm`. This module only
+//! Session and request ownership live in `dynamo-mocker-engine`. This module only
 //! validates framed connections and hands them to that owner.
 
 use std::sync::{Arc, Mutex};

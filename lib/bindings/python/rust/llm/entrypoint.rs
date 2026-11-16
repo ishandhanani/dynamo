@@ -24,7 +24,7 @@ use dynamo_kv_router::config::{
 use dynamo_llm::entrypoint::EngineConfig as RsEngineConfig;
 use dynamo_llm::entrypoint::HttpFrontend;
 use dynamo_llm::entrypoint::input::Input;
-use dynamo_llm::mocker::make_mocker_engine;
+use dynamo_mocker_engine::make_mocker_engine;
 use dynamo_model_card::frontend_config::{
     ChatTemplateDefaults, FrontendApiConfig, MediaRejectionConfig, MetricsConfig,
 };

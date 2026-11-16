@@ -1,10 +1,13 @@
 // SPDX-FileCopyrightText: Copyright (c) 2024-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-//! Mocker module - runtime integration for the mock scheduler.
+//! # Dynamo Mocker Engine
+//!
+//! Runtime integration for the mock scheduler.
 //!
 //! The core mocker logic lives in the `dynamo-mocker` crate.
-//! This module provides the runtime-dependent engine wrapper.
+//! This crate provides the runtime-dependent engine wrapper. It sits above
+//! `dynamo-backend-common` and never depends on `dynamo-llm`.
 
 mod handoff;
 mod metrics;
