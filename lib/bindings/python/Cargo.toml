@@ -54,7 +54,6 @@ mm-routing = [
     "dynamo-llm/mm-routing",
     "dynamo-vllm-sidecar/mm-routing",
     "dynamo-sglang-sidecar/mm-routing",
-    "dynamo-trtllm-sidecar/mm-routing",
 ]
 # Enable the native S3 destination for the request-trace sink. Production wheel
 # builds enable this flag in container/templates/wheel_builder.Dockerfile so

@@ -13,19 +13,15 @@ description = "Dynamo TensorRT-LLM sidecar backend — drives an out-of-process 
 
 [package.metadata.cargo-machete]
 # prost, prost-types: referenced by protobuf code generated into OUT_DIR.
-# dynamo-llm: no source names it since the KV event publisher moved to
-# dynamo-backend-common; the `mm-routing` feature below still forwards to it.
-ignored = ["prost", "prost-types", "dynamo-llm"]
+ignored = ["prost", "prost-types"]
 
 [[bin]]
 name = "dynamo-trtllm-sidecar"
 path = "src/main.rs"
 
 [features]
-# On for the sidecar image's SBOMs (its shared build links vLLM's mm-routing here
-# and into LPX). The Python bindings turn them off so the default wheel stays lean.
-default = ["mm-routing", "jemalloc"]
-mm-routing = ["dynamo-llm/mm-routing"]
+# On for the standalone binary. The Python bindings turn it off so the default wheel stays lean.
+default = ["jemalloc"]
 # jemalloc as the binary's global allocator.
 jemalloc = ["dynamo-sidecar-common/jemalloc"]
 
@@ -33,7 +29,6 @@ jemalloc = ["dynamo-sidecar-common/jemalloc"]
 dynamo-backend-common = { workspace = true }
 dynamo-sidecar-common = { workspace = true }
 dynamo-kv-events = { workspace = true }
-dynamo-llm = { path = "../../llm", default-features = false }
 dynamo-sync = { workspace = true }
 dynamo-frontend-protocols = { workspace = true }
 dynamo-model-card = { workspace = true }
