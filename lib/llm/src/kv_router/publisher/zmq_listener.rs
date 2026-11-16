@@ -17,8 +17,8 @@ use dynamo_kv_events::zmq_wire::{
 };
 use dynamo_router_protocol::worker::{WorkerId, WorkerWithDpRank};
 
+use super::metrics::kv_publisher_metrics;
 use super::{PublisherInput, ZmqRecoveryConfig};
-use crate::kv_router::metrics::kv_publisher_metrics;
 use dynamo_runtime::transports::zmq::sockets::{connect_sub_socket, multipart_message};
 
 pub(super) struct DecodedZmqKvBatch {

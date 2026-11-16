@@ -20,7 +20,6 @@ mod allocator;
 
 mod worker_set;
 pub use worker_set::WorkerSet;
-pub(crate) use worker_set::{CommittedWorkerSetTarget, WorkerSetTarget, WorkerSetTargetId};
 
 mod endpoint_card;
 pub use endpoint_card::wait_for_endpoint_model_card;

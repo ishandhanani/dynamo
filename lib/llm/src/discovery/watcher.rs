@@ -26,7 +26,10 @@ use dynamo_renderer::PromptFormatter;
 use crate::{
     discovery::WorkerSet,
     entrypoint::{self, ChatEngineFactoryCallback},
-    kv_router::{EncoderRouter, PrefillRouter, plugins::RouterPluginBuilder},
+    kv_router::{
+        EncoderRouter, PrefillRouter, plugins::RouterPluginBuilder,
+        worker_set_target::CommittedWorkerSetTarget,
+    },
     worker_type::WorkerType,
 };
 use dynamo_frontend_protocols::common::preprocessor::PreprocessedEmbeddingRequest;
@@ -498,7 +501,7 @@ impl ModelWatcher {
                 super::image_edits::ImageEditAdmission::new(admitted_ids.clone()),
             ));
         }
-        worker_set.set_topology_target(super::CommittedWorkerSetTarget {
+        worker_set.set_topology_target(CommittedWorkerSetTarget {
             endpoint: endpoint.clone(),
             group: spec.key.id(),
             generation: spec.generation,

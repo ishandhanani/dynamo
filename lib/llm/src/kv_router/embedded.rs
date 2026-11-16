@@ -72,7 +72,15 @@ pub(crate) struct EmbeddedSelectionArgs {
     pub policy_factory: WorkerSelectionPolicyFactory,
     /// The partition's hint policies, resolved from router configuration.
     pub hint_policies: dynamo_kv_router::plugins::hint_policy::HintPolicyFactory,
+    /// Starts the publisher of this partition's scheduler load; `None` publishes nothing.
+    pub scheduler_load_publisher: Option<SchedulerLoadPublisher>,
 }
+
+/// Starts the publisher of a router's scheduler load for the Pool Relay, given the router's
+/// endpoint, its selection service, whether replica sync is on, and a token that stops it. The
+/// publisher lives above the request path, so whoever builds the router passes it in.
+pub type SchedulerLoadPublisher =
+    fn(&dynamo_runtime::component::Endpoint, Arc<SelectionService>, bool, CancellationToken);
 
 fn record_queue_rejection(
     per_class: &[RouterQueueMetricHandles],
@@ -362,12 +370,14 @@ impl EmbeddedSelection {
             tracing::warn!(%error, "embedded selection: initial membership reconcile failed");
         }
         tokio::spawn(reconciler.run(source, cancellation_token.child_token()));
-        crate::scheduler_load::start_scheduler_load_publisher(
-            &args.endpoint,
-            Arc::clone(&service),
-            args.kv_router_config.router_replica_sync,
-            cancellation_token.child_token(),
-        );
+        if let Some(start_scheduler_load_publisher) = args.scheduler_load_publisher {
+            start_scheduler_load_publisher(
+                &args.endpoint,
+                Arc::clone(&service),
+                args.kv_router_config.router_replica_sync,
+                cancellation_token.child_token(),
+            );
+        }
 
         tracing::info!(
             worker_type = %worker_type,

@@ -14,6 +14,7 @@ use std::sync::Arc;
 
 use dynamo_kv_router::config::KvRouterConfig;
 use dynamo_kv_router::plugins::worker_selection::WorkerInputs;
+use dynamo_lora::{LoadEstimator, LoraFilter};
 use dynamo_router_policies::router_modes;
 use dynamo_router_protocol::WorkerType;
 use dynamo_router_protocol::identity::RoutingPartitionRef;
@@ -30,7 +31,6 @@ use dynamo_worker_selection::host::{HostedWorkerPicker, SelectionConfig};
 use super::{HostedOccupancy, RoutingHost, RoutingPolicy};
 use crate::{
     kv_router::{KvRouter, metrics::RouterRequestMetrics},
-    lora::{LoadEstimator, LoraFilter},
     routing_policy::HostedCandidatePolicy,
     session_affinity::AffinityCoordinator,
 };
@@ -388,7 +388,7 @@ fn assemble(
 #[cfg(test)]
 mod policy_input_tests {
     use super::*;
-    use crate::lora::{LoraRoutingTable, LoraStateTracker};
+    use dynamo_lora::{LoraRoutingTable, LoraStateTracker};
 
     #[test]
     fn candidate_policy_requires_supported_hosted_mode() {

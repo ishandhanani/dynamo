@@ -37,7 +37,10 @@ use dynamo_runtime::{
 };
 
 use crate::{
-    kv_router::{KvRouter, SelectionPolicySource, shared_cache::HicacheSharedKvCache},
+    kv_router::{
+        KvRouter, SelectionPolicySource, prefill_router::PrefillEndpointProvider,
+        shared_cache::HicacheSharedKvCache, worker_set_target::WorkerSetTarget,
+    },
     lora::{
         LoadEstimatorSubscription, LoraFilter, LoraRoutingTable, LoraStateTracker,
         load_estimator::LoadEstimator,
@@ -2503,6 +2506,7 @@ impl ModelManager {
             self.lora_enabled
                 .then(|| crate::lora_routing::LoraKvPolicy::kv(lora_domain.filter.clone())),
             scheduler_load,
+            Some(crate::scheduler_load::start_scheduler_load_publisher),
             cancellation_token,
         )
         .await?;
@@ -2696,11 +2700,7 @@ impl ModelManager {
             .then(|| prefill_providers[0].clone());
         for worker_set in &decode_consumers {
             if let Some(router) = &worker_set.prefill_router {
-                router.set_target(
-                    prefill_target
-                        .clone()
-                        .map(super::WorkerSetTarget::Committed),
-                );
+                router.set_target(prefill_target.clone().map(WorkerSetTarget::Committed));
             }
         }
 
@@ -2734,7 +2734,7 @@ impl ModelManager {
                 routing_enabled
                     .then(|| unique_encode.clone())
                     .flatten()
-                    .map(super::WorkerSetTarget::Committed),
+                    .map(WorkerSetTarget::Committed),
             );
         }
     }
@@ -2973,6 +2973,78 @@ impl ModelManager {
     }
 }
 
+/// The prefill hop reads its endpoint's shared state, and builds its `KvRouter`, through this
+/// manager. Each method is the inherent one of the same name.
+#[async_trait::async_trait]
+impl PrefillEndpointProvider for ModelManager {
+    async fn get_or_create_runtime_config_watcher(
+        &self,
+        endpoint: &Endpoint,
+    ) -> anyhow::Result<RuntimeConfigWatch> {
+        ModelManager::get_or_create_runtime_config_watcher(self, endpoint).await
+    }
+
+    fn worker_supports_runtime_capability(
+        &self,
+        endpoint_id: &EndpointId,
+        worker_id: WorkerId,
+        capability: &str,
+    ) -> bool {
+        ModelManager::worker_supports_runtime_capability(self, endpoint_id, worker_id, capability)
+    }
+
+    fn get_disaggregated_endpoint(
+        &self,
+        endpoint_id: &EndpointId,
+        worker_id: WorkerId,
+    ) -> Option<DisaggregatedEndpoint> {
+        ModelManager::get_disaggregated_endpoint(self, endpoint_id, worker_id)
+    }
+
+    fn get_data_parallel_size(&self, endpoint_id: &EndpointId, worker_id: WorkerId) -> Option<u32> {
+        ModelManager::get_data_parallel_size(self, endpoint_id, worker_id)
+    }
+
+    fn get_kv_transfer_routing_constraints(
+        &self,
+        endpoint_id: &EndpointId,
+        worker_id: WorkerId,
+    ) -> anyhow::Result<Option<RoutingConstraints>> {
+        ModelManager::get_kv_transfer_routing_constraints(self, endpoint_id, worker_id)
+    }
+
+    async fn kv_chooser_for_with_policy_and_client(
+        &self,
+        client: Client,
+        kv_cache_block_size: u32,
+        policy: SelectionPolicySource,
+        kv_router_config: Option<KvRouterConfig>,
+        prefill_load_estimator: Option<Arc<dyn PrefillLoadEstimator>>,
+        worker_role: Option<WorkerType>,
+        metric_worker_type: &'static str,
+        model_name: Option<String>,
+        is_eagle: bool,
+        scheduler_load: dynamo_sync::load::SchedulerLoadSender,
+        cancellation_token: CancellationToken,
+    ) -> anyhow::Result<Arc<KvRouter>> {
+        ModelManager::kv_chooser_for_with_policy_and_client(
+            self,
+            client,
+            kv_cache_block_size,
+            policy,
+            kv_router_config,
+            prefill_load_estimator,
+            worker_role,
+            metric_worker_type,
+            model_name,
+            is_eagle,
+            scheduler_load,
+            cancellation_token,
+        )
+        .await
+    }
+}
+
 fn has_required_kv_transfer_policy(configs: &HashMap<WorkerId, ModelRuntimeConfig>) -> bool {
     configs.values().any(|config| {
         matches!(
@@ -3023,7 +3095,7 @@ mod tests {
             ids: Arc<parking_lot::Mutex<HashSet<u64>>>,
         }
         impl crate::kv_router::prefill_router::PrefillRouterLifecycle for Hop {
-            fn set_target(&self, _: Option<crate::discovery::WorkerSetTarget>) {}
+            fn set_target(&self, _: Option<WorkerSetTarget>) {}
 
             fn available_worker_ids_for(
                 &self,
@@ -4512,13 +4584,15 @@ mod tests {
             card.mdcsum().to_string(),
             card.clone(),
         );
-        worker_set.set_topology_target(crate::discovery::CommittedWorkerSetTarget {
-            group: endpoint.id().to_string(),
-            endpoint,
-            generation: 1,
-            card: Arc::new(card),
-            admitted_ids: tokio::sync::watch::channel(Vec::new()).1,
-        });
+        worker_set.set_topology_target(
+            crate::kv_router::worker_set_target::CommittedWorkerSetTarget {
+                group: endpoint.id().to_string(),
+                endpoint,
+                generation: 1,
+                card: Arc::new(card),
+                admitted_ids: tokio::sync::watch::channel(Vec::new()).1,
+            },
+        );
         if role != WorkerType::Decode {
             return (worker_set, None, None);
         }

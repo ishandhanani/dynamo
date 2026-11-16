@@ -224,6 +224,11 @@ newer booking that reused the same request id and worker.
   retryable error; a decode-only worker cannot run the request without the hop.
 - **Untargeted**: no prefill target. Pass through to the next stage.
 
+While it builds the binding, and for each prefill dispatch, the hop asks its
+`PrefillEndpointProvider` (the model manager) for the endpoint's runtime-config watch, for the
+selected worker's bootstrap endpoint, data-parallel size, cancellation capability and KV-transfer
+constraints, and for the `KvRouter` of the prefill worker set. It holds no `ModelManager`.
+
 `ModelManager::reconcile_discovery_topology` sets the target only when the namespace has
 exactly one prefill worker set and one decode worker set. The encoder target follows the
 `encoder_result_handoff` rules there. In Direct mode the prefill hop requires

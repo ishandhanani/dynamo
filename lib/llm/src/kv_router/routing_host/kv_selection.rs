@@ -27,7 +27,7 @@ use dynamo_frontend_protocols::{
 };
 
 #[cfg(test)]
-use crate::lora::LoraFilter;
+use dynamo_lora::LoraFilter;
 #[cfg(test)]
 use dynamo_lora::runtime::constrain_runtime_lora_workers;
 
@@ -508,7 +508,7 @@ fn pinned_worker_hint(
 
 #[cfg(test)]
 mod tests {
-    use crate::lora::runtime::{
+    use dynamo_lora::runtime::{
         RUNTIME_LORA_PROTOCOL_VERSION, RUNTIME_LORA_SCHEMES_RUNTIME_KEY,
         RUNTIME_LORA_SUPPORT_RUNTIME_KEY, RUNTIME_LORA_VERSIONS_RUNTIME_KEY,
     };
@@ -519,10 +519,10 @@ mod tests {
     use dynamo_scheduler::host::{RoutingConstraints, RoutingEligibility, WorkerEligibilityError};
 
     use super::*;
-    use crate::lora::{
+    use dynamo_frontend_protocols::common::{preprocessor::RoutingHints, timing::RequestPhase};
+    use dynamo_lora::{
         filter::LoraFilter, routing::table::LoraRoutingTable, state_tracker::LoraStateTracker,
     };
-    use dynamo_frontend_protocols::common::{preprocessor::RoutingHints, timing::RequestPhase};
     use dynamo_model_card::local_model::runtime_config::ModelRuntimeConfig;
 
     fn runtime_config(capability: &str, scheme: &str) -> ModelRuntimeConfig {

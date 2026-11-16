@@ -8,7 +8,7 @@ use std::{
 };
 
 use anyhow::Result;
-use dynamo_kv_events::event::{KV_EVENT_SUBJECT, RouterEvent};
+use dynamo_kv_events::event::RouterEvent;
 use dynamo_kv_hashing::multimodal::BlockExtraInfo;
 use dynamo_kv_hashing::routing::{BlockHashOptions, TokensWithHashes, compute_block_hash_for_seq};
 use dynamo_kv_hints::KvHint;
@@ -61,6 +61,7 @@ pub use dynamo_scheduler::host::OverlapScoresResponse;
 pub use dynamo_kv_router::protocols;
 
 pub(crate) mod embedded;
+pub use embedded::SchedulerLoadPublisher;
 pub mod encoder_router;
 mod managed;
 pub mod metrics;
@@ -72,6 +73,7 @@ mod routing_host;
 pub(crate) use routing_host::hosted_picker;
 pub(crate) use routing_host::hosted_request;
 pub mod shared_cache;
+pub(crate) mod worker_set_target;
 
 pub use encoder_router::EncoderRouter;
 pub use managed::ManagedKvRouter;
@@ -81,8 +83,8 @@ pub use routing_host::{
     KvPushRouter, LlmDispatch, MultimodalCache, RoutingHost, RoutingHostBuilder,
 };
 
-use crate::worker_type::WorkerType;
 use dynamo_model_card::local_model::runtime_config::ModelRuntimeConfig;
+use dynamo_router_protocol::worker_type::WorkerType;
 use dynamo_sync::{
     indexer::{self, Indexer, KvEventSourceRequirement},
     load::SchedulerLoadSender,
@@ -497,9 +499,6 @@ fn cache_hit_for_worker(
     }
 }
 
-// for worker-local kvindexer query
-pub const WORKER_KV_INDEXER_BUFFER_SIZE: usize = 1024; // store 1024 most recent events in worker buffer
-
 /// Context marking a router's refusal of an unknown policy class when the request enters its
 /// class. It wraps the unchanged `DynamoError` and displays as it, so hosts see the same class,
 /// reason, status and message; the prefill handoff recognizes this refusal by type.
@@ -630,7 +629,7 @@ impl KvRouter {
         model_name: Option<String>,
         is_eagle: bool,
         shared_cache: Option<Arc<dyn SharedKvCache>>,
-        lora_filter: Option<Arc<crate::lora::LoraFilter>>,
+        lora_filter: Option<Arc<dynamo_lora::LoraFilter>>,
     ) -> Result<Self> {
         Self::new_with_worker_role(
             endpoint,
@@ -666,7 +665,7 @@ impl KvRouter {
         model_name: Option<String>,
         is_eagle: bool,
         shared_cache: Option<Arc<dyn SharedKvCache>>,
-        lora_filter: Option<Arc<crate::lora::LoraFilter>>,
+        lora_filter: Option<Arc<dynamo_lora::LoraFilter>>,
     ) -> Result<Self> {
         let parent_token = endpoint.component().drt().child_token();
         let scheduler_load = SchedulerLoadSender::disabled(parent_token.child_token());
@@ -687,6 +686,8 @@ impl KvRouter {
             shared_cache,
             lora_filter.map(crate::lora_routing::LoraKvPolicy::kv),
             scheduler_load,
+            // The Pool Relay's scheduler-load publisher is passed in by the model manager.
+            None,
             parent_token,
         )
         .await
@@ -709,6 +710,7 @@ impl KvRouter {
         shared_cache: Option<Arc<dyn SharedKvCache>>,
         admission_policy: Option<Arc<dyn crate::routing_policy::KvAdmissionPolicy>>,
         scheduler_load: SchedulerLoadSender,
+        scheduler_load_publisher: Option<SchedulerLoadPublisher>,
         parent_token: CancellationToken,
     ) -> Result<Self> {
         let mut kv_router_config = kv_router_config.unwrap_or_default();
@@ -729,7 +731,7 @@ impl KvRouter {
         let index_inputs = prepared.prepare_inputs();
         let hint_policies = prepared.hint_policies().clone();
         let policy_factory = prepared.factory;
-        // ModelManager gates client construction as well, but preserve the capability boundary for
+        // The model manager gates client construction as well, but preserve the capability boundary for
         // direct KvRouter callers.
         let shared_cache = if index_inputs.contains(WorkerInputs::CACHE) {
             shared_cache
@@ -864,6 +866,7 @@ impl KvRouter {
                 router_id: endpoint.drt().discovery().instance_id(),
                 policy_factory,
                 hint_policies,
+                scheduler_load_publisher,
             },
             workers_with_configs.clone(),
             Some(request_leases.replica_observer()),
@@ -3201,8 +3204,8 @@ mod tests {
 
     #[tokio::test]
     async fn queued_lora_requests_refresh_registration_without_widening_constraints() {
-        use crate::lora::state_tracker::LoraWorkerProjection;
-        use crate::lora::{LoraFilter, LoraReplicaConfig, LoraRoutingTable, LoraStateTracker};
+        use dynamo_lora::state_tracker::LoraWorkerProjection;
+        use dynamo_lora::{LoraFilter, LoraReplicaConfig, LoraRoutingTable, LoraStateTracker};
         use dynamo_model_card::model_card::LoraInfo;
 
         let tracker = LoraStateTracker::new();

@@ -25,11 +25,6 @@
 //!   - Standalone router (`python -m dynamo.router`): available on `DYN_SYSTEM_PORT`
 //!     when set (default is `-1`, disabled), populated per-request
 //!
-//! - `KvPublisherMetrics`: Worker-local KV event publisher and ZMQ relay counters.
-//!   Registered on the DRT `MetricsRegistry` hierarchy via `Component::metrics()`.
-//!   Populated by `KvEventPublisher` and the ZMQ listener when engines publish KV
-//!   events.
-//!
 //! The standalone router does not create `WorkerLoadMetrics` or
 //! `RoutingOverheadMetrics` (those are frontend-only). It only exposes
 //! `RouterRequestMetrics` and standard DRT transport metrics
@@ -38,7 +33,8 @@
 //!
 //! The metrics of the code that keeps the router's view of workers up to date (worker load,
 //! worker status, KV and active-sequence ingress, the remote indexer) are in
-//! [`dynamo_sync::metrics`].
+//! [`dynamo_sync::metrics`]. The worker-side KV event publisher keeps its own metrics next to
+//! it (`publisher/metrics.rs`).
 //!
 //! See also: `docs/fern/pages/reference/observability/metrics-catalog.mdx` (Router metrics section).
 
@@ -46,7 +42,7 @@ use std::sync::{Arc, LazyLock, OnceLock};
 use std::time::Duration;
 
 use dynamo_runtime::metrics::prometheus_names::{
-    frontend_service, kv_publisher, labels, name_prefix, router_request, routing_overhead,
+    frontend_service, labels, name_prefix, router_request, routing_overhead,
 };
 use dynamo_runtime::{component::Component, metrics::MetricsHierarchy};
 
@@ -73,130 +69,6 @@ fn compute_overhead_buckets() -> Vec<f64> {
 /// Buckets for async phases (indexer find_matches, scheduling, total).
 fn async_overhead_buckets() -> Vec<f64> {
     prometheus::exponential_buckets(0.01, 3.0, 17).unwrap()
-}
-
-// ---------------------------------------------------------------------------
-// KV publisher metrics
-// ---------------------------------------------------------------------------
-
-/// Metrics for the KV publisher, created via the MetricsHierarchy API.
-/// This provides automatic `dynamo_namespace`, `dynamo_component`, and other
-/// hierarchy labels for free.
-pub(crate) struct KvPublisherMetrics {
-    /// Total number of raw events dropped by engines before reaching publisher.
-    pub engines_dropped_events_total: IntCounter,
-    /// Total number of decoded ZMQ KV events by relay stage and event type.
-    pub zmq_events_total: IntCounterVec,
-    /// Total number of ZMQ KV events filtered before conversion.
-    pub zmq_filtered_events_total: IntCounterVec,
-    /// Total number of ZMQ KV events dropped due to conversion issues.
-    pub zmq_conversion_issues_total: IntCounterVec,
-    /// Total number of suspicious-but-forwarded ZMQ KV events.
-    pub zmq_suspicious_events_total: IntCounterVec,
-}
-
-static KV_PUBLISHER_METRICS: OnceLock<Arc<KvPublisherMetrics>> = OnceLock::new();
-
-impl KvPublisherMetrics {
-    /// Create from a Component, memoized in a static OnceLock.
-    /// Uses the MetricsHierarchy API which auto-prepends `dynamo_component_`,
-    /// injects hierarchy labels (including `worker_id`), and registers with the
-    /// DRT `MetricsRegistry`.
-    pub fn from_component(component: &Component) -> Arc<Self> {
-        KV_PUBLISHER_METRICS
-            .get_or_init(|| Arc::new(Self::build(component)))
-            .clone()
-    }
-
-    /// Register the publisher's metrics against any metrics hierarchy.
-    ///
-    /// Split out of [`Self::from_component`] so registration is reachable from
-    /// tests: `from_component` needs a real `Component` (and therefore a live
-    /// `DistributedRuntime`) and memoizes into a process-global `OnceLock`, so
-    /// only the first call in a process runs this code at all.
-    fn build<H: MetricsHierarchy>(hierarchy: &H) -> Self {
-        let metrics = hierarchy.metrics();
-        let engines_dropped_events_total = metrics
-            .create_intcounter(
-                kv_publisher::ENGINES_DROPPED_EVENTS_TOTAL,
-                "Total number of raw events dropped by engines before reaching publisher (detected via event_id gaps)",
-                &[],
-            )
-            .expect("failed to create kv_publisher_engines_dropped_events_total");
-        let zmq_events_total = metrics
-            .create_intcountervec(
-                kv_publisher::ZMQ_EVENTS_TOTAL,
-                "Total number of ZMQ KV events seen by the relay",
-                &["stage", "event_type"],
-                &[],
-            )
-            .expect("failed to create kv_publisher_zmq_events_total");
-        let zmq_filtered_events_total = metrics
-            .create_intcountervec(
-                kv_publisher::ZMQ_FILTERED_EVENTS_TOTAL,
-                "Total number of ZMQ KV events filtered before conversion",
-                &["event_type", "reason"],
-                &[],
-            )
-            .expect("failed to create kv_publisher_zmq_filtered_events_total");
-        let zmq_conversion_issues_total = metrics
-            .create_intcountervec(
-                kv_publisher::ZMQ_CONVERSION_ISSUES_TOTAL,
-                "Total number of ZMQ KV events dropped due to conversion issues",
-                &["event_type", "reason"],
-                &[],
-            )
-            .expect("failed to create kv_publisher_zmq_conversion_issues_total");
-        let zmq_suspicious_events_total = metrics
-            .create_intcountervec(
-                kv_publisher::ZMQ_SUSPICIOUS_EVENTS_TOTAL,
-                "Total number of suspicious-but-forwarded ZMQ KV events",
-                &["event_type", "reason"],
-                &[],
-            )
-            .expect("failed to create kv_publisher_zmq_suspicious_events_total");
-
-        Self {
-            engines_dropped_events_total,
-            zmq_events_total,
-            zmq_filtered_events_total,
-            zmq_conversion_issues_total,
-            zmq_suspicious_events_total,
-        }
-    }
-
-    /// Increment the engines dropped events counter by the given amount.
-    pub fn increment_engines_dropped_events(&self, count: u64) {
-        self.engines_dropped_events_total.inc_by(count);
-    }
-
-    pub fn increment_zmq_event(&self, stage: &'static str, event_type: &'static str) {
-        self.zmq_events_total
-            .with_label_values(&[stage, event_type])
-            .inc();
-    }
-
-    pub fn increment_zmq_filtered_event(&self, event_type: &'static str, reason: &'static str) {
-        self.zmq_filtered_events_total
-            .with_label_values(&[event_type, reason])
-            .inc();
-    }
-
-    pub fn increment_zmq_conversion_issue(&self, event_type: &'static str, reason: &'static str) {
-        self.zmq_conversion_issues_total
-            .with_label_values(&[event_type, reason])
-            .inc();
-    }
-
-    pub fn increment_zmq_suspicious_event(&self, event_type: &'static str, reason: &'static str) {
-        self.zmq_suspicious_events_total
-            .with_label_values(&[event_type, reason])
-            .inc();
-    }
-}
-
-pub(crate) fn kv_publisher_metrics() -> Option<Arc<KvPublisherMetrics>> {
-    KV_PUBLISHER_METRICS.get().cloned()
 }
 
 // ---------------------------------------------------------------------------
@@ -847,7 +719,7 @@ impl RouterRequestMetrics {
 
     #[cfg(test)]
     pub(crate) fn for_test(registry: &dynamo_runtime::MetricsRegistry) -> Arc<Self> {
-        let mut hierarchy = kv_publisher_registration_tests::FakeHierarchy::component("", "", 0);
+        let mut hierarchy = test_fixtures::FakeHierarchy::component("", "", 0);
         hierarchy.registry = registry.clone();
         hierarchy.connection_id = None;
         Arc::new(Self::build(&hierarchy, &[]))
@@ -1075,8 +947,7 @@ mod tests {
 
     #[test]
     fn router_request_metrics_register_with_component_labels() {
-        let hierarchy =
-            kv_publisher_registration_tests::FakeHierarchy::component("dynamo", "frontend", 0x123);
+        let hierarchy = test_fixtures::FakeHierarchy::component("dynamo", "frontend", 0x123);
         let metrics = RouterRequestMetrics::build(&hierarchy, &[(labels::ROUTER_ID, "291")]);
         metrics
             .observe_kv_route_estimate(RequestPhase::Prefill, "m", 96, 64)
@@ -1307,36 +1178,24 @@ dynamo_frontend_router_queue_pending_requests{model=\"model\",policy_class=\"def
 }
 
 #[cfg(test)]
-mod kv_publisher_registration_tests {
-    //! Regression coverage for silently-unregistered KV publisher metrics.
-    //!
-    //! `engines_dropped_events_total` was once declared with `worker_id` as a
-    //! *variable* label. The runtime auto-injects `worker_id` as a *const* label on
-    //! every component metric, so the validator rejected the request, the error was
-    //! swallowed into an unregistered fallback counter, and the metric never
-    //! appeared on `/metrics`. Nothing else observably changed: the fallback
-    //! counter still incremented, just nowhere anyone could scrape it.
-    //!
-    //! These tests build the metric set against a fake hierarchy that injects the
-    //! same auto-labels a real `Component` does, then assert each counter reaches
-    //! the exposition output. No `DistributedRuntime` and no NATS required.
+pub(crate) mod test_fixtures {
+    //! A metrics hierarchy for tests that register component metrics without a runtime.
 
-    use super::*;
     use dynamo_runtime::MetricsRegistry;
+    use dynamo_runtime::metrics::MetricsHierarchy;
 
     /// Stand-in for the DRT → Namespace → Component chain, without a live runtime.
-    /// `connection_id` is what drives the auto-injected `worker_id` const label,
-    /// so it must be set for these tests to reproduce the original conditions.
-    pub(super) struct FakeHierarchy {
+    /// `connection_id` is what drives the auto-injected `worker_id` const label.
+    pub(crate) struct FakeHierarchy {
         basename: String,
         parents: Vec<FakeHierarchy>,
-        pub(super) registry: MetricsRegistry,
-        pub(super) connection_id: Option<u64>,
+        pub(crate) registry: MetricsRegistry,
+        pub(crate) connection_id: Option<u64>,
     }
 
     impl FakeHierarchy {
         /// Mirror a component-level hierarchy: `["" (drt), namespace, component]`.
-        pub(super) fn component(namespace: &str, component: &str, connection_id: u64) -> Self {
+        pub(crate) fn component(namespace: &str, component: &str, connection_id: u64) -> Self {
             Self {
                 basename: component.to_string(),
                 parents: vec![Self::bare(""), Self::bare(namespace)],
@@ -1355,7 +1214,7 @@ mod kv_publisher_registration_tests {
         }
 
         /// Render what a `/metrics` scrape of this hierarchy would return.
-        fn expfmt(&self) -> String {
+        pub(crate) fn expfmt(&self) -> String {
             self.registry.prometheus_expfmt_combined().unwrap()
         }
     }
@@ -1379,103 +1238,5 @@ mod kv_publisher_registration_tests {
         fn connection_id(&self) -> Option<u64> {
             self.connection_id
         }
-    }
-
-    fn exported_name(suffix: &str) -> String {
-        format!("{}_{}", name_prefix::COMPONENT, suffix)
-    }
-
-    /// First non-comment sample line for `name`, if the metric was exported at all.
-    /// A `# HELP`/`# TYPE` pair without a sample line does not count as exported.
-    fn sample_line<'a>(expfmt: &'a str, name: &str) -> Option<&'a str> {
-        expfmt
-            .lines()
-            .filter(|line| !line.starts_with('#'))
-            .find(|line| {
-                line.strip_prefix(name)
-                    .is_some_and(|rest| rest.starts_with('{') || rest.starts_with(' '))
-            })
-    }
-
-    #[test]
-    fn every_kv_publisher_metric_reaches_the_registry() {
-        let hierarchy = FakeHierarchy::component("dynamo", "backend", 0x7f3a1c);
-        let metrics = KvPublisherMetrics::build(&hierarchy);
-
-        // A CounterVec with no observed label values exports no sample lines, so
-        // touch each vector once. `engines_dropped_events_total` is deliberately
-        // left at zero: a worker that never sees an event_id gap is exactly the
-        // state the original bug hid in.
-        metrics.increment_zmq_event("received", "stored");
-        metrics.increment_zmq_filtered_event("stored", "no_blocks");
-        metrics.increment_zmq_conversion_issue("stored", "bad_hash");
-        metrics.increment_zmq_suspicious_event("stored", "large_batch");
-
-        let expfmt = hierarchy.expfmt();
-        for suffix in [
-            kv_publisher::ENGINES_DROPPED_EVENTS_TOTAL,
-            kv_publisher::ZMQ_EVENTS_TOTAL,
-            kv_publisher::ZMQ_FILTERED_EVENTS_TOTAL,
-            kv_publisher::ZMQ_CONVERSION_ISSUES_TOTAL,
-            kv_publisher::ZMQ_SUSPICIOUS_EVENTS_TOTAL,
-        ] {
-            let name = exported_name(suffix);
-            assert!(
-                sample_line(&expfmt, &name).is_some(),
-                "{name} never reached the metrics registry. Exposition was:\n{expfmt}"
-            );
-        }
-    }
-
-    #[test]
-    fn engines_dropped_counter_is_exported_at_zero_with_auto_labels() {
-        let hierarchy = FakeHierarchy::component("dynamo", "backend", 0x7f3a1c);
-        let _metrics = KvPublisherMetrics::build(&hierarchy);
-
-        let expfmt = hierarchy.expfmt();
-        let name = exported_name(kv_publisher::ENGINES_DROPPED_EVENTS_TOTAL);
-        let line = sample_line(&expfmt, &name)
-            .unwrap_or_else(|| panic!("{name} absent from exposition. Exposition was:\n{expfmt}"));
-
-        // The hierarchy labels a real Component would inject. `worker_id` is the
-        // one that collided; it must arrive as a const label, rendered from
-        // connection_id as lowercase hex.
-        for expected in [
-            r#"dynamo_namespace="dynamo""#,
-            r#"dynamo_component="backend""#,
-            r#"worker_id="7f3a1c""#,
-        ] {
-            assert!(
-                line.contains(expected),
-                "expected label {expected} on sample line: {line}"
-            );
-        }
-        assert!(
-            line.ends_with(" 0"),
-            "counter should be exported at zero before any gap is detected: {line}"
-        );
-    }
-
-    #[test]
-    fn worker_id_is_rejected_as_a_variable_label() {
-        // Pins the mechanism the bug tripped over. If this ever starts returning
-        // Ok, the collision is no longer caught at creation time and the guard in
-        // `build` above is the only thing standing between a bad label and a
-        // silently missing metric.
-        let hierarchy = FakeHierarchy::component("dynamo", "backend", 0x7f3a1c);
-        let err = hierarchy
-            .metrics()
-            .create_intcountervec(
-                kv_publisher::ENGINES_DROPPED_EVENTS_TOTAL,
-                "Total number of raw events dropped by engines",
-                &[labels::WORKER_ID],
-                &[],
-            )
-            .expect_err("worker_id must not be usable as a variable label");
-        assert!(
-            err.to_string()
-                .contains("conflicts with auto-injected const label"),
-            "unexpected error: {err}"
-        );
     }
 }

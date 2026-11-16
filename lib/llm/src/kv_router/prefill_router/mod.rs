@@ -24,8 +24,11 @@ use dynamo_worker_selection::host::ConditionalDisaggPolicy;
 use futures::stream::{self, StreamExt};
 
 use crate::{
-    discovery::{ModelManager, WorkerSetTarget, WorkerSetTargetId},
-    kv_router::{RoutingHost, SelectionPolicySource, routing_host::PrefillDispatch},
+    kv_router::{
+        RoutingHost, SelectionPolicySource,
+        routing_host::PrefillDispatch,
+        worker_set_target::{WorkerSetTarget, WorkerSetTargetId},
+    },
     session_affinity::{AffinityTarget, SessionAffinityMode},
 };
 use dynamo_frontend_protocols::common::{
@@ -43,9 +46,11 @@ mod activation;
 mod admission;
 mod cancellation;
 mod conditional_bypass;
+mod endpoints;
 mod handoff;
 mod query;
 use activation::ActivationSnapshot;
+pub use endpoints::PrefillEndpointProvider;
 use handoff::PrefillTask;
 pub use query::PrefillReservation;
 
@@ -269,7 +274,8 @@ pub struct PrefillRouter {
     /// installed after the frontend constructs its one decode `RoutingHost`.
     decode_routing_host: OnceLock<Arc<RoutingHost>>,
     selection_policy: Option<SelectionPolicySource>,
-    model_manager: Arc<ModelManager>,
+    /// Owner of the prefill endpoint's shared state: the model manager, in production.
+    endpoints: Arc<dyn PrefillEndpointProvider>,
     cancel_token: CancellationToken,
     /// Mode of the decode set that owns this router. Governs decode-side
     /// decisions, and is the fallback for the prefill hop -- not its mode. That
@@ -308,7 +314,7 @@ struct PrefillBinding {
 }
 
 struct PrefillBuildContext {
-    model_manager: Arc<ModelManager>,
+    endpoints: Arc<dyn PrefillEndpointProvider>,
     /// Fallback mode for the prefill hop when the prefill card advertises none.
     decode_router_mode: RouterMode,
     selection_policy: SelectionPolicySource,
@@ -621,7 +627,7 @@ impl
                 .select_and_dispatch_prefill(prefill_context, |request, target| {
                     let prepared = self.prepare_prefill_dispatch(request, target, endpoint_id)?;
                     let prefill_supports_cancellation =
-                        self.model_manager.worker_supports_runtime_capability(
+                        self.endpoints.worker_supports_runtime_capability(
                             endpoint_id,
                             prepared.worker_id,
                             DISAGG_PREFILL_CANCEL_ANYTIME_V1,
@@ -822,14 +828,14 @@ impl PrefillRouter {
             self.preflight_kv_transfer_constraints(Some(endpoint_id), worker_id)?;
 
         let bootstrap_info = self
-            .model_manager
+            .endpoints
             .get_disaggregated_endpoint(endpoint_id, worker_id)
             .map(|endpoint| (endpoint_id, endpoint))
             .and_then(|(endpoint_id, endpoint)| {
                 let host = endpoint.bootstrap_host?;
                 let port = endpoint.bootstrap_port?;
                 let dp_size = self
-                    .model_manager
+                    .endpoints
                     .get_data_parallel_size(endpoint_id, worker_id);
                 let random_room = rand::random_range(0..=i64::MAX.cast_unsigned());
                 let bootstrap_room = compute_bootstrap_room(dp_rank, dp_size, random_room);
@@ -862,7 +868,7 @@ impl PrefillRouter {
             return Ok(None);
         };
 
-        self.model_manager
+        self.endpoints
             .get_kv_transfer_routing_constraints(endpoint_id, worker_id)
     }
 }
@@ -982,7 +988,7 @@ mod tests {
         let (_activation_tx, activation_rx) = oneshot::channel();
         let router = PrefillRouter::new(
             activation_rx,
-            Arc::new(ModelManager::new()),
+            Arc::new(endpoints::TestEndpointProvider),
             RouterMode::KV,
             16,
             Some(config),
@@ -1052,7 +1058,7 @@ mod tests {
         let (_activation_tx, activation_rx) = oneshot::channel();
         PrefillRouter::new(
             activation_rx,
-            Arc::new(ModelManager::new()),
+            Arc::new(endpoints::TestEndpointProvider),
             RouterMode::RoundRobin,
             16,
             None,
@@ -1783,7 +1789,7 @@ mod tests {
         let (_activation_tx, activation_rx) = tokio::sync::oneshot::channel();
         let router = PrefillRouter::new(
             activation_rx,
-            Arc::new(crate::discovery::ModelManager::new()),
+            Arc::new(endpoints::TestEndpointProvider),
             RouterMode::RoundRobin,
             16,
             None,

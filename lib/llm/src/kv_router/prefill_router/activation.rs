@@ -15,7 +15,10 @@ use dynamo_runtime::{
     prelude::DistributedRuntimeProvider,
 };
 
-use super::{PrefillBinding, PrefillBuildContext, PrefillLifecycleState, PrefillRouter};
+use super::{
+    PrefillBinding, PrefillBuildContext, PrefillEndpointProvider, PrefillLifecycleState,
+    PrefillRouter,
+};
 
 /// Routing state of a prefill hop, resolved atomically by [`PrefillRouter::activation_snapshot`].
 pub(super) enum ActivationSnapshot {
@@ -26,8 +29,7 @@ pub(super) enum ActivationSnapshot {
     Untargeted,
 }
 use crate::{
-    discovery::{ModelManager, WorkerSetTarget},
-    kv_router::{RoutingHost, SelectionPolicySource},
+    kv_router::{RoutingHost, SelectionPolicySource, worker_set_target::WorkerSetTarget},
     session_affinity::{SessionAffinityMode, create_affinity_coordinator},
 };
 use dynamo_frontend_protocols::common::timing::WORKER_TYPE_PREFILL;
@@ -105,12 +107,12 @@ fn resolve_advertisement_from_cards(
 impl PrefillRouter {
     /// Create a disabled prefill router that will never activate (passthrough only)
     pub fn disabled(
-        model_manager: Arc<ModelManager>,
+        endpoints: Arc<dyn PrefillEndpointProvider>,
         decode_router_mode: RouterMode,
         session_affinity_ttl_secs: Option<u64>,
     ) -> Arc<Self> {
         Self::disabled_with_session_affinity_mode(
-            model_manager,
+            endpoints,
             decode_router_mode,
             session_affinity_ttl_secs,
             SessionAffinityMode::Hard,
@@ -123,7 +125,7 @@ impl PrefillRouter {
     #[expect(clippy::too_many_arguments)]
     pub fn new(
         activation_rx: oneshot::Receiver<Endpoint>,
-        model_manager: Arc<ModelManager>,
+        endpoints: Arc<dyn PrefillEndpointProvider>,
         decode_router_mode: RouterMode,
         kv_cache_block_size: u32,
         kv_router_config: Option<KvRouterConfig>,
@@ -137,7 +139,7 @@ impl PrefillRouter {
     ) -> Arc<Self> {
         Self::new_with_selection_policy(
             Some(activation_rx),
-            model_manager,
+            endpoints,
             decode_router_mode,
             false,
             kv_cache_block_size,
@@ -157,7 +159,7 @@ impl PrefillRouter {
 
 impl PrefillRouter {
     pub(crate) fn disabled_with_session_affinity_mode(
-        model_manager: Arc<ModelManager>,
+        endpoints: Arc<dyn PrefillEndpointProvider>,
         decode_router_mode: RouterMode,
         session_affinity_ttl_secs: Option<u64>,
         session_affinity_mode: SessionAffinityMode,
@@ -168,7 +170,7 @@ impl PrefillRouter {
             target_tx: None,
             decode_routing_host: std::sync::OnceLock::new(),
             selection_policy: None,
-            model_manager,
+            endpoints,
             cancel_token: tokio_util::sync::CancellationToken::new(),
             decode_router_mode,
             decode_supports_prefill_cancellation: false,
@@ -190,7 +192,7 @@ impl PrefillRouter {
     #[expect(clippy::too_many_arguments)]
     pub(crate) fn new_with_selection_policy(
         activation_rx: Option<oneshot::Receiver<Endpoint>>,
-        model_manager: Arc<ModelManager>,
+        endpoints: Arc<dyn PrefillEndpointProvider>,
         decode_router_mode: RouterMode,
         decode_supports_prefill_cancellation: bool,
         kv_cache_block_size: u32,
@@ -227,7 +229,7 @@ impl PrefillRouter {
             target_tx: Some(target_tx),
             decode_routing_host: std::sync::OnceLock::new(),
             selection_policy: Some(selection_policy),
-            model_manager: model_manager.clone(),
+            endpoints: endpoints.clone(),
             cancel_token: cancel_token.clone(),
             decode_router_mode,
             decode_supports_prefill_cancellation,
@@ -305,7 +307,7 @@ impl PrefillRouter {
         // Start runtime config watcher for this endpoint (needed for get_disaggregated_endpoint)
         // This must be done before creating the router so bootstrap info is available
         context
-            .model_manager
+            .endpoints
             .get_or_create_runtime_config_watcher(endpoint)
             .await?;
 
@@ -371,14 +373,14 @@ impl PrefillRouter {
         let router = if prefill_router_mode.is_kv_routing() {
             // Create KV chooser using the endpoint (this is a prefill router)
             let kv_chooser = context
-                .model_manager
+                .endpoints
                 .kv_chooser_for_with_policy_and_client(
                     client.clone(),
                     prefill_block_size,
                     context.selection_policy.clone(),
                     prefill_kv_config,
                     context.prefill_load_estimator.clone(),
-                    Some(crate::worker_type::WorkerType::Prefill),
+                    Some(dynamo_router_protocol::worker_type::WorkerType::Prefill),
                     WORKER_TYPE_PREFILL,
                     Some(context.model_name.clone()),
                     advertisement.is_eagle,
@@ -406,7 +408,7 @@ impl PrefillRouter {
             crate::kv_router::check_hint_policies_route_on_kv_path(
                 prefill_router_mode,
                 &prefill_kv_config.clone().unwrap_or_default(),
-                &[crate::worker_type::WorkerType::Prefill],
+                &[dynamo_router_protocol::worker_type::WorkerType::Prefill],
             )?;
             let affinity = create_affinity_coordinator(
                 prefill_session_affinity_ttl,
@@ -523,7 +525,7 @@ impl PrefillRouter {
                 continue;
             }
             let build_context = PrefillBuildContext {
-                model_manager: router_ref.model_manager.clone(),
+                endpoints: router_ref.endpoints.clone(),
                 decode_router_mode: router_ref.decode_router_mode,
                 selection_policy: router_ref
                     .selection_policy
@@ -674,8 +676,10 @@ mod tests {
     use std::time::Duration;
 
     use super::*;
-    use crate::discovery::CommittedWorkerSetTarget;
-    use crate::kv_router::prefill_router::PrefillRouterLifecycle;
+    use crate::kv_router::prefill_router::{
+        PrefillRouterLifecycle, endpoints::TestEndpointProvider,
+    };
+    use crate::kv_router::worker_set_target::CommittedWorkerSetTarget;
     use dynamo_frontend_protocols::common::llm_backend::{LLMEngineOutput, PreprocessedRequest};
     use dynamo_kv_router::config::KvRouterConfig;
     use dynamo_model_card::router_config::RouterConfig;
@@ -953,7 +957,7 @@ mod tests {
         };
         let router = PrefillRouter::new_with_selection_policy(
             None,
-            Arc::new(ModelManager::new()),
+            Arc::new(TestEndpointProvider),
             RouterMode::RoundRobin,
             false,
             16,
@@ -1261,7 +1265,7 @@ mod tests {
             .endpoint("prefill");
         let router = PrefillRouter::new_with_selection_policy(
             None,
-            Arc::new(ModelManager::new()),
+            Arc::new(TestEndpointProvider),
             RouterMode::KV,
             false,
             64,
@@ -1579,7 +1583,7 @@ mod tests {
             .endpoint("prefill");
         let router = PrefillRouter::new_with_selection_policy(
             None,
-            Arc::new(ModelManager::new()),
+            Arc::new(TestEndpointProvider),
             RouterMode::KV,
             false,
             64,
@@ -1732,7 +1736,7 @@ mod tests {
         let runtime_request = || {
             let mut req = request();
             req.routing_mut().lora_resolution_version =
-                Some(crate::lora::runtime::RUNTIME_LORA_PROTOCOL_VERSION);
+                Some(dynamo_lora::runtime::RUNTIME_LORA_PROTOCOL_VERSION);
             req
         };
         drt.discovery()
@@ -1747,7 +1751,7 @@ mod tests {
             )
             .await
             .unwrap();
-        let manager = Arc::new(ModelManager::new());
+        let manager = Arc::new(TestEndpointProvider);
         let disabled = PrefillRouter::disabled(manager.clone(), RouterMode::RoundRobin, None);
         let mut output = disabled
             .generate(

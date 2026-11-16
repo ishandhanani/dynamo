@@ -53,7 +53,7 @@ use futures::StreamExt;
 use tokio::sync::{Mutex, mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
 
-use crate::kv_router::{WORKER_KV_INDEXER_BUFFER_SIZE, metrics::kv_publisher_metrics};
+use super::{WORKER_KV_INDEXER_BUFFER_SIZE, metrics::kv_publisher_metrics};
 use dynamo_runtime::transports::zmq::sockets::{
     MultipartMessage, SubSocket, connect_sub_socket, multipart_message,
 };
