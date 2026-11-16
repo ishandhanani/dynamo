@@ -359,10 +359,8 @@ impl DcMembershipWatch {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::pool_relay::namespace_source::discovery::PoolRelayDiscoveryConfig;
-    use crate::pool_relay::namespace_source::file::{
-        PoolRelaySourcesFile, RelaySource, SourcesDocument,
-    };
+    use crate::namespace_source::discovery::PoolRelayDiscoveryConfig;
+    use crate::namespace_source::file::{PoolRelaySourcesFile, RelaySource, SourcesDocument};
     use dynamo_model_card::model_card::ModelDeploymentCard;
     use dynamo_router_protocol::worker_type::WorkerType;
     use dynamo_runtime::discovery::{DiscoverySpec, MockDiscovery, SharedMockRegistry};
@@ -727,7 +725,7 @@ mod tests {
         });
         let membership = DcMembershipWatch::start_sources(
             discovery,
-            crate::pool_relay::host::PoolRelaySources::Discovery(PoolRelayDiscoveryConfig {
+            crate::host::PoolRelaySources::Discovery(PoolRelayDiscoveryConfig {
                 namespaces: vec!["a".into()],
                 ..Default::default()
             }),
@@ -745,7 +743,7 @@ mod tests {
             Arc::new(MockDiscovery::new(Some(1), SharedMockRegistry::new()));
         let membership = DcMembershipWatch::start_sources(
             discovery.clone(),
-            crate::pool_relay::host::PoolRelaySources::Discovery(PoolRelayDiscoveryConfig {
+            crate::host::PoolRelaySources::Discovery(PoolRelayDiscoveryConfig {
                 watch_all: true,
                 endpoint_prefixes: vec!["a.worker".into()],
                 ..Default::default()

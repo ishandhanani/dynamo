@@ -2225,44 +2225,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "dynamo-global-common"
-version = "1.8.0"
-dependencies = [
- "blake3",
- "prost 0.13.5",
- "serde",
- "thiserror 2.0.18",
- "tonic 0.13.1",
- "tonic-build 0.13.1",
- "url",
-]
-
-[[package]]
-name = "dynamo-global-discovery-client"
-version = "1.8.0"
-dependencies = [
- "dynamo-global-common",
- "reqwest 0.12.28",
- "serde",
- "serde_json",
- "thiserror 2.0.18",
- "tokio",
- "tokio-util",
- "tracing",
- "url",
-]
-
-[[package]]
-name = "dynamo-global-view-broadcaster"
-version = "1.8.0"
-dependencies = [
- "parking_lot",
- "tokio",
- "tokio-util",
- "tracing",
-]
-
-[[package]]
 name = "dynamo-http-server"
 version = "1.8.0"
 dependencies = [
@@ -2392,7 +2354,6 @@ version = "1.8.0"
 dependencies = [
  "aligned-vec",
  "anyhow",
- "arc-swap",
  "async-nats",
  "async-stream",
  "async-trait",
@@ -2413,13 +2374,9 @@ dependencies = [
  "dynamo-discovery",
  "dynamo-error",
  "dynamo-frontend-protocols",
- "dynamo-global-common",
- "dynamo-global-discovery-client",
- "dynamo-global-view-broadcaster",
  "dynamo-http-server",
  "dynamo-kv-events",
  "dynamo-kv-hashing",
- "dynamo-kv-indexer",
  "dynamo-kv-router",
  "dynamo-lora",
  "dynamo-memory",
@@ -2460,7 +2417,6 @@ dependencies = [
  "rmp-serde",
  "serde",
  "serde_json",
- "sha2 0.10.9",
  "sysinfo",
  "tempfile",
  "thiserror 2.0.18",
@@ -2472,8 +2428,6 @@ dependencies = [
  "tokio-util",
  "tonic 0.13.1",
  "tonic-build 0.13.1",
- "tonic-health",
- "tonic-reflection",
  "tower",
  "tower-http",
  "tracing",
@@ -8810,7 +8764,6 @@ dependencies = [
  "futures-core",
  "pin-project-lite",
  "tokio",
- "tokio-util",
 ]
 
 [[package]]
@@ -9035,18 +8988,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "tonic-health"
-version = "0.13.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cb87334d340313fefa513b6e60794d44a86d5f039b523229c99c323e4e19ca4b"
-dependencies = [
- "prost 0.13.5",
- "tokio",
- "tokio-stream",
- "tonic 0.13.1",
-]
-
-[[package]]
 name = "tonic-prost"
 version = "0.14.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -9071,19 +9012,6 @@ dependencies = [
  "syn 2.0.117",
  "tempfile",
  "tonic-build 0.14.6",
-]
-
-[[package]]
-name = "tonic-reflection"
-version = "0.13.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f9687bd5bfeafebdded2356950f278bba8226f0b32109537c4253406e09aafe1"
-dependencies = [
- "prost 0.13.5",
- "prost-types 0.13.5",
- "tokio",
- "tokio-stream",
- "tonic 0.13.1",
 ]
 
 [[package]]

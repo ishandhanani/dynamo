@@ -8,9 +8,9 @@ use std::time::Duration;
 use super::identity::{pool_id_to_wire, producer_to_wire, relay_identity_to_wire, unix_timestamp};
 use super::load::window_ms;
 use super::protocol as proto;
-use crate::pool_relay::identity::PoolRelayIdentity;
-use crate::pool_relay::load::Coverage;
-use crate::pool_relay::serving_load::{ModelServingLoad, PoolServingLoad, ServingLoadSnapshot};
+use crate::identity::PoolRelayIdentity;
+use crate::load::Coverage;
+use crate::serving_load::{ModelServingLoad, PoolServingLoad, ServingLoadSnapshot};
 
 pub(super) fn serving_load_update(
     relay: PoolRelayIdentity,
@@ -111,7 +111,7 @@ mod tests {
     };
 
     use super::*;
-    use crate::pool_relay::load::{PoolDeployment, PoolSchedulerLoad, SchedulerGauges};
+    use crate::load::{PoolDeployment, PoolSchedulerLoad, SchedulerGauges};
     use dynamo_http_server::load::{RequestGauges, RequestTotals};
 
     fn producer(seed: u8) -> ProducerIdentity {

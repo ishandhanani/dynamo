@@ -2431,7 +2431,6 @@ version = "1.8.0"
 dependencies = [
  "aligned-vec",
  "anyhow",
- "arc-swap",
  "async-nats",
  "async-stream",
  "async-trait",
@@ -2452,13 +2451,9 @@ dependencies = [
  "dynamo-discovery",
  "dynamo-error",
  "dynamo-frontend-protocols",
- "dynamo-global-common",
- "dynamo-global-discovery-client",
- "dynamo-global-view-broadcaster",
  "dynamo-http-server",
  "dynamo-kv-events",
  "dynamo-kv-hashing",
- "dynamo-kv-indexer",
  "dynamo-kv-router",
  "dynamo-lora",
  "dynamo-memory",
@@ -2499,7 +2494,6 @@ dependencies = [
  "rmp-serde",
  "serde",
  "serde_json",
- "sha2 0.10.9",
  "sysinfo",
  "tempfile",
  "thiserror 2.0.18",
@@ -2511,8 +2505,6 @@ dependencies = [
  "tokio-util",
  "tonic 0.13.1",
  "tonic-build 0.13.1",
- "tonic-health 0.13.1",
- "tonic-reflection",
  "tower",
  "tower-http",
  "tracing",
@@ -2724,6 +2716,50 @@ dependencies = [
 ]
 
 [[package]]
+name = "dynamo-pool-relay"
+version = "1.8.0"
+dependencies = [
+ "anyhow",
+ "arc-swap",
+ "async-stream",
+ "async-trait",
+ "blake3",
+ "bytes",
+ "dynamo-global-common",
+ "dynamo-global-discovery-client",
+ "dynamo-global-view-broadcaster",
+ "dynamo-http-server",
+ "dynamo-kv-events",
+ "dynamo-kv-hashing",
+ "dynamo-kv-indexer",
+ "dynamo-model-card",
+ "dynamo-router-protocol",
+ "dynamo-runtime",
+ "dynamo-slot-tracker",
+ "dynamo-sync",
+ "futures",
+ "futures-util",
+ "oneshot",
+ "parking_lot",
+ "prost 0.13.5",
+ "rand 0.9.4",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "thiserror 2.0.18",
+ "tokio",
+ "tokio-stream",
+ "tokio-util",
+ "tonic 0.13.1",
+ "tonic-build 0.13.1",
+ "tonic-health 0.13.1",
+ "tonic-reflection",
+ "tracing",
+ "url",
+ "xxhash-rust",
+]
+
+[[package]]
 name = "dynamo-preprocessor"
 version = "1.8.0"
 dependencies = [
@@ -2839,6 +2875,7 @@ dependencies = [
  "dynamo-mocker",
  "dynamo-model-card",
  "dynamo-parsers",
+ "dynamo-pool-relay",
  "dynamo-preprocessor",
  "dynamo-router-host",
  "dynamo-router-policies",

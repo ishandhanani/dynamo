@@ -517,11 +517,11 @@ mod tests {
     use dynamo_runtime::protocols::EndpointId;
 
     use super::*;
-    use crate::pool_relay::identity::{
+    use crate::identity::{
         CanonicalModelId, CanonicalModelRegistration, KvQueryHashFormat, KvQuerySemantics,
         PoolDescriptor, PoolRelayIdentity, WorkerRole,
     };
-    use crate::pool_relay::topology::{TopologyEntry, TopologyReadinessState};
+    use crate::topology::{TopologyEntry, TopologyReadinessState};
 
     const NS: &str = "ns";
     const RELAY_NS: &str = "relay";

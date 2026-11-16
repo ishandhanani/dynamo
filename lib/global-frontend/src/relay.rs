@@ -16,7 +16,7 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, Result, anyhow};
 use dynamo_global_common::PoolId;
 use dynamo_global_router::RelaySource;
-use dynamo_llm::pool_relay::wan::grpc::protocol::{
+use dynamo_pool_relay::wan::grpc::protocol::{
     KvEventRelayClient, RELAY_CONTRACT_MARKER, SubscribeKvPoolLoadRequest,
     SubscribeServingLoadRequest, SubscribeServingReadinessRequest, WatchKvPoolCatalogRequest,
 };

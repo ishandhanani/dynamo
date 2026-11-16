@@ -10,7 +10,7 @@ use dynamo_global_common::{PoolIdDeriver, PoolKey, PoolsResponse, V1PoolIdDerive
 use dynamo_global_discovery_client::GlobalDiscoveryClient;
 use dynamo_global_frontend::{RelayGatedPoolCatalog, discover_pools, serve_relay_views};
 use dynamo_global_router::{InFlightTracker, PoolSignals};
-use dynamo_llm::pool_relay::wan::grpc::protocol as relay;
+use dynamo_pool_relay::wan::grpc::protocol as relay;
 use grpc::pool_view_frame::Event;
 use grpc::pool_view_receiver_client::PoolViewReceiverClient;
 use prost::Message;

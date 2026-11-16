@@ -113,6 +113,7 @@
 
 # === global-router  (@ai-dynamo/dynamo-global-router-codeowners) ===
 /lib/global-*/**                                                                                        @ai-dynamo/dynamo-global-router-codeowners
+/lib/pool-relay/                                                                                        @ai-dynamo/dynamo-global-router-codeowners
 /lib/global-view-receiver/                                                                              @ai-dynamo/dynamo-global-router-codeowners
 /lib/global-view-broadcaster/                                                                           @ai-dynamo/dynamo-global-router-codeowners
 /components/src/dynamo/pool_relay/                                                                      @ai-dynamo/dynamo-global-router-codeowners
@@ -524,7 +525,6 @@ requirements.txt                                                                
 /tests/fault_tolerance/                                                                                 @ai-dynamo/dynamo-fault-tolerance-codeowners
 /lib/discovery/src/lora/                                                                                @ai-dynamo/dynamo-frontend-codeowners
 /lib/llm/src/entrypoint/                                                                                @ai-dynamo/dynamo-frontend-codeowners
-/lib/llm/src/pool_relay/                                                                                @ai-dynamo/dynamo-global-router-codeowners
 /lib/sync/src/metrics.rs                                                                                @ai-dynamo/dynamo-router-codeowners
 /tests/kvbm_integration/                                                                                @ai-dynamo/dynamo-kv-memory-codeowners
 /lib/llm/src/grpc/protos/                                                                               @ai-dynamo/dynamo-frontend-codeowners
@@ -536,7 +536,6 @@ requirements.txt                                                                
 /lib/llm/src/entrypoint.rs                                                                              @ai-dynamo/dynamo-frontend-codeowners
 /lib/llm/src/grpc/service/                                                                              @ai-dynamo/dynamo-frontend-codeowners
 /lib/llm/src/http/service/                                                                              @ai-dynamo/dynamo-frontend-codeowners
-/lib/llm/src/pool_relay.rs                                                                              @ai-dynamo/dynamo-global-router-codeowners
 /tests/gpu_memory_service/                                                                              @ai-dynamo/dynamo-gms-codeowners
 /lib/llm/src/block_manager/                                                                             @ai-dynamo/dynamo-kv-memory-codeowners
 /lib/mocker/servers/sglang/                                                                             @ai-dynamo/dynamo-backend-sglang-codeowners
@@ -638,7 +637,6 @@ requirements.txt                                                                
 /components/src/dynamo/vllm/multimodal_handlers/                                                        @ai-dynamo/dynamo-multimodal-codeowners
 /lib/preprocessor/tests/test_reasoning_parser.rs                                                        @ai-dynamo/dynamo-frontend-codeowners
 /components/src/dynamo/common/tests/test_snapshot*                                                      @ai-dynamo/dynamo-gms-codeowners
-/lib/llm/tests/fixtures/relay-sources-canonical.json                                                    @ai-dynamo/dynamo-global-router-codeowners
 /lib/preprocessor/tests/test_streaming_tool_parsers.rs                                                  @ai-dynamo/dynamo-frontend-codeowners
 /components/src/dynamo/trtllm/request_handlers/diffusion/                                               @ai-dynamo/dynamo-diffusion-codeowners
 /docs/fern/pages/kubernetes/kv-aware-routing/pool-relay.md                                              @ai-dynamo/dynamo-global-router-codeowners

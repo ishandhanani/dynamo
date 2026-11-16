@@ -10,7 +10,7 @@ use dynamo_router_protocol::identity::{
 use dynamo_runtime::protocols::EndpointId;
 
 use super::protocol as proto;
-use crate::pool_relay::identity::{
+use crate::identity::{
     CanonicalModelRegistration, KvQueryHashFormat, KvQuerySemantics, ModelTarget, PoolDescriptor,
     PoolRelayIdentity, WorkerRole,
 };

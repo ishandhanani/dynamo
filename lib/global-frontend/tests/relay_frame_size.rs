@@ -5,7 +5,7 @@ use dynamo_global_common::grpc::MAX_POOL_VIEW_FRAME_BYTES;
 use dynamo_global_common::{PoolKey, grpc};
 use dynamo_global_frontend::{PoolSnapshot, RelayGatedPoolCatalog, serve_relay_views};
 use dynamo_global_router::Pool;
-use dynamo_llm::pool_relay::wan::grpc::protocol as relay;
+use dynamo_pool_relay::wan::grpc::protocol as relay;
 use prost::Message;
 use std::sync::Arc;
 use std::time::Duration;

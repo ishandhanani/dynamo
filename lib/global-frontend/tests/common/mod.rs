@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use dynamo_global_common::grpc;
-use dynamo_llm::pool_relay::wan::grpc::protocol as relay;
+use dynamo_pool_relay::wan::grpc::protocol as relay;
 use prost::Message;
 
 fn producer(generation: u64) -> relay::ProducerIdentity {

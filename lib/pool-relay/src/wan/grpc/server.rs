@@ -31,8 +31,8 @@ use super::protocol::{FILE_DESCRIPTOR_SET, KvEventRelayServer};
 use super::service::{KvEventRelayService, KvEventRelayServiceConfig, SubscriberLimits};
 use super::serving_load::serving_load_update;
 use super::source::GrpcPublicationSource;
-use crate::pool_relay::RelayPublicationSource;
-use crate::pool_relay::serving_load::ServingLoadSnapshot;
+use crate::RelayPublicationSource;
+use crate::serving_load::ServingLoadSnapshot;
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct GrpcTransportHealth {

@@ -8,15 +8,14 @@ use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
 use tokio::sync::OnceCell;
 
-use super::*;
 use crate::{Endpoint, to_pyerr};
 
 #[pyclass]
 pub struct PoolRelay {
     endpoint: dynamo_runtime::component::Endpoint,
     cluster_id: String,
-    config: llm_rs::pool_relay::PoolRelayConfig,
-    inner: Arc<OnceCell<Arc<llm_rs::pool_relay::PoolRelay>>>,
+    config: dynamo_pool_relay::PoolRelayConfig,
+    inner: Arc<OnceCell<Arc<dynamo_pool_relay::PoolRelay>>>,
 }
 
 #[pymethods]
@@ -90,7 +89,7 @@ impl PoolRelay {
         }
         let sources_file = match sources_file {
             Some(path) if !path.trim().is_empty() => {
-                Some(llm_rs::pool_relay::PoolRelaySourcesFile {
+                Some(dynamo_pool_relay::PoolRelaySourcesFile {
                     path: path.into(),
                     connection_revision,
                 })
@@ -122,7 +121,7 @@ impl PoolRelay {
             ));
         }
 
-        let mut producer = llm_rs::pool_relay::PoolRelayProducerConfig {
+        let mut producer = dynamo_pool_relay::PoolRelayProducerConfig {
             publication_threshold,
             publication_delay_ms,
             recovery_attempt_timeout_ms,
@@ -134,9 +133,7 @@ impl PoolRelay {
                 let bind = bind.parse().map_err(|error| {
                     PyValueError::new_err(format!("invalid Pool Relay bind address: {error}"))
                 })?;
-                Some(llm_rs::pool_relay::wan::grpc::PoolRelayGrpcConfig::new(
-                    bind,
-                ))
+                Some(dynamo_pool_relay::wan::grpc::PoolRelayGrpcConfig::new(bind))
             }
             None => None,
         };
@@ -231,7 +228,7 @@ impl PoolRelay {
                         "routing_pool must be <cluster>/<namespace>/<DGD>",
                     ));
                 };
-                llm_rs::pool_relay::RoutingPoolKey::new(*cluster, *namespace, *dgd)
+                dynamo_pool_relay::RoutingPoolKey::new(*cluster, *namespace, *dgd)
                     .map_err(|error| PyValueError::new_err(error.to_string()))
             })
             .transpose()?;
@@ -249,11 +246,11 @@ impl PoolRelay {
         Ok(Self {
             endpoint: endpoint.inner,
             cluster_id,
-            config: llm_rs::pool_relay::PoolRelayConfig {
+            config: dynamo_pool_relay::PoolRelayConfig {
                 sources: match sources_file {
-                    Some(file) => llm_rs::pool_relay::PoolRelaySources::File(file),
-                    None => llm_rs::pool_relay::PoolRelaySources::Discovery(
-                        llm_rs::pool_relay::PoolRelayDiscoveryConfig {
+                    Some(file) => dynamo_pool_relay::PoolRelaySources::File(file),
+                    None => dynamo_pool_relay::PoolRelaySources::Discovery(
+                        dynamo_pool_relay::PoolRelayDiscoveryConfig {
                             namespaces,
                             endpoint_prefixes,
                             watch_all,
@@ -285,8 +282,8 @@ impl PoolRelay {
             inner
                 .get_or_try_init(|| async move {
                     let (mode, connection_revision) = match &config.sources {
-                        llm_rs::pool_relay::PoolRelaySources::Discovery(_) => ("discovery", None),
-                        llm_rs::pool_relay::PoolRelaySources::File(file) => {
+                        dynamo_pool_relay::PoolRelaySources::Discovery(_) => ("discovery", None),
+                        dynamo_pool_relay::PoolRelaySources::File(file) => {
                             ("from-file", file.connection_revision.clone())
                         }
                     };
@@ -298,7 +295,7 @@ impl PoolRelay {
                         "operator-managed Relay requires the system HTTP server"
                     );
                     let relay = Arc::new(
-                        llm_rs::pool_relay::PoolRelay::start(
+                        dynamo_pool_relay::PoolRelay::start(
                             endpoint.component().clone(),
                             cluster_id,
                             config,
@@ -407,7 +404,7 @@ impl PoolRelay {
 }
 
 impl PoolRelay {
-    fn started(&self) -> PyResult<Arc<llm_rs::pool_relay::PoolRelay>> {
+    fn started(&self) -> PyResult<Arc<dynamo_pool_relay::PoolRelay>> {
         self.inner
             .get()
             .cloned()

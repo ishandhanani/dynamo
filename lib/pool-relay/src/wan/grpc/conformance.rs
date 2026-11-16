@@ -28,20 +28,20 @@ use super::config::PoolRelayGrpcConfig;
 use super::protocol as proto;
 use super::protocol::wire::images::{self, FilterFormat, ImagesFrame, SnapshotAssembly};
 use super::server::GrpcTransport;
-use crate::pool_relay::actor::PoolRelayHandle;
-use crate::pool_relay::discovery::{
+use crate::actor::PoolRelayHandle;
+use crate::discovery::{
     DcMembershipView, DomainWorkerTopology, EndpointMembership, KvCacheDomainKey,
 };
-use crate::pool_relay::identity::{
+use crate::identity::{
     CanonicalModelId, CanonicalModelRegistration, KvQueryHashFormat, KvQuerySemantics, ModelAlias,
     PoolRelayIdentity, WorkerRole,
 };
-use crate::pool_relay::pool_registry::{
+use crate::pool_registry::{
     PoolActorConfig, PoolAttachRequest, PoolAttachment, PoolRegistry, PoolServingFacts,
 };
-use crate::pool_relay::publication::RegistryPublicationSource;
-use crate::pool_relay::serving_load::ServingLoadSnapshot;
-use crate::pool_relay::topology::TopologyPublisher;
+use crate::publication::RegistryPublicationSource;
+use crate::serving_load::ServingLoadSnapshot;
+use crate::topology::TopologyPublisher;
 use dynamo_model_card::local_model::runtime_config::ModelRuntimeConfig;
 use dynamo_sync::load::ActiveLoad;
 

@@ -6,6 +6,6 @@
 - Must not depend on: `dynamo-llm`, `dynamo-preprocessor`, or any crate above them. The router host (`dynamo-router-host`, `lib/router-host`), the model catalog (`dynamo-discovery`, `lib/discovery`), the worker-side publisher and the Pool Relay call into this crate; what it needs from them is passed in as arguments, as with the router-mode selectors of the remote indexer.
 - Hosts import this crate directly; `dynamo-llm` does not re-export it.
 - Metric names and labels, event-plane subjects and the serialized messages defined here are contracts with workers, other routers and dashboards. A refactor must not change them.
-- Features: `ckf-diagnostics` (snapshots of the worker query client; `dynamo-llm` forwards it) and `testing` (fixtures and test-only handles that `dynamo-llm`'s tests reuse).
+- Features: `ckf-diagnostics` (snapshots of the worker query client; `dynamo-pool-relay` forwards it) and `testing` (fixtures and test-only handles that `dynamo-llm`'s tests reuse).
 - Some ZMQ, event-plane and replica-sync tests bind local ports and can fail in a sandbox or in a full parallel run. Rerun a failing one alone before treating it as a regression.
 - Check: `cargo test -p dynamo-sync`, `cargo check -p dynamo-sync --all-targets --features ckf-diagnostics`, and `cargo tree -p dynamo-sync | grep dynamo-llm` must print nothing.

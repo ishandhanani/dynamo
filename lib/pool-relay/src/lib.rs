@@ -1,7 +1,12 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
+//! # Dynamo Pool Relay
+//!
 //! Pool Relay with endpoint-local CKF pools.
+//!
+//! `docs/architecture.md` and `docs/grpc-contract.md` next to this file describe it. The
+//! crate depends on `dynamo-sync` and never on `dynamo-llm` or `dynamo-discovery`.
 
 pub use dynamo_global_common::PoolKey as RoutingPoolKey;
 

@@ -1620,13 +1620,13 @@ mod tests {
     use tokio_util::sync::CancellationToken;
 
     use super::*;
-    use crate::pool_relay::discovery::DcMembershipView;
-    use crate::pool_relay::identity::{KvQueryHashFormat, ModelTarget};
-    use crate::pool_relay::publication::{
+    use crate::discovery::DcMembershipView;
+    use crate::identity::{KvQueryHashFormat, ModelTarget};
+    use crate::publication::{
         PublicationErrorKind, PublicationFrameKind, RegistryPublicationSource,
         RelayPublicationSource,
     };
-    use crate::pool_relay::topology::TopologyPublisher;
+    use crate::topology::TopologyPublisher;
 
     type TestCkfBuilder =
         Box<dyn FnOnce(CkfConfig) -> Result<DcCkfState, CkfBuildError> + Send + 'static>;

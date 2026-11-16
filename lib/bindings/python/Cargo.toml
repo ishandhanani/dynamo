@@ -35,7 +35,7 @@ media-ffmpeg = ["dynamo-llm/media-ffmpeg"]
 kv-indexer = ["dep:clap", "dep:tracing-subscriber", "dynamo-kv-router/http", "dynamo-kv-router/ingest-zmq", "dynamo-kv-router/peer-recovery"]
 kv-indexer-metrics = ["kv-indexer", "dynamo-kv-router/metrics"]
 # Exposes the optional Relay stats/snapshot methods to Python diagnostic builds.
-ckf-diagnostics = ["dynamo-llm/ckf-diagnostics"]
+ckf-diagnostics = ["dynamo-pool-relay/ckf-diagnostics"]
 slot-tracker = ["dep:clap", "dep:tracing-subscriber", "dynamo-kv-router/http", "dynamo-kv-router/replica-sync-zmq"]
 select-service = ["dep:clap", "dep:tracing-subscriber", "dynamo-kv-router/http", "dynamo-kv-router/ingest-zmq", "dynamo-kv-router/replica-sync-zmq", "dynamo-kv-router/peer-recovery"]
 # Replay parity benchmark builds. Deterministic replay itself is the `deterministic`
@@ -68,6 +68,7 @@ request-trace-s3 = ["dynamo-llm/request-trace-s3"]
 # must not enable `extension-module`.
 aisimulate-core = { version = "=0.13.0-dev.202610290000000087", optional = true, features = ["python"] }
 dynamo-runtime = { path = "../../runtime" }
+dynamo-pool-relay = { path = "../../pool-relay" }
 dynamo-discovery = { path = "../../discovery" }
 dynamo-router-host = { path = "../../router-host" }
 dynamo-sync = { path = "../../sync" }

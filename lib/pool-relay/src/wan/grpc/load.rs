@@ -10,8 +10,8 @@ use tokio_util::sync::CancellationToken;
 
 use super::identity::{producer_to_wire, relay_identity_to_wire, unix_timestamp};
 use super::protocol as proto;
-use crate::pool_relay::identity::PoolRelayIdentity;
-use crate::pool_relay::load::PoolLoadSnapshot;
+use crate::identity::PoolRelayIdentity;
+use crate::load::PoolLoadSnapshot;
 
 /// A complete load window published by [`run_load_publisher`].
 pub(super) trait LoadWindow: Clone + Send + Sync + 'static {

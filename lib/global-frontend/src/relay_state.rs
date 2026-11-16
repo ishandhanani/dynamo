@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use dynamo_global_common::PoolId;
 use dynamo_global_router::{LoadReport, PoolSignals, RelaySource, ReportReceipt};
-use dynamo_llm::pool_relay::wan::grpc::protocol::{
+use dynamo_pool_relay::wan::grpc::protocol::{
     KvPoolCatalogUpdate, KvPoolLoadUpdate, ProducerKey, ServingLoadUpdate, ServingReadinessState,
     ServingReadinessUpdate, validate_protocol_envelope,
 };
@@ -121,10 +121,8 @@ impl RelayPoolState {
         }
         for registration in producers.iter().flat_map(|pool| &pool.registrations) {
             if ready_models.contains(&registration.canonical_model_id)
-                && dynamo_llm::pool_relay::wan::grpc::protocol::validate_model_registration(
-                    registration,
-                )
-                .is_ok()
+                && dynamo_pool_relay::wan::grpc::protocol::validate_model_registration(registration)
+                    .is_ok()
             {
                 ready_models.extend(registration.aliases.iter().cloned());
             }
@@ -169,7 +167,7 @@ impl RelayPoolState {
             .find(|registration| {
                 self.ready_models.contains(&registration.canonical_model_id)
                     && registration.aliases.iter().any(|alias| alias == model)
-                    && dynamo_llm::pool_relay::wan::grpc::protocol::validate_model_registration(
+                    && dynamo_pool_relay::wan::grpc::protocol::validate_model_registration(
                         registration,
                     )
                     .is_ok()
@@ -290,7 +288,7 @@ fn pool_report(update: &ServingLoadUpdate, model: &str) -> Option<LoadReport> {
 
 #[cfg(test)]
 mod tests {
-    use dynamo_llm::pool_relay::wan::grpc::protocol::{
+    use dynamo_pool_relay::wan::grpc::protocol::{
         KvPoolLoadEntry, LoadView, ModelServingLoad, PoolDeploymentStatus, PoolServingLoad,
         RequestLifecycleStats,
     };
