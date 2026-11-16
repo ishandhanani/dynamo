@@ -6,13 +6,15 @@
 use std::borrow::Cow;
 
 use crate::preprocessor::structural_tag::{
-    SelectedStructuralTagBuilder, is_beam_parser, requires_native_tool_call_format,
+    SelectedStructuralTagBuilder, requires_native_tool_call_format,
 };
 use crate::preprocessor::{OpenAIPreprocessor, PreprocessedRequest, PromptReasoningPrefill};
 use crate::protocols::openai::chat_completions::NvCreateChatCompletionRequest;
+use crate::protocols::openai::chat_completions::tool_parser_v2::is_beam_parser;
 use crate::protocols::openai::common_ext::CommonExtProvider;
 use crate::protocols::openai::tools::{
-    ToolChoiceGuidance, get_tool_choice_guidance_from_tools, validate_openai_tool_choice,
+    ToolChoiceGuidance, convert_tools, get_tool_choice_guidance_from_tools,
+    validate_openai_tool_choice,
 };
 use crate::protocols::openai::{GuidedToolConstraint, validate};
 
@@ -641,17 +643,6 @@ pub(crate) fn convert_tool_choice(tool_choice: &ChatCompletionToolChoiceOption) 
             ToolChoice::Named(named.function.name.clone())
         }
     }
-}
-
-pub(crate) fn convert_tools(tools: &[ChatCompletionTool]) -> Vec<ToolDefinition> {
-    tools
-        .iter()
-        .map(|tool| ToolDefinition {
-            name: tool.function.name.clone(),
-            parameters: tool.function.parameters.clone(),
-            strict: tool.function.strict,
-        })
-        .collect()
 }
 
 /// Normalize and validate all tools visible to the model without rewriting the request.
@@ -2577,6 +2568,57 @@ mod tests {
                 GuidedToolConstraint::None,
                 "K3 forced choices use native XTML rather than guided JSON"
             );
+        }
+    }
+
+    #[test]
+    fn test_tool_choice_conversion_preserves_request_level_parser_policy() {
+        use crate::protocols::anthropic::types::AnthropicCreateMessageRequest;
+
+        for (label, tool_choice, parsing_enabled) in [
+            ("auto", serde_json::json!({"type": "auto"}), true),
+            ("any", serde_json::json!({"type": "any"}), true),
+            (
+                "named",
+                serde_json::json!({"type": "tool", "name": "get_weather"}),
+                true,
+            ),
+            ("none", serde_json::json!({"type": "none"}), false),
+        ] {
+            let req: AnthropicCreateMessageRequest = serde_json::from_value(serde_json::json!({
+                "model": "test-model",
+                "max_tokens": 100,
+                "messages": [{"role": "user", "content": "Hi"}],
+                "tools": [{
+                    "name": "get_weather",
+                    "description": "Get weather",
+                    "input_schema": {"type": "object"}
+                }],
+                "tool_choice": tool_choice
+            }))
+            .unwrap();
+
+            let chat_req: NvCreateChatCompletionRequest = req.try_into().unwrap();
+            assert_eq!(
+                chat_req.inner.tools.as_ref().map(Vec::len),
+                Some(1),
+                "{label} must preserve tools"
+            );
+            assert_eq!(
+                crate::preprocessor::OpenAIPreprocessor::tool_call_parsing_enabled(&chat_req),
+                parsing_enabled,
+                "unexpected parser policy for Anthropic {label}"
+            );
+
+            match (label, chat_req.inner.tool_choice.as_ref()) {
+                ("auto", Some(ChatCompletionToolChoiceOption::Auto))
+                | ("any", Some(ChatCompletionToolChoiceOption::Required))
+                | ("none", Some(ChatCompletionToolChoiceOption::None)) => {}
+                ("named", Some(ChatCompletionToolChoiceOption::Named(named))) => {
+                    assert_eq!(named.function.name, "get_weather");
+                }
+                (_, actual) => panic!("unexpected converted tool choice for {label}: {actual:?}"),
+            }
         }
     }
 }
