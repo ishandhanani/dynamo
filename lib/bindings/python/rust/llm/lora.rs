@@ -5,7 +5,7 @@
 //!
 //! Provides a single unified interface (LoRADownloader) for all LoRA operations.
 
-use dynamo_llm::lora::{
+use dynamo_lora::{
     HuggingFaceLoRASource, LoRACache as RsLoRACache, LoRADownloader as RsLoRADownloader,
     LocalLoRASource, S3LoRASource,
 };
@@ -35,7 +35,7 @@ impl LoRADownloader {
             })?,
         };
 
-        let mut sources: Vec<Arc<dyn dynamo_llm::lora::LoRASource>> = vec![
+        let mut sources: Vec<Arc<dyn dynamo_lora::LoRASource>> = vec![
             Arc::new(LocalLoRASource::new()),
             Arc::new(HuggingFaceLoRASource::from_env()),
         ];

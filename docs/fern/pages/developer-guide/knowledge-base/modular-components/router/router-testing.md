@@ -11,7 +11,7 @@ The router has three useful test layers. When you add a non-trivial or potential
 
 ## 1. Rust Unit and Integration Tests
 
-Use Rust tests in `lib/router` and `lib/llm` for local correctness:
+Use Rust tests in `lib/router`, `lib/router-host`, and `lib/sync` for local correctness:
 
 - cost-model math
 - indexer behavior
@@ -32,7 +32,7 @@ Typical commands:
 
 ```bash
 cargo test -p dynamo-kv-router
-cargo test -p dynamo-llm --no-default-features
+cargo test -p dynamo-router-host -p dynamo-sync
 ```
 
 ## 2. Bench-Backed E2E Invariant Tests

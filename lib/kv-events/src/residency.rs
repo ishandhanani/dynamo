@@ -32,7 +32,7 @@ pub enum ResidencyDomain {
 ///
 /// Worker ownership is tied to one serving attachment. Cache-owner ownership
 /// is stable across those attachments and is projected to a ready worker only
-/// by the lib/llm reconciliation layer.
+/// by the lib/sync reconciliation layer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ResidencyOwner {

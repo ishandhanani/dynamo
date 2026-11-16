@@ -12,7 +12,6 @@ use crate::{
         FrontendRouteExtension,
         service_v2::{self, HttpService},
     },
-    namespace::NamespaceFilter,
 };
 use dynamo_discovery::{
     ChatEngineFactoryCallback, ModelManager, ModelUpdate, ModelWatcher,
@@ -28,6 +27,7 @@ use dynamo_model_card::{
 use dynamo_router_host::plugins::RouterPluginBuilder;
 use dynamo_runtime::DistributedRuntime;
 use dynamo_runtime::metrics::MetricsHierarchy;
+use dynamo_runtime::namespace::NamespaceFilter;
 
 /// Dynamo's complete discovery-backed HTTP frontend.
 ///
@@ -366,7 +366,7 @@ async fn run_watcher(
     // Start the LoRA allocation controller when LoRA serving is enabled. The
     // controller itself is additionally gated on the allocation config
     // (DYN_LORA_ALLOCATION_ENABLED) inside `start_lora_controller`.
-    if crate::lora::lora_serving_enabled() {
+    if dynamo_lora::lora_serving_enabled() {
         let cancel_token = runtime.primary_token();
         let _controller_handle = model_manager.start_lora_controller(cancel_token);
     }

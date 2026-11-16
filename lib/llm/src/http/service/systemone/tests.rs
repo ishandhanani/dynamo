@@ -313,7 +313,7 @@ async fn unavailable_with_retry_after_does_not_claim_capacity() {
 
 #[test]
 fn placement_pin_sets_both_worker_and_rank() {
-    crate::generate_format::test_formats::install();
+    dynamo_generate_format::test_formats::install();
     let native = build_native_score_request(&[1], &[2], "test-salt").unwrap();
     let mut preprocessed = bind_native("test-model", 16, &native, "request-1")
         .unwrap()
@@ -348,7 +348,7 @@ fn started_branch(
     tracker: Arc<RequestTracker>,
     stream: ManyOut<Annotated<LLMEngineOutput>>,
 ) -> StartedBranch {
-    crate::generate_format::test_formats::install();
+    dynamo_generate_format::test_formats::install();
     let native = build_native_score_request(&prepared.prompt_ids, &prepared.label_ids, "salt");
     let exchange = bind_native("test-model", 16, &native.unwrap(), "branch-0")
         .unwrap()
@@ -682,7 +682,7 @@ impl AsyncEngine<SingleIn<PreprocessedRequest>, ManyOut<Annotated<LLMEngineOutpu
 }
 
 fn selection(engine: Arc<TestEngine>) -> SystemOneExecutionSelection {
-    crate::generate_format::test_formats::install();
+    dynamo_generate_format::test_formats::install();
     let mut card = ModelDeploymentCard::load_from_disk(
         "tests/data/sample-models/mock-llama-3.1-8b-instruct",
         None,

@@ -6,10 +6,10 @@ use std::time::{Duration, Instant};
 
 use dynamo_backend_common::{BackendError, DisaggregationMode, FinishReason, LLMEngine};
 use dynamo_discovery::ModelManager;
-use dynamo_llm::worker_type::WorkerType;
 use dynamo_model_card::model_card::TokenizerKind;
 use dynamo_router_host::PrefillRouter;
 use dynamo_router_host::session_affinity::SessionAffinityMode;
+use dynamo_router_protocol::worker_type::WorkerType;
 use dynamo_runtime::pipeline::{AsyncEngine, AsyncEngineContextProvider, Operator, RouterMode};
 use dynamo_sidecar_testkit::{
     assert::{failure, terminal},

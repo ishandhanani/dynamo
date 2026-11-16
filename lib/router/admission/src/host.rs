@@ -11,5 +11,5 @@ pub use crate::placement::WorkerPlacement;
 pub use crate::profile::{PolicyClassConfig, PolicyProfile, RouterQueuePolicy};
 pub use crate::queue::{PolicyQueue, QueueMetadata, QueueRejection, QueueSnapshot};
 
-// What the frontend host (lib/llm) names beyond the lists above.
+// What the frontend host (lib/router-host, lib/llm) names beyond the lists above.
 pub use crate::queue::QueueLimitKind;

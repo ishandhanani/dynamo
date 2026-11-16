@@ -54,7 +54,6 @@ mm-routing = [
     "dynamo-llm/mm-routing",
     "dynamo-vllm-sidecar/mm-routing",
     "dynamo-sglang-sidecar/mm-routing",
-    "dynamo-trtllm-sidecar/mm-routing",
 ]
 # Enable the native S3 destination for the request-trace sink. Production wheel
 # builds enable this flag in container/templates/wheel_builder.Dockerfile so
@@ -68,6 +67,8 @@ request-trace-s3 = ["dynamo-llm/request-trace-s3"]
 # must not enable `extension-module`.
 aisimulate-core = { version = "=0.13.0-dev.202610290000000087", optional = true, features = ["python"] }
 dynamo-runtime = { path = "../../runtime" }
+dynamo-generate-format = { path = "../../generate-format" }
+dynamo-mocker-engine = { path = "../../mocker/engine" }
 dynamo-pool-relay = { path = "../../pool-relay" }
 dynamo-discovery = { path = "../../discovery" }
 dynamo-router-host = { path = "../../router-host" }
@@ -75,6 +76,7 @@ dynamo-sync = { path = "../../sync" }
 dynamo-preprocessor = { path = "../../preprocessor" }
 dynamo-frontend-protocols = { path = "../../frontend-protocols" }
 dynamo-error = { path = "../../error", features = ["http"] }
+dynamo-lora = { path = "../../lora" }
 dynamo-mocker = { path = "../../mocker" }
 dynamo-model-card = { path = "../../model-card" }
 dynamo-parsers = { version = "=11.0.11" }

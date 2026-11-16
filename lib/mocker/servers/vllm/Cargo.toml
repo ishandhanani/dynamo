@@ -36,7 +36,6 @@ uuid = { workspace = true }
 [dev-dependencies]
 tempfile = { workspace = true }
 serde_json = { workspace = true }
-dynamo-llm = { workspace = true }
 dynamo-kv-events = { workspace = true }
 dynamo-kv-hashing = { workspace = true }
 dynamo-kv-indexer = { workspace = true }

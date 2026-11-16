@@ -535,7 +535,7 @@ mod tests {
         assert_eq!(model_ready_value(&registry, "test-model"), None);
 
         let mut card = ModelDeploymentCard::default();
-        card.worker_type = Some(crate::worker_type::WorkerType::Aggregated);
+        card.worker_type = Some(dynamo_router_protocol::worker_type::WorkerType::Aggregated);
         let mut worker_set = dynamo_discovery::WorkerSet::new(
             "watched".to_string(),
             "watched-mdc".to_string(),
@@ -596,7 +596,7 @@ mod tests {
         register_model_ready_metric(&registry, manager.clone(), None).unwrap();
 
         let mut card = ModelDeploymentCard::default();
-        card.worker_type = Some(crate::worker_type::WorkerType::Aggregated);
+        card.worker_type = Some(dynamo_router_protocol::worker_type::WorkerType::Aggregated);
         let mut worker_set = dynamo_discovery::WorkerSet::new(
             "watched".to_string(),
             "watched-mdc".to_string(),

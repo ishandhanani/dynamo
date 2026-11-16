@@ -31,13 +31,13 @@ use super::openai::{
     preprocessed_context_from_headers,
 };
 use super::{RouteDoc, service_v2};
-use crate::generate_format::{
-    Bound, ClientError, ClientRequest, ErrorPhase, GenerateExchange, Opened, SharedFormat, Worker,
-};
 use dynamo_frontend_protocols::Annotated;
 use dynamo_frontend_protocols::common::llm_backend::{LLMEngineOutput, PreprocessedRequest};
 use dynamo_frontend_protocols::common::timing::RequestTracker;
 use dynamo_frontend_protocols::response_merge::PREFILL_OUTPUT_ANNOTATION;
+use dynamo_generate_format::{
+    Bound, ClientError, ClientRequest, ErrorPhase, GenerateExchange, Opened, SharedFormat, Worker,
+};
 use dynamo_http_server::disconnect::{ConnectionHandle, create_connection_monitor};
 use dynamo_http_server::metrics::{
     CancellationLabels, ErrorType, HttpQueueGuard, ResponseMetricCollector,
@@ -102,7 +102,7 @@ fn stream_error(
     format: &SharedFormat,
     error: &(dyn std::error::Error + 'static),
 ) -> (ErrorType, String) {
-    let crate::generate_format::WorkerError {
+    let dynamo_generate_format::WorkerError {
         kind: error_type,
         status,
         message,
@@ -500,7 +500,7 @@ impl Dispatch {
         let stream = match generate_result {
             Ok(stream) => stream,
             Err(error) => {
-                let crate::generate_format::WorkerError {
+                let dynamo_generate_format::WorkerError {
                     kind: mut error_type,
                     status,
                     message,
@@ -548,7 +548,7 @@ impl Dispatch {
                     Json(response).into_response()
                 }
                 Some(Err(error)) => {
-                    let crate::generate_format::WorkerError {
+                    let dynamo_generate_format::WorkerError {
                         kind: error_type,
                         status,
                         message,

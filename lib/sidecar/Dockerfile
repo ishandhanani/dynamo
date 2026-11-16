@@ -91,9 +91,10 @@ ARG FAST_RELEASE_PROFILE=false
 # intermediate layer retains only the installed binaries and metadata.
 #
 # One `cargo build` for all four compiles the shared tree once. Separate
-# `cargo build -p` calls resolve features per package, so each one recompiled
-# dynamo-llm and most of its dependencies. The SGLang and TRT-LLM manifests
-# enable the vLLM sidecar's `mm-routing` so their SBOMs match their binaries.
+# `cargo build -p` calls resolve features per package, so a shared crate is
+# compiled again for each feature set. No sidecar depends on dynamo-llm. The
+# SGLang manifest enables the vLLM sidecar's `mm-routing` so its SBOM matches
+# its binary; the TRT-LLM and LPX sidecars do not depend on the preprocessor.
 #
 # sharing=private: cargo's .package-cache lock lives in $CARGO_HOME, outside
 # these mounts, so two builds must not write one mount at once. A concurrent

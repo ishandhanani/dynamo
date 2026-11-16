@@ -39,7 +39,7 @@ fn media_strings_move_into_generate_request() {
 
 // Exercise the real frontend projection before lowering to the engine protocol.
 fn plugin_request(body: serde_json::Value) -> PreprocessedRequest {
-    use dynamo_llm::generate_format::{ClientRequest, GenerateFormat, Worker};
+    use dynamo_generate_format::{ClientRequest, GenerateFormat, Worker};
     let body = serde_json::to_vec(&body).unwrap();
     let opened = dynamo_vllm_generate::VllmFormat
         .open(ClientRequest {

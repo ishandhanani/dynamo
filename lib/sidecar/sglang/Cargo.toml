@@ -13,9 +13,8 @@ description = "Dynamo SGLang sidecar for an out-of-process engine exposed throug
 
 [package.metadata.cargo-machete]
 # prost, prost-types: referenced by protobuf code generated into OUT_DIR.
-# dynamo-llm: no source names it since the KV event publisher moved to
-# dynamo-backend-common; the `mm-routing` feature below still forwards to it.
-ignored = ["prost", "prost-types", "dynamo-llm"]
+# dynamo-preprocessor: no source names it; the `mm-routing` feature below forwards to it.
+ignored = ["prost", "prost-types", "dynamo-preprocessor"]
 
 [[bin]]
 name = "dynamo-sglang-sidecar"
@@ -25,14 +24,17 @@ path = "src/main.rs"
 # On for the sidecar image's SBOM (its shared build links vLLM's mm-routing here).
 # The Python bindings turn them off so the default wheel stays lean.
 default = ["mm-routing", "jemalloc"]
-mm-routing = ["dynamo-llm/mm-routing"]
+mm-routing = ["dynamo-preprocessor/mm-routing"]
 # jemalloc as the binary's global allocator.
 jemalloc = ["dynamo-sidecar-common/jemalloc"]
 
 [dependencies]
 dynamo-sglang-generate = { workspace = true }
 dynamo-backend-common = { workspace = true }
-dynamo-llm = { workspace = true }
+# For the `mm-routing` forward only: the feature's code is the preprocessor's. No source here
+# names the preprocessor, and since dynamo-sglang-generate stopped depending on the frontend
+# crate this entry is the only one that puts it in this crate's tree.
+dynamo-preprocessor = { workspace = true }
 dynamo-sync = { workspace = true }
 dynamo-frontend-protocols = { workspace = true }
 dynamo-model-card = { workspace = true }

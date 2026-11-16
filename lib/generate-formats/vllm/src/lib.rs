@@ -17,7 +17,7 @@ use crate::generate::{GenerateAggregator, GenerateRequest, GenerateResponseOptio
 use dynamo_frontend_protocols::common::llm_backend::{LLMEngineOutput, PreprocessedRequest};
 use dynamo_frontend_protocols::common::preprocessed_mm_identifier;
 use dynamo_frontend_protocols::common::preprocessor::MmRoutingInfo;
-use dynamo_llm::generate_format::{
+use dynamo_generate_format::{
     Bound, ClientError, ClientRequest, GenerateExchange, GenerateFormat, Opened, Worker,
 };
 use dynamo_model_card::local_model::runtime_config::VLLM_INFERENCE_V1_GENERATE_CAPABILITY;
@@ -450,8 +450,8 @@ impl GenerateFormat for VllmFormat {
     fn worker_error(
         &self,
         error: &(dyn std::error::Error + 'static),
-        phase: dynamo_llm::generate_format::ErrorPhase,
-    ) -> dynamo_llm::generate_format::WorkerError {
+        phase: dynamo_generate_format::ErrorPhase,
+    ) -> dynamo_generate_format::WorkerError {
         errors::classify(error, phase)
     }
 
@@ -460,7 +460,7 @@ impl GenerateFormat for VllmFormat {
         error: axum::extract::rejection::BytesRejection,
         headers: &axum::http::HeaderMap,
     ) -> ClientError {
-        dynamo_llm::generate_format::json_body_error(headers, error).into()
+        dynamo_generate_format::json_body_error(headers, error).into()
     }
 
     fn frontend_error(&self, error: ClientError) -> ClientError {

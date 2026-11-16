@@ -11,8 +11,7 @@ areas:
   - examples/chat_templates/
   - lib/bindings/python/rust/parsers.rs
   - lib/generate-format-catalog/
-  - lib/llm/src/generate_format.rs
-  - lib/llm/src/generate_format/
+  - lib/generate-format/
   - lib/llm/src/entrypoint.rs
   - lib/llm/src/entrypoint/
   - lib/llm/src/entrypoint/input.rs
@@ -27,7 +26,6 @@ areas:
   - lib/llm/src/http/
   - lib/llm/src/http/service.rs
   - lib/llm/src/http/service/
-  - lib/llm/src/lora.rs
   - lib/discovery/src/lora.rs
   - lib/discovery/src/lora/
   - lib/discovery/src/pipeline.rs
@@ -882,7 +880,7 @@ shared:
   owners:
   - runtime
   - observability
-- glob: lib/llm/src/mocker/
+- glob: lib/mocker/engine/
   owners:
   - runtime
   - performance

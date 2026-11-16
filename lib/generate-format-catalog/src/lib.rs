@@ -12,7 +12,7 @@
 //! `/inference/v1/generate` selects `vllm`. Enable engine APIs to expose the routes.
 //! Unknown names and duplicate registrations fail at initialization.
 
-use dynamo_llm::generate_format::Registry;
+use dynamo_generate_format::Registry;
 use std::sync::Arc;
 
 /// Register the built-in formats. Custom catalogs may extend this registry.

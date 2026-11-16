@@ -211,7 +211,7 @@ where
     /// Setting this to KV means we never intend to call `generate` on this PushRouter. We are
     /// not using it as an AsyncEngine.
     /// Instead we will decide whether to call random/round_robin/direct ourselves and call them directly.
-    /// dynamo-llm's KV Routing does this.
+    /// dynamo-router-host's KV routing does this.
     router_mode: RouterMode,
 
     /// Instance selectors for the modes this router picks by: the configured mode, plus

@@ -935,10 +935,11 @@ async fn test_responses_non_streaming_observes_metrics_before_backend_error_pref
 mod integration_tests {
     use super::*;
     use dynamo_discovery::{ModelWatcher, engines::make_echo_engine};
-    use dynamo_llm::{entrypoint::EngineConfig, namespace::NamespaceFilter};
+    use dynamo_llm::entrypoint::EngineConfig;
     use dynamo_model_card::local_model::LocalModelBuilder;
     use dynamo_runtime::DistributedRuntime;
     use dynamo_runtime::discovery::DiscoveryQuery;
+    use dynamo_runtime::namespace::NamespaceFilter;
     use std::sync::Arc;
 
     #[tokio::test]
@@ -1028,7 +1029,7 @@ mod integration_tests {
                 dynamo_model_card::model_type::ModelType::Chat,
                 dynamo_model_card::model_type::ModelInput::Text,
                 None,
-                Some(dynamo_llm::worker_type::WorkerType::Aggregated),
+                Some(dynamo_router_protocol::worker_type::WorkerType::Aggregated),
                 Vec::new(),
             )
             .await

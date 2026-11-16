@@ -58,6 +58,13 @@ update triggers cleanup or the replay ends. Cleanup timing can affect lineage
 reconstructed by later requests, but does not affect current placement or eviction
 decisions.
 
+## Related Crates
+
+`dynamo-mocker` holds the scheduling and KV-cache simulation, load generation and replay, and needs no distributed runtime. The crates that put it behind a Dynamo interface live next to it:
+
+- [`dynamo-mocker-engine`](engine) (`lib/mocker/engine`) serves the scheduler as a token engine on the Dynamo runtime: KV event publishing, forward-pass and native engine metrics, and the prefill/decode handoff. `python -m dynamo.mocker` runs it through the Python bindings. It cannot be part of this crate: `dynamo-backend-common` depends on `dynamo-mocker`, and the engine depends on `dynamo-backend-common`.
+- [`lib/mocker/servers`](servers) holds the mocker-backed vLLM, SGLang and TensorRT-LLM gRPC servers that the engine sidecars are tested against.
+
 ## Further Reading
 
 - [Mocker CLI reference](../../docs/fern/pages/reference/components/mocker-cli-reference.mdx)

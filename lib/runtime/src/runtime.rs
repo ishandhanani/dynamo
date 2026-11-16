@@ -45,7 +45,7 @@ pub(crate) fn graceful_shutdown_timeout() -> Duration {
 
 /// How long the Velo response service stays open after the main token is
 /// cancelled: the HTTP service's drain, `DYN_HTTP_GRACEFUL_SHUTDOWN_TIMEOUT_SECS`
-/// (default 5, read by dynamo-llm). Requests it admits may still be queued or
+/// (default 5, read by dynamo-http-server). Requests it admits may still be queued or
 /// tokenizing, and register their responses later.
 fn velo_response_drain_window() -> Duration {
     let timeout_secs =

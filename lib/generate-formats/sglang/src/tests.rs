@@ -3,7 +3,7 @@
 
 use crate::{ClientCodec, Encoded, SglangFormat};
 use axum::http::{HeaderMap, StatusCode};
-use dynamo_llm::generate_format::*;
+use dynamo_generate_format::*;
 use serde_json::{Value, json};
 use std::sync::Arc;
 

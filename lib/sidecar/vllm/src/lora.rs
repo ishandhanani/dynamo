@@ -6,7 +6,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use dynamo_backend_common::DynamoError;
-use dynamo_llm::lora::{
+use dynamo_lora::{
     HuggingFaceLoRASource, LoRACache, LoRADownloader, LoRASource, LocalLoRASource, S3LoRASource,
 };
 use dynamo_model_card::local_model::derive_lora_suffix;

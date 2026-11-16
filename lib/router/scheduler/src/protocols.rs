@@ -20,7 +20,7 @@ use std::sync::LazyLock;
 
 /// Trait abstracting the worker configuration fields needed by the scheduling layer.
 ///
-/// `ModelRuntimeConfig` (in `lib/llm`) implements this directly so no adapter type is needed.
+/// `ModelRuntimeConfig` (in `lib/model-card`) implements this directly so no adapter type is needed.
 pub trait WorkerConfigLike {
     fn data_parallel_start_rank(&self) -> u32;
     fn data_parallel_size(&self) -> u32;

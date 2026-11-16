@@ -13,7 +13,7 @@
 //!
 //! What is *not* modelled here: KV-event publishing, forward-pass
 //! metrics, disaggregated-serving bootstrap. Those live in
-//! `lib/llm/src/mocker.rs` and need a `Component` handle that
+//! `lib/mocker/engine/src/lib.rs` and need a `Component` handle that
 //! `LLMEngine::start()` does not expose today; they will land with a
 //! future trait extension. Use the planner/router-facing mocker if
 //! you need the event plane.

@@ -2225,6 +2225,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "dynamo-generate-format"
+version = "1.8.0"
+dependencies = [
+ "anyhow",
+ "axum",
+ "dynamo-error",
+ "dynamo-frontend-protocols",
+ "dynamo-http-server",
+ "dynamo-runtime",
+ "mime",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "dynamo-http-server"
 version = "1.8.0"
 dependencies = [
@@ -2374,13 +2389,13 @@ dependencies = [
  "dynamo-discovery",
  "dynamo-error",
  "dynamo-frontend-protocols",
+ "dynamo-generate-format",
  "dynamo-http-server",
  "dynamo-kv-events",
  "dynamo-kv-hashing",
  "dynamo-kv-router",
  "dynamo-lora",
  "dynamo-memory",
- "dynamo-mocker",
  "dynamo-model-card",
  "dynamo-parsers",
  "dynamo-preprocessor",
@@ -2417,7 +2432,6 @@ dependencies = [
  "rmp-serde",
  "serde",
  "serde_json",
- "sysinfo",
  "tempfile",
  "thiserror 2.0.18",
  "tmq",
@@ -2431,7 +2445,6 @@ dependencies = [
  "tower",
  "tower-http",
  "tracing",
- "url",
  "utoipa 5.5.0",
  "utoipa-swagger-ui",
  "uuid",
@@ -2524,7 +2537,6 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_path_to_error",
- "tmq",
  "tokio",
  "tokio-timerfd",
  "tokio-util",

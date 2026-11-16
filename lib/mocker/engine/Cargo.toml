@@ -1,0 +1,44 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+[package]
+name = "dynamo-mocker-engine"
+description = "Serves a dynamo-mocker scheduler as a token engine on the Dynamo runtime: KV events, forward-pass and native engine metrics, and the prefill/decode handoff"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+homepage.workspace = true
+repository.workspace = true
+
+[dependencies]
+# repo
+dynamo-backend-common = { workspace = true }
+dynamo-frontend-protocols = { workspace = true }
+dynamo-kv-events = { workspace = true }
+dynamo-mocker = { workspace = true, features = ["zmq-events"] }
+dynamo-preprocessor = { workspace = true }
+dynamo-runtime = { workspace = true }
+
+# published
+dynamo-protocols = { workspace = true }
+
+# workspace
+anyhow = { workspace = true }
+async-trait = { workspace = true }
+futures = { workspace = true }
+prometheus = { workspace = true }
+rand = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }
+tokio-stream = { workspace = true }
+tokio-util = { workspace = true }
+tracing = { workspace = true }
+uuid = { workspace = true }
+
+[dev-dependencies]
+dynamo-kv-hashing = { workspace = true }
+dynamo-router-host = { workspace = true }
+tempfile = { workspace = true }
+tokio = { workspace = true, features = ["test-util"] }

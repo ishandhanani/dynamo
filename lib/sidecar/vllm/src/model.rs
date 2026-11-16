@@ -224,7 +224,7 @@ impl DiscoveredModel {
             model_aliases: self.identity.aliases.clone(),
             runtime_data: [
                 (
-                    dynamo_llm::lora::LORA_REQUIRES_REGISTRATION.to_string(),
+                    dynamo_lora::LORA_REQUIRES_REGISTRATION.to_string(),
                     serde_json::Value::Bool(true),
                 ),
                 (
@@ -406,7 +406,7 @@ mod tests {
                 .engine_config(true)
                 .unwrap()
                 .runtime_data
-                .get(dynamo_llm::lora::LORA_REQUIRES_REGISTRATION),
+                .get(dynamo_lora::LORA_REQUIRES_REGISTRATION),
             Some(&json!(true))
         );
     }

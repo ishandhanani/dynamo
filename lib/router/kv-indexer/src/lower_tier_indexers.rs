@@ -10,7 +10,7 @@
 //! one [`ThreadPoolIndexer<LowerTierIndexer>`] per non-device [`StorageTier`]
 //! and lazily allocates each tier on first event arrival.
 //!
-//! Both the request-plane indexer (`dynamo-llm`) and the standalone HTTP
+//! Both the request-plane indexer (`dynamo-sync`) and the standalone HTTP
 //! indexer (this crate's `services::indexer` module) share this implementation
 //! so tier semantics stay aligned across the two surfaces.
 

@@ -3,7 +3,6 @@
 
 use std::{future::Future, pin::Pin, sync::Arc};
 
-use crate::worker_type::WorkerType;
 use dynamo_backend_common::{
     admission_gate::AdmissionEngine,
     first_token::{FirstTokenNotifier, FirstTokenSource},
@@ -18,6 +17,7 @@ use dynamo_frontend_protocols::types::{
 };
 use dynamo_model_card::model_type::{ModelInput, ModelType};
 use dynamo_preprocessor::backend::ExecutionContext;
+use dynamo_router_protocol::worker_type::WorkerType;
 
 use dynamo_runtime::engine::AsyncEngineStream;
 use dynamo_runtime::pipeline::{

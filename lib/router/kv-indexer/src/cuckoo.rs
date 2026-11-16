@@ -3,7 +3,7 @@
 
 //! The DC relay's cuckoo-filter pool index: an exact per-pool producer (`DcCkfState`), the
 //! snapshot and delta publication protocol, and the transposed global consumer
-//! (`GlobalCkfIndexer`). The frontend's pool relay (`lib/llm`) and the relay benches are its
+//! (`GlobalCkfIndexer`). The Pool Relay (`lib/pool-relay`) and the relay benches are its
 //! consumers; the indexer stage itself does not use it.
 //!
 //! The list of re-exports below is the relay contract: every item a consumer names, plus every

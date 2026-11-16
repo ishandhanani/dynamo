@@ -46,6 +46,7 @@ dynamo-sync = { workspace = true }
 dynamo-preprocessor = { workspace = true }
 dynamo-frontend-protocols = { workspace = true }
 dynamo-model-card = { workspace = true }
+dynamo-router-protocol = { workspace = true }
 tempfile = { workspace = true }
 tokio-util = { workspace = true }
 libc = { workspace = true }

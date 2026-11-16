@@ -8,7 +8,7 @@
 //! chat completions format used by the Dynamo engine.
 
 // Re-export all pure Anthropic protocol types so existing `use crate::anthropic::*`
-// continues to work throughout dynamo-llm.
+// continues to work throughout this crate and its callers.
 pub use dynamo_protocols::types::anthropic::*;
 
 use dynamo_protocols::types::{

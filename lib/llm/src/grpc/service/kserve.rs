@@ -938,9 +938,9 @@ mod readiness_gate_tests {
     use super::inference::grpc_inference_service_server::GrpcInferenceService;
     use super::inference::{ModelReadyRequest, ServerReadyRequest};
     use super::*;
-    use crate::worker_type::WorkerType;
     use dynamo_discovery::WorkerSet;
     use dynamo_model_card::model_card::ModelDeploymentCard;
+    use dynamo_router_protocol::worker_type::WorkerType;
     use tonic::Request;
 
     /// A WorkerSet with an explicit role/needs, a live worker, and a chat engine

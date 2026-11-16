@@ -4,7 +4,7 @@
 //! Integration tests for HTTP service namespace discovery functionality.
 //! These tests verify that the HTTP service correctly filters models based on namespace configuration.
 
-use dynamo_llm::namespace::{GLOBAL_NAMESPACE, is_global_namespace};
+use dynamo_runtime::namespace::{GLOBAL_NAMESPACE, is_global_namespace};
 use dynamo_runtime::protocols::EndpointId;
 
 // Helper function to create a test ModelDeploymentCard

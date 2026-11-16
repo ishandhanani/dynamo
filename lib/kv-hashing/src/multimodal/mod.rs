@@ -9,7 +9,7 @@
 //! way: the frontend when it hashes a request before routing, the engine when it publishes
 //! the blocks it stored. This module holds the data types and the rules that make the two
 //! agree, and nothing else: no token hashing ([`crate::routing`]), no event codec
-//! (`dynamo-kv-events`), no model-specific placeholder handling (`dynamo-llm`).
+//! (`dynamo-kv-events`), no model-specific placeholder handling (`dynamo-preprocessor`).
 //!
 //! The data path:
 //!

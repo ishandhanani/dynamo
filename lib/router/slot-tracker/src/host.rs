@@ -21,7 +21,7 @@ pub use crate::wire::{
     ActiveSequenceEvent, ActiveSequenceEventData, PrefillLoadHint, SchedulerGroup, SchedulerLoad,
 };
 
-// What the frontend host (lib/llm) names beyond the lists above.
+// What the frontend host (lib/sync, lib/router-host, lib/discovery) names beyond the lists above.
 pub use crate::multi_worker::{ReplicaWorkerPolicy, active_request_expiry_duration};
 pub use crate::single::RequestId;
 pub use crate::topology::MAX_DATA_PARALLEL_RANKS_PER_WORKER;

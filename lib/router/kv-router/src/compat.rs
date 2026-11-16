@@ -21,7 +21,7 @@
 //!
 //! Gone with no replacement here: the dummy shared-cache server (`services::shared_cache`) and
 //! `protocols::ActiveLoad`, which lives in `dynamo_sync::load::ActiveLoad` (this crate cannot
-//! depend on `dynamo-llm`).
+//! depend on `dynamo-sync`).
 
 /// Pre-split `dynamo_kv_router::conditional_disagg`; its items live in `dynamo_worker_selection` now.
 pub mod conditional_disagg {

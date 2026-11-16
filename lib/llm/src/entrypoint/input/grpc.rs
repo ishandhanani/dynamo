@@ -7,7 +7,6 @@ use std::sync::Arc;
 use crate::{
     entrypoint::{EngineConfig, input::common},
     grpc::service::kserve,
-    namespace::NamespaceFilter,
 };
 use dynamo_discovery::{ModelManager, ModelWatcher, engines::StreamingEngineAdapter};
 use dynamo_frontend_protocols::types::openai::chat_completions::{
@@ -17,7 +16,7 @@ use dynamo_http_server::metrics::Metrics;
 use dynamo_model_card::{
     local_model::runtime_config::TokenizerBackend, router_config::RouterConfig,
 };
-use dynamo_runtime::DistributedRuntime;
+use dynamo_runtime::{DistributedRuntime, namespace::NamespaceFilter};
 
 /// Build and run an KServe gRPC service
 pub async fn run(
@@ -151,7 +150,7 @@ async fn run_watcher(
     // Start the LoRA allocation controller when LoRA serving is enabled (mirrors http.rs;
     // additionally gated on DYN_LORA_ALLOCATION_ENABLED inside start_lora_controller). Without
     // this, gRPC LoRA deployments would never get dynamic placement (N3).
-    if crate::lora::lora_serving_enabled() {
+    if dynamo_lora::lora_serving_enabled() {
         let _controller_handle = model_manager.start_lora_controller(runtime.primary_token());
     }
 

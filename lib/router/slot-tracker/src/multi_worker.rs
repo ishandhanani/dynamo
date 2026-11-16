@@ -7,7 +7,7 @@
 //!
 //! The two traits [`SequencePublisher`] and [`SequenceSubscriber`] abstract the runtime-specific
 //! transport (e.g., NATS EventPublisher, Prometheus gauges) so that all business logic lives in
-//! this crate while the runtime glue stays in `lib/llm`.
+//! this crate while the runtime glue stays in `lib/sync`.
 
 use dynamo_tokens::SequenceHash;
 use parking_lot::Mutex;
@@ -96,7 +96,7 @@ fn active_request_expiry_duration_from_lookup(
 
 /// Complete scheduler-owned load for one worker rank.
 ///
-/// This is an in-process snapshot rather than the event-plane `ActiveLoad` message in lib/llm
+/// This is an in-process snapshot rather than the event-plane `ActiveLoad` message in lib/sync
 /// (`dynamo_sync::load::ActiveLoad`). Scheduler publishers always own both active-load fields,
 /// while remote wire updates may contain only a subset of fields.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

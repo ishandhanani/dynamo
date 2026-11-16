@@ -8,7 +8,7 @@
 //! 1. A change to a media type changes its schema. The test in this module
 //!    fails until the committed schema matches.
 //! 2. Rewrite the schemas with
-//!    `DYNAMO_UPDATE_MEDIA_SCHEMAS=1 cargo test -p dynamo-llm --lib media_schemas`.
+//!    `DYNAMO_UPDATE_MEDIA_SCHEMAS=1 cargo test -p dynamo-frontend-protocols --lib media_schemas`.
 //! 3. Commit the schemas. The `generate-media-protocols` pre-commit hook
 //!    regenerates the Python models from them.
 //! 4. A new media module gets an [`OpenApi`] struct here, an entry in

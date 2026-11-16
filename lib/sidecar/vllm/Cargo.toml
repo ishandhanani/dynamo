@@ -20,13 +20,13 @@ path = "src/main.rs"
 # forward their own opt-in `mm-routing` feature, so the default wheel stays lean.
 default = ["mm-routing", "jemalloc"]
 # Resolve the image placeholder token for exact multimodal KV routing.
-mm-routing = ["dynamo-llm/mm-routing"]
+mm-routing = ["dynamo-preprocessor/mm-routing"]
 # jemalloc as the binary's global allocator.
 jemalloc = ["dynamo-sidecar-common/jemalloc"]
 
 [dependencies]
 dynamo-backend-common = { workspace = true }
-dynamo-llm = { workspace = true }
+dynamo-lora = { workspace = true }
 dynamo-preprocessor = { workspace = true }
 dynamo-frontend-protocols = { workspace = true }
 dynamo-model-card = { workspace = true }
@@ -53,7 +53,9 @@ vllm-proto = { workspace = true }
 
 [dev-dependencies]
 dynamo-vllm-generate = { workspace = true }
+dynamo-generate-format = { workspace = true }
 reqwest = { workspace = true }
 dynamo-backend-common = { workspace = true, features = ["testing"] }
+dynamo-router-protocol = { workspace = true }
 tempfile = { workspace = true }
 tokio-stream = { workspace = true, features = ["net"] }

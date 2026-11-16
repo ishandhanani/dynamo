@@ -2249,11 +2249,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "dynamo-generate-format"
+version = "1.8.0"
+dependencies = [
+ "anyhow",
+ "axum",
+ "dynamo-error",
+ "dynamo-frontend-protocols",
+ "dynamo-http-server",
+ "dynamo-runtime",
+ "mime",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "dynamo-generate-format-catalog"
 version = "1.8.0"
 dependencies = [
  "anyhow",
- "dynamo-llm",
+ "dynamo-generate-format",
  "dynamo-sglang-generate",
  "dynamo-vllm-generate",
 ]
@@ -2451,13 +2466,13 @@ dependencies = [
  "dynamo-discovery",
  "dynamo-error",
  "dynamo-frontend-protocols",
+ "dynamo-generate-format",
  "dynamo-http-server",
  "dynamo-kv-events",
  "dynamo-kv-hashing",
  "dynamo-kv-router",
  "dynamo-lora",
  "dynamo-memory",
- "dynamo-mocker",
  "dynamo-model-card",
  "dynamo-parsers",
  "dynamo-preprocessor",
@@ -2494,7 +2509,6 @@ dependencies = [
  "rmp-serde",
  "serde",
  "serde_json",
- "sysinfo",
  "tempfile",
  "thiserror 2.0.18",
  "tmq",
@@ -2508,7 +2522,6 @@ dependencies = [
  "tower",
  "tower-http",
  "tracing",
- "url",
  "utoipa 5.5.0",
  "utoipa-swagger-ui",
  "uuid",
@@ -2609,6 +2622,31 @@ dependencies = [
  "uuid",
  "validator",
  "zip",
+]
+
+[[package]]
+name = "dynamo-mocker-engine"
+version = "1.8.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "dynamo-backend-common",
+ "dynamo-frontend-protocols",
+ "dynamo-kv-events",
+ "dynamo-mocker",
+ "dynamo-preprocessor",
+ "dynamo-protocols 10.0.1",
+ "dynamo-runtime",
+ "futures",
+ "prometheus",
+ "rand 0.9.4",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tokio-stream",
+ "tokio-util",
+ "tracing",
+ "uuid",
 ]
 
 [[package]]
@@ -2866,13 +2904,16 @@ dependencies = [
  "dynamo-discovery",
  "dynamo-error",
  "dynamo-frontend-protocols",
+ "dynamo-generate-format",
  "dynamo-generate-format-catalog",
  "dynamo-kv-events",
  "dynamo-kv-hashing",
  "dynamo-kv-indexer",
  "dynamo-kv-router",
  "dynamo-llm",
+ "dynamo-lora",
  "dynamo-mocker",
+ "dynamo-mocker-engine",
  "dynamo-model-card",
  "dynamo-parsers",
  "dynamo-pool-relay",
@@ -3156,8 +3197,8 @@ dependencies = [
  "base64 0.22.1",
  "dynamo-error",
  "dynamo-frontend-protocols",
+ "dynamo-generate-format",
  "dynamo-http-server",
- "dynamo-llm",
  "dynamo-model-card",
  "dynamo-protocols 10.0.1",
  "dynamo-runtime",
@@ -3176,8 +3217,8 @@ dependencies = [
  "clap",
  "dynamo-backend-common",
  "dynamo-frontend-protocols",
- "dynamo-llm",
  "dynamo-model-card",
+ "dynamo-preprocessor",
  "dynamo-runtime",
  "dynamo-sglang-generate",
  "dynamo-sidecar-common",
@@ -3369,7 +3410,6 @@ dependencies = [
  "dynamo-backend-common",
  "dynamo-frontend-protocols",
  "dynamo-kv-events",
- "dynamo-llm",
  "dynamo-model-card",
  "dynamo-runtime",
  "dynamo-sidecar-common",
@@ -3405,10 +3445,10 @@ dependencies = [
  "base64 0.22.1",
  "dynamo-error",
  "dynamo-frontend-protocols",
+ "dynamo-generate-format",
  "dynamo-http-server",
  "dynamo-kv-events",
  "dynamo-kv-hashing",
- "dynamo-llm",
  "dynamo-model-card",
  "dynamo-protocols 10.0.1",
  "dynamo-runtime",
@@ -3428,7 +3468,7 @@ dependencies = [
  "clap",
  "dynamo-backend-common",
  "dynamo-frontend-protocols",
- "dynamo-llm",
+ "dynamo-lora",
  "dynamo-model-card",
  "dynamo-preprocessor",
  "dynamo-runtime",
