@@ -11,11 +11,14 @@ use crate::{
     discovery::{ModelManager, ModelWatcher},
     engines::StreamingEngineAdapter,
     entrypoint::EngineConfig,
-    kv_router::indexer::{preprocessed_multimodal_cache_keys, try_build_cache_indexer},
-    kv_router::{EncoderRouter, KvRouter, PrefillRouter, RoutingHost, RoutingLoadContext},
+    kv_router::{EncoderRouter, KvRouter, PrefillRouter, RoutingHost},
     migration::Migration,
     namespace::NamespaceFilter,
     session_affinity::{SessionAffinityMode, create_affinity_coordinator},
+    sync::{
+        indexer::{preprocessed_multimodal_cache_keys, try_build_cache_indexer},
+        load::RoutingLoadContext,
+    },
 };
 use dynamo_frontend_protocols::common::llm_backend::{
     BackendOutput, LLMEngineOutput, PreprocessedRequest,
@@ -566,8 +569,8 @@ mod tests {
             .unwrap();
         let load_context = RoutingLoadContext::start(
             client.clone(),
-            crate::kv_router::RouterLoadSource::Aggregated,
-            crate::discovery::LoadThresholdHandle::new(Default::default()),
+            crate::sync::load::RouterLoadSource::Aggregated,
+            crate::sync::load::LoadThresholdHandle::new(Default::default()),
             &distributed.child_token(),
             None,
         )

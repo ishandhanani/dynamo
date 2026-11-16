@@ -4,7 +4,6 @@
 use std::{collections::HashMap, sync::OnceLock};
 
 use anyhow::Result;
-use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
@@ -12,23 +11,14 @@ use dynamo_runtime::component::Endpoint;
 use dynamo_runtime::traits::DistributedRuntimeProvider;
 use dynamo_runtime::transports::event_plane::EventPublisher;
 
-use crate::kv_router::MULTIMODAL_EMBEDDING_CACHE_SUBJECT;
+use crate::sync::indexer::{
+    MULTIMODAL_EMBEDDING_CACHE_SUBJECT, MultimodalEmbeddingCacheEvent,
+    MultimodalEmbeddingCacheUpdate,
+};
 
 // Cache deltas are routing hints. Bound the queue so a slow event plane cannot
 // grow memory without limit; if it fills, routing cache state may become stale.
 const CACHE_UPDATE_CHANNEL_CAPACITY: usize = 4096;
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct MultimodalEmbeddingCacheUpdate {
-    pub added_keys: Vec<String>,
-    pub removed_keys: Vec<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct MultimodalEmbeddingCacheEvent {
-    pub worker_id: u64,
-    pub update: MultimodalEmbeddingCacheUpdate,
-}
 
 enum CacheDeltaAction {
     Added,

@@ -28,7 +28,6 @@ use super::config::PoolRelayGrpcConfig;
 use super::protocol as proto;
 use super::protocol::wire::images::{self, FilterFormat, ImagesFrame, SnapshotAssembly};
 use super::server::GrpcTransport;
-use crate::kv_router::ActiveLoad;
 use crate::pool_relay::actor::PoolRelayHandle;
 use crate::pool_relay::discovery::{
     DcMembershipView, DomainWorkerTopology, EndpointMembership, KvCacheDomainKey,
@@ -43,6 +42,7 @@ use crate::pool_relay::pool_registry::{
 use crate::pool_relay::publication::RegistryPublicationSource;
 use crate::pool_relay::serving_load::ServingLoadSnapshot;
 use crate::pool_relay::topology::TopologyPublisher;
+use crate::sync::load::ActiveLoad;
 use dynamo_model_card::local_model::runtime_config::ModelRuntimeConfig;
 
 const IO_TIMEOUT: Duration = Duration::from_secs(5);

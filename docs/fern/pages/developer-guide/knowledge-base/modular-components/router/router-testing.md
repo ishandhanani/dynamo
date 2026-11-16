@@ -26,7 +26,7 @@ Examples:
 
 - `lib/router/kv-indexer/src/tests.rs`
 - `lib/router/slot-tracker/src/*`
-- `lib/llm/src/kv_router/indexer/worker_query.rs`
+- `lib/llm/src/sync/indexer/recovery/worker_query.rs`
 
 Typical commands:
 

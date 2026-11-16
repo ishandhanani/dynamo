@@ -12,13 +12,13 @@ use dynamo_scheduler::host::{KvSchedulerError, RoutingConstraints, SchedulingReq
 use dynamo_worker_selection::host::HostedWorkerPicker;
 
 use crate::{
-    discovery::RuntimeConfigWatch,
     kv_router::hosted_request,
     lora::{LoadEstimator, LoraFilter},
     routing_policy::{
         CandidateSelection, ExecutionRequirements, ExecutionStage, HostedCandidatePolicy,
         KvAdmissionPolicy,
     },
+    sync::runtime_configs::RuntimeConfigWatch,
 };
 use dynamo_frontend_protocols::common::preprocessor::PreprocessedRequest;
 use dynamo_model_card::local_model::runtime_config::ModelRuntimeConfig;

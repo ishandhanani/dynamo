@@ -16,8 +16,9 @@ use dynamo_router_protocol::worker::WorkerWithDpRank;
 use dynamo_runtime::component::{Client, Component};
 use dynamo_runtime::discovery::{DiscoveryInstance, DiscoveryQuery};
 use dynamo_runtime::pipeline::{
-    AsyncEngine, AsyncEngineContextProvider, ManyOut, PushRouterOptions, ResponseStream,
-    RouterMode, SingleIn, async_trait, network::Ingress, network::egress::push_router::PushRouter,
+    AsyncEngine, AsyncEngineContextProvider, ManyOut, ModeSelectors, PushRouterOptions,
+    ResponseStream, RouterMode, SingleIn, async_trait, network::Ingress,
+    network::egress::push_router::PushRouter,
 };
 use dynamo_runtime::stream;
 use dynamo_runtime::traits::DistributedRuntimeProvider;
@@ -26,8 +27,8 @@ use futures::StreamExt;
 use parking_lot::RwLock;
 use tokio::sync::Mutex;
 
-use crate::kv_router::indexer::reply::{IndexerQueryReply, IndexerRecordRoutingDecisionReply};
-use crate::kv_router::metrics::RemoteIndexerMetrics;
+use crate::sync::indexer::reply::{IndexerQueryReply, IndexerRecordRoutingDecisionReply};
+use crate::sync::metrics::RemoteIndexerMetrics;
 
 use super::{Indexer, TieredMatchDetails};
 
@@ -44,10 +45,13 @@ pub struct RemoteIndexer {
 }
 
 impl RemoteIndexer {
+    /// `selectors` are the router-mode selectors the two request-plane routers pick with; the
+    /// router host supplies them, because they resolve the installed router plugins.
     pub(super) async fn new(
         component: &Component,
         model_name: String,
         use_kv_events: bool,
+        selectors: ModeSelectors,
     ) -> Result<Self> {
         let query_client = component
             .endpoint(KV_INDEXER_QUERY_ENDPOINT)
@@ -58,7 +62,8 @@ impl RemoteIndexer {
             RouterMode::RoundRobin,
             PushRouterOptions {
                 fault_detection: false,
-                ..crate::kv_router::plugins::push_router_options()
+                selectors: Some(selectors.clone()),
+                ..PushRouterOptions::default()
             },
         )
         .await?;
@@ -75,7 +80,8 @@ impl RemoteIndexer {
                     RouterMode::RoundRobin,
                     PushRouterOptions {
                         fault_detection: false,
-                        ..crate::kv_router::plugins::push_router_options()
+                        selectors: Some(selectors),
+                        ..PushRouterOptions::default()
                     },
                 )
                 .await?,
@@ -553,8 +559,8 @@ fn service_key(component: &Component) -> ServiceKey {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::kv_router::indexer::test_util::store_event;
-    use crate::kv_router::indexer::{LowerTierIndexers, SideIndexer};
+    use crate::sync::indexer::test_util::store_event;
+    use crate::sync::indexer::{LowerTierIndexers, SideIndexer};
     use std::time::Duration;
 
     use dynamo_kv_events::residency::StorageTier;

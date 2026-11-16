@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-use crate::kv_router::sequence::{RuntimeSequenceSubscriber, SequenceSubscriber};
+use crate::sync::sequence::{RuntimeSequenceSubscriber, SequenceSubscriber};
 use dynamo_lora::LoadEstimator;
 use dynamo_runtime::{component::Endpoint, traits::DistributedRuntimeProvider};
 use std::{sync::Arc, time::Duration};
@@ -72,7 +72,7 @@ async fn subscribe_to_events(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::kv_router::ACTIVE_SEQUENCES_SUBJECT;
+    use crate::sync::sequence::ACTIVE_SEQUENCES_SUBJECT;
     use dynamo_router_protocol::worker::WorkerWithDpRank;
     use dynamo_runtime::config::environment_names::zmq_broker as broker_env;
     use dynamo_runtime::distributed::DistributedConfig;

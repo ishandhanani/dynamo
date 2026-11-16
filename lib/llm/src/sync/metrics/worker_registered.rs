@@ -17,7 +17,7 @@ use prometheus::{
 use tokio_util::sync::CancellationToken;
 
 use super::{ROUTER_WORKER_ID_LABEL, labels};
-use crate::discovery::RuntimeConfigWatch;
+use crate::sync::runtime_configs::RuntimeConfigWatch;
 
 const LABELS: &[&str] = &[ROUTER_WORKER_ID_LABEL, labels::DP_RANK, labels::WORKER_TYPE];
 

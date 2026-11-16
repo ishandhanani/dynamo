@@ -11,8 +11,8 @@ use dynamo_runtime::transports::event_plane::EventEnvelope;
 use dynamo_slot_tracker::host::{SchedulerGroup, SchedulerLoad};
 
 use super::serving_load::{SOURCE_RETENTION, freshness};
-use crate::kv_router::ActiveLoad;
-use crate::kv_router::sequence::SCHEDULER_LOAD_PUBLISH_INTERVAL;
+use crate::scheduler_load::SCHEDULER_LOAD_PUBLISH_INTERVAL;
+use crate::sync::load::ActiveLoad;
 use dynamo_model_card::local_model::runtime_config::ModelRuntimeConfig;
 
 /// How long a router scheduler's view counts.

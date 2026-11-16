@@ -18,7 +18,7 @@ use dynamo_slot_tracker::host::{
 use parking_lot::Mutex;
 use tokio_util::sync::CancellationToken;
 
-use super::indexer::ApproximateRequestLease;
+use crate::sync::indexer::ApproximateRequestLease;
 use dynamo_frontend_protocols::common::preprocessor::PrefillBookingRelease;
 
 const LEASE_QUIET: u8 = 0;
@@ -558,7 +558,7 @@ mod tests {
     async fn replica_observer_forwards_live_callbacks_without_retaining_manager() {
         use dynamo_router_protocol::worker::WorkerWithDpRank;
 
-        use crate::kv_router::{sequence::SequenceRequest, tests::tracked_router};
+        use crate::{kv_router::tests::tracked_router, sync::sequence::SequenceRequest};
 
         let router = tracked_router("replica-lease-observer").await;
         let request_id = "replica-lease-callbacks".to_string();
@@ -629,7 +629,7 @@ mod tests {
     async fn attempt_release_frees_booking_when_another_path_owns_cleanup() {
         use dynamo_router_protocol::worker::WorkerWithDpRank;
 
-        use crate::kv_router::{sequence::SequenceRequest, tests::tracked_router};
+        use crate::{kv_router::tests::tracked_router, sync::sequence::SequenceRequest};
 
         let router = tracked_router("attempt-release-lost-claim").await;
         let request_id = "attempt-release-lost-claim".to_string();

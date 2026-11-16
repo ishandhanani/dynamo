@@ -23,18 +23,22 @@ pub(crate) use dynamo_kv_indexer::host::WireTieredMatchDetails;
 pub(crate) use dynamo_kv_indexer::host::{ApproximateRequestLease, TieredMatchDetails};
 pub use dynamo_kv_indexer::host::{Indexer, RemotePrimary, SideIndexer};
 use dynamo_runtime::component::Component;
+use dynamo_runtime::pipeline::ModeSelectors;
 pub(crate) use ingress::{RuntimeIngress, RuntimeIngressArgs};
 use tokio_util::sync::CancellationToken;
 
 mod embedding_cache;
+mod event_source_requirement;
 mod ingress;
 mod recovery;
 pub mod remote;
 pub(crate) mod reply;
 
 pub use self::embedding_cache::{
-    EmbeddingCacheIndexer, preprocessed_multimodal_cache_keys, try_build_cache_indexer,
+    EmbeddingCacheIndexer, MULTIMODAL_EMBEDDING_CACHE_SUBJECT, MultimodalEmbeddingCacheEvent,
+    MultimodalEmbeddingCacheUpdate, preprocessed_multimodal_cache_keys, try_build_cache_indexer,
 };
+pub(crate) use self::event_source_requirement::KvEventSourceRequirement;
 use self::remote::RemoteIndexer;
 pub use self::remote::{ServedIndexerHandle, ServedIndexerMode, ensure_served_indexer_service};
 #[cfg(feature = "ckf-diagnostics")]
@@ -86,6 +90,7 @@ pub(crate) async fn build(
     model_name: Option<&str>,
     cancellation_token: CancellationToken,
     session_prefix_index: Option<Arc<SessionPrefixIndexer>>,
+    remote_indexer_selectors: ModeSelectors,
 ) -> Result<Indexer> {
     let approximate_policy = resolve_approximate_primary_policy(kv_router_config)?;
     if approximate_policy == ResolvedApproximatePrimaryPolicy::TtlRemoteFallback {
@@ -114,8 +119,13 @@ pub(crate) async fn build(
             model_name,
             "Using remote KV indexer"
         );
-        let remote =
-            RemoteIndexer::new(component, model_name, kv_router_config.use_kv_events).await?;
+        let remote = RemoteIndexer::new(
+            component,
+            model_name,
+            kv_router_config.use_kv_events,
+            remote_indexer_selectors,
+        )
+        .await?;
         let approx = predict_on_route_side_indexer(
             component,
             kv_router_config,
@@ -265,7 +275,7 @@ fn predict_on_route_side_indexer(
 }
 
 #[cfg(test)]
-pub(super) mod test_util {
+pub(crate) mod test_util {
     use dynamo_kv_events::event::{
         KvCacheEvent, KvCacheEventData, KvCacheStoreData, KvCacheStoredBlockData, RouterEvent,
     };

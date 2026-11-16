@@ -19,7 +19,7 @@ use dynamo_runtime::component::Instance;
 use serde::{Deserialize, Serialize};
 
 use super::PublisherId;
-use crate::kv_router::indexer::Indexer;
+use crate::sync::indexer::Indexer;
 
 pub const KV_STATE_HOST_TOPIC_V2: &str = "kv-state-hosts-v2";
 pub const KV_STATE_ATTACHMENT_INTENT_TOPIC_V2: &str = "kv-state-attachment-intents-v2";

@@ -11,16 +11,12 @@ and the booking lifecycle these rules protect.
   then asks the scheduler to choose a worker. It selects and books, but never sends a request.
 - `embedded.rs`: connects discovered workers and their load to one `SelectionService` partition
   from `lib/router/kv-router`, and runs each selection through `SelectionCore`.
-- `indexer/`: tracks which KV-cache blocks each worker holds; lookups run in `lib/router/kv-router`.
 - `publisher/`: receives KV-cache events and worker metrics from inference engines.
-- `active_load.rs`: `ActiveLoad`, the load message workers publish on the event plane. Written
-  by `publisher/`, read by `metrics_subscriber.rs`, `discovery/worker_monitor.rs`, and `pool_relay/`.
-- `metrics.rs`, `metrics_subscriber.rs`: router Prometheus metrics, and the subscription to
-  workers' KV load metrics.
-- `sequence.rs`, `sequence/`: runtime glue for active-sequence tracking and its replica sync.
+- `metrics.rs`: Prometheus metrics of the request path and of the publisher.
+- `managed.rs`: `ManagedKvRouter`, a `KvRouter` together with the load context that owns its
+  load tasks.
 - `request_lease.rs`: one request-liveness coordinator and reaper per `KvRouter`. Holds booking
   leases and releases them on completion or expiry.
-- `routing_load.rs`: the load context shared by a worker set's scheduler and its load metrics.
 - `routing_host.rs`: `RoutingHost`, the pipeline's terminal engine. Owns selection, dispatch,
   and response cleanup for one worker set.
   - `routing_host/kv.rs`: the KV path: preview, plan, select, track, dispatch.
@@ -39,6 +35,22 @@ and the booking lifecycle these rules protect.
 - `encoder_router.rs`: `EncoderRouter`, the optional encode hop for multimodal inputs.
 - `plugins.rs`: installs the linked router plugin registry.
 - `shared_cache.rs`: the HiCache shared KV cache client (SGLang + Mooncake).
+
+The state these stages read is kept up to date by [`../sync`](../sync.rs), not by this module:
+
+- `sync/indexer/`: tracks which KV-cache blocks each worker holds; lookups run in
+  `lib/router/kv-router`.
+- `sync/sequence.rs`, `sync/sequence/`: runtime glue for active-sequence tracking and its
+  replica sync.
+- `sync/load/`: `ActiveLoad`, the load message workers publish on the event plane (written by
+  `publisher/`, read by `metrics_subscriber.rs`, `worker_monitor.rs`, and `pool_relay/`); the
+  subscription to it; the worker monitor; and `routing_load.rs`, the load context shared by a
+  worker set's scheduler and its load metrics.
+- `sync/membership/`, `sync/runtime_configs.rs`: KV event-source membership and the watch of
+  per-worker runtime configs.
+- `sync/metrics.rs`: Prometheus metrics of the above.
+
+`../scheduler_load.rs` publishes the router's scheduler load for the Pool Relay.
 
 ## Guardrails
 
@@ -63,11 +75,14 @@ and the booking lifecycle these rules protect.
   `prefill_router/mod.rs`, or the two hosts score decode differently.
 - Keep `README.md` in step with changes to the layer map, per-stage roles, booking lifecycle,
   cancellation, or prefill activation.
+- `../sync` must not import this module, `discovery`, or any other module of this crate. Pass
+  what it needs in, as `KvRouter` does with the router-mode selectors of the remote indexer.
 
 ## Testing
 
 - Unit tests live beside the code: `routing_host/tests.rs` and the tests in `prefill_router/`.
-  On macOS run `cargo test -p dynamo-llm --no-default-features --lib kv_router::`.
+  On macOS run `cargo test -p dynamo-llm --no-default-features --lib kv_router::` (and
+  `sync::` for the state sync).
 - Some ZMQ, event-plane, and replica-sync tests bind local ports and can fail inside a sandbox
   or in a full parallel run. Rerun a failing one alone before treating it as a regression.
 - End-to-end router tests are described in the

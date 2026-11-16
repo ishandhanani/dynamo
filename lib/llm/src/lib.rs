@@ -8,8 +8,6 @@
 
 pub mod admission_gate;
 pub mod common;
-mod direct_zmq_fan_in;
-mod direct_zmq_sub_pool;
 pub mod discovery;
 pub mod engines;
 pub mod entrypoint;
@@ -28,7 +26,9 @@ pub mod mocker;
 pub mod namespace;
 pub mod pool_relay;
 mod routing_policy;
+pub mod scheduler_load;
 pub mod session_affinity;
+pub mod sync;
 pub use dynamo_tokenizers as tokenizers;
 pub use dynamo_tokenizers::{file_json_field, log_json_err};
 pub mod tokens;

@@ -22,7 +22,7 @@ use super::recovery_lane::{RECOVERY_CONCURRENCY_LIMIT, RecoveryLane};
 use super::target::{IndexerRecoveryTarget, RecoveryResetReason, RecoveryTarget};
 use super::worker_query_state::{LiveEventAction, RankState, RecoveryKey};
 use super::worker_query_transport::{RuntimeWorkerQueryTransport, WorkerQueryTransport};
-use crate::discovery::{
+use crate::sync::membership::{
     KvEventSource, KvSourceId, KvSourceMembershipView, KvSourceMembershipWatch, KvSourceStatus,
     PublisherId,
 };
@@ -1116,7 +1116,7 @@ impl<T: RecoveryTarget> WorkerQueryClient<T> {
 #[cfg(test)]
 impl WorkerQueryClient<IndexerRecoveryTarget> {
     fn new_for_test(
-        indexer: crate::kv_router::Indexer,
+        indexer: crate::sync::indexer::Indexer,
         membership_rx: watch::Receiver<KvSourceMembershipView>,
         transport: Arc<dyn WorkerQueryTransport>,
     ) -> Arc<Self> {
@@ -1170,15 +1170,14 @@ mod tests {
     };
     use tokio::sync::{Notify, oneshot, watch};
 
-    use crate::{
-        discovery::{
+    use crate::sync::{
+        indexer::{Indexer, LowerTierIndexers},
+        membership::{
             KvSourceAmbiguity, KvSourceMembershipCoordinator, KvSourceMembershipView,
-            KvStateEndpointResolution, runtime_config_watch,
+            KvStateEndpointResolution,
         },
-        kv_router::{
-            indexer::{Indexer, LowerTierIndexers},
-            metrics::RouterWorkerStatusMetrics,
-        },
+        metrics::RouterWorkerStatusMetrics,
+        runtime_configs::runtime_config_watch,
     };
     use dynamo_model_card::{
         local_model::runtime_config::ModelRuntimeConfig, model_card::ModelDeploymentCard,
@@ -3370,7 +3369,7 @@ mod tests {
                 "test-model".to_string(),
                 "decode",
                 super::super::subscriber::MismatchMetricScope::Router(
-                    crate::kv_router::KvEventSourceRequirement::Unknown,
+                    crate::sync::indexer::KvEventSourceRequirement::Unknown,
                 ),
                 cancel.child_token(),
                 Some(startup_tx),

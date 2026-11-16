@@ -556,7 +556,7 @@ impl<H: ControllerHost> ModelDiscoveryController<H> {
                 model: key.model_name.clone(),
                 endpoint: representative.endpoint_id.clone(),
                 model_type: card.model_type,
-                worker_type: crate::kv_router::RouterLoadSource::from_worker_type(
+                worker_type: crate::sync::load::RouterLoadSource::from_worker_type(
                     ModelDeploymentCard::resolve_worker_type(card.worker_type, card.model_type),
                 )
                 .metric_label(),

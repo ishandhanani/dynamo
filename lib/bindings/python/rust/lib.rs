@@ -2075,7 +2075,7 @@ impl Client {
             let error_key = key.clone();
             let error_value = value.clone();
             let wait = async move {
-                let mut rx = llm_rs::discovery::runtime_config_watch(
+                let mut rx = llm_rs::sync::runtime_configs::runtime_config_watch(
                     &endpoint,
                     endpoint.drt().primary_token(),
                 )
@@ -2152,9 +2152,12 @@ impl Client {
             let _guard = lifecycle.clone().drop_guard();
             let mut last_matches: Vec<u64> = Vec::new();
             let wait = async {
-                let mut rx = llm_rs::discovery::runtime_config_watch(&endpoint, lifecycle.clone())
-                    .await
-                    .map_err(to_pyerr)?;
+                let mut rx = llm_rs::sync::runtime_configs::runtime_config_watch(
+                    &endpoint,
+                    lifecycle.clone(),
+                )
+                .await
+                .map_err(to_pyerr)?;
 
                 loop {
                     let mut matches: Vec<u64> = rx

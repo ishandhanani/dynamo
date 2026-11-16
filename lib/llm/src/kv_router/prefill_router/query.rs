@@ -160,8 +160,8 @@ mod tests {
     use super::*;
     use crate::{
         discovery::ModelManager,
-        kv_router::prefill_router::PrefillBinding,
-        kv_router::{KvRouter, RouterLoadSource, RoutingHost, RoutingLoadContext},
+        kv_router::{KvRouter, RoutingHost, prefill_router::PrefillBinding},
+        sync::load::{RouterLoadSource, RoutingLoadContext},
         worker_type::WorkerType,
     };
     use dynamo_frontend_protocols::common::{
@@ -331,7 +331,7 @@ mod tests {
         let load_context = RoutingLoadContext::start(
             client.clone(),
             RouterLoadSource::Prefill,
-            crate::discovery::LoadThresholdHandle::new(Default::default()),
+            crate::sync::load::LoadThresholdHandle::new(Default::default()),
             &client.endpoint.drt().child_token(),
             None,
         )

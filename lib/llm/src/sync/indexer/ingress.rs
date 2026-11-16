@@ -15,15 +15,15 @@ use dynamo_kv_router::plugins::worker_selection::WorkerInputs;
 use dynamo_router_protocol::identity::RoutingPartitionId;
 use dynamo_router_protocol::worker_type::WorkerType;
 use dynamo_runtime::component::Endpoint;
+use dynamo_runtime::pipeline::ModeSelectors;
 use dynamo_scheduler::host::{IndexRegistry, KvEventIngress};
 use tokio_util::sync::CancellationToken;
 
 use super::{
-    Indexer, KvEventSubscriptionHandle, ServedIndexerMode, ensure_served_indexer_service,
-    start_subscriber,
+    Indexer, KvEventSourceRequirement, KvEventSubscriptionHandle, ServedIndexerMode,
+    ensure_served_indexer_service, start_subscriber,
 };
-use crate::discovery::KvSourceMembershipWatch;
-use crate::kv_router::KvEventSourceRequirement;
+use crate::sync::membership::KvSourceMembershipWatch;
 
 pub(crate) struct RuntimeIngressArgs<'a> {
     pub endpoint: &'a Endpoint,
@@ -38,6 +38,8 @@ pub(crate) struct RuntimeIngressArgs<'a> {
     pub kv_source_membership: Option<KvSourceMembershipWatch>,
     pub cancellation_token: CancellationToken,
     pub session_prefix_index: Option<Arc<SessionPrefixIndexer>>,
+    /// Router-mode selectors for the remote indexer's request-plane routers.
+    pub remote_indexer_selectors: ModeSelectors,
 }
 
 pub(crate) struct RuntimeIngress {
@@ -60,6 +62,7 @@ impl RuntimeIngress {
             kv_source_membership,
             cancellation_token,
             session_prefix_index,
+            remote_indexer_selectors,
         } = args;
         let component = endpoint.component();
         let index_required = worker_inputs.reads_kv_index();
@@ -71,6 +74,7 @@ impl RuntimeIngress {
                 model_name,
                 cancellation_token.child_token(),
                 session_prefix_index,
+                remote_indexer_selectors,
             )
             .await?
         } else {

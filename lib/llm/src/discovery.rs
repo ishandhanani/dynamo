@@ -9,19 +9,6 @@ pub(crate) use model::{
     GenerateEngineSelection, SystemOneExecutionSelection, SystemOneSelectionError,
 };
 
-pub mod kv_source_membership;
-pub use kv_source_membership::{
-    KvEventSource, KvSourceAdvertisement, KvSourceAmbiguity, KvSourceId, KvSourceKey,
-    KvSourceMembership, KvSourceMembershipError, KvSourceMembershipView, KvSourceStatus,
-    KvSourceTransition, KvStateEndpointResolution, PublisherId, resolve_kv_state_endpoint,
-};
-
-mod kv_source_watch;
-pub(crate) use kv_source_watch::KvSourceMembershipCoordinator;
-pub use kv_source_watch::KvSourceMembershipWatch;
-
-pub mod kv_state_agent;
-
 mod model_manager;
 pub(crate) mod router_policy;
 pub use model_manager::{ModelManager, ModelManagerError, UNKNOWN_METRIC_MODEL};
@@ -35,15 +22,8 @@ mod worker_set;
 pub use worker_set::WorkerSet;
 pub(crate) use worker_set::{CommittedWorkerSetTarget, WorkerSetTarget, WorkerSetTargetId};
 
-pub(crate) mod runtime_configs;
-pub use runtime_configs::{RuntimeConfigWatch, runtime_config_watch};
-
 mod endpoint_card;
 pub use endpoint_card::wait_for_endpoint_model_card;
 
 mod watcher;
 pub use watcher::{ModelUpdate, ModelWatcher};
-
-mod worker_monitor;
-pub(crate) use worker_monitor::RoutableThresholds;
-pub use worker_monitor::{KvWorkerMonitor, LoadThresholdHandle, WorkerLoadState};

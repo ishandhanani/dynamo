@@ -33,7 +33,7 @@ use tokio::{
 };
 use tokio_util::sync::CancellationToken;
 
-use crate::discovery::kv_state_agent::{
+use crate::sync::membership::kv_state_agent::{
     KV_STATE_ATTACHMENT_INTENT_TOPIC_V2, KV_STATE_HOST_TOPIC_V2, KvStateAttachmentIntent,
     KvStateHostAdvertisement, KvStateIngressProtocol,
 };

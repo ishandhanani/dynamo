@@ -97,7 +97,7 @@ struct AttachmentDescriptorInput {
     indexer_domain_id: String,
     kv_block_size: u32,
     #[serde(default)]
-    ingress_protocol: Option<llm_rs::discovery::kv_state_agent::KvStateIngressProtocol>,
+    ingress_protocol: Option<llm_rs::sync::membership::kv_state_agent::KvStateIngressProtocol>,
     raw_zmq_endpoint: String,
     #[serde(default)]
     raw_topic: String,
@@ -138,7 +138,7 @@ impl KvStateAttachmentOwner {
                     indexer_domain_id: input.indexer_domain_id.parse()?,
                     kv_block_size: input.kv_block_size,
                     ingress_protocol: input.ingress_protocol.unwrap_or(
-                        llm_rs::discovery::kv_state_agent::KvStateIngressProtocol::VllmResidencyV1,
+                        llm_rs::sync::membership::kv_state_agent::KvStateIngressProtocol::VllmResidencyV1,
                     ),
                     raw_zmq_endpoint: input.raw_zmq_endpoint,
                     raw_topic: input.raw_topic,

@@ -217,7 +217,7 @@ mod tests {
     use tokio_util::sync::CancellationToken;
 
     use super::*;
-    use crate::kv_router::sequence::ActiveSequenceEventPublisher;
+    use crate::sync::sequence::ActiveSequenceEventPublisher;
     use dynamo_frontend_protocols::common::llm_backend::LLMEngineOutput;
 
     struct SyntheticExecutionContext;

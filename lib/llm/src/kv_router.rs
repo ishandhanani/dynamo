@@ -3,7 +3,6 @@
 
 use std::{
     collections::{HashMap, HashSet},
-    fmt,
     sync::Arc,
     time::Instant,
 };
@@ -61,12 +60,10 @@ pub use dynamo_scheduler::host::OverlapScoresResponse;
 // (removed with it in 1.10).
 pub use dynamo_kv_router::protocols;
 
-pub mod active_load;
 pub(crate) mod embedded;
 pub mod encoder_router;
-pub mod indexer;
+mod managed;
 pub mod metrics;
-pub(crate) mod metrics_subscriber;
 pub mod plugins;
 pub mod prefill_router;
 pub mod publisher;
@@ -74,26 +71,24 @@ mod request_lease;
 mod routing_host;
 pub(crate) use routing_host::hosted_picker;
 pub(crate) use routing_host::hosted_request;
-pub(crate) mod routing_load;
-pub mod sequence;
 pub mod shared_cache;
 
-pub use active_load::ActiveLoad;
-
 pub use encoder_router::EncoderRouter;
-pub use indexer::Indexer;
+pub use managed::ManagedKvRouter;
 pub use prefill_router::PrefillRouter;
 pub(crate) use routing_host::{EVERY_ROLE, check_hint_policies_route_on_kv_path};
 pub use routing_host::{
     KvPushRouter, LlmDispatch, MultimodalCache, RoutingHost, RoutingHostBuilder,
 };
-pub use routing_load::{
-    ManagedKvRouter, RouterLoadSource, RoutingLoadContext, SchedulerLoadSender,
-};
 
 use crate::{
-    discovery::{KvSourceMembershipWatch, RuntimeConfigWatch},
-    kv_router::sequence::{SequenceError, SequenceRequest},
+    sync::{
+        indexer::{self, Indexer, KvEventSourceRequirement},
+        load::SchedulerLoadSender,
+        membership::KvSourceMembershipWatch,
+        runtime_configs::RuntimeConfigWatch,
+        sequence::{SequenceError, SequenceRequest},
+    },
     worker_type::WorkerType,
 };
 use dynamo_model_card::local_model::runtime_config::ModelRuntimeConfig;
@@ -438,60 +433,6 @@ pub(crate) fn to_worker_selection_session_context(
     .with_agent_headers(agent_headers.clone())
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum KvEventSourceRequirement {
-    NotRequired,
-    CacheAwareRouting,
-    ConditionalDisaggDecodeCache,
-    Unknown,
-}
-
-impl KvEventSourceRequirement {
-    pub(crate) fn derive(
-        worker_role: Option<WorkerType>,
-        config: &KvRouterConfig,
-        inputs: WorkerInputs,
-    ) -> Self {
-        if !inputs.reads_kv_index() || config.use_remote_indexer || !config.use_kv_events {
-            return Self::NotRequired;
-        }
-
-        match worker_role {
-            Some(WorkerType::Decode) if config.conditional_disagg_enabled => {
-                Self::ConditionalDisaggDecodeCache
-            }
-            Some(_) => Self::CacheAwareRouting,
-            None => Self::Unknown,
-        }
-    }
-
-    pub(crate) fn as_str(self) -> &'static str {
-        match self {
-            Self::NotRequired => "not_required",
-            Self::CacheAwareRouting => "cache_aware_routing",
-            Self::ConditionalDisaggDecodeCache => "conditional_disagg_decode_cache",
-            Self::Unknown => "unknown",
-        }
-    }
-
-    pub(crate) fn requires_source(self) -> bool {
-        matches!(
-            self,
-            Self::CacheAwareRouting | Self::ConditionalDisaggDecodeCache
-        )
-    }
-
-    pub(crate) fn should_subscribe(self) -> bool {
-        self != Self::NotRequired
-    }
-}
-
-impl fmt::Display for KvEventSourceRequirement {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str(self.as_str())
-    }
-}
-
 pub enum FindBestMatchOutcome {
     Routed {
         worker: WorkerWithDpRank,
@@ -557,18 +498,6 @@ fn cache_hit_for_worker(
             .unwrap_or(0.0),
     }
 }
-
-// for metric publishing (push-based)
-pub const KV_METRICS_SUBJECT: &str = "kv_metrics";
-/// Router scheduler views of per-worker load, consumed by the Pool Relay.
-///
-/// Kept separate from [`KV_METRICS_SUBJECT`] so one router's view never
-/// overwrites another router's worker-overload state.
-pub const SCHEDULER_LOAD_SUBJECT: &str = "scheduler_load";
-pub const MULTIMODAL_EMBEDDING_CACHE_SUBJECT: &str = "multimodal_embedding_cache";
-
-// for inter-router comms
-pub const ACTIVE_SEQUENCES_SUBJECT: &str = "active_sequences_events";
 
 // for worker-local kvindexer query
 pub const WORKER_KV_INDEXER_BUFFER_SIZE: usize = 1024; // store 1024 most recent events in worker buffer
@@ -838,6 +767,7 @@ impl KvRouter {
             kv_source_membership,
             cancellation_token: cancellation_token.clone(),
             session_prefix_index: session_prefix_index.clone(),
+            remote_indexer_selectors: plugins::mode_selectors(),
         })
         .await?;
         let indexer = ingress.indexer().clone();
@@ -896,7 +826,7 @@ impl KvRouter {
         });
 
         let client_for_registration = client.clone();
-        let registration_availability_provider: metrics::RegistrationAvailabilityProvider =
+        let registration_availability_provider: crate::sync::metrics::RegistrationAvailabilityProvider =
             Arc::new(move || client_for_registration.available_instance_ids());
 
         let client_for_availability = client.clone();
@@ -2770,7 +2700,7 @@ mod tests {
         let endpoint = component.endpoint("backend");
         let client = endpoint.client().await.unwrap();
         let (_tx, workers) = watch::channel(HashMap::from([(7, ModelRuntimeConfig::default())]));
-        let membership = crate::discovery::KvSourceMembershipCoordinator::start(
+        let membership = crate::sync::membership::KvSourceMembershipCoordinator::start(
             endpoint.id(),
             workers.clone(),
             component.drt().discovery(),

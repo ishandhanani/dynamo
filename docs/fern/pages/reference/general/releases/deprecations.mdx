@@ -104,7 +104,7 @@ Upgrading? Pick the version you run today to see the dependency migration and th
 | `services::selection::affinity` | `dynamo_session_affinity` |
 | `test_utils` (`bench` feature) | `dynamo_kv_indexer::testing` |
 
-Removed with no replacement: the dummy shared-cache server, `services::shared_cache::{SharedCacheConfig, run_server}` and `services::shared_cache::server::{AppState, RemoveRequest, SharedCacheQueryRequest, SharedCacheQueryResponse, SharedCacheStore, StoreRequest, create_router}`. From `indexer::cuckoo`, the unused in-process adapter (`LocalCkfAdapter`, `LocalCkfAdapterBuildError`, `LocalCkfAdapterError`, `LocalCkfDeltaSinkError`, `LocalCkfDrainReport`, `LocalCkfEventResult`, `LocalCkfRecoveryReport`) and the `DEFAULT_GLOBAL_INGESTION_CONTROL_TIMEOUT`, `DEFAULT_GLOBAL_INGESTION_QUEUE_CAPACITY`, and `DEFAULT_GLOBAL_INGESTION_WORKERS` constants are removed; the rest of `indexer::cuckoo` still resolves. `protocols::ActiveLoad` lives in `dynamo_llm::kv_router::ActiveLoad` and is not re-exported, because `dynamo-kv-router` cannot depend on `dynamo-llm`.
+Removed with no replacement: the dummy shared-cache server, `services::shared_cache::{SharedCacheConfig, run_server}` and `services::shared_cache::server::{AppState, RemoveRequest, SharedCacheQueryRequest, SharedCacheQueryResponse, SharedCacheStore, StoreRequest, create_router}`. From `indexer::cuckoo`, the unused in-process adapter (`LocalCkfAdapter`, `LocalCkfAdapterBuildError`, `LocalCkfAdapterError`, `LocalCkfDeltaSinkError`, `LocalCkfDrainReport`, `LocalCkfEventResult`, `LocalCkfRecoveryReport`) and the `DEFAULT_GLOBAL_INGESTION_CONTROL_TIMEOUT`, `DEFAULT_GLOBAL_INGESTION_QUEUE_CAPACITY`, and `DEFAULT_GLOBAL_INGESTION_WORKERS` constants are removed; the rest of `indexer::cuckoo` still resolves. `protocols::ActiveLoad` lives in `dynamo_llm::sync::load::ActiveLoad` and is not re-exported, because `dynamo-kv-router` cannot depend on `dynamo-llm`.
 
   > **Migrate:** Replace each `dynamo_kv_router::<pre-split path>` import with the owner path from the table (the `#[deprecated]` note on a struct alias spells it out), add the owner crate to your `Cargo.toml`, and drop the `standalone-indexer`, `standalone-slot-tracker`, `standalone-selection`, and `runtime-protocols` features in favor of `http`, `ingest-zmq`, `replica-sync-zmq`, and `peer-recovery`. Finish before v1.10.0.
 
@@ -132,6 +132,13 @@ Removed with no replacement: the dummy shared-cache server, `services::shared_ca
 | `telemetry` | `dynamo_telemetry`, the crate root |
 | `preprocessor` | `dynamo_preprocessor`, the crate root |
 | `backend` | `dynamo_preprocessor::backend` |
+| `kv_router::indexer`, `kv_router::{Indexer, MULTIMODAL_EMBEDDING_CACHE_SUBJECT}` | `dynamo_llm::sync::indexer` |
+| `kv_router::sequence`, `kv_router::ACTIVE_SEQUENCES_SUBJECT` | `dynamo_llm::sync::sequence` |
+| `kv_router::active_load`, `kv_router::{ActiveLoad, KV_METRICS_SUBJECT, RouterLoadSource, RoutingLoadContext, SchedulerLoadSender}`, `discovery::{KvWorkerMonitor, LoadThresholdHandle, WorkerLoadState}` | `dynamo_llm::sync::load` |
+| `discovery::{kv_source_membership, kv_state_agent}`, `discovery::KvSourceMembershipWatch`, and the `discovery` re-exports of the `kv_source_membership` items | `dynamo_llm::sync::membership` |
+| `discovery::{RuntimeConfigWatch, runtime_config_watch}` | `dynamo_llm::sync::runtime_configs` |
+| `kv_router::metrics::{WORKER_LOAD_METRICS, WorkerLoadMetrics, RemoteIndexerMetrics}` | `dynamo_llm::sync::metrics` |
+| `kv_router::SCHEDULER_LOAD_SUBJECT` | `dynamo_llm::scheduler_load` |
 
 A log statement that does not pin a target reports its module path, so its target follows the move.
 
@@ -148,6 +155,12 @@ A log statement that does not pin a target reports its module path, so its targe
 | `dynamo_llm::telemetry` | `dynamo_telemetry` |
 | `dynamo_llm::preprocessor` | `dynamo_preprocessor` |
 | `dynamo_llm::backend` | `dynamo_preprocessor::backend` |
+| `dynamo_llm::kv_router::indexer` | `dynamo_llm::sync::indexer` |
+| `dynamo_llm::kv_router::sequence` | `dynamo_llm::sync::sequence`, and `dynamo_llm::scheduler_load` for the scheduler-load publisher |
+| `dynamo_llm::kv_router::{metrics_subscriber, routing_load}`, `dynamo_llm::discovery::worker_monitor` | `dynamo_llm::sync::load::{metrics_subscriber, routing_load, worker_monitor}` |
+| `dynamo_llm::discovery::kv_source_watch` | `dynamo_llm::sync::membership::kv_source_watch` |
+| `dynamo_llm::discovery::runtime_configs` | `dynamo_llm::sync::runtime_configs` |
+| `dynamo_llm::{direct_zmq_fan_in, direct_zmq_sub_pool}` | `dynamo_llm::sync::{direct_zmq_fan_in, direct_zmq_sub_pool}` |
 
 Statements that pin a target keep it: the request-trace sinks still log under `dynamo_llm::request_trace`.
 
@@ -567,7 +580,7 @@ Statements that pin a target keep it: the request-trace sinks still log under `d
 
 <span className="dynref-badge dynref-badge--blue">Behavioral</span> **EPP default RUST_LOG changed from debug/kv_router=trace to info** ([#11550](https://github.com/ai-dynamo/dynamo/pull/11550)).
 
-  > **Migrate:** Explicitly set RUST_LOG=debug,dynamo_llm::kv_router=trace on the EPP component if verbose KV-router trace logging is still required.
+  > **Migrate:** Explicitly set RUST_LOG=debug,dynamo_llm::sync=trace,dynamo_llm::kv_router=trace on the EPP component if verbose KV-router trace logging is still required.
 
 <span className="dynref-badge dynref-badge--blue">Behavioral</span> **Monitoring scripts now target dynamo-system namespace by default instead of dynamo** ([#10771](https://github.com/ai-dynamo/dynamo/pull/10771)).
 

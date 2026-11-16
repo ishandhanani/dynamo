@@ -17,9 +17,10 @@ use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
-use crate::{
+use crate::sync::{
     direct_zmq_fan_in::{ContinuityMode, FanInEvent, start_direct_zmq_fan_in},
-    kv_router::{ACTIVE_SEQUENCES_SUBJECT, metrics::ActiveSequenceZmqIngressMetrics},
+    metrics::ActiveSequenceZmqIngressMetrics,
+    sequence::ACTIVE_SEQUENCES_SUBJECT,
 };
 
 const DIRECT_ZMQ_ENV: &str = "DYN_ROUTER_ACTIVE_SEQUENCE_DIRECT_ZMQ";
@@ -123,8 +124,8 @@ pub(super) async fn start(
         }
         Ok(())
     };
-    let observer =
-        move |observation: crate::direct_zmq_fan_in::FanInObservation| match observation.event {
+    let observer = move |observation: crate::sync::direct_zmq_fan_in::FanInObservation| {
+        match observation.event {
             FanInEvent::SourceStarted => metrics.source_started(),
             FanInEvent::SourceStopped => metrics.source_stopped(),
             FanInEvent::Disconnected | FanInEvent::DiscoveryReset => {}
@@ -135,7 +136,8 @@ pub(super) async fn start(
             FanInEvent::SequenceGap { missing } => metrics.record_gap(missing),
             FanInEvent::OutOfOrder => metrics.record_out_of_order(),
             FanInEvent::ForcedAbort => metrics.record_forced_abort(),
-        };
+        }
+    };
 
     start_direct_zmq_fan_in(
         endpoint,

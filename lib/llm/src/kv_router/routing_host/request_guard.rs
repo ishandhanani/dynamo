@@ -8,12 +8,12 @@ use prometheus::IntCounter;
 use crate::{
     kv_router::{
         KvRouter,
-        indexer::ApproximateRequestLease,
         metrics::RouterRequestMetrics,
         prefill_router::BYPASS_REMOTE_PREFILL_ANNOTATION,
         request_lease::{RequestAttemptLease, RequestAttemptRelease},
     },
     routing_policy::AttemptLease,
+    sync::indexer::ApproximateRequestLease,
 };
 use dynamo_admission::host::AbortCause;
 use dynamo_frontend_protocols::common::preprocessor::PreprocessedRequest;

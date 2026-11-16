@@ -17,12 +17,24 @@ use dynamo_runtime::{
 };
 use tokio::sync::Mutex;
 
-use crate::kv_router::{
-    MULTIMODAL_EMBEDDING_CACHE_SUBJECT, publisher::MultimodalEmbeddingCacheEvent,
-};
 use dynamo_frontend_protocols::common::{
     llm_backend::PreprocessedRequest, preprocessor::MultimodalData,
 };
+use serde::{Deserialize, Serialize};
+
+pub const MULTIMODAL_EMBEDDING_CACHE_SUBJECT: &str = "multimodal_embedding_cache";
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MultimodalEmbeddingCacheUpdate {
+    pub added_keys: Vec<String>,
+    pub removed_keys: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MultimodalEmbeddingCacheEvent {
+    pub worker_id: u64,
+    pub update: MultimodalEmbeddingCacheUpdate,
+}
 
 fn multimodal_cache_key_from_url(url: &str) -> String {
     blake3::hash(url.as_bytes()).to_hex().to_string()
@@ -312,9 +324,6 @@ impl MultimodalCacheIndex for EmbeddingCacheIndexer {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::kv_router::publisher::{
-        MultimodalEmbeddingCacheEvent, MultimodalEmbeddingCacheUpdate,
-    };
 
     #[test]
     fn shared_indexer_cache_prunes_dropped_entries() {

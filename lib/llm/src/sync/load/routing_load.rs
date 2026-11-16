@@ -15,10 +15,9 @@ use dynamo_runtime::component::Client;
 use dynamo_runtime::engine::EngineContextGuard;
 use dynamo_runtime::pipeline::WorkerLoadMonitor;
 
-use crate::discovery::{KvWorkerMonitor, LoadThresholdHandle, RoutableThresholds};
-use crate::kv_router::KvRouter;
-use crate::worker_type::WorkerType;
+use crate::sync::load::{KvWorkerMonitor, LoadThresholdHandle, RoutableThresholds};
 use dynamo_frontend_protocols::common::timing::{WORKER_TYPE_DECODE, WORKER_TYPE_PREFILL};
+use dynamo_router_protocol::worker_type::WorkerType;
 
 /// Endpoint role whose scheduler and remote metrics feed one load context.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -391,46 +390,6 @@ impl RoutingLoadContext {
 impl Drop for RoutingLoadContext {
     fn drop(&mut self) {
         self.cancellation_token.cancel();
-    }
-}
-
-/// Standalone KV selection surface plus the context that owns its load tasks.
-pub struct ManagedKvRouter {
-    load_context: Arc<RoutingLoadContext>,
-    router: Arc<KvRouter>,
-}
-
-impl Clone for ManagedKvRouter {
-    fn clone(&self) -> Self {
-        Self {
-            load_context: self.load_context.clone(),
-            router: self.router.clone(),
-        }
-    }
-}
-
-impl std::ops::Deref for ManagedKvRouter {
-    type Target = KvRouter;
-
-    fn deref(&self) -> &Self::Target {
-        &self.router
-    }
-}
-
-impl ManagedKvRouter {
-    pub fn new(load_context: Arc<RoutingLoadContext>, router: Arc<KvRouter>) -> Self {
-        Self {
-            load_context,
-            router,
-        }
-    }
-
-    pub fn load_context(&self) -> &Arc<RoutingLoadContext> {
-        &self.load_context
-    }
-
-    pub fn router(&self) -> &Arc<KvRouter> {
-        &self.router
     }
 }
 

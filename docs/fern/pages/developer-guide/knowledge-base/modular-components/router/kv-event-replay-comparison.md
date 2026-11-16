@@ -87,7 +87,7 @@ if last_seq >= 0 and seq > last_seq + 1:
     # ... receive and process replayed events
 ```
 
-**Dynamo** (from `lib/llm/src/kv_router/indexer/recovery/worker_query_state.rs`):
+**Dynamo** (from `lib/llm/src/sync/indexer/recovery/worker_query_state.rs`):
 The router tracks an admission cursor per worker and data-parallel rank. Discovering and activating a source with a recovery target starts an initial full recovery immediately; live events arriving during recovery are admitted or buffered according to the rank state. A later gap buffers the live event and requests events from the next expected ID (`start_event_id=Some(expected)`, `end_event_id=None`), preserving the existing rank and cursor.
 
 The worker selects the recovery response when handling the query: retained history produces `Events`; expired or unavailable history requires `TreeDump`. Buffered events update the existing index, while a successful tree dump clears the rank and then admits the dumped events. The client does not preselect snapshot recovery for an ordinary gap.

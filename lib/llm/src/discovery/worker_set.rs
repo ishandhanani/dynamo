@@ -18,8 +18,9 @@ use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
 
 use crate::{
-    discovery::{LoadThresholdHandle, allocator::AllocatorTrimOnDrop},
-    kv_router::{EncoderRouter, RoutingLoadContext, prefill_router::PrefillRouterLifecycle},
+    discovery::allocator::AllocatorTrimOnDrop,
+    kv_router::{EncoderRouter, prefill_router::PrefillRouterLifecycle},
+    sync::load::{LoadThresholdHandle, RoutingLoadContext},
 };
 use dynamo_frontend_protocols::types::{
     RealtimeBidirectionalEngine,

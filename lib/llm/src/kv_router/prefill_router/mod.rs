@@ -316,7 +316,7 @@ struct PrefillBuildContext {
     session_affinity_ttl: Option<std::time::Duration>,
     session_affinity_mode: SessionAffinityMode,
     model_name: String,
-    load_thresholds: crate::discovery::LoadThresholdHandle,
+    load_thresholds: crate::sync::load::LoadThresholdHandle,
     parent_token: CancellationToken,
     task_guard: Option<dynamo_runtime::engine::EngineContextGuard>,
 }
@@ -991,7 +991,7 @@ mod tests {
             SessionAffinityMode::Hard,
             "model".to_string(),
             "namespace".to_string(),
-            crate::discovery::LoadThresholdHandle::new(Default::default()),
+            crate::sync::load::LoadThresholdHandle::new(Default::default()),
             CancellationToken::new(),
         );
         assert!(router.conditional_disagg_enabled());
@@ -1061,7 +1061,7 @@ mod tests {
             SessionAffinityMode::Hard,
             "model".to_string(),
             "namespace".to_string(),
-            crate::discovery::LoadThresholdHandle::new(Default::default()),
+            crate::sync::load::LoadThresholdHandle::new(Default::default()),
             CancellationToken::new(),
         )
     }
@@ -1792,7 +1792,7 @@ mod tests {
             SessionAffinityMode::Hard,
             "test-model".to_string(),
             "test-namespace".to_string(),
-            crate::discovery::LoadThresholdHandle::new(Default::default()),
+            crate::sync::load::LoadThresholdHandle::new(Default::default()),
             CancellationToken::new(),
         );
         let task_state = Arc::downgrade(&router.activation_task_state);
