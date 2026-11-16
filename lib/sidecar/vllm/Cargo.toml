@@ -20,7 +20,7 @@ path = "src/main.rs"
 # forward their own opt-in `mm-routing` feature, so the default wheel stays lean.
 default = ["mm-routing", "jemalloc"]
 # Resolve the image placeholder token for exact multimodal KV routing.
-mm-routing = ["dynamo-llm/mm-routing"]
+mm-routing = ["dynamo-preprocessor/mm-routing"]
 # jemalloc as the binary's global allocator.
 jemalloc = ["dynamo-sidecar-common/jemalloc"]
 
