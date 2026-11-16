@@ -16,7 +16,7 @@ use tokio::task::JoinHandle;
 
 use super::SharedCacheStatusTracker;
 use super::tracker::ConsolidatedEvent;
-use crate::utils::zmq::{bind_pub_socket, send_multipart};
+use dynamo_runtime::transports::zmq::sockets::{bind_pub_socket, send_multipart};
 
 /// Event batch structure matching vLLM's format (array_like=True)
 /// Format: [timestamp, [events], data_parallel_rank]

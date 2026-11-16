@@ -21,7 +21,7 @@ use tokio::{
 };
 use tokio_util::sync::CancellationToken;
 
-use crate::utils::zmq::multipart_message;
+use dynamo_runtime::transports::zmq::sockets::multipart_message;
 
 const GROUP_JOIN_TIMEOUT: Duration = Duration::from_secs(5);
 
@@ -1388,9 +1388,10 @@ mod tests {
         use tmq::AsZmqSocket;
 
         let pool = DirectZmqSubPool::new_raw(4, 128, CancellationToken::new()).unwrap();
-        let publisher = crate::utils::zmq::bind_pub_socket("tcp://127.0.0.1:*")
-            .await
-            .unwrap();
+        let publisher =
+            dynamo_runtime::transports::zmq::sockets::bind_pub_socket("tcp://127.0.0.1:*")
+                .await
+                .unwrap();
         let endpoint = publisher
             .lock()
             .await
@@ -1430,12 +1431,18 @@ mod tests {
         let received = tokio::time::timeout(Duration::from_secs(5), async {
             loop {
                 // Passes the "slot-0001" filter but is not that route's topic.
-                crate::utils::zmq::send_multipart(&publisher, frames("slot-00010", 0))
-                    .await
-                    .unwrap();
-                crate::utils::zmq::send_multipart(&publisher, frames("slot-0001", 1))
-                    .await
-                    .unwrap();
+                dynamo_runtime::transports::zmq::sockets::send_multipart(
+                    &publisher,
+                    frames("slot-00010", 0),
+                )
+                .await
+                .unwrap();
+                dynamo_runtime::transports::zmq::sockets::send_multipart(
+                    &publisher,
+                    frames("slot-0001", 1),
+                )
+                .await
+                .unwrap();
                 if let Ok(Some(frames)) =
                     tokio::time::timeout(Duration::from_millis(50), first.receiver.recv()).await
                 {

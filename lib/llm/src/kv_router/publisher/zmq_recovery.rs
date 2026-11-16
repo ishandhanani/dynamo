@@ -5,12 +5,12 @@
 
 use super::PublisherInput;
 use super::zmq_listener::{is_mismatched_rank, normalize_batch, split_zmq_kv_batch};
-use crate::utils::zmq::multipart_message;
 #[cfg(test)]
 use dynamo_kv_events::placement::PlacementEvent;
 use dynamo_kv_events::zmq_wire::{ZmqEventNormalizer, decode_event_batch};
 use dynamo_router_protocol::worker::WorkerWithDpRank;
 use dynamo_runtime::transports::zmq::ipv6_option_for;
+use dynamo_runtime::transports::zmq::sockets::multipart_message;
 use futures::{FutureExt, SinkExt, StreamExt};
 use std::sync::atomic::AtomicU64;
 use std::time::Duration;
@@ -396,7 +396,10 @@ async fn recovery_session(
     ingest.cursor.clear_pending();
     let connect = async {
         let (live, mut live_monitor) =
-            crate::utils::zmq::connect_sub_socket_with_monitor(endpoint, topic).await?;
+            dynamo_runtime::transports::zmq::sockets::connect_sub_socket_with_monitor(
+                endpoint, topic,
+            )
+            .await?;
         let ctx = tmq::Context::new();
         // Attach the monitor reader before connecting so the handshake event cannot be missed.
         let mut replay_monitor = tmq::pair(&ctx).connect("inproc://replay-monitor")?;

@@ -861,7 +861,6 @@ mod test_event_processing {
 #[cfg(test)]
 mod tests_startup_helpers {
     use super::*;
-    use crate::utils::zmq::{bind_pub_socket, send_multipart};
     use bytes::Bytes;
     use dynamo_kv_hashing::{ExternalSequenceBlockHash, LocalBlockHash};
     use dynamo_kv_indexer::host::{
@@ -870,6 +869,7 @@ mod tests_startup_helpers {
     use dynamo_runtime::discovery::{
         Discovery, DiscoveryQuery, EventSourceQuery, MockDiscovery, SharedMockRegistry,
     };
+    use dynamo_runtime::transports::zmq::sockets::{bind_pub_socket, send_multipart};
     use std::sync::{Arc, Mutex};
     use tokio::sync::oneshot;
 
