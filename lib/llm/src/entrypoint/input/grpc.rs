@@ -7,7 +7,6 @@ use std::sync::Arc;
 use crate::{
     entrypoint::{EngineConfig, input::common},
     grpc::service::kserve,
-    namespace::NamespaceFilter,
 };
 use dynamo_discovery::{ModelManager, ModelWatcher, engines::StreamingEngineAdapter};
 use dynamo_frontend_protocols::types::openai::chat_completions::{
@@ -17,7 +16,7 @@ use dynamo_http_server::metrics::Metrics;
 use dynamo_model_card::{
     local_model::runtime_config::TokenizerBackend, router_config::RouterConfig,
 };
-use dynamo_runtime::DistributedRuntime;
+use dynamo_runtime::{DistributedRuntime, namespace::NamespaceFilter};
 
 /// Build and run an KServe gRPC service
 pub async fn run(

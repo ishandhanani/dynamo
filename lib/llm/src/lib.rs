@@ -15,7 +15,6 @@ pub mod http;
 pub mod generate_format;
 pub mod lora;
 pub mod mocker;
-pub mod namespace;
 pub use dynamo_tokenizers as tokenizers;
 pub use dynamo_tokenizers::{file_json_field, log_json_err};
 pub mod tokens;

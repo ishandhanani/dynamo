@@ -12,7 +12,6 @@ use crate::{
         FrontendRouteExtension,
         service_v2::{self, HttpService},
     },
-    namespace::NamespaceFilter,
 };
 use dynamo_discovery::{
     ChatEngineFactoryCallback, ModelManager, ModelUpdate, ModelWatcher,
@@ -28,6 +27,7 @@ use dynamo_model_card::{
 use dynamo_router_host::plugins::RouterPluginBuilder;
 use dynamo_runtime::DistributedRuntime;
 use dynamo_runtime::metrics::MetricsHierarchy;
+use dynamo_runtime::namespace::NamespaceFilter;
 
 /// Dynamo's complete discovery-backed HTTP frontend.
 ///

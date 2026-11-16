@@ -6,7 +6,7 @@ use std::time::Duration;
 
 use dynamo_renderer::PromptFormatter;
 
-use crate::{entrypoint::EngineConfig, namespace::NamespaceFilter};
+use crate::entrypoint::EngineConfig;
 use dynamo_discovery::{ModelManager, ModelWatcher, engines::StreamingEngineAdapter};
 use dynamo_frontend_protocols::common::llm_backend::{BackendOutput, PreprocessedRequest};
 use dynamo_frontend_protocols::types::{
@@ -27,6 +27,7 @@ use dynamo_preprocessor::{OpenAIPreprocessor, prompt::prompt_formatter_from_mdc}
 use dynamo_runtime::{
     DistributedRuntime,
     engine::{AsyncEngineStream, Data},
+    namespace::NamespaceFilter,
     pipeline::{Context, ManyOut, Operator, ServiceBackend, ServiceFrontend, SingleIn, Source},
 };
 use std::sync::Arc;

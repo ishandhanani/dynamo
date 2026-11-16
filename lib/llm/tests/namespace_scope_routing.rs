@@ -13,7 +13,6 @@ use dynamo_frontend_protocols::openai::chat_completions::{
     NvCreateChatCompletionRequest, NvCreateChatCompletionStreamResponse,
 };
 use dynamo_llm::http::service::service_v2::HttpService;
-use dynamo_llm::namespace::{NamespaceFilter, NamespacePrefixMode};
 use dynamo_model_card::model_card::ModelDeploymentCard;
 use dynamo_model_card::model_type::{ModelInput, ModelType};
 use dynamo_model_card::router_config::RouterConfig;
@@ -23,6 +22,7 @@ use dynamo_runtime::discovery::{
     DiscoveryInstance, DiscoveryQuery, DiscoverySpec, EventTransportKind,
 };
 use dynamo_runtime::distributed::{DiscoveryBackend, DistributedConfig, RequestPlaneMode};
+use dynamo_runtime::namespace::{NamespaceFilter, NamespacePrefixMode};
 use dynamo_runtime::pipeline::network::Ingress;
 use dynamo_runtime::pipeline::{
     AsyncEngine, AsyncEngineContextProvider, ManyOut, ResponseStream, SingleIn, async_trait,
