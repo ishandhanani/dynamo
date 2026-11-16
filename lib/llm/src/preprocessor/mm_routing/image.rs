@@ -16,8 +16,8 @@ use llm_multimodal::{ModelMetadata, ModelRegistry};
 use llm_tokenizer::traits::Tokenizer as ModelTokenizer;
 use llm_tokenizer::{Decoder, Encoder, Encoding, HuggingFaceTokenizer, SpecialTokens};
 
-use crate::protocols::TokenIdType;
 use crate::tokenizers::traits::Tokenizer as RuntimeTokenizer;
+use dynamo_frontend_protocols::TokenIdType;
 
 use super::{glm5_next, nemotron};
 
@@ -642,8 +642,9 @@ mod tests {
     use super::*;
     use crate::preprocessor::{
         ModelDeploymentCard, NvCreateChatCompletionRequest, OpenAIPreprocessor,
-        PreprocessedRequest, RoutingImagePromptLayout,
+        RoutingImagePromptLayout,
     };
+    use dynamo_frontend_protocols::common::preprocessor::PreprocessedRequest;
 
     struct TestImageRoutingBackend {
         failing_width: Option<u32>,

@@ -14,7 +14,7 @@ use crate::grpc::service::dispatch_error_status;
 // Re-exported so the old per-module path keeps resolving for outside users.
 pub use crate::grpc::service::grpc_monitor_for_disconnects;
 use crate::http::service::metadata::extract_metadata_from_grpc;
-use crate::types::Annotated;
+use dynamo_frontend_protocols::types::Annotated;
 
 use super::kserve;
 
@@ -27,8 +27,8 @@ use dynamo_http_server::{
     metrics::{CancellationLabels, Endpoint},
 };
 
-use crate::protocols::tensor;
-use crate::protocols::tensor::{
+use dynamo_frontend_protocols::tensor;
+use dynamo_frontend_protocols::tensor::{
     NvCreateTensorRequest, NvCreateTensorResponse, RequestedOutput, Tensor,
 };
 use dynamo_model_card::tensor_model::{self, TensorMetadata};
@@ -308,7 +308,30 @@ impl TryFrom<inference::ModelInferRequest> for NvCreateTensorRequest {
     }
 }
 
-impl tensor::Tensor {
+/// Fills a tensor from KServe request contents. An extension trait because the tensor
+/// type belongs to the protocols while these conversions are the gRPC service's.
+trait KserveTensorContents {
+    #[allow(clippy::result_large_err)]
+    fn set_data_from_tensor_contents(
+        &mut self,
+        contents: &inference::InferTensorContents,
+    ) -> Result<(), Status>;
+
+    #[allow(clippy::result_large_err)]
+    fn set_data_from_raw_contents(&mut self, raw_input: &[u8]) -> Result<(), Status>;
+
+    #[allow(clippy::result_large_err)]
+    fn raw_input_to_bytes_tensor(
+        &self,
+        element_count: usize,
+        raw_input: &[u8],
+    ) -> Result<tensor::FlattenTensor, Status>;
+
+    #[allow(clippy::result_large_err)]
+    fn raw_input_to_typed_tensor(&self, raw_input: &[u8]) -> Result<tensor::FlattenTensor, Status>;
+}
+
+impl KserveTensorContents for tensor::Tensor {
     #[allow(clippy::result_large_err)]
     fn set_data_from_tensor_contents(
         &mut self,

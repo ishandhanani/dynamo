@@ -63,11 +63,12 @@ use tracing::{self, Instrument};
 #[cfg(feature = "mm-routing")]
 use crate::preprocessor::media::MediaFetcherPolicy;
 use crate::preprocessor::media::{MediaLoader, max_data_url_bytes};
-use crate::protocols::common::preprocessor::{
+use crate::tokenizers::Encoding;
+use dynamo_frontend_protocols::common::preprocessor::{
     MultimodalData, MultimodalDataMap, MultimodalItemRef, MultimodalUuidMap,
     PreprocessedRequestBuilder, RoutingHints,
 };
-use crate::{protocols::common::timing::RequestTracker, tokenizers::Encoding};
+use dynamo_frontend_protocols::common::timing::RequestTracker;
 use dynamo_http_server::metrics::RequestMetrics;
 #[cfg(all(feature = "mm-routing", feature = "media-ffmpeg"))]
 use dynamo_model_card::local_model::runtime_config::{
@@ -95,7 +96,8 @@ use dynamo_runtime::pipeline::{
 };
 use dynamo_runtime::protocols::annotated::{Annotated, AnnotationsProvider};
 
-use crate::protocols::{
+use crate::tokenizers::traits::Tokenizer;
+use dynamo_frontend_protocols::{
     TokenIdType,
     common::{
         OutputOptionsProvider, SamplingOptionsProvider, StopConditionsProvider,
@@ -114,21 +116,18 @@ use crate::protocols::{
         embeddings::{NvCreateEmbeddingRequest, NvCreateEmbeddingResponse},
     },
 };
-use crate::tokenizers::traits::Tokenizer;
 
 use crate::preprocessor::prompt::{
     MediaRequestExt, apply_continue_final_message, prompt_formatter_from_mdc,
 };
-use crate::protocols::openai::common_ext::CommonExtProvider;
+use dynamo_frontend_protocols::openai::common_ext::CommonExtProvider;
 use dynamo_renderer::{OAIChatLikeRequest, PromptFormatter, PromptInput, TextInput, TokenInput};
 
-pub use crate::protocols::common::llm_backend::{BackendOutput, PreprocessedRequest};
-pub use crate::protocols::common::metrics::{
-    ANNOTATION_LLM_METRICS, ANNOTATION_PAYLOAD_USAGE, LLMMetricAnnotation,
+use dynamo_frontend_protocols::common::llm_backend::{
+    BackendOutput, EmbeddingsEngineOutput, PreprocessedRequest,
 };
-pub use crate::protocols::common::preprocessor::PreprocessedEmbeddingRequest;
-
-use crate::protocols::common::llm_backend::EmbeddingsEngineOutput;
+use dynamo_frontend_protocols::common::metrics::{ANNOTATION_PAYLOAD_USAGE, LLMMetricAnnotation};
+use dynamo_frontend_protocols::common::preprocessor::PreprocessedEmbeddingRequest;
 
 /// Takes the encoder's token buffer rather than copying it. The tokenizer cache and fastokens
 /// return `Encoding::Sp` with an exactly sized buffer, so a copy only adds a prompt-sized
@@ -568,9 +567,9 @@ mod into_token_ids_tests {
 #[cfg(test)]
 mod embedding_base64_transport_tests {
     use super::{OpenAIPreprocessor, decode_base64_to_floats};
-    use crate::protocols::common::llm_backend::EmbeddingsEngineOutput;
-    use crate::protocols::openai::embeddings::NvCreateEmbeddingRequest;
     use base64::{Engine as _, engine::general_purpose::STANDARD};
+    use dynamo_frontend_protocols::common::llm_backend::EmbeddingsEngineOutput;
+    use dynamo_frontend_protocols::openai::embeddings::NvCreateEmbeddingRequest;
     use dynamo_runtime::protocols::annotated::Annotated;
     use futures::StreamExt;
     use futures::stream;
@@ -639,7 +638,7 @@ pub(crate) const DEFAULT_THINKING_MODE_RUNTIME_KEY: &str = "default_thinking_mod
 /// frontend's own recordings (when present) take precedence over the forwarded values.
 fn drain_router_routing_data(
     data: &mut Option<BackendOutput>,
-    tracker: Option<&crate::protocols::common::timing::RequestTracker>,
+    tracker: Option<&dynamo_frontend_protocols::common::timing::RequestTracker>,
 ) {
     let Some(routing_data) = data.as_mut().and_then(|d| d.routing_data.take()) else {
         return;
@@ -1750,9 +1749,11 @@ fn attach_agent_context_from_context(
     request: &mut PreprocessedRequest,
     context: &PipelineContext<()>,
 ) {
-    if let Ok(agent_context) = context.get::<crate::protocols::common::extensions::AgentContext>(
-        crate::protocols::common::extensions::AGENT_CONTEXT_CONTEXT_KEY,
-    ) {
+    if let Ok(agent_context) = context
+        .get::<dynamo_frontend_protocols::common::extensions::AgentContext>(
+            dynamo_frontend_protocols::common::extensions::AGENT_CONTEXT_CONTEXT_KEY,
+        )
+    {
         request.agent_context = Some(agent_context.as_ref().clone());
     }
 }
@@ -1761,7 +1762,9 @@ fn attach_image_cache_scope_from_context(
     request: &mut PreprocessedRequest,
     context: &PipelineContext<()>,
 ) {
-    use crate::protocols::common::extensions::{SESSION_AFFINITY_CONTEXT_KEY, SessionAffinityId};
+    use dynamo_frontend_protocols::common::extensions::{
+        SESSION_AFFINITY_CONTEXT_KEY, SessionAffinityId,
+    };
 
     if let Ok(session_affinity) = context.get::<SessionAffinityId>(SESSION_AFFINITY_CONTEXT_KEY) {
         request.image_cache_scope = Some(session_affinity.as_str().to_owned());
@@ -1904,25 +1907,29 @@ impl<R: AnnotationsProvider> AnnotationsProvider for NormalizedArgsRequest<'_, R
 impl<R: SamplingOptionsProvider> SamplingOptionsProvider for NormalizedArgsRequest<'_, R> {
     fn extract_sampling_options(
         &self,
-    ) -> anyhow::Result<crate::protocols::common::SamplingOptions> {
+    ) -> anyhow::Result<dynamo_frontend_protocols::common::SamplingOptions> {
         self.inner.extract_sampling_options()
     }
 }
 
 impl<R: StopConditionsProvider> StopConditionsProvider for NormalizedArgsRequest<'_, R> {
-    fn extract_stop_conditions(&self) -> anyhow::Result<crate::protocols::common::StopConditions> {
+    fn extract_stop_conditions(
+        &self,
+    ) -> anyhow::Result<dynamo_frontend_protocols::common::StopConditions> {
         self.inner.extract_stop_conditions()
     }
 }
 
 impl<R: OutputOptionsProvider> OutputOptionsProvider for NormalizedArgsRequest<'_, R> {
-    fn extract_output_options(&self) -> anyhow::Result<crate::protocols::common::OutputOptions> {
+    fn extract_output_options(
+        &self,
+    ) -> anyhow::Result<dynamo_frontend_protocols::common::OutputOptions> {
         self.inner.extract_output_options()
     }
 }
 
 impl<R: NvExtProvider> NvExtProvider for NormalizedArgsRequest<'_, R> {
-    fn nvext(&self) -> Option<&crate::protocols::common::extensions::NvExt> {
+    fn nvext(&self) -> Option<&dynamo_frontend_protocols::common::extensions::NvExt> {
         self.inner.nvext()
     }
 
@@ -2039,7 +2046,7 @@ pub struct OpenAIPreprocessor {
     /// `None` disables MM-aware routing for this model and the router falls
     /// back to text-prefix routing.
     #[cfg(feature = "mm-routing")]
-    routing_image_token_id: Option<crate::protocols::TokenIdType>,
+    routing_image_token_id: Option<dynamo_frontend_protocols::TokenIdType>,
     /// Model-specific routing-side image prompt shape. Most families replace
     /// only an existing pad token; Kimi-K3 inserts its structural/dimension
     /// block, while Nemotron wraps its repeated image tokens in delimiters.
@@ -2057,7 +2064,7 @@ pub struct OpenAIPreprocessor {
     /// routing starts from the frontend-tokenized prompt. `None` when the
     /// model doesn't need it or `bos_token` doesn't round-trip to one id.
     #[cfg(feature = "mm-routing")]
-    routing_prepend_bos: Option<crate::protocols::TokenIdType>,
+    routing_prepend_bos: Option<dynamo_frontend_protocols::TokenIdType>,
 }
 
 pub(crate) const LORA_NAME_CONTEXT_KEY: &str = "discovery.lora_name";
@@ -2078,7 +2085,7 @@ fn token_id_bound(model_vocab: Option<usize>, tokenizer_bound: Option<usize>) ->
 /// `field` names the request field in the error.
 fn ensure_token_ids_in_vocab(
     field: &str,
-    tokens: &[crate::protocols::TokenIdType],
+    tokens: &[dynamo_frontend_protocols::TokenIdType],
     bound: Option<usize>,
 ) -> anyhow::Result<()> {
     if let Some(bound) = bound
@@ -2517,10 +2524,11 @@ impl OpenAIPreprocessor {
 
     /// Validate the client's effective reasoning toggle against the model's policy.
     fn validate_reasoning_request(&self, request: &NvCreateChatCompletionRequest) -> Result<()> {
-        let family = crate::protocols::openai::chat_completions::unified_parser::selected_family(
-            self.tool_call_parser.as_deref(),
-            self.runtime_config.reasoning_parser.as_deref(),
-        );
+        let family =
+            dynamo_frontend_protocols::openai::chat_completions::unified_parser::selected_family(
+                self.tool_call_parser.as_deref(),
+                self.runtime_config.reasoning_parser.as_deref(),
+            );
         if Self::reasoning_is_mandatory(family)
             && Self::normalize_thinking_aliases(request.chat_template_args.as_ref(), family)
                 == Some(false)
@@ -2961,14 +2969,14 @@ impl OpenAIPreprocessor {
         let token_id_bound = token_id_bound(model_info.vocab_size(), tokenizer_id_bound);
         let tool_call_parser = mdc.runtime_config.tool_call_parser.clone();
         if validate_chat_parsers {
-            crate::protocols::openai::chat_completions::tool_parser_v2::validate_parser_version(
+            dynamo_frontend_protocols::openai::chat_completions::tool_parser_v2::validate_parser_version(
                 tool_call_parser.as_deref(),
                 mdc.runtime_config.reasoning_parser.as_deref(),
             )?;
             tracing::info!(
                 model = %mdc.display_name,
-                parser_version = ?crate::protocols::openai::chat_completions::tool_parser_v2::selected_version()?,
-                unified_family = ?crate::protocols::openai::chat_completions::unified_parser::selected_family(
+                parser_version = ?dynamo_frontend_protocols::openai::chat_completions::tool_parser_v2::selected_version()?,
+                unified_family = ?dynamo_frontend_protocols::openai::chat_completions::unified_parser::selected_family(
                     tool_call_parser.as_deref(),
                     mdc.runtime_config.reasoning_parser.as_deref(),
                 ),
@@ -2984,7 +2992,7 @@ impl OpenAIPreprocessor {
                 ),
             ] {
                 if let Some(warning) = parser.and_then(
-                    crate::protocols::openai::chat_completions::unified_parser::deprecated_alias_warning,
+                    dynamo_frontend_protocols::openai::chat_completions::unified_parser::deprecated_alias_warning,
                 ) {
                     tracing::warn!(model = %mdc.display_name, slot, "{warning}");
                 }
@@ -2999,7 +3007,7 @@ impl OpenAIPreprocessor {
             == dynamo_model_card::local_model::runtime_config::ToolCallArgumentsFormat::JsonObject
             || mdc.runtime_config.tool_call_parser.as_deref() == Some("glm47");
         let beam_route = mdc.model_type.supports_chat()
-            && crate::protocols::openai::chat_completions::unified_parser::selected_family(
+            && dynamo_frontend_protocols::openai::chat_completions::unified_parser::selected_family(
                 tool_call_parser.as_deref(),
                 mdc.runtime_config.reasoning_parser.as_deref(),
             ) == Some(dynamo_model_card::parser_family::BEAM_UNIFIED_FAMILY);
@@ -3662,7 +3670,7 @@ impl OpenAIPreprocessor {
     }
 
     fn validate_model_request<R: OAIChatLikeRequest>(&self, request: &R) -> Result<()> {
-        if crate::protocols::openai::chat_completions::unified_parser::selected_family(
+        if dynamo_frontend_protocols::openai::chat_completions::unified_parser::selected_family(
             self.tool_call_parser.as_deref(),
             self.runtime_config.reasoning_parser.as_deref(),
         ) == Some("gpt_oss")
@@ -4188,7 +4196,7 @@ impl OpenAIPreprocessor {
         formatted_prompt: Option<&str>,
         // Worker-bound token ids; used (mm-routing only) to build the exact
         // routing sequence and atomically gate worker `mm_hashes`.
-        token_ids: &[crate::protocols::TokenIdType],
+        token_ids: &[dynamo_frontend_protocols::TokenIdType],
     ) -> Result<Vec<MmImageEntry>> {
         let (entries, _image_tokens) = self
             .gather_multi_modal_data_with_image_tokens(
@@ -4222,7 +4230,7 @@ impl OpenAIPreprocessor {
         request: &R,
         builder: &mut PreprocessedRequestBuilder,
         formatted_prompt: Option<&str>,
-        token_ids: &[crate::protocols::TokenIdType],
+        token_ids: &[dynamo_frontend_protocols::TokenIdType],
     ) -> Result<(Vec<MmRoutingEntry>, Option<usize>)> {
         // `token_ids` is only consumed by exact MM-routing construction below.
         #[cfg(not(feature = "mm-routing"))]
@@ -4335,9 +4343,11 @@ impl OpenAIPreprocessor {
                                 );
                                 // The text holds a fixed modality key and two
                                 // numbers, so the 400 body can carry it.
-                                return Err(crate::protocols::common::invalid_argument_error(
-                                    message,
-                                ));
+                                return Err(
+                                    dynamo_frontend_protocols::common::invalid_argument_error(
+                                        message,
+                                    ),
+                                );
                             }
                         }
                         if has_media_loader {
@@ -4533,7 +4543,7 @@ impl OpenAIPreprocessor {
                     &mut media_map,
                     task.modality,
                     task.slot_idx,
-                    MultimodalData::Decoded(rdma_descriptor),
+                    MultimodalData::Decoded(rdma_descriptor.try_into()?),
                 )?;
             }
         }
@@ -4809,7 +4819,7 @@ impl OpenAIPreprocessor {
         &self,
         builder: &mut PreprocessedRequestBuilder,
         image_entries: &[MmImageEntry],
-        token_ids: &[crate::protocols::TokenIdType],
+        token_ids: &[dynamo_frontend_protocols::TokenIdType],
     ) -> Result<()> {
         let entries: Vec<_> = image_entries
             .iter()
@@ -4829,10 +4839,10 @@ impl OpenAIPreprocessor {
     fn build_mm_exact_routing_info(
         &self,
         entries: &[MmRoutingEntry],
-        token_ids: &[crate::protocols::TokenIdType],
+        token_ids: &[dynamo_frontend_protocols::TokenIdType],
         image_text_prompt_len: Option<usize>,
-    ) -> Option<crate::protocols::common::preprocessor::MmRoutingInfo> {
-        use crate::protocols::common::preprocessor::MmRoutingInfo;
+    ) -> Option<dynamo_frontend_protocols::common::preprocessor::MmRoutingInfo> {
+        use dynamo_frontend_protocols::common::preprocessor::MmRoutingInfo;
 
         if entries.is_empty() {
             return None;
@@ -5371,9 +5381,12 @@ impl OpenAIPreprocessor {
         request: &R,
         formatted_prompt: Option<&RenderedPrompt>,
         tracker: Option<&RequestTracker>,
-    ) -> Result<(Vec<crate::protocols::TokenIdType>, HashMap<String, String>)> {
+    ) -> Result<(
+        Vec<dynamo_frontend_protocols::TokenIdType>,
+        HashMap<String, String>,
+    )> {
         let mut annotations = HashMap::new();
-        let mut tokens_out: Vec<crate::protocols::TokenIdType> = Vec::new();
+        let mut tokens_out: Vec<dynamo_frontend_protocols::TokenIdType> = Vec::new();
         // match request type before any conversion/processing
         match request.prompt_input_type() {
             PromptInput::Tokens(_) => {
@@ -5786,9 +5799,9 @@ impl OpenAIPreprocessor {
     fn tool_processing_route(
         &self,
         request: &NvCreateChatCompletionRequest,
-        guided_tool_constraint: &crate::protocols::openai::GuidedToolConstraint,
+        guided_tool_constraint: &dynamo_frontend_protocols::openai::GuidedToolConstraint,
     ) -> anyhow::Result<ToolProcessingRoute> {
-        use crate::protocols::openai::chat_completions::{tool_parser_v2, unified_parser};
+        use dynamo_frontend_protocols::openai::chat_completions::{tool_parser_v2, unified_parser};
 
         let family = unified_parser::selected_request_family(
             self.tool_call_parser.as_deref(),
@@ -5845,7 +5858,7 @@ impl OpenAIPreprocessor {
         )
         .map_err(|error| invalid_argument_error(format!("{error:#}")))?;
 
-        if selected_version == tool_parser_v2::ParserVersion::V2 {
+        if selected_version == dynamo_runtime::config::ParserVersion::V2 {
             return Err(invalid_argument_error(format!(
                 "{}=2 was requested, but this tool choice requires the v1 tool-call jail",
                 env_llm::DYN_PARSER_VERSION
@@ -5887,7 +5900,7 @@ impl OpenAIPreprocessor {
         stream: S,
         request: &NvCreateChatCompletionRequest,
         prompt_injected_reasoning: PromptReasoningPrefill,
-        guided_tool_constraint: crate::protocols::openai::GuidedToolConstraint,
+        guided_tool_constraint: dynamo_frontend_protocols::openai::GuidedToolConstraint,
         tool_processing_route: ToolProcessingRoute,
     ) -> anyhow::Result<
         impl Stream<Item = Annotated<NvCreateChatCompletionStreamResponse>> + Send + 'static,
@@ -5895,7 +5908,7 @@ impl OpenAIPreprocessor {
     where
         S: Stream<Item = Annotated<NvCreateChatCompletionStreamResponse>> + Send + 'static,
     {
-        use crate::protocols::openai::chat_completions::unified_parser;
+        use dynamo_frontend_protocols::openai::chat_completions::unified_parser;
         let prompt_prefill = prompt_injected_reasoning;
         let prompt_injected_reasoning = prompt_prefill.for_route(&tool_processing_route);
         let uses_tool_call_structural_tag = guided_tool_constraint.uses_structural_tag();
@@ -6723,7 +6736,7 @@ impl OpenAIPreprocessor {
     where
         S: Stream<Item = Annotated<NvCreateChatCompletionStreamResponse>> + Send + 'static,
     {
-        use crate::protocols::openai::chat_completions::unified_parser::empty_choice;
+        use dynamo_frontend_protocols::openai::chat_completions::unified_parser::empty_choice;
         use dynamo_parsers::tool_calling::jail::{
             Annotated as JailAnnotated, apply_tool_calling_jail,
             apply_tool_calling_jail_with_guided_streaming,
@@ -6758,7 +6771,8 @@ impl OpenAIPreprocessor {
             metrics_template: Option<LLMMetricAnnotation>,
             chunk_tokens: usize,
             nvext: Option<serde_json::Value>,
-            prompt_logprobs: Option<Arc<crate::protocols::common::llm_backend::PromptLogprobs>>,
+            prompt_logprobs:
+                Option<Arc<dynamo_frontend_protocols::common::llm_backend::PromptLogprobs>>,
             logprobs: std::collections::BTreeMap<u32, dynamo_protocols::types::ChatChoiceLogprobs>,
             response_template: Option<dynamo_protocols::types::CreateChatCompletionStreamResponse>,
         }
@@ -6883,7 +6897,7 @@ impl OpenAIPreprocessor {
                         // the suffix after it, so terminal recovery examines the
                         // final unfinished call while the shared scanner decides
                         // whether each opener is real or quoted prose.
-                        while let Some(marker_start) = crate::protocols::openai::chat_completions::unified_parser::first_unquoted_native_tool_call_marker(&state.input_text, "glm47") {
+                        while let Some(marker_start) = dynamo_frontend_protocols::openai::chat_completions::unified_parser::first_unquoted_native_tool_call_marker(&state.input_text, "glm47") {
                             let after_marker =
                                 &state.input_text[marker_start + glm47_start_in.len()..];
                             let Some(end) = after_marker.find(&glm47_end_in) else {
@@ -6909,7 +6923,7 @@ impl OpenAIPreprocessor {
                         // A response that quotes on every chunk keeps the old growth.
                         if !state.emitted_text.is_empty()
                             && !state.input_text.contains(['"', '\'', '`'])
-                            && crate::protocols::openai::chat_completions::unified_parser::unquoted_native_tool_call_marker_or_prefix_start(&state.input_text, "glm47").is_none()
+                            && dynamo_frontend_protocols::openai::chat_completions::unified_parser::unquoted_native_tool_call_marker_or_prefix_start(&state.input_text, "glm47").is_none()
                             && let Some(unemitted) =
                                 state.input_text.strip_prefix(state.emitted_text.as_str())
                         {
@@ -7020,13 +7034,13 @@ impl OpenAIPreprocessor {
                     .expect("choice recovery buffer poisoned");
                 for choice in &mut data.inner.choices {
                     let state = recovery.entry(choice.index).or_default();
-                    if let Some(marker_start) = crate::protocols::openai::chat_completions::unified_parser::unquoted_native_tool_call_marker_or_prefix_start(&state.input_text, "glm47") {
+                    if let Some(marker_start) = dynamo_frontend_protocols::openai::chat_completions::unified_parser::unquoted_native_tool_call_marker_or_prefix_start(&state.input_text, "glm47") {
                         let desired_content = &state.input_text[..marker_start];
                         // An EOS inside a tool call is incomplete even if the engine reports stop.
                         let dropped_call_reported_as_length = choice.finish_reason
                             == Some(dynamo_protocols::types::FinishReason::Stop)
                             && choice.delta.tool_calls.is_none()
-                            && crate::protocols::openai::chat_completions::unified_parser::first_unquoted_native_tool_call_marker(&state.input_text, "glm47").is_some();
+                            && dynamo_frontend_protocols::openai::chat_completions::unified_parser::first_unquoted_native_tool_call_marker(&state.input_text, "glm47").is_some();
                         if dropped_call_reported_as_length {
                             tracing::warn!(
                                 choice_index = choice.index,
@@ -7039,7 +7053,7 @@ impl OpenAIPreprocessor {
                         }
                         if choice.finish_reason
                             == Some(dynamo_protocols::types::FinishReason::Length)
-                            && crate::protocols::openai::chat_completions::unified_parser::first_unquoted_native_tool_call_marker(&state.input_text, "glm47").is_some()
+                            && dynamo_frontend_protocols::openai::chat_completions::unified_parser::first_unquoted_native_tool_call_marker(&state.input_text, "glm47").is_some()
                         {
                             // Count EOS drops separately from max_tokens truncation.
                             if !dropped_call_reported_as_length {
@@ -7186,7 +7200,7 @@ impl OpenAIPreprocessor {
         reasoning_parser: Option<&str>,
     ) -> Result<bool> {
         if let Some(family) =
-            crate::protocols::openai::chat_completions::unified_parser::selected_family(
+            dynamo_frontend_protocols::openai::chat_completions::unified_parser::selected_family(
                 tool_call_parser,
                 reasoning_parser,
             )
@@ -7345,7 +7359,7 @@ impl OpenAIPreprocessor {
     ) -> bool {
         // Unified families share reasoning-only output deferral with the legacy path.
         let has_reasoning_decoder = reasoning_parser.is_some()
-            || crate::protocols::openai::chat_completions::unified_parser::selected_content_decoder_family(
+            || dynamo_frontend_protocols::openai::chat_completions::unified_parser::selected_content_decoder_family(
                 tool_call_parser,
                 reasoning_parser,
             )
@@ -7706,7 +7720,7 @@ impl OpenAIPreprocessor {
         reasoning_parser: Option<&str>,
     ) -> bool {
         Self::is_gemma4_tool_parser(tool_parser)
-            && crate::protocols::openai::chat_completions::unified_parser::selected_content_decoder_family(
+            && dynamo_frontend_protocols::openai::chat_completions::unified_parser::selected_content_decoder_family(
                 tool_parser,
                 reasoning_parser,
             ) == Some(dynamo_model_card::parser_family::GEMMA4_UNIFIED_FAMILY)
@@ -7724,7 +7738,7 @@ impl OpenAIPreprocessor {
         match reasoning_parser {
             parser if Self::is_nemotron_force_reasoning(parser) => Some("<think>"),
             Some("gemma4" | "gemma-4") if Self::is_gemma4_tool_parser(tool_parser) => Some(
-                crate::protocols::openai::chat_completions::unified_parser::GEMMA4_EMPTY_THOUGHT_CHANNEL,
+                dynamo_frontend_protocols::openai::chat_completions::unified_parser::GEMMA4_EMPTY_THOUGHT_CHANNEL,
             ),
             _ => None,
         }
@@ -8750,7 +8764,7 @@ impl
         let mut response_generator = Box::new(response_generator);
         response_generator.enable_tool_call_eos(matches!(
             guided_tool_constraint,
-            crate::protocols::openai::GuidedToolConstraint::BeamTurnGrammar { .. }
+            dynamo_frontend_protocols::openai::GuidedToolConstraint::BeamTurnGrammar { .. }
         ));
 
         // Update ISL only for text prompts (embeddings get sequence length from tensor shape)
@@ -9595,7 +9609,7 @@ mod strip_tests {
 #[cfg(test)]
 mod extra_args_media_copy_tests {
     use super::*;
-    use crate::protocols::common::preprocessor::MultimodalData;
+    use dynamo_frontend_protocols::common::preprocessor::MultimodalData;
     use dynamo_model_card::model_card::ModelDeploymentCard;
 
     pub(super) fn test_preprocessor() -> OpenAIPreprocessor {
@@ -9738,7 +9752,7 @@ mod extra_args_media_copy_tests {
 
     #[tokio::test]
     async fn continue_final_message_rejects_reordered_tool_results() {
-        use crate::protocols::ValidateRequest;
+        use dynamo_frontend_protocols::ValidateRequest;
         use dynamo_renderer::deepseek::v41::DeepSeekV41Formatter;
 
         let mut preprocessor = test_preprocessor();
@@ -9864,9 +9878,10 @@ mod extra_args_media_copy_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::protocols::common::extensions::{AGENT_CONTEXT_CONTEXT_KEY, AgentContext};
-    use crate::protocols::common::preprocessor::MultimodalData;
-    use crate::protocols::common::{OutputOptions, SamplingOptions, StopConditions};
+    use dynamo_frontend_protocols::common::extensions::{AGENT_CONTEXT_CONTEXT_KEY, AgentContext};
+    use dynamo_frontend_protocols::common::metrics::ANNOTATION_LLM_METRICS;
+    use dynamo_frontend_protocols::common::preprocessor::MultimodalData;
+    use dynamo_frontend_protocols::common::{OutputOptions, SamplingOptions, StopConditions};
     use dynamo_protocols::types::{
         ChatChoiceStream, ChatCompletionStreamResponseDelta, CreateChatCompletionStreamResponse,
         FinishReason, Role,
@@ -9947,9 +9962,9 @@ mod tests {
                 None,
                 Some("gpt_oss"),
             );
-            let batch = crate::protocols::openai::chat_completions::unified_parser::parse_complete_with_policy(
-                "gpt_oss", input, &crate::protocols::openai::GuidedToolConstraint::None, &[],
-                crate::protocols::openai::chat_completions::unified_parser::UnifiedRequestPolicy {
+            let batch = dynamo_frontend_protocols::openai::chat_completions::unified_parser::parse_complete_with_policy(
+                "gpt_oss", input, &dynamo_frontend_protocols::openai::GuidedToolConstraint::None, &[],
+                dynamo_frontend_protocols::openai::chat_completions::unified_parser::UnifiedRequestPolicy {
                     reasoning_disabled, ..Default::default()
                 },
             ).unwrap();
@@ -10052,7 +10067,7 @@ mod tests {
     // The parser corpus cannot exercise preprocessing seed compaction.
     #[test]
     fn gpt_oss_tool_prefill_preserves_consumed_json_state() {
-        use crate::protocols::openai::chat_completions::unified_parser::{
+        use dynamo_frontend_protocols::openai::chat_completions::unified_parser::{
             ChoiceState, StreamPrefill,
         };
         use dynamo_parsers_v2::{
@@ -10159,7 +10174,7 @@ mod tests {
                         .unwrap();
                     assert!(matches!(
                         &constraint,
-                        crate::protocols::openai::GuidedToolConstraint::GuidedJsonRequired
+                        dynamo_frontend_protocols::openai::GuidedToolConstraint::GuidedJsonRequired
                     ));
                     let route = preprocessor
                         .tool_processing_route(&request, &constraint)
@@ -10246,7 +10261,7 @@ mod tests {
                 assert!(!prefill.unified, "quoted analysis is tool data");
                 let input = "<|call|>";
                 for split in 0..=input.len() {
-                    use crate::protocols::openai::chat_completions::unified_parser::{
+                    use dynamo_frontend_protocols::openai::chat_completions::unified_parser::{
                         ChoiceState, StreamPrefill,
                     };
                     use dynamo_parsers_v2::{
@@ -10764,7 +10779,7 @@ mod tests {
 
     #[tokio::test]
     async fn eight_family_routes_and_tool_suppression() {
-        use crate::protocols::openai::chat_completions::unified_parser;
+        use dynamo_frontend_protocols::openai::chat_completions::unified_parser;
         let card = ModelDeploymentCard::load_from_disk(
             "tests/data/sample-models/mock-llama-3.1-8b-instruct",
             None,
@@ -10857,8 +10872,9 @@ mod tests {
 
     #[tokio::test]
     async fn eight_family_request_initialization() {
-        use crate::protocols::openai::chat_completions::unified_parser;
-        for (family, native) in unified_parser::tests::eight_family_calls("é initialized") {
+        use dynamo_frontend_protocols::openai::chat_completions::unified_parser;
+        for (family, native) in unified_parser::test_fixtures::eight_family_calls("é initialized")
+        {
             let (tool, reason) = match family {
                 "qwen3" => ("qwen3_coder", "qwen3"),
                 "kimi_k2" => ("kimi_k2", "kimi_k25"),
@@ -10879,7 +10895,7 @@ mod tests {
             };
             preprocessor.tool_call_parser = Some(tool.into());
             preprocessor.runtime_config.reasoning_parser = Some(reason.into());
-            let (open, close) = unified_parser::tests::reasoning_markers(family);
+            let (open, close) = unified_parser::test_fixtures::reasoning_markers(family);
             for thinking in [false, true] {
                 for prefilled in [false, true] {
                     for choice in [
@@ -10898,10 +10914,10 @@ mod tests {
                         .unwrap();
                         let args = serde_json::json!({"count":2,"content":"é initialized"});
                         let payload = match &constraint {
-                            crate::protocols::openai::GuidedToolConstraint::GuidedJsonNamed {
+                            dynamo_frontend_protocols::openai::GuidedToolConstraint::GuidedJsonNamed {
                                 ..
                             } => args.to_string(),
-                            crate::protocols::openai::GuidedToolConstraint::GuidedJsonRequired => {
+                            dynamo_frontend_protocols::openai::GuidedToolConstraint::GuidedJsonRequired => {
                                 serde_json::json!([{"name":"write_file","arguments":args}])
                                     .to_string()
                             }
@@ -11003,7 +11019,7 @@ mod tests {
                     futures::stream::iter([Annotated::from_data(source)]),
                     &request,
                     false.into(),
-                    crate::protocols::openai::GuidedToolConstraint::None,
+                    dynamo_frontend_protocols::openai::GuidedToolConstraint::None,
                     ToolProcessingRoute::Unified(
                         dynamo_model_card::parser_family::KIMI_K2_UNIFIED_FAMILY,
                     ),
@@ -11035,7 +11051,7 @@ mod tests {
 
     #[tokio::test]
     async fn gemma_prompt_channel_preserves_optional_label_ownership() {
-        use crate::protocols::openai::chat_completions::unified_parser;
+        use dynamo_frontend_protocols::openai::chat_completions::unified_parser;
         if unified_parser::selected_family(Some("gemma4"), Some("gemma4")).is_none() {
             return;
         }
@@ -11082,7 +11098,7 @@ mod tests {
                         futures::stream::iter(chunks),
                         &request,
                         prefill.clone(),
-                        crate::protocols::openai::GuidedToolConstraint::None,
+                        dynamo_frontend_protocols::openai::GuidedToolConstraint::None,
                         ToolProcessingRoute::Unified("gemma4"),
                     )
                     .unwrap()
@@ -11263,17 +11279,19 @@ mod tests {
     // The backend cannot emit either continuation until the client releases it.
     // This catches transport buffering even when the final aggregate is correct.
     async fn paused_http_tool_progress(guided: bool) {
-        use crate::protocols::openai::chat_completions::unified_parser;
+        use dynamo_frontend_protocols::openai::chat_completions::unified_parser;
         assert!(
             unified_parser::parsers_v2_selected(),
             "run with DYN_PARSER_VERSION=2"
         );
         let client = reqwest::Client::builder().no_proxy().build().unwrap();
         let mut failures = Vec::new();
-        for (shape, fields) in unified_parser::tests::write_file_progress_cases() {
+        for (shape, fields) in unified_parser::test_fixtures::write_file_progress_cases() {
             let expected_arguments: serde_json::Value =
-                serde_json::from_str(&unified_parser::tests::ordered_arguments(&fields)).unwrap();
-            for (family, native) in unified_parser::tests::native_write_file_calls(&fields) {
+                serde_json::from_str(&unified_parser::test_fixtures::ordered_arguments(&fields))
+                    .unwrap();
+            for (family, native) in unified_parser::test_fixtures::native_write_file_calls(&fields)
+            {
                 for named in if guided {
                     vec![false, true]
                 } else {
@@ -11283,7 +11301,7 @@ mod tests {
                     let (port, cancel, join) = start_unified_replay(
                         family,
                         native.clone(),
-                        unified_parser::tests::ordered_arguments(&fields),
+                        unified_parser::test_fixtures::ordered_arguments(&fields),
                         Some(release.clone()),
                     )
                     .await;
@@ -11440,13 +11458,13 @@ mod tests {
 
     #[tokio::test]
     async fn eight_family_http_sse_replay() {
-        use crate::protocols::openai::chat_completions::unified_parser;
+        use dynamo_frontend_protocols::openai::chat_completions::unified_parser;
         // Run with the experiment enabled in a separate process: its flag is cached.
         if unified_parser::selected_family(Some("qwen3_coder"), Some("qwen3")).is_none() {
             return;
         }
         let client = reqwest::Client::builder().no_proxy().build().unwrap();
-        for (family, native) in unified_parser::tests::eight_family_calls("é replay") {
+        for (family, native) in unified_parser::test_fixtures::eight_family_calls("é replay") {
             let (port, cancel, join) = start_unified_replay(
                 family,
                 native,
@@ -11938,9 +11956,9 @@ responses_tools: None,
             .postprocessor_parsing_stream(stream::iter(chunks), &request, prefill, false)
             .unwrap();
         let result =
-            crate::protocols::openai::chat_completions::aggregator::DeltaAggregator::apply(
+            dynamo_frontend_protocols::openai::chat_completions::aggregator::DeltaAggregator::apply(
                 output,
-                crate::protocols::openai::ParsingOptions::default(),
+                dynamo_frontend_protocols::openai::ParsingOptions::default(),
             )
             .await
             .unwrap();
@@ -12143,8 +12161,8 @@ responses_tools: None,
                                     "missing finish: {alias} {choice:?} tag={structural_tag} prompt={prompt} split={split} chunks={:?}",
                                     snapshot(&actual)
                                 );
-                                let batch = crate::protocols::openai::chat_completions::aggregator::DeltaAggregator::apply(
-                                    stream::iter(actual), crate::protocols::openai::ParsingOptions::default(),
+                                let batch = dynamo_frontend_protocols::openai::chat_completions::aggregator::DeltaAggregator::apply(
+                                    stream::iter(actual), dynamo_frontend_protocols::openai::ParsingOptions::default(),
                                 ).await.unwrap();
                                 if forced && !structural_tag {
                                     let calls =
@@ -12546,8 +12564,8 @@ responses_tools: None,
 
     #[tokio::test]
     async fn disabled_unified_reasoning_keeps_interleaved_text_order_in_stream_and_batch() {
-        use crate::protocols::openai::GuidedToolConstraint;
-        use crate::protocols::openai::chat_completions::unified_parser;
+        use dynamo_frontend_protocols::openai::GuidedToolConstraint;
+        use dynamo_frontend_protocols::openai::chat_completions::unified_parser;
         for (family, input) in [
             (
                 "kimi_k3",
@@ -12686,7 +12704,7 @@ responses_tools: None,
 
     #[tokio::test]
     async fn legacy_jail_preserves_prompt_logprobs_metadata() {
-        let expected: crate::protocols::common::llm_backend::PromptLogprobs =
+        let expected: dynamo_frontend_protocols::common::llm_backend::PromptLogprobs =
             serde_json::from_value(serde_json::json!([
                 null,
                 {"17": {"logprob": -0.25, "rank": 1, "decoded_token": " hello"}}
@@ -12757,7 +12775,7 @@ responses_tools: None,
         assert_eq!(choices[0].finish_reason, Some(FinishReason::Stop));
         assert_eq!(choices[0].logprobs, score("thought"));
         let mut score_only =
-            crate::protocols::openai::chat_completions::unified_parser::empty_choice(0);
+            dynamo_frontend_protocols::openai::chat_completions::unified_parser::empty_choice(0);
         score_only.logprobs = score("eos");
         assert_eq!(choices[1], &score_only);
     }
@@ -13398,9 +13416,9 @@ responses_tools: None,
         );
 
         let response =
-            crate::protocols::openai::chat_completions::aggregator::DeltaAggregator::apply(
+            dynamo_frontend_protocols::openai::chat_completions::aggregator::DeltaAggregator::apply(
                 stream::iter(responses),
-                crate::protocols::openai::ParsingOptions::new(None, None),
+                dynamo_frontend_protocols::openai::ParsingOptions::new(None, None),
             )
             .await
             .unwrap();
@@ -13453,9 +13471,9 @@ responses_tools: None,
         );
 
         let response =
-            crate::protocols::openai::chat_completions::aggregator::DeltaAggregator::apply(
+            dynamo_frontend_protocols::openai::chat_completions::aggregator::DeltaAggregator::apply(
                 stream::iter(responses),
-                crate::protocols::openai::ParsingOptions::new(None, None),
+                dynamo_frontend_protocols::openai::ParsingOptions::new(None, None),
             )
             .await
             .unwrap();
@@ -14307,7 +14325,7 @@ responses_tools: None,
                 panic!("video must reach the media loader and be decoded");
             };
             assert!(
-                descriptor.content_hash().is_none(),
+                descriptor.content_hash_key().is_none(),
                 "adjacent videos must reach the media loader with hashing disabled"
             );
         }
@@ -14358,7 +14376,7 @@ responses_tools: None,
 
     #[test]
     fn routing_priorities_keep_strict_tier_independent() {
-        let hints = crate::protocols::common::extensions::AgentHints {
+        let hints = dynamo_frontend_protocols::common::extensions::AgentHints {
             priority: Some(-3),
             strict_priority: Some(7),
             ..Default::default()
@@ -15990,7 +16008,7 @@ responses_tools: None,
     }
 
     fn preprocessed_budget_request(max_tokens: Option<u32>) -> PreprocessedRequest {
-        let stop_conditions = crate::protocols::common::StopConditions {
+        let stop_conditions = dynamo_frontend_protocols::common::StopConditions {
             max_tokens,
             ..Default::default()
         };
@@ -15999,8 +16017,8 @@ responses_tools: None,
             .model("test-model".to_string())
             .token_ids(vec![1, 2, 3])
             .stop_conditions(stop_conditions)
-            .sampling_options(crate::protocols::common::SamplingOptions::default())
-            .output_options(crate::protocols::common::OutputOptions::default())
+            .sampling_options(dynamo_frontend_protocols::common::SamplingOptions::default())
+            .output_options(dynamo_frontend_protocols::common::OutputOptions::default())
             .build()
             .unwrap()
     }
@@ -16040,7 +16058,7 @@ responses_tools: None,
 
     #[test]
     fn attach_request_context_metadata_keeps_affinity_separate_from_agent_context() {
-        use crate::protocols::common::extensions::{
+        use dynamo_frontend_protocols::common::extensions::{
             SESSION_AFFINITY_CONTEXT_KEY, SessionAffinityId,
         };
 
@@ -16734,7 +16752,7 @@ responses_tools: None,
     #[test]
     fn test_nonleading_system_message_normalized_for_strict_template() {
         let formatter = test_prompt_formatter(REQUIRES_LEADING_SYSTEM_TEMPLATE);
-        let anthropic_request: crate::protocols::anthropic::AnthropicCreateMessageRequest =
+        let anthropic_request: dynamo_frontend_protocols::anthropic::AnthropicCreateMessageRequest =
             serde_json::from_value(serde_json::json!({
                 "model": "test-model",
                 "max_tokens": 100,
@@ -16939,7 +16957,7 @@ responses_tools: None,
         formatter: &dyn OAIPromptFormatter,
         request: &NvCreateChatCompletionRequest,
     ) -> RenderedPrompt {
-        use crate::protocols::openai::common_ext::CommonExtProvider;
+        use dynamo_frontend_protocols::openai::common_ext::CommonExtProvider;
 
         let continue_final = request.get_continue_final_message() == Some(true);
         let rendered = if continue_final {
@@ -18026,9 +18044,9 @@ responses_tools: None,
             .filter_map(|annotated| annotated.data.clone())
             .collect();
         let response =
-            crate::protocols::openai::chat_completions::aggregator::DeltaAggregator::apply(
+            dynamo_frontend_protocols::openai::chat_completions::aggregator::DeltaAggregator::apply(
                 stream::iter(output),
-                crate::protocols::openai::ParsingOptions::default(),
+                dynamo_frontend_protocols::openai::ParsingOptions::default(),
             )
             .await
             .unwrap();
@@ -18055,7 +18073,7 @@ responses_tools: None,
     }
 
     fn minimax_m3_uses_unified_parser() -> bool {
-        crate::protocols::openai::chat_completions::unified_parser::selected_family(
+        dynamo_frontend_protocols::openai::chat_completions::unified_parser::selected_family(
             Some("minimax_m3"),
             Some("minimax_m3"),
         )
@@ -18222,12 +18240,12 @@ responses_tools: None,
                 );
                 assert_eq!(trip.message, (answer.to_string(), "Plan.".to_string()));
                 assert_eq!(minimax_m3_streamed_text(&trip.chunks), trip.message);
-                let mut options = crate::protocols::openai::ParsingOptions::new(
+                let mut options = dynamo_frontend_protocols::openai::ParsingOptions::new(
                     Some("minimax_m3".into()),
                     Some("minimax_m3".into()),
                 );
                 options.reasoning_disabled = mode == "disabled";
-                let response = crate::protocols::openai::chat_completions::aggregator::DeltaAggregator::apply_for_selected_unified_parser(
+                let response = dynamo_frontend_protocols::openai::chat_completions::aggregator::DeltaAggregator::apply_for_selected_unified_parser(
                     stream::iter(trip.chunks.into_iter().map(Annotated::from_data)), options,
                 ).await.unwrap();
                 assert_eq!(
@@ -18298,9 +18316,9 @@ responses_tools: None,
                         .all(|choice| choice.finish_reason.is_none())
                 );
                 assert!(
-                    crate::protocols::openai::chat_completions::aggregator::DeltaAggregator::apply(
+                    dynamo_frontend_protocols::openai::chat_completions::aggregator::DeltaAggregator::apply(
                         stream::iter(output),
-                        crate::protocols::openai::ParsingOptions::default(),
+                        dynamo_frontend_protocols::openai::ParsingOptions::default(),
                     )
                     .await
                     .is_err()
@@ -20713,15 +20731,15 @@ responses_tools: None,
     #[tokio::test]
     async fn test_stream_stop_sequence_survives_tool_parser_split() {
         use crate::preprocessor::OpenAIPreprocessor;
-        use crate::protocols::anthropic::stream_converter::{
+        use dynamo_frontend_protocols::anthropic::stream_converter::{
             AnthropicStreamConverter,
-            tests::{sse_values, text_chunk},
+            test_fixtures::{sse_values, text_chunk},
         };
         use dynamo_model_card::model_card::ModelDeploymentCard;
         use dynamo_runtime::protocols::annotated::Annotated;
         use futures::StreamExt;
 
-        let request: crate::protocols::openai::chat_completions::NvCreateChatCompletionRequest =
+        let request: dynamo_frontend_protocols::openai::chat_completions::NvCreateChatCompletionRequest =
             serde_json::from_value(serde_json::json!({
                 "model": "test-model",
                 "messages": [{"role": "user", "content": "hi"}],
@@ -20784,7 +20802,7 @@ responses_tools: None,
     #[test]
     fn named_tool_rendering_policy_matches_the_production_preprocessor() {
         use crate::preprocessor::OpenAIPreprocessor;
-        use crate::protocols::openai::responses::tests::native_tools::{
+        use dynamo_frontend_protocols::openai::responses::test_fixtures::{
             TEMPLATE, formatter, namespace, request,
         };
         use dynamo_model_card::model_card::ModelDeploymentCard;
@@ -20825,7 +20843,7 @@ responses_tools: None,
 #[cfg(test)]
 mod beam_route_tests {
     use super::*;
-    use crate::protocols::openai::chat_completions::NvCreateChatCompletionRequest;
+    use dynamo_frontend_protocols::openai::chat_completions::NvCreateChatCompletionRequest;
     use std::collections::HashMap;
 
     fn test_prompt_formatter_with_exclusion(
@@ -21171,7 +21189,7 @@ mod beam_route_tests {
     /// debris between messages. Whole and one-byte delivery, then the aggregated reply.
     #[tokio::test]
     async fn beam_bare_explicit_guidance_streams_as_visible_text() {
-        use crate::protocols::openai::chat_completions::NvCreateChatCompletionStreamResponse;
+        use dynamo_frontend_protocols::openai::chat_completions::NvCreateChatCompletionStreamResponse;
         let preprocessor = OpenAIPreprocessor::new(mock_card(Some("beam"))).unwrap();
         let base = || -> NvCreateChatCompletionRequest {
             serde_json::from_value(serde_json::json!({
@@ -21256,9 +21274,9 @@ mod beam_route_tests {
                     pieces.len()
                 );
                 let response =
-                    crate::protocols::openai::chat_completions::aggregator::DeltaAggregator::apply(
+                    dynamo_frontend_protocols::openai::chat_completions::aggregator::DeltaAggregator::apply(
                         stream::iter(output),
-                        crate::protocols::openai::ParsingOptions::new(
+                        dynamo_frontend_protocols::openai::ParsingOptions::new(
                             Some("beam".to_string()),
                             Some("beam".to_string()),
                         ),

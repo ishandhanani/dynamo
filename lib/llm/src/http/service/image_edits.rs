@@ -16,7 +16,7 @@ use super::{
     error::HttpError,
     openai::{ErrorMessage, ErrorResponse, parse_json_request, read_json_request_body},
 };
-use crate::protocols::openai::images::NvCreateImageRequest;
+use dynamo_frontend_protocols::openai::images::NvCreateImageRequest;
 
 #[derive(Clone, Debug)]
 pub(super) struct Limits {

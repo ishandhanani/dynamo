@@ -10,9 +10,9 @@ use tokio_stream::StreamExt;
 use tracing::Instrument;
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 
+use dynamo_frontend_protocols::common::extensions::SESSION_AFFINITY_CONTEXT_KEY;
+use dynamo_frontend_protocols::common::preprocessor::PreprocessedRequest;
 use dynamo_llm::entrypoint::PrefillRoutedEngine;
-use dynamo_llm::protocols::common::extensions::SESSION_AFFINITY_CONTEXT_KEY;
-use dynamo_llm::protocols::common::preprocessor::PreprocessedRequest;
 use dynamo_runtime::logging::{DistributedTraceContext, otel_parent_context_from_distributed};
 use dynamo_runtime::pipeline::{AsyncEngineContextProvider, SingleIn};
 use dynamo_runtime::protocols::annotated::Annotated as RsAnnotated;
@@ -197,7 +197,7 @@ fn dispatch_span(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use dynamo_llm::protocols::common::extensions::{
+    use dynamo_frontend_protocols::common::extensions::{
         SessionAffinityId, session_affinity_from_headers,
     };
     use dynamo_runtime::logging::{DistributedTraceIdLayer, inject_trace_headers_into_map};

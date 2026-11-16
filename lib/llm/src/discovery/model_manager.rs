@@ -44,21 +44,20 @@ use crate::{
         LoadEstimatorSubscription, LoraFilter, LoraRoutingTable, LoraStateTracker,
         load_estimator::LoadEstimator,
     },
-    types::{
-        RealtimeBidirectionalEngine,
-        generic::tensor::TensorStreamingEngine,
-        openai::{
-            audios::OpenAIAudiosStreamingEngine,
-            chat_completions::OpenAIChatCompletionsStreamingEngine,
-            classify::OpenAIClassifyStreamingEngine, completions::OpenAICompletionsStreamingEngine,
-            embeddings::OpenAIEmbeddingsStreamingEngine, generate::GenerateStreamingEngine,
-            images::OpenAIImagesStreamingEngine, pooling::OpenAIPoolingStreamingEngine,
-            rerank::OpenAIRerankStreamingEngine,
-            transcriptions::OpenAITranscriptionsStreamingEngine,
-            videos::OpenAIVideosStreamingEngine,
-        },
-    },
     worker_type::WorkerType,
+};
+use dynamo_frontend_protocols::types::{
+    RealtimeBidirectionalEngine,
+    generic::tensor::TensorStreamingEngine,
+    openai::{
+        audios::OpenAIAudiosStreamingEngine,
+        chat_completions::OpenAIChatCompletionsStreamingEngine,
+        classify::OpenAIClassifyStreamingEngine, completions::OpenAICompletionsStreamingEngine,
+        embeddings::OpenAIEmbeddingsStreamingEngine, generate::GenerateStreamingEngine,
+        images::OpenAIImagesStreamingEngine, pooling::OpenAIPoolingStreamingEngine,
+        rerank::OpenAIRerankStreamingEngine, transcriptions::OpenAITranscriptionsStreamingEngine,
+        videos::OpenAIVideosStreamingEngine,
+    },
 };
 use dynamo_model_card::{
     local_model::runtime_config::{
@@ -1625,7 +1624,7 @@ impl ModelManager {
     ) -> Result<
         (
             OpenAIChatCompletionsStreamingEngine,
-            crate::protocols::openai::ParsingOptions,
+            dynamo_frontend_protocols::openai::ParsingOptions,
         ),
         ModelManagerError,
     > {
@@ -1643,7 +1642,7 @@ impl ModelManager {
     ) -> Result<
         (
             OpenAICompletionsStreamingEngine,
-            crate::protocols::openai::ParsingOptions,
+            dynamo_frontend_protocols::openai::ParsingOptions,
         ),
         ModelManagerError,
     > {
@@ -1661,7 +1660,7 @@ impl ModelManager {
     ) -> Result<
         (
             GenerateStreamingEngine,
-            crate::protocols::openai::ParsingOptions,
+            dynamo_frontend_protocols::openai::ParsingOptions,
         ),
         ModelManagerError,
     > {
@@ -2152,7 +2151,7 @@ impl ModelManager {
     /// load does not double-count the decode component's active sequences. Returns false when LoRA
     /// serving is disabled.
     fn should_start_lora_load_feed(lora_enabled: bool, worker_type: &str) -> bool {
-        lora_enabled && worker_type == crate::protocols::common::timing::WORKER_TYPE_DECODE
+        lora_enabled && worker_type == dynamo_frontend_protocols::common::timing::WORKER_TYPE_DECODE
     }
 
     fn hicache_cache_for(
@@ -2999,7 +2998,7 @@ mod tests {
     };
 
     use crate::discovery::{KvEventSource, KvSourceStatus};
-    use crate::protocols::{
+    use dynamo_frontend_protocols::{
         Annotated,
         common::{llm_backend::LLMEngineOutput, preprocessor::PreprocessedRequest},
     };
@@ -3290,7 +3289,7 @@ mod tests {
                 16,
                 Some(config),
                 None,
-                crate::protocols::common::timing::WORKER_TYPE_DECODE,
+                dynamo_frontend_protocols::common::timing::WORKER_TYPE_DECODE,
                 Some("test-model".to_string()),
                 false,
             )
@@ -3430,7 +3429,7 @@ mod tests {
 
     #[test]
     fn lora_load_feed_starts_for_aggregated_and_decode_not_prefill() {
-        use crate::protocols::common::timing::{WORKER_TYPE_DECODE, WORKER_TYPE_PREFILL};
+        use dynamo_frontend_protocols::common::timing::{WORKER_TYPE_DECODE, WORKER_TYPE_PREFILL};
         // Aggregated and disaggregated-decode deployments both route via WORKER_TYPE_DECODE
         // (create_kv_router_from_endpoint maps any non-prefill, active-block-tracking endpoint to
         // it), so the LoRA load feed must start for that worker type — otherwise the controller
@@ -4686,7 +4685,7 @@ mod tests {
     // one WorkerSet carries an actual serving engine.
 
     fn make_chat_engine()
-    -> crate::types::openai::chat_completions::OpenAIChatCompletionsStreamingEngine {
+    -> dynamo_frontend_protocols::types::openai::chat_completions::OpenAIChatCompletionsStreamingEngine{
         Arc::new(crate::engines::StreamingEngineAdapter::new(
             crate::engines::make_echo_engine(),
         ))
