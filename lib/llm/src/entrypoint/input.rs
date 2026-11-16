@@ -120,7 +120,7 @@ pub async fn run_input_with_frontend_route_extensions(
     // Registered before initialization, not after: `spawn_workers` reads the
     // registration count to decide whether the process-wide sinks follow the
     // caller's token, and this input owns their teardown.
-    let active_input = crate::request_trace::ActiveInput::register();
+    let active_input = dynamo_telemetry::request_trace::ActiveInput::register();
 
     if !matches!(&in_opt, Input::Http) {
         initialize_input(&drt, &engine_config).await;
@@ -154,10 +154,12 @@ pub(crate) async fn initialize_input(
     drt: &dynamo_runtime::DistributedRuntime,
     engine_config: &super::EngineConfig,
 ) {
-    if let Err(e) = crate::request_trace::init_from_env_with_shutdown(drt.child_token()).await {
+    if let Err(e) =
+        dynamo_telemetry::request_trace::init_from_env_with_shutdown(drt.child_token()).await
+    {
         tracing::warn!(error = %e, "Request trace initialization failed; continuing without trace sink");
     }
-    if let Err(e) = crate::request_trace::start_tool_event_ingest_from_policy(
+    if let Err(e) = dynamo_telemetry::request_trace::start_tool_event_ingest_from_policy(
         drt.clone(),
         engine_config.local_model(),
     )

@@ -141,11 +141,7 @@ pub(crate) fn emit_request_payload(payload: RequestTracePayload, event_time_unix
 
 /// Publish one `router_selection` row. Runs on the routing task, never on the
 /// scheduler actor; building the candidate list is O(retained rows).
-pub(crate) fn emit_router_selection(
-    request_id: &str,
-    worker_type: &'static str,
-    trace: SelectionTrace,
-) {
+pub fn emit_router_selection(request_id: &str, worker_type: &'static str, trace: SelectionTrace) {
     let SelectionTrace {
         candidate_count,
         pinned,

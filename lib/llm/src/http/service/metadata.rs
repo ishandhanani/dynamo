@@ -145,7 +145,7 @@ pub(super) fn attach_x_request_id<T: Send + Sync + 'static>(
     request: &mut Context<T>,
     headers: &HeaderMap,
 ) {
-    if !crate::request_trace::is_enabled() {
+    if !dynamo_telemetry::request_trace::is_enabled() {
         return;
     }
 
@@ -154,7 +154,7 @@ pub(super) fn attach_x_request_id<T: Send + Sync + 'static>(
         .and_then(|value| value.to_str().ok())
     {
         request.insert(
-            crate::request_trace::X_REQUEST_ID_CONTEXT_KEY,
+            dynamo_telemetry::request_trace::X_REQUEST_ID_CONTEXT_KEY,
             x_request_id.to_string(),
         );
     }

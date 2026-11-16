@@ -1585,7 +1585,6 @@ mod tests {
         use crate::http::service::openai::check_for_backend_error;
         use crate::http::service::service_v2::BackendErrorCheck;
         use crate::preprocessor::OpenAIPreprocessor;
-        use crate::request_trace::payload_stream::scan_aggregate_with_future;
         use dynamo_frontend_protocols::common::llm_backend::{BackendOutput, FinishReason};
         use dynamo_frontend_protocols::common::metrics::ANNOTATION_PAYLOAD_USAGE;
         use dynamo_frontend_protocols::openai::ParsingOptions;
@@ -1595,6 +1594,7 @@ mod tests {
         };
         use dynamo_frontend_protocols::types::Annotated;
         use dynamo_runtime::engine::AsyncEngineContext;
+        use dynamo_telemetry::request_trace::payload_stream::scan_aggregate_with_future;
         use futures::{Stream, StreamExt};
 
         const MODEL: &str = "test-model";
@@ -1723,7 +1723,9 @@ mod tests {
         ) -> (
             (Registry, Result<NvCreateChatCompletionResponse, Rejected>),
             (Registry, Result<NvCreateChatCompletionResponse, Rejected>),
-            impl std::future::Future<Output = crate::request_trace::payload_stream::PayloadOutcome>,
+            impl std::future::Future<
+                Output = dynamo_telemetry::request_trace::payload_stream::PayloadOutcome,
+            >,
         ) {
             let plain = observe_and_aggregate(preprocessed(false, outputs.clone())).await;
             let (captured, future) = scan_aggregate_with_future(

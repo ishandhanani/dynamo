@@ -13,13 +13,13 @@ use dynamo_frontend_protocols::common::llm_backend::{
 };
 use dynamo_frontend_protocols::openai::chat_completions::NvCreateChatCompletionRequest;
 use dynamo_llm::preprocessor::OpenAIPreprocessor;
-use dynamo_llm::request_trace::SharedFinishReasonMetadata;
 use dynamo_protocols::types::{
     ChatCompletionRequestMessage, ChatCompletionRequestUserMessage,
     ChatCompletionRequestUserMessageContent, CreateChatCompletionRequest,
 };
 use dynamo_runtime::engine::{AsyncEngineContext, AsyncEngineStream, ResponseStream};
 use dynamo_runtime::protocols::annotated::Annotated;
+use dynamo_telemetry::request_trace::SharedFinishReasonMetadata;
 use futures::StreamExt;
 use futures::stream;
 

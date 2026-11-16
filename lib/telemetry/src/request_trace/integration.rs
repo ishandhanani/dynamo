@@ -23,7 +23,7 @@ struct RequestTraceRequestEndState {
     replay_metrics: Arc<RequestReplayMetrics>,
 }
 
-pub(crate) struct RequestEndTraceState {
+pub struct RequestEndTraceState {
     agent: Option<AgentContextTraceState>,
     request: Option<RequestTraceRequestEndState>,
     request_id: String,
@@ -56,7 +56,7 @@ fn shared_replay_metrics(
     super::replay_metrics(token_ids, trace_block_size).map(Arc::new)
 }
 
-pub(crate) fn build_request_end_trace_state(
+pub fn build_request_end_trace_state(
     common_request: &PreprocessedRequest,
     tracker: &Option<Arc<RequestTracker>>,
     context: &Context<()>,
@@ -166,7 +166,7 @@ impl Drop for RequestEndTraceState {
     }
 }
 
-pub(crate) fn finish_reason_metadata_handle(
+pub fn finish_reason_metadata_handle(
     trace_state: &Option<RequestEndTraceState>,
 ) -> Option<SharedFinishReasonMetadata> {
     trace_state
@@ -186,7 +186,7 @@ where
         return stream;
     };
 
-    let (stream, done) = crate::telemetry::stream::notify_on_completion(stream);
+    let (stream, done) = crate::stream::notify_on_completion(stream);
     tokio::spawn(async move {
         done.await;
         trace_state.emit();
@@ -194,7 +194,7 @@ where
     stream
 }
 
-pub(crate) fn wrap_chat_request_end_stream(
+pub fn wrap_chat_request_end_stream(
     stream: Pin<Box<dyn Stream<Item = Annotated<NvCreateChatCompletionStreamResponse>> + Send>>,
     trace_state: Option<RequestEndTraceState>,
 ) -> Pin<Box<dyn Stream<Item = Annotated<NvCreateChatCompletionStreamResponse>> + Send>> {
@@ -209,7 +209,7 @@ pub(crate) fn wrap_chat_request_end_stream(
     wrap_request_end_stream(Box::pin(stream), trace_state)
 }
 
-pub(crate) fn wrap_completion_request_end_stream(
+pub fn wrap_completion_request_end_stream(
     stream: Pin<Box<dyn Stream<Item = Annotated<NvCreateCompletionResponse>> + Send>>,
     trace_state: Option<RequestEndTraceState>,
 ) -> Pin<Box<dyn Stream<Item = Annotated<NvCreateCompletionResponse>> + Send>> {

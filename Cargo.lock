@@ -2901,7 +2901,6 @@ version = "1.8.0"
 dependencies = [
  "aligned-vec",
  "anyhow",
- "approx",
  "arc-swap",
  "assert_matches",
  "async-nats",
@@ -2951,6 +2950,7 @@ dependencies = [
  "dynamo-scheduler",
  "dynamo-session-affinity",
  "dynamo-slot-tracker",
+ "dynamo-telemetry",
  "dynamo-tokenizers",
  "dynamo-tokens",
  "dynamo-worker-selection",
@@ -2981,12 +2981,8 @@ dependencies = [
  "ndarray 0.16.1",
  "nix 0.26.4",
  "nixl-sys",
- "object_store 0.12.5",
  "offset-allocator",
  "oneshot",
- "opentelemetry",
- "opentelemetry-otlp",
- "opentelemetry_sdk",
  "parking_lot",
  "prometheus",
  "proptest",
@@ -3714,6 +3710,44 @@ dependencies = [
  "regex",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "dynamo-telemetry"
+version = "1.8.0"
+dependencies = [
+ "anyhow",
+ "approx",
+ "async-nats",
+ "async-trait",
+ "axum 0.8.4",
+ "bytemuck",
+ "bytes",
+ "dynamo-frontend-protocols",
+ "dynamo-kv-hashing",
+ "dynamo-model-card",
+ "dynamo-protocols 10.0.1",
+ "dynamo-runtime",
+ "dynamo-tokens",
+ "dynamo-worker-selection",
+ "flate2",
+ "futures",
+ "object_store 0.12.5",
+ "opentelemetry",
+ "opentelemetry-otlp",
+ "opentelemetry_sdk",
+ "parking_lot",
+ "rand 0.9.4",
+ "rmp-serde",
+ "serde",
+ "serde_json",
+ "serial_test",
+ "temp-env",
+ "tempfile",
+ "tokio",
+ "tokio-util",
+ "tracing",
+ "uuid",
 ]
 
 [[package]]

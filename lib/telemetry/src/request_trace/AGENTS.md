@@ -1,6 +1,6 @@
 # Request Trace Rust Modules
 
-This folder owns `DYN_REQUEST_TRACE` capture in `dynamo-llm`: replay hashing,
+This folder owns `DYN_REQUEST_TRACE` capture in `dynamo-telemetry`: replay hashing,
 request-end emission, optional `agent_context` enrichment, local trace sinks,
 and optional harness tool-event ingestion.
 
@@ -22,6 +22,6 @@ For changes under `request_trace/`, run:
 
 ```bash
 cargo fmt --check
-cargo check -p dynamo-llm --lib --no-default-features
-cargo test -p dynamo-llm --lib request_trace --no-default-features
+cargo check -p dynamo-telemetry --lib
+cargo test -p dynamo-telemetry --lib request_trace
 ```

@@ -9,7 +9,7 @@ use dynamo_runtime::config::env_is_truthy;
 use dynamo_runtime::config::environment_names::llm::audit as env_audit;
 use dynamo_runtime::config::environment_names::llm::request_trace as env_request_trace;
 
-use crate::telemetry::parse_sink_names;
+use crate::parse_sink_names;
 
 use super::DEFAULT_TOOL_EVENTS_TOPIC;
 

@@ -162,7 +162,7 @@ ENV_TRACE_SINKS = "DYN_REQUEST_TRACE_SINKS"
 ENV_TRACE_FORMAT = "DYN_REQUEST_TRACE_FILE_FORMAT"
 ENV_TRACE_RECORDS = "DYN_REQUEST_TRACE_RECORDS"
 ENV_TRACE_PATH = "DYN_REQUEST_TRACE_FILE_PATH"
-# lib/llm/src/request_trace/config.rs parse_file_format.
+# lib/telemetry/src/request_trace/config.rs parse_file_format.
 _GZ_FORMATS = frozenset({"jsonl_gz", "jsonl.gz"})
 
 ENV_WORKER_SELECTION_POLICY = "DYN_ROUTER_WORKER_SELECTION_POLICY"

@@ -110,7 +110,7 @@ impl FpmTraceInner {
 /// components sharing a producer cannot collide on the output file or inherit
 /// another component's attribution. Different producers have independent
 /// queues, files, and retention budgets.
-pub(crate) struct FpmTrace {
+pub struct FpmTrace {
     inner: Arc<FpmTraceInner>,
     source: Arc<sink::FpmTraceSource>,
 }
@@ -139,7 +139,7 @@ impl FpmTrace {
     /// This never waits. A bounded broadcast queue intentionally retains the
     /// newest records under load; the sink reports overwritten-record counts.
     /// `false` means shutdown had already stopped accepting trace records.
-    pub(crate) fn publish_payload(&self, payload: Bytes) -> bool {
+    pub fn publish_payload(&self, payload: Bytes) -> bool {
         if !self.inner.begin_publish() {
             return false;
         }
@@ -203,7 +203,7 @@ fn registry() -> &'static Mutex<TraceRegistry> {
     REGISTRY.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
-pub(crate) async fn init_from_env_with_shutdown(
+pub async fn init_from_env_with_shutdown(
     runtime_id: &str,
     namespace: &str,
     component: &str,
@@ -323,7 +323,7 @@ mod tests {
     use serde_json::Value;
 
     use super::*;
-    use crate::telemetry::jsonl_gz::segment_path;
+    use crate::jsonl_gz::segment_path;
 
     fn full_policy(path: &Path) -> FpmTracePolicy {
         FpmTracePolicy {

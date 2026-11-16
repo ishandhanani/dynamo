@@ -5,7 +5,7 @@
 
 The frontends append ``dynamo.request.trace.v1`` rows to rotating
 ``<segments_root>/<pod>/req.NNNNNN.jsonl.gz`` segments on a shared RWX claim,
-one gzip member per flush (``lib/llm/src/telemetry/jsonl_gz.rs``).
+one gzip member per flush (``lib/telemetry/src/jsonl_gz.rs``).
 ``cut_window`` turns the ``request_end`` rows that arrived in
 ``[start_ms, end_ms)`` and completed by ``as_of_ms`` into the bare-row window
 file a DGDR Run replays. Selection, censoring, de-duplication, the single

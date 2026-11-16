@@ -128,6 +128,8 @@ Removed with no replacement: the dummy shared-cache server, `services::shared_ca
 | `protocols` | `dynamo_frontend_protocols`, the crate root; `openai`, `anthropic`, `common`, `tensor`, `codec`, `unified`, `agents`, `systemone`, and `response_merge` keep their names |
 | `types` | `dynamo_frontend_protocols::types` |
 | The re-exports `preprocessor::{BackendOutput, PreprocessedRequest, PreprocessedEmbeddingRequest, LLMMetricAnnotation, ANNOTATION_LLM_METRICS, ANNOTATION_PAYLOAD_USAGE}` and `discovery::{WORKER_TYPE_DECODE, WORKER_TYPE_PREFILL}` | `dynamo_frontend_protocols::common::{llm_backend, preprocessor, metrics, timing}` |
+| `request_trace`, `fpm_trace`, `recorder`, `perf` | `dynamo_telemetry`, under the same module names |
+| `telemetry` | `dynamo_telemetry`, the crate root |
 
 A log statement that does not pin a target reports its module path, so its target follows the move.
 
@@ -140,6 +142,10 @@ A log statement that does not pin a target reports its module path, so its targe
 | `dynamo_llm::{model_card, local_model, hub, frontend_config}`, `dynamo_llm::common::checked_file` | `dynamo_model_card::{model_card, local_model, hub, frontend_config, checked_file}` |
 | `dynamo_llm::preprocessor::media::loader`, for the media fetcher configuration | `dynamo_model_card::media_config` |
 | `dynamo_llm::protocols` | `dynamo_frontend_protocols` |
+| `dynamo_llm::{request_trace, fpm_trace, recorder}` | `dynamo_telemetry::{request_trace, fpm_trace, recorder}` |
+| `dynamo_llm::telemetry` | `dynamo_telemetry` |
+
+Statements that pin a target keep it: the request-trace sinks still log under `dynamo_llm::request_trace`.
 
   > **Migrate:** Replace each `dynamo_llm::<pre-split path>` import with the owner path from the first table and add the owner crate to your `Cargo.toml`. A `DYN_LOG` filter scoped to `dynamo_llm` or to one of its modules must name the new crate from the second table. There is no runtime alias, so the old directive no longer selects the moved statements.
 

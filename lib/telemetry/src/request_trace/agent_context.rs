@@ -165,7 +165,7 @@ impl FinishReasonMetadataState {
 ///
 /// Callers should gate this once per request so the response path only pays a
 /// cheap boolean branch for untraced requests.
-pub(crate) fn record_llm_metric_tokens(
+pub fn record_llm_metric_tokens(
     tracker: Option<&RequestTracker>,
     input_tokens: Option<usize>,
     output_tokens: usize,
@@ -277,7 +277,7 @@ pub(crate) fn build_agent_context_trace_state(
     })
 }
 
-pub(crate) fn record_backend_finish_reason_metadata(
+pub fn record_backend_finish_reason_metadata(
     finish_reason_metadata: Option<&SharedFinishReasonMetadata>,
     choice_index: Option<u32>,
     finish_reason: Option<&BackendFinishReason>,

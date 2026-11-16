@@ -1,9 +1,16 @@
 // SPDX-FileCopyrightText: Copyright (c) 2024-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
+//! Trace and metric records Dynamo writes to sinks: the request trace, the forward-pass
+//! metrics trace, stream recorders, and the JSONL writers and in-process bus they share.
+
 pub mod bus;
+pub mod fpm_trace;
 pub mod jsonl;
 pub mod jsonl_gz;
+pub mod perf;
+pub mod recorder;
+pub mod request_trace;
 pub mod stream;
 
 /// Parse a comma-separated list of sink names from an env-var value.

@@ -6229,7 +6229,9 @@ impl OpenAIPreprocessor {
         context: Arc<dyn AsyncEngineContext>,
         emit_payload_usage_chunk: bool,
         trace_tokens_enabled: bool,
-        trace_finish_reason_metadata: Option<crate::request_trace::SharedFinishReasonMetadata>,
+        trace_finish_reason_metadata: Option<
+            dynamo_telemetry::request_trace::SharedFinishReasonMetadata,
+        >,
         mm_counts: MultimodalCounts,
     ) -> impl Stream<Item = Annotated<Resp>> + Send
     where
@@ -6256,7 +6258,9 @@ impl OpenAIPreprocessor {
         context: Arc<dyn AsyncEngineContext>,
         emit_payload_usage_chunk: bool,
         trace_tokens_enabled: bool,
-        trace_finish_reason_metadata: Option<crate::request_trace::SharedFinishReasonMetadata>,
+        trace_finish_reason_metadata: Option<
+            dynamo_telemetry::request_trace::SharedFinishReasonMetadata,
+        >,
         mm_counts: MultimodalCounts,
         image_tokens: Option<usize>,
     ) -> impl Stream<Item = Annotated<Resp>> + Send
@@ -6305,7 +6309,8 @@ impl OpenAIPreprocessor {
             finished: bool,
             emit_payload_usage_chunk: bool,
             trace_tokens_enabled: bool,
-            trace_finish_reason_metadata: Option<crate::request_trace::SharedFinishReasonMetadata>,
+            trace_finish_reason_metadata:
+                Option<dynamo_telemetry::request_trace::SharedFinishReasonMetadata>,
             mm_counts: MultimodalCounts,
             image_tokens: Option<usize>,
         }
@@ -6432,7 +6437,7 @@ impl OpenAIPreprocessor {
 
                         let isl = self.response_generator.get_isl().map(|isl| isl as usize);
 
-                        crate::request_trace::record_backend_finish_reason_metadata(
+                        dynamo_telemetry::request_trace::record_backend_finish_reason_metadata(
                             self.trace_finish_reason_metadata.as_ref(),
                             backend_output.index,
                             backend_output.finish_reason.as_ref(),
@@ -6474,7 +6479,7 @@ impl OpenAIPreprocessor {
                         self.image_tokens,
                     );
                     if self.trace_tokens_enabled {
-                        crate::request_trace::record_llm_metric_tokens(
+                        dynamo_telemetry::request_trace::record_llm_metric_tokens(
                             tracker,
                             isl,
                             current_osl,
@@ -6521,7 +6526,7 @@ impl OpenAIPreprocessor {
                             self.image_tokens,
                         );
                         if self.trace_tokens_enabled {
-                            crate::request_trace::record_llm_metric_tokens(
+                            dynamo_telemetry::request_trace::record_llm_metric_tokens(
                                 tracker,
                                 Some(usage.prompt_tokens as usize),
                                 usage.completion_tokens as usize,
@@ -8633,17 +8638,18 @@ impl
         // The handle snapshots the pristine request and its arrival time here;
         // the single payload record is published once at stream completion
         // (or with an empty response on cancel/timeout), off the request path.
-        let payload_http_headers = if crate::request_trace::payload::http_header_capture_active() {
-            context
-                .get_optional::<std::collections::BTreeMap<String, String>>(
-                    crate::request_trace::payload::HTTP_HEADERS_CONTEXT_KEY,
-                )
-                .ok()
-                .flatten()
-        } else {
-            None
-        };
-        let payload_handle = crate::request_trace::payload::create_handle(
+        let payload_http_headers =
+            if dynamo_telemetry::request_trace::payload::http_header_capture_active() {
+                context
+                    .get_optional::<std::collections::BTreeMap<String, String>>(
+                        dynamo_telemetry::request_trace::payload::HTTP_HEADERS_CONTEXT_KEY,
+                    )
+                    .ok()
+                    .flatten()
+            } else {
+                None
+            };
+        let payload_handle = dynamo_telemetry::request_trace::payload::create_handle(
             &request,
             &request_id,
             payload_http_headers,
@@ -8745,7 +8751,7 @@ impl
         )?;
 
         tracing::trace!(model = %common_request.model, token_count = common_request.token_ids.len(), ?prompt_injected_reasoning, "Pre-processed request");
-        let trace_state = crate::request_trace::build_request_end_trace_state(
+        let trace_state = dynamo_telemetry::request_trace::build_request_end_trace_state(
             &common_request,
             &tracker,
             &context,
@@ -8753,7 +8759,7 @@ impl
         );
         let trace_tokens_enabled = trace_state.is_some();
         let trace_finish_reason_metadata =
-            crate::request_trace::finish_reason_metadata_handle(&trace_state);
+            dynamo_telemetry::request_trace::finish_reason_metadata_handle(&trace_state);
 
         // Attach the timing tracker to the request so downstream components can record metrics
         common_request.tracker = tracker;
@@ -8817,7 +8823,7 @@ impl
             let parsing_options = payload_parsing_options
                 .expect("payload capture has matching request parsing options");
             let (stream, agg_fut) =
-                crate::request_trace::payload_stream::scan_aggregate_with_future(
+                dynamo_telemetry::request_trace::payload_stream::scan_aggregate_with_future(
                     Box::pin(transformed_stream),
                     parsing_options,
                 );
@@ -8853,8 +8859,10 @@ impl
             &self.speculative_prefill_tasks,
         );
 
-        let final_stream =
-            crate::request_trace::wrap_chat_request_end_stream(final_stream, trace_state);
+        let final_stream = dynamo_telemetry::request_trace::wrap_chat_request_end_stream(
+            final_stream,
+            trace_state,
+        );
 
         // prepend the annotations to the response stream
         let stream = annotations_stream.chain(final_stream);
@@ -8949,7 +8957,7 @@ impl
         }
         attach_request_context_metadata(&mut common_request, &context);
 
-        let trace_state = crate::request_trace::build_request_end_trace_state(
+        let trace_state = dynamo_telemetry::request_trace::build_request_end_trace_state(
             &common_request,
             &tracker,
             &context,
@@ -8957,7 +8965,7 @@ impl
         );
         let trace_tokens_enabled = trace_state.is_some();
         let trace_finish_reason_metadata =
-            crate::request_trace::finish_reason_metadata_handle(&trace_state);
+            dynamo_telemetry::request_trace::finish_reason_metadata_handle(&trace_state);
 
         // Attach the timing tracker to the request so downstream components can record metrics
         common_request.tracker = tracker;
@@ -9019,8 +9027,10 @@ impl
             None,
         );
 
-        let stream =
-            crate::request_trace::wrap_completion_request_end_stream(Box::pin(stream), trace_state);
+        let stream = dynamo_telemetry::request_trace::wrap_completion_request_end_stream(
+            Box::pin(stream),
+            trace_state,
+        );
 
         // prepend the annotations to the response stream
         let stream = annotations_stream.chain(stream);

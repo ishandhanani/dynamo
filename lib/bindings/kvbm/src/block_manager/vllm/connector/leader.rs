@@ -59,7 +59,7 @@ impl From<SlotError> for PyErr {
     }
 }
 use anyhow;
-use dynamo_llm::recorder::Recorder;
+use dynamo_telemetry::recorder::Recorder;
 use tokio_util::sync::CancellationToken;
 
 pub trait Leader: Send + Sync + std::fmt::Debug {

@@ -18,7 +18,7 @@
 //!
 //! A single worker task drains the record channel and uploads each finished
 //! batch inline (same shape as the OpenTelemetry Rust `BatchLogProcessor` and
-//! the local `telemetry::jsonl_gz` writer). While an upload is in flight the
+//! the local `jsonl_gz` writer). While an upload is in flight the
 //! worker is not draining, so a slow `PutObject` applies backpressure and
 //! `emit` drops records once the channel fills. Drops are counted and surfaced
 //! (see [`S3RequestTraceSink::emit`]). Overlapping uploads with a bounded
@@ -413,7 +413,7 @@ fn request_trace_s3_builder(bucket: &str, region: Option<&str>) -> AmazonS3Build
 
 /// Buffers raw JSONL bytes until the batch is ready to flush; gzip
 /// compression happens in [`take_finished`], which offloads the CPU work
-/// to a blocking pool (matching `telemetry::jsonl_gz`).
+/// to a blocking pool (matching `jsonl_gz`).
 struct JsonlBatch {
     raw: Vec<u8>,
     lines: u64,
