@@ -18,6 +18,7 @@ pub mod media_config;
 pub mod model_card;
 pub mod model_type;
 pub mod parser_family;
+pub mod readiness;
 pub mod reasoning_field;
 pub mod request_template;
 pub mod router_config;

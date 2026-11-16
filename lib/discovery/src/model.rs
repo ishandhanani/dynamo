@@ -487,19 +487,19 @@ impl Model {
         let units = wsets
             .iter()
             .map(|ws| match Self::ws_type_and_needs(ws) {
-                Some((worker_type, needs)) => super::readiness::ReadinessUnit {
+                Some((worker_type, needs)) => dynamo_model_card::readiness::ReadinessUnit {
                     worker_type: Some(worker_type),
                     live_count: ws.worker_count(),
                     needs,
                 },
-                None => super::readiness::ReadinessUnit {
+                None => dynamo_model_card::readiness::ReadinessUnit {
                     worker_type: None,
                     live_count: ws.worker_count(),
                     needs: Vec::new(),
                 },
             })
             .collect::<Vec<_>>();
-        let eval = super::readiness::evaluate_readiness(&units);
+        let eval = dynamo_model_card::readiness::evaluate_readiness(&units);
         if eval.has_legacy {
             warn_legacy_readiness_once(&self.name, wsets[0].namespace());
         }

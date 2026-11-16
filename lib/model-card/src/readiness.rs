@@ -10,7 +10,7 @@
 
 use std::collections::HashSet;
 
-use dynamo_model_card::model_card::ModelDeploymentCard;
+use crate::model_card::ModelDeploymentCard;
 use dynamo_router_protocol::worker_type::WorkerType;
 
 /// The readiness-relevant projection of one WorkerSet: one distinct worker card shape
@@ -241,8 +241,8 @@ mod tests {
 
     #[test]
     fn normalization_projects_legacy_prefill_cards() {
-        use dynamo_model_card::model_card::ModelDeploymentCard;
-        use dynamo_model_card::model_type::ModelType;
+        use crate::model_card::ModelDeploymentCard;
+        use crate::model_type::ModelType;
 
         let mut legacy_prefill = ModelDeploymentCard::with_name_only("m");
         legacy_prefill.model_type = ModelType::Prefill;

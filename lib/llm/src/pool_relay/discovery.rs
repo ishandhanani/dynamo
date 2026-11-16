@@ -869,7 +869,7 @@ fn decode_card(instance: DiscoveryInstance) -> Option<(ModelCardInstanceId, Stor
     };
     match instance.deserialize_model::<ModelDeploymentCard>() {
         Ok(mut card) => {
-            dynamo_discovery::readiness::normalize_legacy_prefill_topology(&mut card);
+            dynamo_model_card::readiness::normalize_legacy_prefill_topology(&mut card);
             Some((
                 id,
                 StoredModelCard {

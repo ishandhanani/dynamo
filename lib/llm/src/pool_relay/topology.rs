@@ -18,8 +18,8 @@ use super::identity::{
     PoolCatalogSnapshot, WorkerRole,
 };
 use crate::worker_type::WorkerType;
-use dynamo_discovery::readiness::{ReadinessUnit, evaluate_readiness};
 use dynamo_model_card::model_type::ModelType;
+use dynamo_model_card::readiness::{ReadinessUnit, evaluate_readiness};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TopologyReadinessState {

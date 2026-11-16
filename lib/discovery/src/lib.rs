@@ -10,7 +10,6 @@
 pub mod image_edits;
 pub mod lora;
 mod model;
-pub mod readiness;
 pub use model::Model;
 pub use model::{GenerateEngineSelection, SystemOneExecutionSelection, SystemOneSelectionError};
 
