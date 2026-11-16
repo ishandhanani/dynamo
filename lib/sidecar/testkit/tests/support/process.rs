@@ -7,7 +7,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use dynamo_backend_common::{DisaggregationMode, LLMEngineOutput, PreprocessedRequest};
-use dynamo_llm::discovery::ModelWatcher;
+use dynamo_discovery::ModelWatcher;
 use dynamo_llm::http::service::service_v2::HttpService;
 use dynamo_llm::namespace::NamespaceFilter;
 use dynamo_model_card::model_card::ModelDeploymentCard;

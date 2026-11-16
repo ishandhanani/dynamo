@@ -10,9 +10,9 @@ use crate::{
 };
 use dynamo_http_server::metrics::Metrics;
 
-use crate::discovery::ModelManager;
 use anyhow::Result;
 use derive_builder::Builder;
+use dynamo_discovery::ModelManager;
 use dynamo_frontend_protocols::tensor::{NvCreateTensorRequest, NvCreateTensorResponse};
 use dynamo_model_card::request_template::{RequestTemplate, resolve_request_model};
 use dynamo_model_card::tensor_model::TensorModelConfig;
@@ -938,8 +938,8 @@ mod readiness_gate_tests {
     use super::inference::grpc_inference_service_server::GrpcInferenceService;
     use super::inference::{ModelReadyRequest, ServerReadyRequest};
     use super::*;
-    use crate::discovery::WorkerSet;
     use crate::worker_type::WorkerType;
+    use dynamo_discovery::WorkerSet;
     use dynamo_model_card::model_card::ModelDeploymentCard;
     use tonic::Request;
 
@@ -959,9 +959,11 @@ mod readiness_gate_tests {
         let (_tx, rx) = tokio::sync::watch::channel(vec![1u64]);
         let mut ws = WorkerSet::new(namespace.to_string(), mdcsum.to_string(), card);
         ws.set_instance_watcher(rx);
-        ws.chat_engine = Some(Arc::new(crate::engines::StreamingEngineAdapter::new(
-            crate::engines::make_echo_engine(),
-        )));
+        ws.chat_engine = Some(Arc::new(
+            dynamo_discovery::engines::StreamingEngineAdapter::new(
+                dynamo_discovery::engines::make_echo_engine(),
+            ),
+        ));
         ws
     }
 
@@ -1088,8 +1090,8 @@ mod infer_dispatch_tests {
     /// Register a no-op Completions engine for `model` so it shows up in
     /// `list_completions_models()`.
     fn register_completions_model(state: &State, model: &str) {
-        let engine = Arc::new(crate::engines::StreamingEngineAdapter::new(
-            crate::engines::make_echo_engine(),
+        let engine = Arc::new(dynamo_discovery::engines::StreamingEngineAdapter::new(
+            dynamo_discovery::engines::make_echo_engine(),
         ));
         state
             .manager()

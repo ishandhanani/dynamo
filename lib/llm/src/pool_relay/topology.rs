@@ -17,8 +17,8 @@ use super::identity::{
     CanonicalModelId, CanonicalModelRegistration, KvQuerySemantics, ModelTarget,
     PoolCatalogSnapshot, WorkerRole,
 };
-use crate::discovery::readiness::{ReadinessUnit, evaluate_readiness};
 use crate::worker_type::WorkerType;
+use dynamo_discovery::readiness::{ReadinessUnit, evaluate_readiness};
 use dynamo_model_card::model_type::ModelType;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

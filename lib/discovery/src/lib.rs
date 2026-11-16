@@ -1,6 +1,12 @@
 // SPDX-FileCopyrightText: Copyright (c) 2024-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
+//! # Dynamo Discovery
+//!
+//! The frontend's model catalog: [`ModelWatcher`] admits workers into WorkerSets and builds
+//! each one's routed pipeline, [`ModelManager`] holds the resulting models and their engines.
+//! It builds the routers of `dynamo-router-host` and never depends on `dynamo-llm`.
+
 pub mod image_edits;
 pub mod lora;
 mod model;
@@ -30,3 +36,11 @@ pub use pipeline::{
 
 mod watcher;
 pub use watcher::{ModelUpdate, ModelWatcher};
+
+pub mod engines;
+mod scheduler_load;
+pub mod shared_cache;
+
+#[cfg(test)]
+#[path = "../../runtime/src/test_utils.rs"]
+mod test_utils;

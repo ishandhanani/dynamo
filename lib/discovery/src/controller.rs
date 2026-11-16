@@ -1482,7 +1482,7 @@ mod tests {
                 group_key: group_key(),
                 mdc_checksum: card.mdcsum().to_string(),
                 projection_fingerprint: card.source_path.clone().unwrap(),
-                video_contract: crate::discovery::watcher::qwen_video_contract_digest(&card),
+                video_contract: crate::watcher::qwen_video_contract_digest(&card),
                 card,
             }))
         }
@@ -1651,7 +1651,7 @@ mod tests {
             group_key: group_key(),
             mdc_checksum: card.mdcsum().to_string(),
             projection_fingerprint: mdc_checksum.to_string(),
-            video_contract: crate::discovery::watcher::qwen_video_contract_digest(&card),
+            video_contract: crate::watcher::qwen_video_contract_digest(&card),
             card,
         }
     }

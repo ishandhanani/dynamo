@@ -26,7 +26,7 @@ use dynamo_renderer::PromptFormatter;
 use super::pipeline::{
     ChatEngineFactoryCallback, build_preprocessed_routing_with_session_affinity_mode,
 };
-use crate::discovery::WorkerSet;
+use crate::WorkerSet;
 use dynamo_frontend_protocols::common::preprocessor::PreprocessedEmbeddingRequest;
 use dynamo_frontend_protocols::common::timing::WORKER_TYPE_DECODE;
 use dynamo_frontend_protocols::types::generic::realtime::{
@@ -1632,7 +1632,7 @@ fn worker_set_chat_preprocessor(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::discovery::Model;
+    use crate::Model;
     use dynamo_model_card::local_model::runtime_config::VLLM_INFERENCE_V1_GENERATE_CAPABILITY;
     use dynamo_model_card::model_card::ModelDeploymentCard;
     use dynamo_router_host::session_affinity::SessionAffinityMode;
@@ -1764,7 +1764,7 @@ mod tests {
         // The live case proves this response actually triggers speculative dispatch.
         for retire_worker_set in [false, true] {
             let model_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-                .join("tests/data/sample-models/mock-llama-3.1-8b-instruct");
+                .join("../llm/tests/data/sample-models/mock-llama-3.1-8b-instruct");
             let card = ModelDeploymentCard::load_from_disk(model_path, None).unwrap();
             let runtime_cancellation = CancellationToken::new();
             let cancellation = runtime_cancellation.child_token();
@@ -2493,7 +2493,7 @@ request_classifier:
                 .endpoint("generate");
             endpoint.register_endpoint_instance().await.unwrap();
             let model_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-                .join("tests/data/sample-models/mock-llama-3.1-8b-instruct");
+                .join("../llm/tests/data/sample-models/mock-llama-3.1-8b-instruct");
             let mut card = ModelDeploymentCard::load_from_disk(model_path, None).unwrap();
             card.set_name(&format!("classifier-model-{instance}"));
             card.model_type = ModelType::Chat;
@@ -3067,7 +3067,7 @@ request_classifier:
             ..base_mcid.clone()
         };
         let model_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("tests/data/sample-models/mock-llama-3.1-8b-instruct");
+            .join("../llm/tests/data/sample-models/mock-llama-3.1-8b-instruct");
         let mut base_card = ModelDeploymentCard::load_from_disk(model_path, None).unwrap();
         base_card.set_name("lora-lifecycle-base");
         base_card.model_input = ModelInput::Tokens;
@@ -3639,7 +3639,7 @@ request_classifier:
                 .unwrap()
                 .endpoint("generate");
             let model_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-                .join("tests/data/sample-models/mock-llama-3.1-8b-instruct");
+                .join("../llm/tests/data/sample-models/mock-llama-3.1-8b-instruct");
             let mut card = ModelDeploymentCard::load_from_disk(model_path, None).unwrap();
             card.set_name(&format!("parser-factory-model-{index}"));
             card.model_input = input;

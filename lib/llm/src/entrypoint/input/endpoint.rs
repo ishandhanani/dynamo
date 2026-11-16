@@ -3,11 +3,12 @@
 
 use std::{future::Future, pin::Pin, sync::Arc};
 
-use crate::{engines::StreamingEngineAdapter, worker_type::WorkerType};
+use crate::worker_type::WorkerType;
 use dynamo_backend_common::{
     admission_gate::AdmissionEngine,
     first_token::{FirstTokenNotifier, FirstTokenSource},
 };
+use dynamo_discovery::engines::StreamingEngineAdapter;
 use dynamo_frontend_protocols::common::preprocessor::PreprocessedRequest;
 use dynamo_frontend_protocols::types::{
     Annotated,
@@ -298,7 +299,7 @@ mod integration_tests {
             .map_err(|e| anyhow::anyhow!("Failed to create distributed runtime: {}", e))?;
 
         let engine_config = EngineConfig::InProcessText {
-            engine: crate::engines::make_echo_engine(),
+            engine: dynamo_discovery::engines::make_echo_engine(),
             model: Box::new(
                 dynamo_model_card::local_model::LocalModelBuilder::default()
                     .model_name(Some("test-model".to_string()))

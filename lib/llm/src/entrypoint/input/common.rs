@@ -6,12 +6,8 @@ use std::time::Duration;
 
 use dynamo_renderer::PromptFormatter;
 
-use crate::{
-    discovery::{ModelManager, ModelWatcher},
-    engines::StreamingEngineAdapter,
-    entrypoint::EngineConfig,
-    namespace::NamespaceFilter,
-};
+use crate::{entrypoint::EngineConfig, namespace::NamespaceFilter};
+use dynamo_discovery::{ModelManager, ModelWatcher, engines::StreamingEngineAdapter};
 use dynamo_frontend_protocols::common::llm_backend::{BackendOutput, PreprocessedRequest};
 use dynamo_frontend_protocols::types::{
     Annotated,
@@ -107,7 +103,7 @@ pub async fn prepare_engine(
             let engine = loop {
                 match model_manager.get_chat_completions_engine(&model_service_name) {
                     Ok(engine) => break engine,
-                    Err(crate::discovery::ModelManagerError::ModelUnavailable(_))
+                    Err(dynamo_discovery::ModelManagerError::ModelUnavailable(_))
                         if tokio::time::Instant::now() < deadline =>
                     {
                         tracing::debug!(

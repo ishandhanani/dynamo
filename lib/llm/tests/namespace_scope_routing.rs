@@ -7,11 +7,11 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Result;
+use dynamo_discovery::{ModelManager, ModelWatcher};
 use dynamo_frontend_protocols::Annotated;
 use dynamo_frontend_protocols::openai::chat_completions::{
     NvCreateChatCompletionRequest, NvCreateChatCompletionStreamResponse,
 };
-use dynamo_llm::discovery::{ModelManager, ModelWatcher};
 use dynamo_llm::http::service::service_v2::HttpService;
 use dynamo_llm::namespace::{NamespaceFilter, NamespacePrefixMode};
 use dynamo_llm::worker_type::WorkerType;

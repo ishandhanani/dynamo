@@ -42,7 +42,6 @@
 //! ```
 
 use super::{RouteDoc, service_v2};
-use crate::discovery::ModelManager;
 use axum::{
     Json, Router,
     extract::Request,
@@ -51,6 +50,7 @@ use axum::{
     response::{IntoResponse, Response},
     routing::{get, post},
 };
+use dynamo_discovery::ModelManager;
 use dynamo_model_card::router_config::LoadThresholdConfig;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;

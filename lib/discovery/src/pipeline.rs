@@ -133,7 +133,7 @@ fn router_client(
 #[allow(clippy::too_many_arguments)]
 pub async fn build_preprocessed_routing(
     client: &Client,
-    model_manager: Arc<crate::discovery::ModelManager>,
+    model_manager: Arc<crate::ModelManager>,
     router_mode: RouterMode,
     load_context: Arc<RoutingLoadContext>,
     chooser: Option<Arc<KvRouter>>,
@@ -160,7 +160,7 @@ pub async fn build_preprocessed_routing(
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn build_preprocessed_routing_with_session_affinity_mode(
     client: &Client,
-    model_manager: Arc<crate::discovery::ModelManager>,
+    model_manager: Arc<crate::ModelManager>,
     router_mode: RouterMode,
     load_context: Arc<RoutingLoadContext>,
     chooser: Option<Arc<KvRouter>>,
@@ -352,7 +352,7 @@ impl PreprocessedRouting {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::discovery::ModelManager;
+    use crate::ModelManager;
     use dynamo_runtime::DistributedRuntime;
 
     #[tokio::test]

@@ -15,12 +15,12 @@ use pyo3::{
 use pyo3_async_runtimes::TaskLocals;
 
 use dynamo_backend_common::admission_gate::WorkerAdmissionGate;
+use dynamo_discovery::{ChatEngineFactoryCallback, PrefillRoutedEngine};
 use dynamo_frontend_protocols::types::openai::chat_completions::OpenAIChatCompletionsStreamingEngine;
 use dynamo_kv_indexer::host::ApproximateCachePolicyKind as RsApproximateCachePolicyKind;
 use dynamo_kv_router::config::{
     KvRouterConfig as RsKvRouterConfig, apply_deprecated_overlap_score_weight_override,
 };
-use dynamo_llm::discovery::{ChatEngineFactoryCallback, PrefillRoutedEngine};
 use dynamo_llm::entrypoint::EngineConfig as RsEngineConfig;
 use dynamo_llm::entrypoint::HttpFrontend;
 use dynamo_llm::entrypoint::input::Input;
@@ -860,7 +860,7 @@ async fn select_engine(
             // There is no validation for the echo engine
             RsEngineConfig::InProcessText {
                 model: Box::new(local_model),
-                engine: dynamo_llm::engines::make_echo_engine(),
+                engine: dynamo_discovery::engines::make_echo_engine(),
             }
         }
         EngineType::Dynamic => {

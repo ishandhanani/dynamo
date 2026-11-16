@@ -8,7 +8,7 @@
 //! cancellation, migration, and the optional encode and prefill hops. `README.md` next to this
 //! file has the layer map and the booking lifecycle.
 //!
-//! The model catalog (`dynamo_llm::discovery`) builds the routers of this crate and passes in
+//! The model catalog (`dynamo_discovery`) builds the routers of this crate and passes in
 //! what they need from above. This crate depends on `dynamo-sync`, which keeps the state it
 //! reads up to date, and never on `dynamo-llm`.
 

@@ -3,7 +3,7 @@
 
 //! Router scheduler load snapshots published on the event plane.
 //!
-//! The frontend-side counterpart is [`crate::frontend_load`]; the Pool Relay aggregates both.
+//! The frontend-side counterpart is `frontend_load` in `dynamo-llm`; the Pool Relay aggregates both.
 
 use std::collections::HashMap;
 use std::sync::Arc;

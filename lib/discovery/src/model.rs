@@ -1363,7 +1363,7 @@ mod tests {
         configure: impl FnOnce(&mut ModelDeploymentCard),
     ) -> (Arc<WorkerSet>, watch::Sender<Vec<u64>>) {
         let mut card = ModelDeploymentCard::load_from_disk(
-            "tests/data/sample-models/mock-llama-3.1-8b-instruct",
+            "../llm/tests/data/sample-models/mock-llama-3.1-8b-instruct",
             None,
         )
         .unwrap();
@@ -1750,7 +1750,7 @@ mod tests {
             dynamo_model_card::model_card::ModelDeploymentCard::default(),
         );
         let pr = PrefillRouter::disabled(
-            std::sync::Arc::new(crate::discovery::ModelManager::new()),
+            std::sync::Arc::new(crate::ModelManager::new()),
             dynamo_runtime::pipeline::RouterMode::RoundRobin,
             None,
         );

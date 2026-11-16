@@ -182,7 +182,7 @@ use super::{
     Placement, PreparedBranch, StartedBranch, add_input_tokens, bind_native, dispatch,
     finish_branch, pin_to_placement, resolve_dp_rank,
 };
-use crate::discovery::SystemOneExecutionSelection;
+use dynamo_discovery::SystemOneExecutionSelection;
 use dynamo_frontend_protocols::{
     Annotated,
     common::{

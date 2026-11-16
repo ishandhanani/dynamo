@@ -51,4 +51,5 @@ url = { workspace = true }
 
 [dev-dependencies]
 dynamo-global-view-broadcaster = { path = "../global-view-broadcaster" }
+dynamo-discovery = { workspace = true }
 dynamo-model-card = { workspace = true }

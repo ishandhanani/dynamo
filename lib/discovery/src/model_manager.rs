@@ -37,7 +37,7 @@ use dynamo_runtime::{
 };
 
 use super::lora::LoadEstimatorSubscription;
-use crate::kv_router::shared_cache::HicacheSharedKvCache;
+use crate::shared_cache::HicacheSharedKvCache;
 use dynamo_frontend_protocols::types::{
     RealtimeBidirectionalEngine,
     generic::tensor::TensorStreamingEngine,
@@ -3198,7 +3198,7 @@ mod tests {
         name: &str,
     ) -> tokio::sync::watch::Sender<Vec<u64>> {
         let mut card = ModelDeploymentCard::load_from_disk(
-            "tests/data/sample-models/mock-llama-3.1-8b-instruct",
+            "../llm/tests/data/sample-models/mock-llama-3.1-8b-instruct",
             None,
         )
         .unwrap();

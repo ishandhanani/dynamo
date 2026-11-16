@@ -13,7 +13,7 @@ use serde::Serialize;
 use std::sync::{Arc, LazyLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use crate::discovery::ModelManager;
+use dynamo_discovery::ModelManager;
 use dynamo_frontend_protocols::{
     common::metrics::{ANNOTATION_LLM_METRICS, LLMMetricAnnotation},
     openai::chat_completions::NvCreateChatCompletionStreamResponse,
@@ -443,7 +443,7 @@ pub fn router(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::discovery::UNKNOWN_METRIC_MODEL;
+    use dynamo_discovery::UNKNOWN_METRIC_MODEL;
     use dynamo_http_server::metrics::*;
     use std::time::Duration;
     const STATE_AWAITING_FIRST_TOKEN: &str = "awaiting_first_token";
@@ -536,16 +536,18 @@ mod tests {
 
         let mut card = ModelDeploymentCard::default();
         card.worker_type = Some(crate::worker_type::WorkerType::Aggregated);
-        let mut worker_set = crate::discovery::WorkerSet::new(
+        let mut worker_set = dynamo_discovery::WorkerSet::new(
             "watched".to_string(),
             "watched-mdc".to_string(),
             card,
         );
         let (worker_tx, worker_rx) = tokio::sync::watch::channel(Vec::new());
         worker_set.set_instance_watcher(worker_rx);
-        worker_set.chat_engine = Some(Arc::new(crate::engines::StreamingEngineAdapter::new(
-            crate::engines::make_echo_engine(),
-        )));
+        worker_set.chat_engine = Some(Arc::new(
+            dynamo_discovery::engines::StreamingEngineAdapter::new(
+                dynamo_discovery::engines::make_echo_engine(),
+            ),
+        ));
         assert!(manager.add_worker_set("test-model", "watched", worker_set));
         assert_eq!(model_ready_value(&registry, "test-model"), Some(0.0));
         assert!(!load_ready());
@@ -595,16 +597,18 @@ mod tests {
 
         let mut card = ModelDeploymentCard::default();
         card.worker_type = Some(crate::worker_type::WorkerType::Aggregated);
-        let mut worker_set = crate::discovery::WorkerSet::new(
+        let mut worker_set = dynamo_discovery::WorkerSet::new(
             "watched".to_string(),
             "watched-mdc".to_string(),
             card,
         );
         let (worker_tx, worker_rx) = tokio::sync::watch::channel(Vec::new());
         worker_set.set_instance_watcher(worker_rx);
-        worker_set.chat_engine = Some(Arc::new(crate::engines::StreamingEngineAdapter::new(
-            crate::engines::make_echo_engine(),
-        )));
+        worker_set.chat_engine = Some(Arc::new(
+            dynamo_discovery::engines::StreamingEngineAdapter::new(
+                dynamo_discovery::engines::make_echo_engine(),
+            ),
+        ));
         let worker_set = Arc::new(worker_set);
 
         // `register_alias` refuses a name that is already a live primary, so it must
@@ -768,8 +772,8 @@ mod tests {
             .add_chat_completions_model(
                 "registered-model",
                 "checksum",
-                Arc::new(crate::engines::StreamingEngineAdapter::new(
-                    crate::engines::make_echo_engine(),
+                Arc::new(dynamo_discovery::engines::StreamingEngineAdapter::new(
+                    dynamo_discovery::engines::make_echo_engine(),
                 )),
             )
             .unwrap();

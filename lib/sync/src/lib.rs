@@ -5,7 +5,7 @@
 //!
 //! Keeps a router's view of its workers up to date.
 //!
-//! The request path (`dynamo_router_host`) and the model catalog (`dynamo_llm::discovery`)
+//! The request path (`dynamo_router_host`) and the model catalog (`dynamo_discovery`)
 //! read what this crate maintains. It depends on neither: both are above it.
 //!
 //! - [`indexer`]: which KV-cache blocks each worker holds. Ingest of worker KV events, recovery,

@@ -52,7 +52,7 @@ struct GenerateRoute {
 }
 
 fn canonical_generate_models(
-    manager: &crate::discovery::ModelManager,
+    manager: &dynamo_discovery::ModelManager,
     models: Vec<String>,
 ) -> Vec<String> {
     models
@@ -284,7 +284,7 @@ async fn handler(
         .as_ref()
         .ok()
         .map(|model| state.manager().metric_model_for(model))
-        .unwrap_or(crate::discovery::UNKNOWN_METRIC_MODEL);
+        .unwrap_or(dynamo_discovery::UNKNOWN_METRIC_MODEL);
     let tracker = Arc::new(RequestTracker::new());
     tracker.record_isl(input_tokens, None);
     let dispatch_span = tracing::info_span!(
@@ -344,7 +344,7 @@ async fn handler(
         Ok(selection) => selection,
         Err(error) => {
             let status = match error {
-                crate::discovery::ModelManagerError::ModelUnavailable(_) => {
+                dynamo_discovery::ModelManagerError::ModelUnavailable(_) => {
                     StatusCode::SERVICE_UNAVAILABLE
                 }
                 _ => StatusCode::NOT_FOUND,

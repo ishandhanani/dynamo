@@ -14,7 +14,7 @@ use dynamo_runtime::protocols::EndpointId;
 use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
 
-use crate::discovery::allocator::AllocatorTrimOnDrop;
+use crate::allocator::AllocatorTrimOnDrop;
 use dynamo_frontend_protocols::types::{
     RealtimeBidirectionalEngine,
     generic::tensor::TensorStreamingEngine,

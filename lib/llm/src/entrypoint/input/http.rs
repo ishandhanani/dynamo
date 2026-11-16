@@ -7,14 +7,16 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use crate::{
-    discovery::{ChatEngineFactoryCallback, ModelManager, ModelUpdate, ModelWatcher},
-    engines::StreamingEngineAdapter,
     entrypoint::{EngineConfig, input::common},
     http::service::{
         FrontendRouteExtension,
         service_v2::{self, HttpService},
     },
     namespace::NamespaceFilter,
+};
+use dynamo_discovery::{
+    ChatEngineFactoryCallback, ModelManager, ModelUpdate, ModelWatcher,
+    engines::StreamingEngineAdapter,
 };
 use dynamo_frontend_protocols::types::openai::chat_completions::{
     NvCreateChatCompletionRequest, NvCreateChatCompletionStreamResponse,
@@ -478,7 +480,7 @@ fn update_model_metrics(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::engines::make_echo_engine;
+    use dynamo_discovery::engines::make_echo_engine;
     use dynamo_frontend_protocols::types::openai::chat_completions::OpenAIChatCompletionsStreamingEngine;
     use dynamo_kv_router::config::KvRouterConfig;
     use dynamo_model_card::model_card::{LoraInfo, ModelDeploymentCard};

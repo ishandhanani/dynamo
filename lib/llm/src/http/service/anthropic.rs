@@ -625,7 +625,7 @@ async fn anthropic_messages(
             // "overloaded_error" by `anthropic_error`). Reuses the OpenAI path's
             // canonical, customer-facing message so both APIs report the same
             // text. Anything else is a genuine missing model → 404.
-            crate::discovery::ModelManagerError::ModelUnavailable(_) => AnthropicHandlerError::new(
+            dynamo_discovery::ModelManagerError::ModelUnavailable(_) => AnthropicHandlerError::new(
                 ErrorClass::Unavailable,
                 StatusCode::SERVICE_UNAVAILABLE,
                 "overloaded_error",

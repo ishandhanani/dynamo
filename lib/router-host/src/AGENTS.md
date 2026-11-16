@@ -48,7 +48,7 @@ depend on is in [`../AGENTS.md`](../AGENTS.md).
 
 Two neighbours live elsewhere: the worker-side KV event publisher is
 `dynamo_backend_common::kv_publisher` (`lib/backend-common/src/kv_publisher/`), and
-`lib/llm/src/kv_router/shared_cache.rs` in `dynamo-llm` is the HiCache shared KV cache client
+`lib/discovery/src/shared_cache.rs` in `dynamo-discovery` is the HiCache shared KV cache client
 (SGLang + Mooncake), which the model manager builds and hands `KvRouter` as a `SharedKvCache`.
 
 The state these stages read is kept up to date by the crate `dynamo-sync`
@@ -65,7 +65,7 @@ The state these stages read is kept up to date by the crate `dynamo-sync`
   runtime configs.
 - `metrics.rs`: Prometheus metrics of the above.
 
-`lib/llm/src/scheduler_load.rs` publishes the router's scheduler load for the Pool Relay.
+`lib/discovery/src/scheduler_load.rs` publishes the router's scheduler load for the Pool Relay.
 
 ## Guardrails
 
@@ -92,10 +92,10 @@ The state these stages read is kept up to date by the crate `dynamo-sync`
   cancellation, or prefill activation.
 - `dynamo-sync` is below this crate and cannot import it. Pass what it needs in, as `KvRouter`
   does with the router-mode selectors of the remote indexer.
-- This crate does not depend on `dynamo-llm`: not on `discovery`, `entrypoint`, `http`,
-  `pool_relay`, `scheduler_load` or the publisher. Discovery builds the routers and passes in
-  what they need from above: the model manager as `PrefillEndpointProvider`, and the Pool
-  Relay's scheduler-load publisher as `SchedulerLoadPublisher`.
+- This crate does not depend on `dynamo-discovery` or `dynamo-llm`: not on the model catalog,
+  `entrypoint`, `http`, `pool_relay` or the publisher. The catalog builds the routers and passes
+  in what they need from above: the model manager as `PrefillEndpointProvider`, and its
+  scheduler-load publisher as `SchedulerLoadPublisher`.
 
 ## Testing
 

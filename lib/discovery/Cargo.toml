@@ -1,0 +1,70 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+[package]
+name = "dynamo-discovery"
+description = "The Dynamo frontend's model catalog: the model manager, the discovery watcher with WorkerSet admission, and the builder of each WorkerSet's routed pipeline"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+homepage.workspace = true
+repository.workspace = true
+
+[dependencies]
+# repo
+dynamo-frontend-protocols = { workspace = true }
+dynamo-http-server = { workspace = true }
+dynamo-kv-events = { workspace = true }
+dynamo-kv-hashing = { workspace = true }
+dynamo-kv-hints = { workspace = true }
+dynamo-kv-indexer = { workspace = true }
+dynamo-kv-router = { workspace = true }
+dynamo-lora = { workspace = true }
+dynamo-model-card = { workspace = true }
+dynamo-preprocessor = { workspace = true }
+dynamo-router-host = { workspace = true }
+dynamo-router-protocol = { workspace = true }
+dynamo-runtime = { workspace = true }
+dynamo-scheduler = { workspace = true }
+dynamo-slot-tracker = { workspace = true }
+dynamo-sync = { workspace = true }
+dynamo-worker-selection = { workspace = true }
+
+# workspace
+anyhow = { workspace = true }
+arc-swap = "1.9.1"
+async-stream = { workspace = true }
+async-trait = { workspace = true }
+blake3 = "1.8"
+dashmap = { workspace = true }
+dynamo-decisions = { workspace = true }
+dynamo-protocols = { workspace = true }
+dynamo-renderer = { workspace = true }
+dynamo-tokenizers = { workspace = true }
+futures = { workspace = true }
+libc = { workspace = true }
+parking_lot = { workspace = true }
+prometheus = { workspace = true }
+rand = { workspace = true }
+rmp-serde = "1.3"
+serde = { workspace = true }
+serde_json = { workspace = true }
+sha2 = "0.10"
+thiserror = { workspace = true }
+tokio = { workspace = true }
+tokio-util = { workspace = true }
+tracing = { workspace = true }
+uuid = { workspace = true }
+
+[dev-dependencies]
+dynamo-router-host = { workspace = true, features = ["testing"] }
+dynamo-router-policies = { workspace = true }
+dynamo-runtime = { workspace = true, features = ["testing"] }
+dynamo-sync = { workspace = true, features = ["testing"] }
+serial_test = "3"
+temp-env = { version = "0.3.6", features = ["async_closure"] }
+tempfile = { workspace = true }
+tmq = { workspace = true }
+tokio = { workspace = true, features = ["test-util"] }
+tracing-subscriber = { workspace = true }

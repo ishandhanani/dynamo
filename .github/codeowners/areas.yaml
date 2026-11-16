@@ -28,9 +28,9 @@ areas:
   - lib/llm/src/http/service.rs
   - lib/llm/src/http/service/
   - lib/llm/src/lora.rs
-  - lib/llm/src/discovery/lora.rs
-  - lib/llm/src/discovery/lora/
-  - lib/llm/src/discovery/pipeline.rs
+  - lib/discovery/src/lora.rs
+  - lib/discovery/src/lora/
+  - lib/discovery/src/pipeline.rs
   - lib/router-host/src/lora_routing.rs
   - lib/lora/
   - lib/preprocessor/src/lib.rs
@@ -78,8 +78,8 @@ areas:
   - lib/router/slot-tracker/
   - lib/router/worker-selection/
   - lib/router-host/
-  - lib/llm/src/kv_router/
-  - lib/llm/src/scheduler_load.rs
+  - lib/discovery/src/shared_cache.rs
+  - lib/discovery/src/scheduler_load.rs
   - lib/sync/src/indexer/
   - lib/sync/src/sequence.rs
   - lib/sync/src/sequence/
@@ -312,7 +312,7 @@ areas:
   - lib/llm/bin/
   - lib/llm/src/bin/
   - lib/llm/src/common/
-  - lib/llm/src/discovery/
+  - lib/discovery/
   - lib/llm/src/kernels/
   - lib/lora/src/huggingface.rs
   - lib/lora/src/routing/
@@ -1198,7 +1198,7 @@ shared:
   owners:
   - frontend
   - observability
-- glob: lib/llm/src/discovery/lora.rs
+- glob: lib/discovery/src/lora.rs
   owners:
   - frontend
   - observability
@@ -1218,7 +1218,7 @@ shared:
   owners:
   - router
   - global-router
-- glob: lib/llm/src/kv_router/shared_cache.rs
+- glob: lib/discovery/src/shared_cache.rs
   owners:
   - router
   - kv-memory

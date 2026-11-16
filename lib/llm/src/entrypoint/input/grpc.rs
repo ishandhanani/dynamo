@@ -5,12 +5,11 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use crate::{
-    discovery::{ModelManager, ModelWatcher},
-    engines::StreamingEngineAdapter,
     entrypoint::{EngineConfig, input::common},
     grpc::service::kserve,
     namespace::NamespaceFilter,
 };
+use dynamo_discovery::{ModelManager, ModelWatcher, engines::StreamingEngineAdapter};
 use dynamo_frontend_protocols::types::openai::chat_completions::{
     NvCreateChatCompletionRequest, NvCreateChatCompletionStreamResponse,
 };
@@ -196,7 +195,7 @@ async fn run_watcher(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::engines::make_echo_engine;
+    use dynamo_discovery::engines::make_echo_engine;
     use dynamo_model_card::local_model::LocalModelBuilder;
     use dynamo_runtime::{Runtime, distributed::DistributedConfig};
     use std::time::Duration;

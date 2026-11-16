@@ -11,6 +11,7 @@ members = [
     "lib/preprocessor",
     "lib/sync",
     "lib/router-host",
+    "lib/discovery",
     "lib/rl",
     "lib/runtime",
     "lib/tokens",
@@ -96,6 +97,7 @@ dynamo-telemetry = { path = "lib/telemetry", version = "1.8.0" }
 dynamo-preprocessor = { path = "lib/preprocessor", version = "1.8.0" }
 dynamo-sync = { path = "lib/sync", version = "1.8.0" }
 dynamo-router-host = { path = "lib/router-host", version = "1.8.0" }
+dynamo-discovery = { path = "lib/discovery", version = "1.8.0" }
 dynamo-sglang-generate = { path = "lib/generate-formats/sglang", version = "1.8.0" }
 dynamo-vllm-generate = { path = "lib/generate-formats/vllm", version = "1.8.0" }
 dynamo-rl = { path = "lib/rl", version = "1.8.0" }

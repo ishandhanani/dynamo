@@ -13,7 +13,7 @@ use dynamo_runtime::DistributedRuntime;
 use dynamo_runtime::transports::event_plane::EventPublisher;
 use tokio_util::sync::CancellationToken;
 
-use crate::discovery::ModelManager;
+use dynamo_discovery::ModelManager;
 use dynamo_http_server::metrics::Metrics;
 use dynamo_runtime::utils::retry::{Backoff, FailureStreak};
 

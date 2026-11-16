@@ -3,6 +3,6 @@
 
 //! LoRA identity, placement, allocation and adapter sources: the crate `dynamo-lora`.
 //! The frontend's allocation gauges and the load-estimator subscription are
-//! `crate::discovery::lora`.
+//! `dynamo_discovery::lora`.
 
 pub use dynamo_lora::*;

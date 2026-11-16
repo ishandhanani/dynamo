@@ -12,9 +12,9 @@ use std::sync::Arc;
 
 use dynamo_scheduler::host::PrefillLoadEstimator;
 
-use crate::discovery::ChatEngineFactoryCallback;
-use crate::engines::StreamingEngine;
 use dynamo_backend_common::admission_gate::WorkerAdmissionGate;
+use dynamo_discovery::ChatEngineFactoryCallback;
+use dynamo_discovery::engines::StreamingEngine;
 use dynamo_model_card::local_model::LocalModel;
 use dynamo_preprocessor::backend::ExecutionContext;
 
