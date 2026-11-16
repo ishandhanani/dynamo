@@ -7,9 +7,9 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use crate::{
-    discovery::{ModelManager, ModelUpdate, ModelWatcher},
+    discovery::{ChatEngineFactoryCallback, ModelManager, ModelUpdate, ModelWatcher},
     engines::StreamingEngineAdapter,
-    entrypoint::{ChatEngineFactoryCallback, EngineConfig, input::common},
+    entrypoint::{EngineConfig, input::common},
     http::service::{
         FrontendRouteExtension,
         service_v2::{self, HttpService},

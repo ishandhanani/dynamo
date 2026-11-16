@@ -6,43 +6,17 @@
 //! - Connect it to an Input
 
 pub mod input;
-pub use input::{PreprocessedRouting, build_preprocessed_routing, http::HttpFrontend};
+pub use input::http::HttpFrontend;
 
-use std::future::Future;
-use std::pin::Pin;
 use std::sync::Arc;
 
-use dynamo_runtime::discovery::ModelCardInstanceId;
 use dynamo_scheduler::host::PrefillLoadEstimator;
 
+use crate::discovery::ChatEngineFactoryCallback;
 use crate::engines::StreamingEngine;
 use dynamo_backend_common::admission_gate::WorkerAdmissionGate;
-use dynamo_frontend_protocols::types::openai::chat_completions::OpenAIChatCompletionsStreamingEngine;
-use dynamo_model_card::{local_model::LocalModel, model_card::ModelDeploymentCard};
+use dynamo_model_card::local_model::LocalModel;
 use dynamo_preprocessor::backend::ExecutionContext;
-
-/// Callback type for chat engine factory (async)
-pub type PrefillRoutedEngine = dynamo_runtime::pipeline::ServiceEngine<
-    dynamo_runtime::pipeline::SingleIn<
-        dynamo_frontend_protocols::common::preprocessor::PreprocessedRequest,
-    >,
-    dynamo_runtime::pipeline::ManyOut<
-        dynamo_frontend_protocols::types::Annotated<
-            dynamo_frontend_protocols::common::llm_backend::LLMEngineOutput,
-        >,
-    >,
->;
-
-pub type ChatEngineFactoryCallback = Arc<
-    dyn Fn(
-            ModelCardInstanceId,
-            ModelDeploymentCard,
-            PrefillRoutedEngine,
-        ) -> Pin<
-            Box<dyn Future<Output = anyhow::Result<OpenAIChatCompletionsStreamingEngine>> + Send>,
-        > + Send
-        + Sync,
->;
 
 #[derive(Clone)]
 pub enum EngineConfig {

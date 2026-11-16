@@ -587,6 +587,7 @@ requirements.txt                                                                
 /tests/gpu_memory_service/common/                                                                       @ai-dynamo/dynamo-gms-codeowners
 /lib/llm/src/block_manager/layout/                                                                      @ai-dynamo/dynamo-kv-memory-codeowners
 /lib/llm/src/block_manager/pool.rs                                                                      @ai-dynamo/dynamo-kv-memory-codeowners
+/lib/llm/src/discovery/pipeline.rs                                                                      @ai-dynamo/dynamo-frontend-codeowners
 /lib/sync/src/load/routing_load.rs                                                                      @ai-dynamo/dynamo-router-codeowners
 /lib/sync/src/load/serving_load.rs                                                                      @ai-dynamo/dynamo-router-codeowners
 /components/src/dynamo/common/http/                                                                     @ai-dynamo/dynamo-frontend-codeowners

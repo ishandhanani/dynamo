@@ -9,7 +9,7 @@ The module map and the rules for changing this code are in [`AGENTS.md`](AGENTS.
 
 ## Layer map
 
-The frontend pipeline (`lib/llm/src/entrypoint/input/common.rs`, `PreprocessedRouting::build_pipeline`)
+The frontend pipeline (`lib/llm/src/discovery/pipeline.rs`, `PreprocessedRouting::build_pipeline`)
 runs these stages in order:
 
 ```mermaid

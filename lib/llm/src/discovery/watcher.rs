@@ -23,10 +23,10 @@ use dynamo_scheduler::host::PrefillLoadEstimator;
 
 use dynamo_renderer::PromptFormatter;
 
-use crate::{
-    discovery::WorkerSet,
-    entrypoint::{self, ChatEngineFactoryCallback},
+use super::pipeline::{
+    ChatEngineFactoryCallback, build_preprocessed_routing_with_session_affinity_mode,
 };
+use crate::discovery::WorkerSet;
 use dynamo_frontend_protocols::common::preprocessor::PreprocessedEmbeddingRequest;
 use dynamo_frontend_protocols::common::timing::WORKER_TYPE_DECODE;
 use dynamo_frontend_protocols::types::generic::realtime::{
@@ -743,7 +743,7 @@ impl ModelWatcher {
 
             let preprocessed_routing = if needs_preprocessed_routing {
                 Some(
-                    entrypoint::input::build_preprocessed_routing_with_session_affinity_mode(
+                    build_preprocessed_routing_with_session_affinity_mode(
                         &client,
                         self.manager.clone(),
                         router_config.router_mode,

@@ -25,5 +25,10 @@ pub use worker_set::WorkerSet;
 mod endpoint_card;
 pub use endpoint_card::wait_for_endpoint_model_card;
 
+mod pipeline;
+pub use pipeline::{
+    ChatEngineFactoryCallback, PrefillRoutedEngine, PreprocessedRouting, build_preprocessed_routing,
+};
+
 mod watcher;
 pub use watcher::{ModelUpdate, ModelWatcher};

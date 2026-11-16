@@ -4176,7 +4176,7 @@ mod tests {
     /// Wraps a raw-token engine with a real `Backend`, so `RetryManager`'s `next_generate`
     /// re-creates an actual fresh `Decoder` on every retry, exactly as the production
     /// pipeline does (migration sits outside `Backend` from the response's perspective; see
-    /// `lib/llm/src/entrypoint/input/common.rs`).
+    /// `lib/llm/src/discovery/pipeline.rs`).
     struct BackendWrappedEngine {
         backend: Arc<dynamo_preprocessor::backend::Backend>,
         raw_engine: ServerStreamingEngine<PreprocessedRequest, Annotated<LLMEngineOutput>>,

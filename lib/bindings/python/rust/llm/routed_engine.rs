@@ -12,7 +12,7 @@ use tracing_opentelemetry::OpenTelemetrySpanExt;
 
 use dynamo_frontend_protocols::common::extensions::SESSION_AFFINITY_CONTEXT_KEY;
 use dynamo_frontend_protocols::common::preprocessor::PreprocessedRequest;
-use dynamo_llm::entrypoint::PrefillRoutedEngine;
+use dynamo_llm::discovery::PrefillRoutedEngine;
 use dynamo_runtime::logging::{DistributedTraceContext, otel_parent_context_from_distributed};
 use dynamo_runtime::pipeline::{AsyncEngineContextProvider, SingleIn};
 use dynamo_runtime::protocols::annotated::Annotated as RsAnnotated;
