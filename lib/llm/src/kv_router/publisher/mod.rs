@@ -34,11 +34,11 @@ use dynamo_runtime::discovery::{DiscoverySpec, EventScope};
 use dynamo_runtime::protocols::EndpointId;
 use dynamo_runtime::traits::DistributedRuntimeProvider;
 
-use crate::sync::membership::KvEventSource as DiscoveredKvEventSource;
-use crate::{
-    kv_router::{KV_EVENT_SUBJECT, WORKER_KV_INDEXER_BUFFER_SIZE, metrics::KvPublisherMetrics},
-    sync::indexer::start_worker_kv_query_endpoint,
+use crate::kv_router::{
+    KV_EVENT_SUBJECT, WORKER_KV_INDEXER_BUFFER_SIZE, metrics::KvPublisherMetrics,
 };
+use dynamo_sync::indexer::start_worker_kv_query_endpoint;
+use dynamo_sync::membership::KvEventSource as DiscoveredKvEventSource;
 
 mod attachment_owner;
 mod batching;
@@ -57,9 +57,9 @@ pub use zmq_recovery::{KvStreamCommand, KvStreamStatus, ZmqRecoveryConfig};
 
 pub use attachment_owner::{KvStateAttachmentDescriptor, KvStateAttachmentOwner};
 
-pub use crate::sync::membership::kv_state_agent::KvStateIngressProtocol;
 #[cfg(test)]
 use dedup::{EventDedupFilter, EventDedupPolicy};
+pub use dynamo_sync::membership::kv_state_agent::KvStateIngressProtocol;
 #[cfg(test)]
 use event_processor::run_event_processor_loop;
 use event_processor::start_event_processor;

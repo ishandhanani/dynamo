@@ -75,7 +75,7 @@ def _make_process_env(
         "dynamo_scheduler=debug,"
         "dynamo_admission=debug,"
         "dynamo_worker_selection=debug,"
-        "dynamo_llm::sync=debug,dynamo_llm::kv_router=debug"
+        "dynamo_sync=debug,dynamo_llm::kv_router=debug"
     ),
     **extra,
 ) -> dict[str, str]:

@@ -15,10 +15,6 @@ use crate::{
     migration::Migration,
     namespace::NamespaceFilter,
     session_affinity::{SessionAffinityMode, create_affinity_coordinator},
-    sync::{
-        indexer::{preprocessed_multimodal_cache_keys, try_build_cache_indexer},
-        load::RoutingLoadContext,
-    },
 };
 use dynamo_frontend_protocols::common::llm_backend::{
     BackendOutput, LLMEngineOutput, PreprocessedRequest,
@@ -37,6 +33,10 @@ use dynamo_http_server::metrics::Metrics;
 use dynamo_model_card::{model_card::ModelDeploymentCard, request_template::RequestTemplate};
 use dynamo_preprocessor::backend::{Backend, ExecutionContext};
 use dynamo_preprocessor::{OpenAIPreprocessor, prompt::prompt_formatter_from_mdc};
+use dynamo_sync::{
+    indexer::{preprocessed_multimodal_cache_keys, try_build_cache_indexer},
+    load::RoutingLoadContext,
+};
 
 use dynamo_kv_router::config::min_initial_workers_from_env;
 use dynamo_lora::policy::validate_router_mode_for_lora;
@@ -569,8 +569,8 @@ mod tests {
             .unwrap();
         let load_context = RoutingLoadContext::start(
             client.clone(),
-            crate::sync::load::RouterLoadSource::Aggregated,
-            crate::sync::load::LoadThresholdHandle::new(Default::default()),
+            dynamo_sync::load::RouterLoadSource::Aggregated,
+            dynamo_sync::load::LoadThresholdHandle::new(Default::default()),
             &distributed.child_token(),
             None,
         )

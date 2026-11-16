@@ -79,14 +79,14 @@ areas:
   - lib/llm/src/kv_router/
   - lib/llm/src/routing_policy.rs
   - lib/llm/src/scheduler_load.rs
-  - lib/llm/src/sync/indexer/
-  - lib/llm/src/sync/sequence.rs
-  - lib/llm/src/sync/sequence/
-  - lib/llm/src/sync/load/active_load.rs
-  - lib/llm/src/sync/load/metrics_subscriber.rs
-  - lib/llm/src/sync/load/routing_load.rs
-  - lib/llm/src/sync/metrics.rs
-  - lib/llm/src/sync/metrics/
+  - lib/sync/src/indexer/
+  - lib/sync/src/sequence.rs
+  - lib/sync/src/sequence/
+  - lib/sync/src/load/active_load.rs
+  - lib/sync/src/load/metrics_subscriber.rs
+  - lib/sync/src/load/routing_load.rs
+  - lib/sync/src/metrics.rs
+  - lib/sync/src/metrics/
   - lib/llm/src/kv_router/prefill_router/
   - lib/llm/src/kv_router/publisher/
   - tests/router/
@@ -301,6 +301,7 @@ areas:
   - lib/bindings/python/
   - lib/error/
   - lib/llm/
+  - lib/sync/
   - lib/preprocessor/
   - lib/preprocessor/src/backend.rs
   - lib/llm/benches/
@@ -1167,7 +1168,7 @@ shared:
   owners:
   - kv-memory
   - observability
-- glob: lib/llm/src/sync/load/worker_monitor.rs
+- glob: lib/sync/src/load/worker_monitor.rs
   owners:
   - runtime
   - epp
@@ -1200,7 +1201,7 @@ shared:
   owners:
   - router
   - epp
-- glob: lib/llm/src/sync/load/routing_load.rs
+- glob: lib/sync/src/load/routing_load.rs
   owners:
   - router
   - epp

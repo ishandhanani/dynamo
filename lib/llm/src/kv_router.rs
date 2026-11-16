@@ -81,17 +81,15 @@ pub use routing_host::{
     KvPushRouter, LlmDispatch, MultimodalCache, RoutingHost, RoutingHostBuilder,
 };
 
-use crate::{
-    sync::{
-        indexer::{self, Indexer, KvEventSourceRequirement},
-        load::SchedulerLoadSender,
-        membership::KvSourceMembershipWatch,
-        runtime_configs::RuntimeConfigWatch,
-        sequence::{SequenceError, SequenceRequest},
-    },
-    worker_type::WorkerType,
-};
+use crate::worker_type::WorkerType;
 use dynamo_model_card::local_model::runtime_config::ModelRuntimeConfig;
+use dynamo_sync::{
+    indexer::{self, Indexer, KvEventSourceRequirement},
+    load::SchedulerLoadSender,
+    membership::KvSourceMembershipWatch,
+    runtime_configs::RuntimeConfigWatch,
+    sequence::{SequenceError, SequenceRequest},
+};
 
 /// Where a `KvRouter` gets the worker-selection policy its partition runs.
 #[derive(Clone, Default)]
@@ -826,7 +824,7 @@ impl KvRouter {
         });
 
         let client_for_registration = client.clone();
-        let registration_availability_provider: crate::sync::metrics::RegistrationAvailabilityProvider =
+        let registration_availability_provider: dynamo_sync::metrics::RegistrationAvailabilityProvider =
             Arc::new(move || client_for_registration.available_instance_ids());
 
         let client_for_availability = client.clone();
@@ -2700,7 +2698,7 @@ mod tests {
         let endpoint = component.endpoint("backend");
         let client = endpoint.client().await.unwrap();
         let (_tx, workers) = watch::channel(HashMap::from([(7, ModelRuntimeConfig::default())]));
-        let membership = crate::sync::membership::KvSourceMembershipCoordinator::start(
+        let membership = dynamo_sync::membership::KvSourceMembershipCoordinator::start(
             endpoint.id(),
             workers.clone(),
             component.drt().discovery(),

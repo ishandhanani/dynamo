@@ -33,7 +33,7 @@ media-ffmpeg = ["dynamo-preprocessor/media-ffmpeg"]
 bench = ["dynamo-kv-router/bench"]
 # Pull-only CKF Relay stats and snapshots. Keep this separate from `metrics`, which
 # is enabled by normal `dynamo-llm` builds and must not retain diagnostic hot-path work.
-ckf-diagnostics = []
+ckf-diagnostics = ["dynamo-sync/ckf-diagnostics"]
 kv-router-stress = ["dep:clap", "dep:indicatif", "bench"]
 # Multimodal-aware KV routing info, which the preprocessor in dynamo-preprocessor builds.
 mm-routing = ["dynamo-preprocessor/mm-routing"]
@@ -78,6 +78,7 @@ dynamo-router-protocol = { workspace = true }
 dynamo-scheduler = { workspace = true }
 dynamo-session-affinity = { workspace = true }
 dynamo-slot-tracker = { workspace = true }
+dynamo-sync = { workspace = true }
 dynamo-telemetry = { workspace = true }
 dynamo-worker-selection = { workspace = true }
 dynamo-memory = { workspace = true }
@@ -86,7 +87,6 @@ dynamo-rl = { workspace = true }
 dynamo-runtime = { workspace = true }
 dynamo-tokenizers = { workspace = true }
 dynamo-renderer = { workspace = true }
-dynamo-tokens = { workspace = true }
 
 # workspace
 anyhow = { workspace = true }
@@ -202,6 +202,7 @@ sysinfo = { workspace = true }
 [dev-dependencies]
 dynamo-frontend-protocols = { workspace = true, features = ["testing"] }
 dynamo-preprocessor = { workspace = true, features = ["testing"] }
+dynamo-sync = { workspace = true, features = ["testing"] }
 dynamo-lora = { workspace = true, features = ["testing"] }
 dynamo-kv-router = { workspace = true, features = ["testing"] }
 dynamo-runtime = { workspace = true, features = ["testing"] }

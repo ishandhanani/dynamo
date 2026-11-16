@@ -1,0 +1,2041 @@
+// SPDX-FileCopyrightText: Copyright (c) 2024-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// SPDX-License-Identifier: Apache-2.0
+
+use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+
+use tokio_util::sync::CancellationToken;
+
+use arc_swap::ArcSwap;
+use dashmap::DashMap;
+use dynamo_slot_tracker::host::SchedulerLoadSnapshot;
+
+use crate::load::ActiveLoad;
+use crate::load::RouterLoadSource;
+use crate::load::metrics_subscriber::KvMetricsSubscriber;
+use crate::load::routing_load::SchedulerLoadReceiver;
+use crate::metrics::WORKER_LOAD_METRICS;
+use dynamo_http_server::metrics::WORKER_LAST_INPUT_SEQUENCE_TOKENS_GAUGE;
+use dynamo_http_server::metrics::WORKER_LAST_INTER_TOKEN_LATENCY_GAUGE;
+use dynamo_http_server::metrics::WORKER_LAST_TIME_TO_FIRST_TOKEN_GAUGE;
+use dynamo_model_card::router_config::LoadThresholdConfig;
+use dynamo_runtime::component::Client;
+use dynamo_runtime::pipeline::{WorkerLoadMonitor, async_trait};
+
+use crate::runtime_configs::runtime_config_watch;
+
+const UNSET_DP_RANK_LABEL: &str = "none";
+
+/// Clean up load and latency Prometheus metrics for a worker across the specified dp_ranks.
+///
+/// This removes metrics with the given worker_id, dp_rank, and worker_type label combination.
+/// Called when workers are removed to prevent stale metrics from accumulating.
+fn cleanup_worker_metrics(worker_id: u64, dp_ranks: &[u32], worker_type: &str) {
+    let worker_id_str = worker_id.to_string();
+    for dp_rank in dp_ranks {
+        WORKER_LOAD_METRICS.remove(worker_id, *dp_rank, worker_type);
+        let dp_rank_str = dp_rank.to_string();
+        let labels = &[worker_id_str.as_str(), dp_rank_str.as_str(), worker_type];
+        let _ = WORKER_LAST_TIME_TO_FIRST_TOKEN_GAUGE.remove_label_values(labels);
+        let _ = WORKER_LAST_INPUT_SEQUENCE_TOKENS_GAUGE.remove_label_values(labels);
+        let _ = WORKER_LAST_INTER_TOKEN_LATENCY_GAUGE.remove_label_values(labels);
+    }
+
+    let unset_labels = &[worker_id_str.as_str(), UNSET_DP_RANK_LABEL, worker_type];
+    let _ = WORKER_LAST_TIME_TO_FIRST_TOKEN_GAUGE.remove_label_values(unset_labels);
+    let _ = WORKER_LAST_INPUT_SEQUENCE_TOKENS_GAUGE.remove_label_values(unset_labels);
+    let _ = WORKER_LAST_INTER_TOKEN_LATENCY_GAUGE.remove_label_values(unset_labels);
+}
+
+/// Default value for `max_num_batched_tokens` when the runtime config does not
+/// report it. Set high enough that the frac-based overload check (which multiplies
+/// this value by the threshold fraction) can never fire with realistic loads.
+const DEFAULT_MAX_TOKENS: u64 = 10_000_000;
+
+fn publish_overloaded_instances(client: &Client, overloaded_instances: &[u64]) {
+    if client.set_overloaded_instances(overloaded_instances) {
+        let counts = client.routing_instance_counts();
+        tracing::debug!(
+            overloaded_instances = ?overloaded_instances,
+            free_workers = counts.free,
+            total_workers = counts.discovered,
+            "overloaded instances changed"
+        );
+    }
+}
+
+fn overload_reconciliation_needed(client: &Client) -> bool {
+    client.overload_reconciliation_needed()
+}
+
+fn publish_overloaded_instances_if_needed(
+    client: &Client,
+    overloaded_tracker: &OverloadedWorkerTracker,
+    overloaded_changed: bool,
+) -> bool {
+    // A fresh load observation clears request-path overload leases early.
+    // This prevents the monitor's unchanged-set suppression from retaining
+    // a request-path mark until its bounded lease expires.
+    if !overloaded_changed && !overload_reconciliation_needed(client) {
+        return false;
+    }
+
+    publish_overloaded_instances(client, &overloaded_tracker.ids());
+    true
+}
+
+/// Shared threshold configuration for independently owned routing load contexts.
+///
+/// Every request classification and every queue selection reads it from a worker thread;
+/// only `/busy_threshold` writes it. Reads are wait-free: `get` copies the current value out
+/// of an [`ArcSwap`] without taking a lock, so a pending write never stalls the request path.
+#[derive(Clone)]
+pub struct LoadThresholdHandle {
+    config: Arc<ArcSwap<LoadThresholdConfig>>,
+    enabled: bool,
+}
+
+impl LoadThresholdHandle {
+    pub fn new(config: LoadThresholdConfig) -> Self {
+        Self {
+            config: Arc::new(ArcSwap::from_pointee(config)),
+            enabled: true,
+        }
+    }
+
+    /// A handle that ignores thresholds, for a frontend in direct routing mode.
+    /// Its monitor never subscribes to KV metrics.
+    pub fn disabled() -> Self {
+        Self {
+            enabled: false,
+            ..Self::new(LoadThresholdConfig::default())
+        }
+    }
+
+    /// False for a handle from [`Self::disabled`].
+    pub fn is_enabled(&self) -> bool {
+        self.enabled
+    }
+
+    pub fn get(&self) -> LoadThresholdConfig {
+        LoadThresholdConfig::clone(&self.config.load())
+    }
+
+    /// Merge the set fields of `config` into the current thresholds. Concurrent writers
+    /// retry through `rcu`; they are rare and never block readers. A handle from
+    /// [`Self::disabled`] ignores the update.
+    pub fn update(&self, config: &LoadThresholdConfig) {
+        if !self.enabled {
+            return;
+        }
+        self.config.rcu(|current| {
+            let mut next = LoadThresholdConfig::clone(current);
+            if let Some(value) = config.active_decode_blocks_threshold {
+                next.active_decode_blocks_threshold = Some(value);
+            }
+            if let Some(value) = config.active_prefill_tokens_threshold {
+                next.active_prefill_tokens_threshold = Some(value);
+            }
+            if let Some(value) = config.active_prefill_tokens_threshold_frac {
+                next.active_prefill_tokens_threshold_frac = Some(value);
+            }
+            next
+        });
+    }
+
+    pub fn is_configured(&self) -> bool {
+        self.config.load().is_configured()
+    }
+}
+
+/// Which load observations the monitor judges against the decode threshold.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DecodeSignals {
+    /// Scheduler snapshots of booked load and worker-published load alike.
+    All,
+    /// Worker-published load only. A KV router's queue judges the load it booked itself,
+    /// so its scheduler snapshots neither feed the decode state nor move the latch.
+    EngineOnly,
+}
+
+/// Worker load monitoring state per dp_rank
+#[derive(Clone, Debug)]
+struct DecodeOverloadLatchState {
+    latched_overloaded: bool,
+    kv_used_blocks_cleared: bool,
+    active_decode_blocks_cleared: bool,
+}
+
+impl Default for DecodeOverloadLatchState {
+    fn default() -> Self {
+        Self {
+            latched_overloaded: false,
+            kv_used_blocks_cleared: true,
+            active_decode_blocks_cleared: true,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct RemoteActiveLoadSnapshot {
+    worker: dynamo_router_protocol::worker::WorkerWithDpRank,
+    active_decode_blocks: Option<u64>,
+    active_prefill_tokens: Option<u64>,
+    kv_used_blocks: Option<u64>,
+}
+
+impl From<ActiveLoad> for RemoteActiveLoadSnapshot {
+    fn from(load: ActiveLoad) -> Self {
+        Self {
+            worker: dynamo_router_protocol::worker::WorkerWithDpRank::new(
+                load.worker_id,
+                load.dp_rank,
+            ),
+            active_decode_blocks: load.active_decode_blocks,
+            active_prefill_tokens: load.active_prefill_tokens,
+            kv_used_blocks: load.kv_used_blocks,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum LoadObservation {
+    Scheduler(SchedulerLoadSnapshot),
+    Remote(RemoteActiveLoadSnapshot),
+}
+
+impl LoadObservation {
+    fn parts(
+        self,
+    ) -> (
+        dynamo_router_protocol::worker::WorkerWithDpRank,
+        Option<u64>,
+        Option<u64>,
+        Option<u64>,
+    ) {
+        match self {
+            Self::Scheduler(snapshot) => (
+                snapshot.worker,
+                Some(snapshot.active_decode_blocks),
+                Some(snapshot.active_prefill_tokens),
+                None,
+            ),
+            Self::Remote(snapshot) => (
+                snapshot.worker,
+                snapshot.active_decode_blocks,
+                snapshot.active_prefill_tokens,
+                snapshot.kv_used_blocks,
+            ),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct WorkerLoadState {
+    pub active_decode_blocks: HashMap<u32, u64>,
+    pub kv_used_blocks: HashMap<u32, u64>,
+    pub kv_total_blocks: HashMap<u32, u64>,
+    pub active_prefill_tokens: HashMap<u32, u64>,
+    /// max_num_batched_tokens from runtime config (same for all dp_ranks)
+    pub max_num_batched_tokens: HashMap<u32, u64>,
+    /// The current router-visible ranks declared by this worker's runtime config.
+    /// `None` allows observations received before discovery to remain usable until
+    /// the runtime config arrives and establishes the authoritative rank set.
+    declared_dp_ranks: Option<HashSet<u32>>,
+    decode_overload_latches: HashMap<u32, DecodeOverloadLatchState>,
+}
+
+impl WorkerLoadState {
+    fn reconcile_runtime_config(
+        &mut self,
+        dp_ranks: std::ops::Range<u32>,
+        total_kv_blocks: Option<u64>,
+        max_num_batched_tokens: Option<u64>,
+        active_decode_blocks_threshold: Option<f64>,
+    ) -> HashSet<u32> {
+        let declared_dp_ranks: HashSet<_> = dp_ranks.collect();
+
+        self.active_decode_blocks
+            .retain(|dp_rank, _| declared_dp_ranks.contains(dp_rank));
+        self.kv_used_blocks
+            .retain(|dp_rank, _| declared_dp_ranks.contains(dp_rank));
+        self.active_prefill_tokens
+            .retain(|dp_rank, _| declared_dp_ranks.contains(dp_rank));
+
+        self.kv_total_blocks.clear();
+        if let Some(total_blocks) = total_kv_blocks {
+            // TODO(rank-aware-kv-capacity): resolve each rank from a validated advertisement and
+            // retain its provenance. Aggregate/representative estimates may support approximate
+            // routing, but must not trip this hard overload threshold. Exclusion remains
+            // worker-granular until the overloaded-worker contract itself becomes rank-aware.
+            self.kv_total_blocks.extend(
+                declared_dp_ranks
+                    .iter()
+                    .map(|&dp_rank| (dp_rank, total_blocks)),
+            );
+        }
+
+        self.max_num_batched_tokens.clear();
+        if let Some(max_batched) = max_num_batched_tokens {
+            self.max_num_batched_tokens.extend(
+                declared_dp_ranks
+                    .iter()
+                    .map(|&dp_rank| (dp_rank, max_batched)),
+            );
+        }
+
+        self.decode_overload_latches.clear();
+        if let Some(threshold) = active_decode_blocks_threshold {
+            for &dp_rank in &declared_dp_ranks {
+                self.update_decode_overload_latch(
+                    dp_rank,
+                    self.active_decode_blocks.get(&dp_rank).copied(),
+                    self.kv_used_blocks.get(&dp_rank).copied(),
+                    threshold,
+                );
+            }
+        }
+
+        self.declared_dp_ranks = Some(declared_dp_ranks.clone());
+        declared_dp_ranks
+    }
+
+    fn accepts_dp_rank(&self, dp_rank: u32) -> bool {
+        self.declared_dp_ranks
+            .as_ref()
+            .is_none_or(|declared| declared.contains(&dp_rank))
+    }
+
+    fn is_decode_signal_overloaded(
+        used_blocks: u64,
+        total_blocks: u64,
+        active_decode_blocks_threshold: f64,
+    ) -> bool {
+        total_blocks > 0
+            && (used_blocks as f64) > (active_decode_blocks_threshold * total_blocks as f64)
+    }
+
+    fn current_decode_overloaded(&self, dp_rank: u32, active_decode_blocks_threshold: f64) -> bool {
+        let Some(&total_blocks) = self.kv_total_blocks.get(&dp_rank) else {
+            return false;
+        };
+
+        self.kv_used_blocks
+            .get(&dp_rank)
+            .is_some_and(|&used_blocks| {
+                Self::is_decode_signal_overloaded(
+                    used_blocks,
+                    total_blocks,
+                    active_decode_blocks_threshold,
+                )
+            })
+            || self
+                .active_decode_blocks
+                .get(&dp_rank)
+                .is_some_and(|&active_blocks| {
+                    Self::is_decode_signal_overloaded(
+                        active_blocks,
+                        total_blocks,
+                        active_decode_blocks_threshold,
+                    )
+                })
+    }
+
+    fn update_decode_overload_latch(
+        &mut self,
+        dp_rank: u32,
+        active_decode_blocks: Option<u64>,
+        kv_used_blocks: Option<u64>,
+        active_decode_blocks_threshold: f64,
+    ) {
+        let Some(&total_blocks) = self.kv_total_blocks.get(&dp_rank) else {
+            return;
+        };
+        if total_blocks == 0 {
+            return;
+        }
+
+        let active_decode_overloaded = active_decode_blocks.is_some_and(|value| {
+            Self::is_decode_signal_overloaded(value, total_blocks, active_decode_blocks_threshold)
+        });
+        let kv_used_overloaded = kv_used_blocks.is_some_and(|value| {
+            Self::is_decode_signal_overloaded(value, total_blocks, active_decode_blocks_threshold)
+        });
+
+        let latch = self.decode_overload_latches.entry(dp_rank).or_default();
+        if active_decode_overloaded || kv_used_overloaded {
+            latch.latched_overloaded = true;
+        }
+        if let Some(value) = active_decode_blocks {
+            latch.active_decode_blocks_cleared = !Self::is_decode_signal_overloaded(
+                value,
+                total_blocks,
+                active_decode_blocks_threshold,
+            );
+        }
+        if let Some(value) = kv_used_blocks {
+            latch.kv_used_blocks_cleared = !Self::is_decode_signal_overloaded(
+                value,
+                total_blocks,
+                active_decode_blocks_threshold,
+            );
+        }
+        if latch.latched_overloaded
+            && latch.kv_used_blocks_cleared
+            && latch.active_decode_blocks_cleared
+        {
+            latch.latched_overloaded = false;
+        }
+    }
+
+    fn apply_load_observation(
+        &mut self,
+        observation: LoadObservation,
+        active_decode_blocks_threshold: Option<f64>,
+        signals: DecodeSignals,
+    ) -> bool {
+        // Once routed, a scheduler snapshot is the queue's to judge: it neither feeds the
+        // decode state nor moves the latch. Worker-published `active_decode_blocks` is an
+        // engine signal like `kv_used_blocks` and stays in. Scheduler snapshots cannot
+        // precede routing (the queue that publishes them is built after `route()`), so no
+        // booked value is left behind in the decode state when the switch flips.
+        let booked_only = signals == DecodeSignals::EngineOnly
+            && matches!(observation, LoadObservation::Scheduler(_));
+        let (worker, active_decode_blocks, active_prefill_tokens, kv_used_blocks) =
+            observation.parts();
+        let dp_rank = worker.dp_rank;
+        if !self.accepts_dp_rank(dp_rank) {
+            return false;
+        }
+
+        if let Some(active_tokens) = active_prefill_tokens {
+            self.active_prefill_tokens.insert(dp_rank, active_tokens);
+        }
+        if booked_only {
+            return true;
+        }
+        if let Some(active_blocks) = active_decode_blocks {
+            self.active_decode_blocks.insert(dp_rank, active_blocks);
+        }
+        if let Some(kv_used_blocks) = kv_used_blocks {
+            self.kv_used_blocks.insert(dp_rank, kv_used_blocks);
+        }
+        if let Some(threshold) = active_decode_blocks_threshold {
+            self.update_decode_overload_latch(
+                dp_rank,
+                active_decode_blocks,
+                kv_used_blocks,
+                threshold,
+            );
+        }
+        true
+    }
+
+    #[cfg(test)]
+    fn update_from_active_load(
+        &mut self,
+        load: &ActiveLoad,
+        active_decode_blocks_threshold: Option<f64>,
+    ) {
+        self.apply_load_observation(
+            LoadObservation::Remote(load.clone().into()),
+            active_decode_blocks_threshold,
+            DecodeSignals::All,
+        );
+    }
+
+    /// Returns true if ALL dp_ranks are overloaded based on the threshold logic.
+    ///
+    /// Each threshold is `Option<T>`. A `None` threshold means that check is
+    /// skipped entirely — it cannot contribute to a dp_rank being overloaded. If all
+    /// three thresholds are `None`, no dp_rank is ever overloaded.
+    ///
+    /// For each dp_rank, a dp_rank is overloaded if ANY of these conditions is met (OR logic):
+    /// 1. `active_prefill_tokens > active_prefill_tokens_threshold` (absolute, if set)
+    /// 2. `active_prefill_tokens > frac * max_num_batched_tokens` (fractional, if set)
+    /// 3. decode overload latch set by either `kv_used_blocks` or `active_decode_blocks` (if set)
+    ///
+    /// The worker is overloaded only if ALL dp_ranks are overloaded.
+    pub fn is_overloaded(
+        &self,
+        active_decode_blocks_threshold: Option<f64>,
+        active_prefill_tokens_threshold: Option<u64>,
+        active_prefill_tokens_threshold_frac: Option<f64>,
+    ) -> bool {
+        // Short-circuit if all thresholds are unset (i.e. no overload check can fire)
+        if active_decode_blocks_threshold.is_none()
+            && active_prefill_tokens_threshold.is_none()
+            && active_prefill_tokens_threshold_frac.is_none()
+        {
+            return false;
+        }
+
+        // Once discovery has supplied the runtime config, its rank set is
+        // authoritative. An expected rank without a load observation is free,
+        // so one noisy rank cannot exclude the whole worker during startup.
+        let fallback_dp_ranks;
+        let all_dp_ranks = match &self.declared_dp_ranks {
+            Some(declared_dp_ranks) => declared_dp_ranks,
+            None => {
+                fallback_dp_ranks = self
+                    .active_decode_blocks
+                    .keys()
+                    .chain(self.kv_used_blocks.keys())
+                    .chain(self.decode_overload_latches.keys())
+                    .chain(self.active_prefill_tokens.keys())
+                    .copied()
+                    .collect();
+                &fallback_dp_ranks
+            }
+        };
+
+        // If no dp_ranks known, not overloaded
+        if all_dp_ranks.is_empty() {
+            return false;
+        }
+
+        // Check if ALL dp_ranks are overloaded
+        all_dp_ranks.iter().all(|&dp_rank| {
+            // Check 1: prefill tokens threshold (absolute token count)
+            if let Some(&active_tokens) = self.active_prefill_tokens.get(&dp_rank) {
+                if let Some(abs_threshold) = active_prefill_tokens_threshold
+                    && active_tokens > abs_threshold
+                {
+                    return true; // This dp_rank is overloaded due to absolute token threshold
+                }
+
+                // Check 2: prefill tokens threshold (fraction of max_num_batched_tokens)
+                if let Some(frac) = active_prefill_tokens_threshold_frac {
+                    let max_batched = self
+                        .max_num_batched_tokens
+                        .get(&dp_rank)
+                        .copied()
+                        .unwrap_or(DEFAULT_MAX_TOKENS);
+                    let frac_threshold = (frac * max_batched as f64) as u64;
+                    if active_tokens > frac_threshold {
+                        return true;
+                    }
+                }
+            }
+
+            // Check 3: decode overload latch (OR-ed from kv_used_blocks and active_decode_blocks)
+            if let Some(decode_threshold) = active_decode_blocks_threshold {
+                let is_overloaded = self
+                    .decode_overload_latches
+                    .get(&dp_rank)
+                    .map(|latch| latch.latched_overloaded)
+                    .unwrap_or_else(|| self.current_decode_overloaded(dp_rank, decode_threshold));
+                if is_overloaded {
+                    return true;
+                }
+            }
+
+            // If we can't perform any check or no threshold exceeded, this dp_rank is free
+            false
+        })
+    }
+
+    fn is_overloaded_for_config(&self, config: &LoadThresholdConfig) -> bool {
+        self.is_overloaded(
+            config.active_decode_blocks_threshold,
+            config.active_prefill_tokens_threshold,
+            config.active_prefill_tokens_threshold_frac,
+        )
+    }
+}
+
+#[derive(Debug, Default)]
+struct OverloadedWorkerTracker {
+    overloaded_workers: HashSet<u64>,
+}
+
+impl OverloadedWorkerTracker {
+    fn update_worker(&mut self, worker_id: u64, overloaded: bool) -> bool {
+        if overloaded {
+            self.overloaded_workers.insert(worker_id)
+        } else {
+            self.overloaded_workers.remove(&worker_id)
+        }
+    }
+
+    fn replace(&mut self, overloaded_workers: HashSet<u64>) -> bool {
+        if self.overloaded_workers == overloaded_workers {
+            return false;
+        }
+        self.overloaded_workers = overloaded_workers;
+        true
+    }
+
+    fn remove_workers(&mut self, removed_workers: &[u64]) -> bool {
+        let mut changed = false;
+        for worker_id in removed_workers {
+            changed |= self.overloaded_workers.remove(worker_id);
+        }
+        changed
+    }
+
+    #[cfg(test)]
+    fn contains(&self, worker_id: u64) -> bool {
+        self.overloaded_workers.contains(&worker_id)
+    }
+
+    fn ids(&self) -> Vec<u64> {
+        self.overloaded_workers.iter().copied().collect()
+    }
+}
+
+fn collect_overloaded_workers(
+    worker_load_states: &DashMap<u64, WorkerLoadState>,
+    config: &LoadThresholdConfig,
+) -> HashSet<u64> {
+    worker_load_states
+        .iter()
+        .filter_map(|entry| {
+            entry
+                .value()
+                .is_overloaded_for_config(config)
+                .then_some(*entry.key())
+        })
+        .collect()
+}
+
+/// The live busy thresholds and the switch that moves their enforcement from the worker
+/// monitor to a KV router's queue. The monitor owns one; the scheduler-load sender holds a
+/// clone so the router can flip the switch.
+#[derive(Clone)]
+pub(crate) struct RoutableThresholds {
+    handle: LoadThresholdHandle,
+    routed: Arc<AtomicBool>,
+}
+
+impl RoutableThresholds {
+    pub(crate) fn new(handle: LoadThresholdHandle) -> Self {
+        Self {
+            handle,
+            routed: Arc::new(AtomicBool::new(false)),
+        }
+    }
+
+    /// The live handle `/busy_threshold` updates.
+    pub(crate) fn handle(&self) -> &LoadThresholdHandle {
+        &self.handle
+    }
+
+    /// Thresholds the monitor applies. Once a KV router's queue enforces them on its booked
+    /// load, only the decode threshold remains, for the worker-published signals the queue
+    /// cannot see: generated tokens, other frontends, and prefill workers that track no
+    /// active blocks.
+    fn monitor_config(&self) -> LoadThresholdConfig {
+        let config = self.handle.get();
+        if self.is_routed() {
+            LoadThresholdConfig {
+                active_decode_blocks_threshold: config.active_decode_blocks_threshold,
+                ..Default::default()
+            }
+        } else {
+            config
+        }
+    }
+
+    /// Which observations the monitor judges: all of them, or only worker-published ones
+    /// once the queue owns its booked load.
+    fn decode_signals(&self) -> DecodeSignals {
+        if self.is_routed() {
+            DecodeSignals::EngineOnly
+        } else {
+            DecodeSignals::All
+        }
+    }
+
+    /// Hand enforcement of the booked-load checks to the caller's queue. The monitor keeps
+    /// judging worker-published load against the decode threshold; the queue applies the
+    /// returned live handle to its own booked load.
+    pub(crate) fn route(&self) -> LoadThresholdHandle {
+        self.routed.store(true, Ordering::Release);
+        self.handle.clone()
+    }
+
+    pub(crate) fn is_routed(&self) -> bool {
+        self.routed.load(Ordering::Acquire)
+    }
+}
+
+/// Worker monitor for tracking KV cache usage and overload states.
+///
+/// Cloning shares state via internal Arc-wrapped fields. This allows multiple pipelines
+/// (e.g., chat and completions) to share the same monitor instance.
+///
+/// Prometheus metrics are exposed via [`WORKER_LOAD_METRICS`] (defined in `sync::metrics`),
+/// which the HTTP service registers with its Prometheus registry.
+///
+#[derive(Clone)]
+pub struct KvWorkerMonitor {
+    client: Client,
+    source: RouterLoadSource,
+    scheduler_load_rx: Arc<tokio::sync::Mutex<Option<SchedulerLoadReceiver>>>,
+    worker_load_states: Arc<DashMap<u64, WorkerLoadState>>,
+    /// Load thresholds for overload detection. Each field is `Option<T>` — unset
+    /// means the corresponding check in `is_overloaded` is skipped. If all three are
+    /// `None`, rejection is fully disabled.
+    thresholds: RoutableThresholds,
+    /// Guard to ensure start_monitoring() only runs once across clones
+    started: Arc<AtomicBool>,
+    start_lock: Arc<tokio::sync::Mutex<()>>,
+    lifecycle: Arc<MonitorLifecycle>,
+}
+
+struct MonitorLifecycle {
+    cancellation_token: CancellationToken,
+    task_guard: Option<dynamo_runtime::engine::EngineContextGuard>,
+}
+
+impl Drop for MonitorLifecycle {
+    fn drop(&mut self) {
+        self.cancellation_token.cancel();
+    }
+}
+
+impl KvWorkerMonitor {
+    pub(crate) fn new(
+        client: Client,
+        source: RouterLoadSource,
+        scheduler_load_rx: SchedulerLoadReceiver,
+        thresholds: RoutableThresholds,
+        cancellation_token: CancellationToken,
+        task_guard: Option<dynamo_runtime::engine::EngineContextGuard>,
+    ) -> Self {
+        Self {
+            client,
+            source,
+            scheduler_load_rx: Arc::new(tokio::sync::Mutex::new(Some(scheduler_load_rx))),
+            worker_load_states: Arc::new(DashMap::new()),
+            thresholds,
+            started: Arc::new(AtomicBool::new(false)),
+            start_lock: Arc::new(tokio::sync::Mutex::new(())),
+            lifecycle: Arc::new(MonitorLifecycle {
+                cancellation_token,
+                task_guard,
+            }),
+        }
+    }
+
+    /// The live thresholds and the switch a KV router flips when its queue takes over
+    /// their enforcement.
+    #[cfg(test)]
+    pub(crate) fn thresholds(&self) -> &RoutableThresholds {
+        &self.thresholds
+    }
+
+    /// Returns true iff the user explicitly configured at least one threshold.
+    ///
+    /// When false, all three per-field checks are skipped in `is_overloaded` and
+    /// rejection is fully disabled. Callers that gate 529 responses on overload
+    /// detection should check this before enabling the gate.
+    pub fn is_configured(&self) -> bool {
+        self.thresholds.handle().is_configured()
+    }
+
+    /// Get the current active decode blocks threshold, if configured.
+    pub fn active_decode_blocks_threshold(&self) -> Option<f64> {
+        self.thresholds
+            .handle()
+            .get()
+            .active_decode_blocks_threshold
+    }
+
+    /// Set the active decode blocks threshold.
+    pub fn set_active_decode_blocks_threshold(&self, threshold: f64) {
+        self.thresholds.handle().update(&LoadThresholdConfig {
+            active_decode_blocks_threshold: Some(threshold),
+            ..Default::default()
+        });
+    }
+
+    /// Get the current active prefill tokens threshold, if configured.
+    pub fn active_prefill_tokens_threshold(&self) -> Option<u64> {
+        self.thresholds
+            .handle()
+            .get()
+            .active_prefill_tokens_threshold
+    }
+
+    /// Set the active prefill tokens threshold.
+    pub fn set_active_prefill_tokens_threshold(&self, threshold: u64) {
+        self.thresholds.handle().update(&LoadThresholdConfig {
+            active_prefill_tokens_threshold: Some(threshold),
+            ..Default::default()
+        });
+    }
+
+    /// Get the current active prefill tokens threshold frac, if configured.
+    pub fn active_prefill_tokens_threshold_frac(&self) -> Option<f64> {
+        self.thresholds
+            .handle()
+            .get()
+            .active_prefill_tokens_threshold_frac
+    }
+
+    /// Set the active prefill tokens threshold frac.
+    pub fn set_active_prefill_tokens_threshold_frac(&self, frac: f64) {
+        self.thresholds.handle().update(&LoadThresholdConfig {
+            active_prefill_tokens_threshold_frac: Some(frac),
+            ..Default::default()
+        });
+    }
+
+    /// Get the current load threshold configuration. Unset fields are returned
+    /// as `None` (no spurious fallback values).
+    pub fn load_threshold_config(&self) -> LoadThresholdConfig {
+        self.thresholds.handle().get()
+    }
+
+    /// Update thresholds from a `LoadThresholdConfig`. Only fields that are
+    /// `Some` in the input overwrite their counterparts; `None` fields leave
+    /// the existing value untouched.
+    pub fn set_load_threshold_config(&self, config: &LoadThresholdConfig) {
+        self.thresholds.handle().update(config);
+    }
+}
+
+#[async_trait]
+impl WorkerLoadMonitor for KvWorkerMonitor {
+    /// Start background monitoring of worker KV cache usage.
+    ///
+    /// This is safe to call multiple times (e.g., from cloned monitors shared across
+    /// pipelines) - only the first call spawns the background task.
+    async fn start_monitoring(&self) -> anyhow::Result<()> {
+        let _start_guard = self.start_lock.lock().await;
+        if self.started.load(Ordering::Acquire) {
+            tracing::debug!("Worker monitoring already started, skipping");
+            return Ok(());
+        }
+
+        let endpoint = &self.client.endpoint;
+        let cancellation_token = self.lifecycle.cancellation_token.child_token();
+
+        let runtime_configs_rx =
+            match runtime_config_watch(endpoint, cancellation_token.clone()).await {
+                Ok(rx) => rx,
+                Err(error) => {
+                    tracing::error!(
+                        endpoint = %endpoint.id(),
+                        %error,
+                        "KvWorkerMonitor: failed to watch endpoint runtime configs"
+                    );
+                    return Err(error);
+                }
+            };
+
+        // Subscribe to KV metrics over the configured event transport. This is
+        // optional; cleanup of TTFT and ITL metrics continues without it. The
+        // reports feed only threshold-based overload detection, and the
+        // subscription connects to every worker, so skip it when the threshold
+        // handle is disabled.
+        let kv_metrics_rx = if !self.thresholds.handle().is_enabled() {
+            tracing::debug!(
+                endpoint = %endpoint.id(),
+                "KvWorkerMonitor: threshold handle disabled, skipping the KV metrics subscription"
+            );
+            None
+        } else {
+            match KvMetricsSubscriber::for_endpoint(endpoint).await {
+                Ok(sub) => Some(sub),
+                Err(e) => {
+                    tracing::warn!(
+                        "KvWorkerMonitor: KV metrics subscriber not available ({}), skipping load metrics.",
+                        e
+                    );
+                    None
+                }
+            }
+        };
+
+        let mut instances_rx = self.client.instance_avail_watcher();
+        let mut scheduler_load_rx = self
+            .scheduler_load_rx
+            .lock()
+            .await
+            .take()
+            .ok_or_else(|| anyhow::anyhow!("scheduler-load receiver already started"))?;
+
+        let worker_load_states = self.worker_load_states.clone();
+        let client = self.client.clone();
+        let source = self.source;
+        let thresholds = self.thresholds.clone();
+        let started = self.started.clone();
+        let task_guard = self.lifecycle.task_guard.clone();
+
+        // Spawn background monitoring task
+        self.started.store(true, Ordering::Release);
+        tokio::spawn(async move {
+            let _task_guard = task_guard;
+            struct StartedGuard(Arc<AtomicBool>);
+
+            impl Drop for StartedGuard {
+                fn drop(&mut self) {
+                    self.0.store(false, Ordering::Release);
+                }
+            }
+
+            let _started_guard = StartedGuard(started);
+            let mut kv_metrics_rx = kv_metrics_rx;
+            let mut runtime_configs_rx = runtime_configs_rx;
+            let mut known_workers: HashSet<u64> = instances_rx.borrow().iter().copied().collect();
+
+            let mut known_worker_dp_ranks: HashMap<u64, std::collections::HashSet<u32>> =
+                HashMap::new();
+            let mut overloaded_tracker = OverloadedWorkerTracker::default();
+            let mut last_thresholds = thresholds.monitor_config();
+
+            loop {
+                let kv_event_future = async {
+                    if let Some(kv_metrics_rx) = &mut kv_metrics_rx {
+                        kv_metrics_rx.next().await
+                    } else {
+                        std::future::pending().await
+                    }
+                };
+
+                tokio::select! {
+                    _ = cancellation_token.cancelled() => {
+                        tracing::debug!("Worker monitoring cancelled");
+                        let runtime_configs = runtime_configs_rx.borrow();
+                        for worker_id in known_worker_dp_ranks.keys() {
+                            if runtime_configs.contains_key(worker_id) {
+                                continue;
+                            }
+                            let dp_ranks: Vec<u32> = known_worker_dp_ranks[worker_id]
+                                .iter()
+                                .copied()
+                                .collect();
+                            cleanup_worker_metrics(*worker_id, &dp_ranks, source.metric_label());
+                        }
+                        break;
+                    }
+
+                    // Handle runtime config updates
+                    result = runtime_configs_rx.changed() => {
+                        if result.is_err() {
+                            tracing::warn!(source = ?source, "runtime-config watch closed");
+                            break;
+                        }
+
+                        let runtime_configs = runtime_configs_rx.borrow_and_update().clone();
+
+                        // Find workers that are being removed (not in runtime_configs anymore)
+                        let removed_workers: Vec<u64> = known_worker_dp_ranks
+                            .keys()
+                            .filter(|id| !runtime_configs.contains_key(id))
+                            .copied()
+                            .collect();
+
+                        // Clean up Prometheus metrics for removed workers
+                        for worker_id in &removed_workers {
+                            if let Some(dp_ranks) = known_worker_dp_ranks.remove(worker_id) {
+                                let dp_ranks_vec: Vec<u32> = dp_ranks.into_iter().collect();
+                                cleanup_worker_metrics(
+                                    *worker_id,
+                                    &dp_ranks_vec,
+                                    source.metric_label(),
+                                );
+                                tracing::debug!(
+                                    "Removed Prometheus metrics for worker {}",
+                                    worker_id
+                                );
+                            }
+                        }
+
+                        worker_load_states.retain(|lease_id, _| runtime_configs.contains_key(lease_id));
+                        overloaded_tracker.remove_workers(&removed_workers);
+                        client.clear_overloaded_instances_for_removed(&removed_workers);
+
+                        let cfg = thresholds.monitor_config();
+
+                        // Reconcile worker state to the authoritative rank range from discovery.
+                        // This also makes expected-but-unobserved ranks participate in the
+                        // worker-level "all ranks overloaded" decision.
+                        for (lease_id, runtime_config) in runtime_configs.iter() {
+                            let mut state = worker_load_states.entry(*lease_id).or_default();
+                            let dp_ranks = match runtime_config.data_parallel_rank_range() {
+                                Ok(dp_ranks) => dp_ranks,
+                                Err(error) => {
+                                    tracing::warn!(
+                                        worker_id = *lease_id,
+                                        %error,
+                                        "ignoring runtime config with an invalid data-parallel rank range"
+                                    );
+                                    continue;
+                                }
+                            };
+                            let declared_dp_ranks = state.reconcile_runtime_config(
+                                dp_ranks,
+                                runtime_config.total_kv_blocks,
+                                runtime_config.max_num_batched_tokens,
+                                cfg.active_decode_blocks_threshold,
+                            );
+
+                            if let Some(previous_dp_ranks) = known_worker_dp_ranks
+                                .insert(*lease_id, declared_dp_ranks.clone())
+                            {
+                                let removed_dp_ranks: Vec<_> = previous_dp_ranks
+                                    .difference(&declared_dp_ranks)
+                                    .copied()
+                                    .collect();
+                                cleanup_worker_metrics(
+                                    *lease_id,
+                                    &removed_dp_ranks,
+                                    source.metric_label(),
+                                );
+                            }
+                        }
+
+                        last_thresholds = cfg.clone();
+                        let overloaded_workers = collect_overloaded_workers(&worker_load_states, &cfg);
+                        // Deliberately not `publish_overloaded_instances_if_needed`: unlike the
+                        // load branches below, this one carries no fresh load observation. It wakes
+                        // on endpoint membership and runtime-config changes, so the recompute above
+                        // reads whatever load state was last observed. Publishing on an unchanged
+                        // set here would retire request-path overload leases on no load evidence at
+                        // all — and because `runtime_config_watch` joins availability for the whole
+                        // endpoint, one unrelated worker appearing would clear another worker's
+                        // in-force lease. Leases are bounded, so they expire on their own instead.
+                        if overloaded_tracker.replace(overloaded_workers) {
+                            publish_overloaded_instances(&client, &overloaded_tracker.ids());
+                        }
+                    }
+
+                    // Handle KV metrics updates (ActiveLoad) - only if subscriber is available
+                    // Note: Prometheus gauges are updated directly by sequence.rs (router's own bookkeeping)
+                    // This branch only updates WorkerLoadState for overload detection thresholds.
+                    kv_event = kv_event_future => {
+                        let Some(event_result) = kv_event else {
+                            kv_metrics_rx = None;
+                            tracing::debug!(source = ?source, "KV metrics stream closed");
+                            continue;
+                        };
+
+                        let Ok(active_load) = event_result else {
+                            tracing::error!("Error receiving KV metrics event: {event_result:?}");
+                            continue;
+                        };
+
+                        let observation =
+                            LoadObservation::Remote(RemoteActiveLoadSnapshot::from(active_load));
+                        let (worker, _, _, _) = observation.parts();
+                        if !known_workers.contains(&worker.worker_id) {
+                            tracing::debug!(
+                                worker_id = worker.worker_id,
+                                dp_rank = worker.dp_rank,
+                                source = ?source,
+                                "dropping load event until endpoint membership is discovered"
+                            );
+                            continue;
+                        }
+                        if worker_load_states
+                            .get(&worker.worker_id)
+                            .is_some_and(|state| !state.accepts_dp_rank(worker.dp_rank))
+                        {
+                            tracing::debug!(
+                                worker_id = worker.worker_id,
+                                dp_rank = worker.dp_rank,
+                                source = ?source,
+                                "dropping load event outside the worker's current runtime-config rank range"
+                            );
+                            continue;
+                        }
+
+                        // Track known worker/dp_rank combinations for cleanup
+                        known_worker_dp_ranks
+                            .entry(worker.worker_id)
+                            .or_default()
+                            .insert(worker.dp_rank);
+
+                        // Snapshot thresholds once per event; the handle read is wait-free.
+                        let cfg = thresholds.monitor_config();
+                        let signals = thresholds.decode_signals();
+                        let thresholds_changed = cfg != last_thresholds;
+
+                        // Update worker load state per dp_rank (for overload detection only).
+                        // Note: Prometheus gauges are updated directly by sequence.rs
+                        let (total_blocks, worker_overloaded) = {
+                            let mut state = worker_load_states.entry(worker.worker_id).or_default();
+                            state.apply_load_observation(
+                                observation,
+                                cfg.active_decode_blocks_threshold,
+                                signals,
+                            );
+                            let total_blocks = state.kv_total_blocks.get(&worker.dp_rank).copied();
+                            let worker_overloaded = state.is_overloaded_for_config(&cfg);
+                            (total_blocks, worker_overloaded)
+                        };
+
+                        if tracing::enabled!(tracing::Level::DEBUG) {
+                            tracing::debug!(
+                                worker_id = worker.worker_id,
+                                dp_rank = worker.dp_rank,
+                                observation = ?observation,
+                                total_blocks = ?total_blocks,
+                                active_decode_blocks_threshold = ?cfg.active_decode_blocks_threshold,
+                                active_prefill_tokens_threshold = ?cfg.active_prefill_tokens_threshold,
+                                active_prefill_tokens_threshold_frac = ?cfg.active_prefill_tokens_threshold_frac,
+                                worker_overloaded,
+                                "processed active load update"
+                            );
+                        }
+
+                        // Recompute the full overloaded set only when thresholds change;
+                        // otherwise incrementally update just this worker. When the set
+                        // changes, publish to both the decode Client and (in disaggregated
+                        // serving) the prefill Client — see `publish_overloaded_instances`.
+                        let overloaded_changed = if thresholds_changed {
+                            last_thresholds = cfg.clone();
+                            let overloaded_workers =
+                                collect_overloaded_workers(&worker_load_states, &cfg);
+                            overloaded_tracker.replace(overloaded_workers)
+                        } else {
+                            overloaded_tracker.update_worker(worker.worker_id, worker_overloaded)
+                        };
+
+                        publish_overloaded_instances_if_needed(
+                            &client,
+                            &overloaded_tracker,
+                            overloaded_changed,
+                        );
+                    }
+
+                    scheduler_loads = scheduler_load_rx.recv() => {
+                        let Some(scheduler_loads) = scheduler_loads else {
+                            if !cancellation_token.is_cancelled() {
+                                tracing::warn!(source = ?source, "scheduler-load channel closed");
+                            }
+                            break;
+                        };
+
+                        let cfg = thresholds.monitor_config();
+                        let signals = thresholds.decode_signals();
+                        let thresholds_changed = cfg != last_thresholds;
+                        let mut overloaded_changed = false;
+                        for snapshot in scheduler_loads {
+                            let worker = snapshot.worker;
+                            if !known_workers.contains(&worker.worker_id) {
+                                tracing::debug!(
+                                    worker_id = worker.worker_id,
+                                    dp_rank = worker.dp_rank,
+                                    source = ?source,
+                                    "dropping scheduler load until endpoint membership is discovered"
+                                );
+                                continue;
+                            }
+                            if worker_load_states
+                                .get(&worker.worker_id)
+                                .is_some_and(|state| !state.accepts_dp_rank(worker.dp_rank))
+                            {
+                                tracing::debug!(
+                                    worker_id = worker.worker_id,
+                                    dp_rank = worker.dp_rank,
+                                    source = ?source,
+                                    "dropping scheduler load outside the worker's current runtime-config rank range"
+                                );
+                                continue;
+                            }
+
+                            known_worker_dp_ranks
+                                .entry(worker.worker_id)
+                                .or_default()
+                                .insert(worker.dp_rank);
+                            let worker_overloaded = {
+                                let mut state = worker_load_states
+                                    .entry(worker.worker_id)
+                                    .or_default();
+                                state.apply_load_observation(
+                                    LoadObservation::Scheduler(snapshot),
+                                    cfg.active_decode_blocks_threshold,
+                                    signals,
+                                );
+                                state.is_overloaded_for_config(&cfg)
+                            };
+                            overloaded_changed |= overloaded_tracker
+                                .update_worker(worker.worker_id, worker_overloaded);
+                        }
+
+                        if thresholds_changed {
+                            last_thresholds = cfg.clone();
+                            overloaded_changed |= overloaded_tracker.replace(
+                                collect_overloaded_workers(&worker_load_states, &cfg),
+                            );
+                        }
+                        publish_overloaded_instances_if_needed(
+                            &client,
+                            &overloaded_tracker,
+                            overloaded_changed,
+                        );
+                    }
+
+                    // Handle endpoint instance changes for membership validation and metric cleanup.
+                    result = instances_rx.changed() => {
+                        if result.is_err() {
+                            tracing::debug!(source = ?source, "endpoint instance watcher closed");
+                            break;
+                        }
+                        let current_instances: std::collections::HashSet<u64> =
+                            instances_rx.borrow_and_update().iter().copied().collect();
+
+                        let removed_workers: Vec<u64> = known_workers
+                            .difference(&current_instances)
+                            .copied()
+                            .collect();
+
+                        if !removed_workers.is_empty() {
+                            for worker_id in &removed_workers {
+                                let dp_ranks: Vec<u32> = known_worker_dp_ranks
+                                    .get(worker_id)
+                                    .map(|ranks| ranks.iter().copied().collect())
+                                    .unwrap_or_else(|| vec![0]);
+                                cleanup_worker_metrics(
+                                    *worker_id,
+                                    &dp_ranks,
+                                    source.metric_label(),
+                                );
+                                tracing::debug!(
+                                    source = ?source,
+                                    "cleaned up metrics for removed worker {}",
+                                    worker_id
+                                );
+                            }
+                            worker_load_states.retain(|worker_id, _| {
+                                !removed_workers.contains(worker_id)
+                            });
+                            overloaded_tracker.remove_workers(&removed_workers);
+                            client.clear_overloaded_instances_for_removed(&removed_workers);
+                        }
+
+                        known_workers = current_instances;
+                    }
+
+                }
+            }
+
+            tracing::info!("Worker monitoring task exiting");
+        });
+
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        DecodeSignals, LoadObservation, LoadThresholdConfig, LoadThresholdHandle,
+        OverloadedWorkerTracker, RemoteActiveLoadSnapshot, RoutableThresholds, WORKER_LOAD_METRICS,
+        WorkerLoadState, cleanup_worker_metrics, collect_overloaded_workers,
+        overload_reconciliation_needed, publish_overloaded_instances_if_needed,
+    };
+    use crate::load::ActiveLoad;
+    use dynamo_router_protocol::worker::WorkerWithDpRank;
+    use dynamo_slot_tracker::host::{BusyThresholds, SchedulerLoadSnapshot};
+    use std::collections::HashSet;
+    use std::sync::Arc;
+
+    #[test]
+    fn overloaded_worker_tracker_updates_one_worker() {
+        let mut tracker = OverloadedWorkerTracker::default();
+
+        assert!(tracker.update_worker(7, true));
+        assert!(tracker.contains(7));
+        assert!(!tracker.update_worker(7, true));
+
+        assert!(tracker.update_worker(7, false));
+        assert!(!tracker.contains(7));
+        assert!(!tracker.update_worker(7, false));
+    }
+
+    #[test]
+    fn local_and_remote_scheduler_snapshots_share_last_writer_wins_state() {
+        let worker = WorkerWithDpRank::new(7, 0);
+        let local = LoadObservation::Scheduler(SchedulerLoadSnapshot {
+            worker,
+            active_decode_blocks: 20,
+            active_prefill_tokens: 200,
+        });
+        let remote = LoadObservation::Remote(RemoteActiveLoadSnapshot {
+            worker,
+            active_decode_blocks: Some(10),
+            active_prefill_tokens: Some(100),
+            kv_used_blocks: None,
+        });
+
+        let mut local_then_remote = WorkerLoadState::default();
+        local_then_remote.apply_load_observation(local, None, DecodeSignals::All);
+        local_then_remote.apply_load_observation(remote, None, DecodeSignals::All);
+        assert_eq!(local_then_remote.active_prefill_tokens.get(&0), Some(&100));
+
+        let mut remote_then_local = WorkerLoadState::default();
+        remote_then_local.apply_load_observation(remote, None, DecodeSignals::All);
+        remote_then_local.apply_load_observation(local, None, DecodeSignals::All);
+        assert_eq!(remote_then_local.active_prefill_tokens.get(&0), Some(&200));
+    }
+
+    #[test]
+    fn remote_none_preserves_state_while_some_zero_clears_it() {
+        let worker = WorkerWithDpRank::new(7, 0);
+        let mut state = WorkerLoadState::default();
+        state.active_prefill_tokens.insert(0, 123);
+
+        state.apply_load_observation(
+            LoadObservation::Remote(RemoteActiveLoadSnapshot {
+                worker,
+                active_decode_blocks: None,
+                active_prefill_tokens: None,
+                kv_used_blocks: Some(8),
+            }),
+            None,
+            DecodeSignals::All,
+        );
+        assert_eq!(state.active_prefill_tokens.get(&0), Some(&123));
+
+        state.apply_load_observation(
+            LoadObservation::Remote(RemoteActiveLoadSnapshot {
+                worker,
+                active_decode_blocks: None,
+                active_prefill_tokens: Some(0),
+                kv_used_blocks: None,
+            }),
+            None,
+            DecodeSignals::All,
+        );
+        assert_eq!(state.active_prefill_tokens.get(&0), Some(&0));
+    }
+
+    #[test]
+    fn overloaded_worker_tracker_replaces_and_removes_workers() {
+        let mut tracker = OverloadedWorkerTracker::default();
+
+        assert!(tracker.replace(HashSet::from([1, 3, 5])));
+        assert!(!tracker.replace(HashSet::from([1, 3, 5])));
+
+        assert!(tracker.remove_workers(&[3, 5]));
+        assert!(tracker.contains(1));
+        assert!(!tracker.contains(3));
+        assert!(!tracker.contains(5));
+        assert!(
+            tracker.update_worker(3, true),
+            "rejoined overloaded workers must be republished after removal"
+        );
+        assert!(tracker.contains(3));
+
+        assert!(!tracker.remove_workers(&[2, 4]));
+    }
+
+    #[test]
+    fn load_threshold_config_default_is_not_configured() {
+        let config = LoadThresholdConfig::default();
+        assert!(!config.is_configured());
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn load_threshold_config_validates_decode_fraction() {
+        for threshold in [0.0, 0.85, 1.0] {
+            let config = LoadThresholdConfig {
+                active_decode_blocks_threshold: Some(threshold),
+                ..Default::default()
+            };
+            assert!(config.validate().is_ok(), "threshold={threshold}");
+        }
+
+        for threshold in [-0.1, 1.1, f64::NAN, f64::INFINITY] {
+            let config = LoadThresholdConfig {
+                active_decode_blocks_threshold: Some(threshold),
+                ..Default::default()
+            };
+            let error = config.validate().unwrap_err();
+            assert!(
+                error.contains("active_decode_blocks_threshold"),
+                "threshold={threshold}, error={error}"
+            );
+        }
+    }
+
+    #[test]
+    fn load_threshold_config_validates_prefill_fraction() {
+        for threshold in [0.0, 0.9, 64.0] {
+            let config = LoadThresholdConfig {
+                active_prefill_tokens_threshold_frac: Some(threshold),
+                ..Default::default()
+            };
+            assert!(config.validate().is_ok(), "threshold={threshold}");
+        }
+
+        for threshold in [-0.1, f64::NAN, f64::INFINITY] {
+            let config = LoadThresholdConfig {
+                active_prefill_tokens_threshold_frac: Some(threshold),
+                ..Default::default()
+            };
+            let error = config.validate().unwrap_err();
+            assert!(
+                error.contains("active_prefill_tokens_threshold_frac"),
+                "threshold={threshold}, error={error}"
+            );
+        }
+    }
+
+    #[test]
+    fn load_threshold_config_decode_only_is_configured() {
+        let config = LoadThresholdConfig {
+            active_decode_blocks_threshold: Some(0.85),
+            ..Default::default()
+        };
+        assert!(config.is_configured());
+    }
+
+    #[test]
+    fn load_threshold_config_prefill_tokens_only_is_configured() {
+        let config = LoadThresholdConfig {
+            active_prefill_tokens_threshold: Some(10_000),
+            ..Default::default()
+        };
+        assert!(config.is_configured());
+    }
+
+    #[test]
+    fn load_threshold_config_prefill_frac_only_is_configured() {
+        let config = LoadThresholdConfig {
+            active_prefill_tokens_threshold_frac: Some(0.9),
+            ..Default::default()
+        };
+        assert!(config.is_configured());
+    }
+
+    #[test]
+    fn load_threshold_config_all_set_is_configured() {
+        let config = LoadThresholdConfig {
+            active_decode_blocks_threshold: Some(0.85),
+            active_prefill_tokens_threshold: Some(10_000),
+            active_prefill_tokens_threshold_frac: Some(0.9),
+        };
+        assert!(config.is_configured());
+    }
+
+    #[test]
+    fn is_overloaded_prefers_kv_used_blocks_over_active_decode_blocks() {
+        let mut state = WorkerLoadState::default();
+        state.active_decode_blocks.insert(0, 10);
+        state.kv_used_blocks.insert(0, 90);
+        state.kv_total_blocks.insert(0, 100);
+
+        assert!(state.is_overloaded(Some(0.6), Some(u64::MAX), Some(2.0)));
+    }
+
+    #[test]
+    fn is_overloaded_falls_back_to_active_decode_blocks_when_kv_used_missing() {
+        let mut state = WorkerLoadState::default();
+        state.active_decode_blocks.insert(0, 90);
+        state.kv_total_blocks.insert(0, 100);
+
+        assert!(state.is_overloaded(Some(0.6), Some(u64::MAX), Some(2.0)));
+    }
+
+    #[test]
+    fn is_overloaded_recognizes_dp_rank_known_only_from_kv_used_blocks() {
+        let mut state = WorkerLoadState::default();
+        state.kv_used_blocks.insert(0, 90);
+        state.kv_total_blocks.insert(0, 100);
+
+        assert!(state.is_overloaded(Some(0.6), Some(u64::MAX), Some(2.0)));
+    }
+
+    #[test]
+    fn expected_but_unobserved_dp_rank_keeps_worker_available() {
+        let mut state = WorkerLoadState::default();
+        state.reconcile_runtime_config(0..2, Some(100), Some(1_000), Some(0.6));
+
+        state.update_from_active_load(
+            &ActiveLoad {
+                worker_id: 1,
+                dp_rank: 0,
+                active_decode_blocks: None,
+                active_prefill_tokens: None,
+                kv_used_blocks: Some(90),
+            },
+            Some(0.6),
+        );
+        assert!(!state.is_overloaded(Some(0.6), None, None));
+
+        state.update_from_active_load(
+            &ActiveLoad {
+                worker_id: 1,
+                dp_rank: 1,
+                active_decode_blocks: None,
+                active_prefill_tokens: None,
+                kv_used_blocks: Some(90),
+            },
+            Some(0.6),
+        );
+        assert!(state.is_overloaded(Some(0.6), None, None));
+    }
+
+    #[test]
+    fn runtime_config_update_reconciles_rank_range_and_optional_capacity() {
+        let mut state = WorkerLoadState::default();
+        state.reconcile_runtime_config(2..4, Some(100), Some(1_000), Some(0.6));
+
+        for dp_rank in 2..4 {
+            state.update_from_active_load(
+                &ActiveLoad {
+                    worker_id: 1,
+                    dp_rank,
+                    active_decode_blocks: Some(90),
+                    active_prefill_tokens: Some(900),
+                    kv_used_blocks: Some(90),
+                },
+                Some(0.6),
+            );
+        }
+        assert!(state.is_overloaded(Some(0.6), None, Some(0.5)));
+
+        let declared = state.reconcile_runtime_config(3..4, None, None, Some(0.6));
+        assert_eq!(declared, HashSet::from([3]));
+        assert!(!state.active_decode_blocks.contains_key(&2));
+        assert!(!state.kv_used_blocks.contains_key(&2));
+        assert!(!state.active_prefill_tokens.contains_key(&2));
+        assert!(state.kv_total_blocks.is_empty());
+        assert!(state.max_num_batched_tokens.is_empty());
+        assert!(state.decode_overload_latches.is_empty());
+        assert!(!state.is_overloaded(Some(0.6), None, Some(0.5)));
+
+        assert!(!state.apply_load_observation(
+            LoadObservation::Remote(RemoteActiveLoadSnapshot {
+                worker: WorkerWithDpRank::new(1, 2),
+                active_decode_blocks: Some(100),
+                active_prefill_tokens: Some(1_000),
+                kv_used_blocks: Some(100),
+            }),
+            Some(0.6),
+            DecodeSignals::All,
+        ));
+
+        let declared = state.reconcile_runtime_config(4..5, Some(100), Some(1_000), Some(0.6));
+        assert_eq!(declared, HashSet::from([4]));
+        assert!(state.active_decode_blocks.is_empty());
+        assert!(state.kv_used_blocks.is_empty());
+        assert!(state.active_prefill_tokens.is_empty());
+        assert!(!state.is_overloaded(Some(0.6), None, Some(0.5)));
+    }
+
+    #[test]
+    fn decode_overload_latch_sets_overloaded_if_any_signal_is_overloaded() {
+        let mut state = WorkerLoadState::default();
+        state.kv_total_blocks.insert(0, 100);
+        state.update_from_active_load(
+            &ActiveLoad {
+                worker_id: 1,
+                dp_rank: 0,
+                active_decode_blocks: None,
+                active_prefill_tokens: None,
+                kv_used_blocks: Some(90),
+            },
+            Some(0.6),
+        );
+
+        assert!(state.is_overloaded(Some(0.6), Some(u64::MAX), Some(2.0)));
+    }
+
+    #[test]
+    fn decode_overload_latch_only_clears_after_both_signals_report_not_overloaded() {
+        let mut state = WorkerLoadState::default();
+        state.kv_total_blocks.insert(0, 100);
+
+        state.update_from_active_load(
+            &ActiveLoad {
+                worker_id: 1,
+                dp_rank: 0,
+                active_decode_blocks: None,
+                active_prefill_tokens: None,
+                kv_used_blocks: Some(90),
+            },
+            Some(0.6),
+        );
+        assert!(state.is_overloaded(Some(0.6), Some(u64::MAX), Some(2.0)));
+
+        state.update_from_active_load(
+            &ActiveLoad {
+                worker_id: 1,
+                dp_rank: 0,
+                active_decode_blocks: Some(10),
+                active_prefill_tokens: None,
+                kv_used_blocks: None,
+            },
+            Some(0.6),
+        );
+        assert!(state.is_overloaded(Some(0.6), Some(u64::MAX), Some(2.0)));
+
+        state.update_from_active_load(
+            &ActiveLoad {
+                worker_id: 1,
+                dp_rank: 0,
+                active_decode_blocks: None,
+                active_prefill_tokens: None,
+                kv_used_blocks: Some(10),
+            },
+            Some(0.6),
+        );
+        assert!(!state.is_overloaded(Some(0.6), Some(u64::MAX), Some(2.0)));
+    }
+
+    #[test]
+    fn decode_overload_latch_clears_with_only_kv_used_blocks_signal() {
+        let mut state = WorkerLoadState::default();
+        state.kv_total_blocks.insert(0, 100);
+
+        state.update_from_active_load(
+            &ActiveLoad {
+                worker_id: 1,
+                dp_rank: 0,
+                active_decode_blocks: None,
+                active_prefill_tokens: None,
+                kv_used_blocks: Some(90),
+            },
+            Some(0.6),
+        );
+        assert!(state.is_overloaded(Some(0.6), Some(u64::MAX), Some(2.0)));
+
+        state.update_from_active_load(
+            &ActiveLoad {
+                worker_id: 1,
+                dp_rank: 0,
+                active_decode_blocks: None,
+                active_prefill_tokens: None,
+                kv_used_blocks: Some(10),
+            },
+            Some(0.6),
+        );
+        assert!(!state.is_overloaded(Some(0.6), Some(u64::MAX), Some(2.0)));
+    }
+
+    #[test]
+    fn decode_overload_latch_clears_with_only_active_decode_blocks_signal() {
+        let mut state = WorkerLoadState::default();
+        state.kv_total_blocks.insert(0, 100);
+
+        state.update_from_active_load(
+            &ActiveLoad {
+                worker_id: 1,
+                dp_rank: 0,
+                active_decode_blocks: Some(90),
+                active_prefill_tokens: None,
+                kv_used_blocks: None,
+            },
+            Some(0.6),
+        );
+        assert!(state.is_overloaded(Some(0.6), Some(u64::MAX), Some(2.0)));
+
+        state.update_from_active_load(
+            &ActiveLoad {
+                worker_id: 1,
+                dp_rank: 0,
+                active_decode_blocks: Some(10),
+                active_prefill_tokens: None,
+                kv_used_blocks: None,
+            },
+            Some(0.6),
+        );
+        assert!(!state.is_overloaded(Some(0.6), Some(u64::MAX), Some(2.0)));
+    }
+
+    #[test]
+    fn decode_overload_latch_clears_when_both_signals_are_not_overloaded_in_same_event() {
+        let mut state = WorkerLoadState::default();
+        state.kv_total_blocks.insert(0, 100);
+
+        state.update_from_active_load(
+            &ActiveLoad {
+                worker_id: 1,
+                dp_rank: 0,
+                active_decode_blocks: Some(90),
+                active_prefill_tokens: None,
+                kv_used_blocks: None,
+            },
+            Some(0.6),
+        );
+        assert!(state.is_overloaded(Some(0.6), Some(u64::MAX), Some(2.0)));
+
+        state.update_from_active_load(
+            &ActiveLoad {
+                worker_id: 1,
+                dp_rank: 0,
+                active_decode_blocks: Some(10),
+                active_prefill_tokens: None,
+                kv_used_blocks: Some(10),
+            },
+            Some(0.6),
+        );
+        assert!(!state.is_overloaded(Some(0.6), Some(u64::MAX), Some(2.0)));
+    }
+
+    #[test]
+    fn routed_monitor_keeps_only_the_engine_decode_check() {
+        let handle = LoadThresholdHandle::new(LoadThresholdConfig {
+            active_decode_blocks_threshold: Some(0.8),
+            active_prefill_tokens_threshold: Some(100),
+            active_prefill_tokens_threshold_frac: Some(0.5),
+        });
+        let thresholds = RoutableThresholds::new(handle.clone());
+        assert!(!thresholds.is_routed());
+        assert_eq!(thresholds.monitor_config(), handle.get());
+        assert_eq!(thresholds.decode_signals(), DecodeSignals::All);
+
+        let routed = thresholds.route();
+        assert!(thresholds.is_routed());
+        assert_eq!(
+            thresholds.monitor_config(),
+            LoadThresholdConfig {
+                active_decode_blocks_threshold: Some(0.8),
+                ..Default::default()
+            },
+            "prefill thresholds move to the queue; the decode one stays for worker-published load"
+        );
+        assert_eq!(thresholds.decode_signals(), DecodeSignals::EngineOnly);
+        assert_eq!(
+            routed.get(),
+            handle.get(),
+            "the routed handle is the live one"
+        );
+        assert!(handle.is_configured(), "the live handle keeps its values");
+
+        // A live `/busy_threshold` update still reaches the routed monitor.
+        handle.update(&LoadThresholdConfig {
+            active_decode_blocks_threshold: Some(0.6),
+            ..Default::default()
+        });
+        assert_eq!(
+            thresholds.monitor_config().active_decode_blocks_threshold,
+            Some(0.6)
+        );
+    }
+
+    #[test]
+    fn engine_only_ignores_scheduler_snapshots_and_keeps_worker_published_load() {
+        let worker = WorkerWithDpRank::new(1, 0);
+        let booked = |active_decode_blocks| {
+            LoadObservation::Scheduler(SchedulerLoadSnapshot {
+                worker,
+                active_decode_blocks,
+                active_prefill_tokens: 0,
+            })
+        };
+        let published = |active_decode_blocks, kv_used_blocks| {
+            LoadObservation::Remote(
+                ActiveLoad {
+                    worker_id: 1,
+                    dp_rank: 0,
+                    active_decode_blocks,
+                    active_prefill_tokens: None,
+                    kv_used_blocks,
+                }
+                .into(),
+            )
+        };
+        let fresh = || {
+            let mut state = WorkerLoadState::default();
+            state.kv_total_blocks.insert(0, 100);
+            state
+        };
+
+        // Before routing, a scheduler snapshot of booked blocks marks the worker.
+        let mut unrouted = fresh();
+        unrouted.apply_load_observation(booked(90), Some(0.6), DecodeSignals::All);
+        assert!(unrouted.is_overloaded(Some(0.6), None, None));
+
+        // Once routed, the same snapshot is the queue's to judge: it is not even recorded.
+        let mut routed = fresh();
+        routed.apply_load_observation(booked(90), Some(0.6), DecodeSignals::EngineOnly);
+        assert!(!routed.is_overloaded(Some(0.6), None, None));
+        assert!(routed.active_decode_blocks.is_empty());
+
+        // Worker-published load still marks the worker when routed, whichever field it uses.
+        let mut routed = fresh();
+        routed.apply_load_observation(
+            published(None, Some(90)),
+            Some(0.6),
+            DecodeSignals::EngineOnly,
+        );
+        assert!(routed.is_overloaded(Some(0.6), None, None));
+        let mut routed = fresh();
+        routed.apply_load_observation(
+            published(Some(90), None),
+            Some(0.6),
+            DecodeSignals::EngineOnly,
+        );
+        assert!(routed.is_overloaded(Some(0.6), None, None));
+    }
+
+    #[test]
+    fn engine_only_latch_is_held_and_released_by_worker_published_load_alone() {
+        let worker = WorkerWithDpRank::new(1, 0);
+        let mut state = WorkerLoadState::default();
+        state.kv_total_blocks.insert(0, 100);
+        let used = |kv_used_blocks| {
+            LoadObservation::Remote(
+                ActiveLoad {
+                    worker_id: 1,
+                    dp_rank: 0,
+                    active_decode_blocks: None,
+                    active_prefill_tokens: None,
+                    kv_used_blocks: Some(kv_used_blocks),
+                }
+                .into(),
+            )
+        };
+        let booked = LoadObservation::Scheduler(SchedulerLoadSnapshot {
+            worker,
+            active_decode_blocks: 90,
+            active_prefill_tokens: 0,
+        });
+
+        state.apply_load_observation(used(90), Some(0.6), DecodeSignals::EngineOnly);
+        assert!(state.is_overloaded(Some(0.6), None, None));
+        // A stale-high scheduler snapshot neither sets nor holds the latch...
+        state.apply_load_observation(booked, Some(0.6), DecodeSignals::EngineOnly);
+        assert!(state.is_overloaded(Some(0.6), None, None));
+        // ...so the engine reporting the KV drained releases it.
+        state.apply_load_observation(used(10), Some(0.6), DecodeSignals::EngineOnly);
+        assert!(!state.is_overloaded(Some(0.6), None, None));
+    }
+
+    #[test]
+    fn load_threshold_handle_merges_updates_and_shares_state() {
+        let handle = LoadThresholdHandle::new(LoadThresholdConfig {
+            active_prefill_tokens_threshold: Some(10),
+            ..Default::default()
+        });
+        let reader = handle.clone();
+        assert!(reader.is_configured());
+
+        // A partial update keeps the fields it does not set.
+        handle.update(&LoadThresholdConfig {
+            active_decode_blocks_threshold: Some(0.9),
+            ..Default::default()
+        });
+        assert_eq!(
+            reader.get(),
+            LoadThresholdConfig {
+                active_decode_blocks_threshold: Some(0.9),
+                active_prefill_tokens_threshold: Some(10),
+                active_prefill_tokens_threshold_frac: None,
+            }
+        );
+
+        // Updates compose in order.
+        handle.update(&LoadThresholdConfig {
+            active_prefill_tokens_threshold: Some(20),
+            active_prefill_tokens_threshold_frac: Some(0.5),
+            ..Default::default()
+        });
+        let current = reader.get();
+        assert_eq!(current.active_prefill_tokens_threshold, Some(20));
+        assert_eq!(current.active_prefill_tokens_threshold_frac, Some(0.5));
+        assert_eq!(current.active_decode_blocks_threshold, Some(0.9));
+    }
+
+    #[test]
+    fn busy_thresholds_from_load_threshold_config() {
+        let config = LoadThresholdConfig {
+            active_decode_blocks_threshold: Some(0.9),
+            active_prefill_tokens_threshold: Some(u64::MAX),
+            active_prefill_tokens_threshold_frac: Some(0.5),
+        };
+        let thresholds = BusyThresholds::from(config);
+        assert_eq!(thresholds.decode_busy_threshold_frac, Some(0.9));
+        assert_eq!(thresholds.prefill_busy_threshold, Some(usize::MAX));
+        assert_eq!(thresholds.prefill_busy_threshold_frac, Some(0.5));
+        assert_eq!(
+            BusyThresholds::from(LoadThresholdConfig::default()),
+            BusyThresholds::default()
+        );
+    }
+
+    #[test]
+    fn is_overloaded_returns_false_when_all_thresholds_are_none() {
+        let mut state = WorkerLoadState::default();
+        state.kv_total_blocks.insert(0, 100);
+        state.active_decode_blocks.insert(0, 99);
+        state.kv_used_blocks.insert(0, 99);
+        state.active_prefill_tokens.insert(0, u64::MAX / 2);
+        state.max_num_batched_tokens.insert(0, 1_000);
+
+        assert!(!state.is_overloaded(None, None, None));
+    }
+
+    #[test]
+    fn is_overloaded_with_only_decode_threshold_ignores_prefill_signals() {
+        let mut state = WorkerLoadState::default();
+        state.max_num_batched_tokens.insert(0, 1_000);
+        state.active_prefill_tokens.insert(0, 5_000);
+
+        assert!(!state.is_overloaded(Some(0.6), None, None));
+    }
+
+    #[test]
+    fn is_overloaded_with_only_prefill_abs_ignores_decode_latch() {
+        let mut state = WorkerLoadState::default();
+        state.kv_total_blocks.insert(0, 100);
+        state.update_from_active_load(
+            &ActiveLoad {
+                worker_id: 1,
+                dp_rank: 0,
+                active_decode_blocks: Some(90),
+                active_prefill_tokens: None,
+                kv_used_blocks: Some(90),
+            },
+            Some(0.6),
+        );
+
+        assert!(!state.is_overloaded(None, Some(u64::MAX), None));
+    }
+
+    #[test]
+    fn is_overloaded_with_only_prefill_frac_ignores_decode_latch() {
+        let mut state = WorkerLoadState::default();
+        state.kv_total_blocks.insert(0, 100);
+        state.update_from_active_load(
+            &ActiveLoad {
+                worker_id: 1,
+                dp_rank: 0,
+                active_decode_blocks: Some(90),
+                active_prefill_tokens: None,
+                kv_used_blocks: Some(90),
+            },
+            Some(0.6),
+        );
+
+        assert!(!state.is_overloaded(None, None, Some(2.0)));
+    }
+
+    #[test]
+    fn is_overloaded_with_only_prefill_abs_fires_when_tokens_exceed_threshold() {
+        let mut state = WorkerLoadState::default();
+        state.active_prefill_tokens.insert(0, 5_000);
+
+        assert!(state.is_overloaded(None, Some(1_000), None));
+    }
+
+    #[test]
+    fn is_overloaded_with_only_prefill_frac_fires_when_fraction_exceeded() {
+        let mut state = WorkerLoadState::default();
+        state.max_num_batched_tokens.insert(0, 1_000);
+        state.active_prefill_tokens.insert(0, 2_500);
+
+        assert!(state.is_overloaded(None, None, Some(2.0)));
+    }
+
+    #[test]
+    fn compute_overloaded_instances_flags_prefill_workers_over_token_threshold() {
+        use dashmap::DashMap;
+        use std::collections::HashSet;
+
+        let states = DashMap::new();
+
+        // Prefill worker far over the prefill-token threshold.
+        let mut prefill = WorkerLoadState::default();
+        prefill.active_prefill_tokens.insert(0, 300_000);
+        states.insert(1u64, prefill);
+
+        // Prefill worker under the threshold — must not be flagged.
+        let mut quiet = WorkerLoadState::default();
+        quiet.active_prefill_tokens.insert(0, 100);
+        states.insert(2u64, quiet);
+
+        let cfg = LoadThresholdConfig {
+            active_prefill_tokens_threshold: Some(5_000),
+            ..Default::default()
+        };
+
+        let overloaded = collect_overloaded_workers(&states, &cfg);
+        assert_eq!(overloaded, HashSet::from([1]));
+    }
+
+    #[tokio::test]
+    async fn unchanged_low_metric_reconciles_request_path_overload() {
+        use dynamo_runtime::{DistributedRuntime, Runtime, distributed::DistributedConfig};
+
+        let rt = Runtime::from_current().unwrap();
+        let drt = DistributedRuntime::new(rt.clone(), DistributedConfig::process_local())
+            .await
+            .unwrap();
+        let client = drt
+            .namespace("test_request_path_overload_reconciliation".to_string())
+            .unwrap()
+            .component("test_component".to_string())
+            .unwrap()
+            .endpoint("decode".to_string())
+            .client()
+            .await
+            .unwrap();
+        let mut tracker = OverloadedWorkerTracker::default();
+
+        assert!(!tracker.update_worker(7, false));
+        client.mark_overloaded_immediate(7);
+        assert_eq!(
+            client.overloaded_instance_ids(),
+            Some(Arc::new(HashSet::from([7])))
+        );
+
+        let overloaded_changed = tracker.update_worker(7, false);
+        assert!(
+            !overloaded_changed,
+            "the monitor's cached set remains empty"
+        );
+        assert!(overload_reconciliation_needed(&client));
+
+        assert!(publish_overloaded_instances_if_needed(
+            &client,
+            &tracker,
+            overloaded_changed,
+        ));
+
+        assert_eq!(client.overloaded_instance_ids(), None);
+        assert!(!client.overload_reconciliation_needed());
+        rt.shutdown();
+    }
+
+    #[test]
+    fn cleanup_removes_every_load_series_for_the_worker_ranks() {
+        use dynamo_slot_tracker::host::LocalWorkerLoad;
+        use prometheus::core::Collector;
+
+        const WORKER_ID: u64 = 0x10696;
+        let load = LocalWorkerLoad {
+            active_blocks: 1,
+            active_tokens: 1,
+            active_requests: 2,
+            prefill_requests: 1,
+        };
+        for dp_rank in [0, 1] {
+            WORKER_LOAD_METRICS.observe(WORKER_ID, dp_rank, "decode", load);
+        }
+        let worker_series = || {
+            let worker_id = WORKER_ID.to_string();
+            let m = &*WORKER_LOAD_METRICS;
+            [
+                m.active_decode_blocks.collect(),
+                m.active_prefill_tokens.collect(),
+                m.active_requests.collect(),
+            ]
+            .into_iter()
+            .flatten()
+            .flat_map(|family| family.get_metric().to_vec())
+            .filter(|metric| {
+                metric
+                    .get_label()
+                    .iter()
+                    .any(|label| label.name() == "worker_id" && label.value() == worker_id)
+            })
+            .count()
+        };
+        assert_eq!(worker_series(), 2 * (1 + 1 + 2));
+
+        cleanup_worker_metrics(WORKER_ID, &[0, 1], "decode");
+        assert_eq!(worker_series(), 0);
+    }
+}

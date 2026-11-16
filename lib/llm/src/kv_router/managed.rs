@@ -4,7 +4,7 @@
 use std::sync::Arc;
 
 use super::KvRouter;
-use crate::sync::load::RoutingLoadContext;
+use dynamo_sync::load::RoutingLoadContext;
 
 /// Standalone KV selection surface plus the context that owns its load tasks.
 pub struct ManagedKvRouter {

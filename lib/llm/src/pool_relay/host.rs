@@ -73,18 +73,18 @@ use super::serving_load::ServingLoadAggregator;
 use super::topology::{TopologyPublisher, TopologySnapshot};
 use super::wan::grpc::{GrpcTransport, PoolRelayGrpcConfig};
 use crate::scheduler_load::SCHEDULER_LOAD_SUBJECT;
+use crate::utils::retry::{Backoff, FailureStreak};
+use dynamo_model_card::local_model::runtime_config::ModelRuntimeConfig;
 #[cfg(feature = "ckf-diagnostics")]
-use crate::sync::indexer::WorkerQueryHealthSnapshot;
-use crate::sync::indexer::{
+use dynamo_sync::indexer::WorkerQueryHealthSnapshot;
+use dynamo_sync::indexer::{
     DEFAULT_RECOVERY_ATTEMPT_TIMEOUT, RecoverySupervisor, TargetFaultDisposition,
     start_target_subscriber,
 };
-use crate::sync::load::metrics_subscriber::KvMetricsSubscriber;
-use crate::sync::membership::{
+use dynamo_sync::load::metrics_subscriber::KvMetricsSubscriber;
+use dynamo_sync::membership::{
     KvSourceMembershipCoordinator, KvSourceMembershipView, KvSourceMembershipWatch,
 };
-use crate::utils::retry::{Backoff, FailureStreak};
-use dynamo_model_card::local_model::runtime_config::ModelRuntimeConfig;
 
 pub const DEFAULT_EXPECTED_UNIQUE_BLOCKS: usize = 1_048_576;
 const DEFAULT_RECOVERY_FETCH_CONCURRENCY: usize = 16;
@@ -2763,7 +2763,7 @@ mod tests {
 
     use super::super::actor::ActorFaultCategory;
     use super::*;
-    use crate::sync::membership::{KvEventSource, KvSourceMembership};
+    use dynamo_sync::membership::{KvEventSource, KvSourceMembership};
 
     #[test]
     fn publication_capacity_rejects_ckf_larger_than_cbi1() {
@@ -2893,7 +2893,7 @@ mod tests {
         )
         .await
         .unwrap();
-        let source = crate::sync::membership::KvEventSource {
+        let source = dynamo_sync::membership::KvEventSource {
             kv_state_endpoint: endpoint.clone(),
             worker,
             publisher_id: publisher.publisher_id(),

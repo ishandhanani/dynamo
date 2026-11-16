@@ -19,11 +19,11 @@ use tokio::{
 };
 use tokio_util::sync::CancellationToken;
 
-use crate::sync::direct_zmq_fan_in::{
-    ContinuityMode, FanInEvent, FanInObservation, start_direct_zmq_fan_in,
-};
 use dynamo_session_affinity::host::{
     AffinityReplicaSink, AffinityTarget, AffinityVersion, WeakSessionAffinity,
+};
+use dynamo_sync::direct_zmq_fan_in::{
+    ContinuityMode, FanInEvent, FanInObservation, start_direct_zmq_fan_in,
 };
 
 pub(super) const SESSION_AFFINITY_SUBJECT: &str = "session_affinity_events";

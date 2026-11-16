@@ -13,7 +13,6 @@ use crate::{
         request_lease::{RequestAttemptLease, RequestAttemptRelease},
     },
     routing_policy::AttemptLease,
-    sync::indexer::ApproximateRequestLease,
 };
 use dynamo_admission::host::AbortCause;
 use dynamo_frontend_protocols::common::preprocessor::PreprocessedRequest;
@@ -36,6 +35,7 @@ use dynamo_runtime::{
 };
 use dynamo_scheduler::host::{BookingHandle, RequestLifecycle};
 use dynamo_session_affinity::host::AffinityLease;
+use dynamo_sync::indexer::ApproximateRequestLease;
 
 #[derive(Clone)]
 struct OutputHashBranch {

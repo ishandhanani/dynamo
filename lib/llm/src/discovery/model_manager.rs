@@ -23,11 +23,11 @@ use tokio_util::sync::CancellationToken;
 use super::{
     GenerateEngineSelection, Model, SystemOneExecutionSelection, SystemOneSelectionError, WorkerSet,
 };
-use crate::sync::{
+use dynamo_model_card::router_config::LoadThresholdConfig;
+use dynamo_sync::{
     membership::{KvSourceMembershipCoordinator, KvSourceMembershipWatch},
     runtime_configs::{RuntimeConfigWatch, runtime_config_watch},
 };
-use dynamo_model_card::router_config::LoadThresholdConfig;
 
 use dynamo_runtime::{
     component::{Client, Endpoint},
@@ -43,7 +43,6 @@ use crate::{
         load_estimator::LoadEstimator,
         state_tracker::{LoraWorkerObservation, LoraWorkerProjection},
     },
-    sync::indexer::KvEventSourceRequirement,
     worker_type::WorkerType,
 };
 use dynamo_frontend_protocols::types::{
@@ -67,6 +66,7 @@ use dynamo_model_card::{
     model_card::ModelDeploymentCard,
     model_type::ModelType,
 };
+use dynamo_sync::indexer::KvEventSourceRequirement;
 
 struct LoraEndpointDomain {
     routing_table: LoraRoutingTable,
@@ -2260,7 +2260,7 @@ impl ModelManager {
         let client = endpoint.client().await?;
         let parent_token = endpoint.component().drt().child_token();
         let scheduler_load =
-            crate::sync::load::SchedulerLoadSender::disabled(parent_token.child_token());
+            dynamo_sync::load::SchedulerLoadSender::disabled(parent_token.child_token());
         self.kv_chooser_for_with_policy_and_client(
             client,
             kv_cache_block_size,
@@ -2342,14 +2342,14 @@ impl ModelManager {
         is_eagle: bool,
     ) -> anyhow::Result<crate::kv_router::ManagedKvRouter> {
         let client = endpoint.client().await?;
-        let source = crate::sync::load::RouterLoadSource::from_worker_role_or_metric(
+        let source = dynamo_sync::load::RouterLoadSource::from_worker_role_or_metric(
             worker_role,
             metric_worker_type,
         );
-        let load_context = crate::sync::load::RoutingLoadContext::start(
+        let load_context = dynamo_sync::load::RoutingLoadContext::start(
             client.clone(),
             source,
-            crate::sync::load::LoadThresholdHandle::new(Default::default()),
+            dynamo_sync::load::LoadThresholdHandle::new(Default::default()),
             &endpoint.component().drt().child_token(),
             None,
         )
@@ -2385,7 +2385,7 @@ impl ModelManager {
         metric_worker_type: &'static str,
         model_name: Option<String>,
         is_eagle: bool,
-        scheduler_load: crate::sync::load::SchedulerLoadSender,
+        scheduler_load: dynamo_sync::load::SchedulerLoadSender,
         cancellation_token: CancellationToken,
     ) -> anyhow::Result<Arc<KvRouter>> {
         if let Some(config) = &kv_router_config {
@@ -2422,7 +2422,7 @@ impl ModelManager {
         metric_worker_type: &'static str,
         model_name: Option<String>,
         is_eagle: bool,
-        scheduler_load: crate::sync::load::SchedulerLoadSender,
+        scheduler_load: dynamo_sync::load::SchedulerLoadSender,
         cancellation_token: CancellationToken,
     ) -> anyhow::Result<Arc<KvRouter>> {
         if let Some(config) = &mut kv_router_config {
@@ -2997,7 +2997,6 @@ mod tests {
         transports::event_plane::EventScope,
     };
 
-    use crate::sync::membership::{KvEventSource, KvSourceStatus};
     use dynamo_frontend_protocols::{
         Annotated,
         common::{llm_backend::LLMEngineOutput, preprocessor::PreprocessedRequest},
@@ -3006,6 +3005,7 @@ mod tests {
         DISAGG_PREFILL_CANCEL_ANYTIME_V1, ModelRuntimeConfig,
     };
     use dynamo_model_card::model_card::ModelDeploymentCard;
+    use dynamo_sync::membership::{KvEventSource, KvSourceStatus};
 
     fn make_worker_set(namespace: &str, mdcsum: &str) -> WorkerSet {
         WorkerSet::new(
@@ -4535,7 +4535,7 @@ mod tests {
             crate::session_affinity::SessionAffinityMode::Hard,
             "topology-model".to_string(),
             worker_set.namespace().to_string(),
-            crate::sync::load::LoadThresholdHandle::new(Default::default()),
+            dynamo_sync::load::LoadThresholdHandle::new(Default::default()),
             CancellationToken::new(),
         );
         let encoder = crate::kv_router::EncoderRouter::new(

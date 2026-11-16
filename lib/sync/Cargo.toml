@@ -1,0 +1,64 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+[package]
+name = "dynamo-sync"
+description = "Keeps a Dynamo router's view of its workers up to date: KV index ingest and recovery, slot-tracker replica sync, worker load, and KV event-source membership"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+homepage.workspace = true
+repository.workspace = true
+
+[features]
+# Pull-only stats and snapshots of the worker query client, for the CKF Relay.
+# dynamo-llm forwards its own ckf-diagnostics feature here.
+ckf-diagnostics = []
+# Exports the test fixtures and test-only handles that dynamo-llm's tests reuse.
+testing = []
+
+[dependencies]
+# repo
+dynamo-frontend-protocols = { workspace = true }
+dynamo-http-server = { workspace = true }
+dynamo-kv-events = { workspace = true }
+dynamo-kv-hashing = { workspace = true }
+dynamo-kv-indexer = { workspace = true, features = ["export"] }
+dynamo-kv-router = { workspace = true }
+dynamo-model-card = { workspace = true }
+dynamo-router-protocol = { workspace = true }
+dynamo-runtime = { workspace = true }
+dynamo-scheduler = { workspace = true }
+dynamo-slot-tracker = { workspace = true }
+dynamo-tokens = { workspace = true }
+
+# workspace
+anyhow = { workspace = true }
+arc-swap = "1.9.1"
+async-trait = { workspace = true }
+dashmap = { workspace = true }
+futures = { workspace = true }
+parking_lot = { workspace = true }
+prometheus = { workspace = true }
+rand = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tmq = { workspace = true }
+tokio = { workspace = true }
+tokio-util = { workspace = true }
+tracing = { workspace = true }
+
+blake3 = { version = "1.8" }
+
+[dev-dependencies]
+dynamo-kv-hints = { workspace = true }
+bytes = { workspace = true }
+serial_test = "3"
+temp-env = { version = "0.3.6", features = ["async_closure"] }
+tempfile = { workspace = true }
+tokio = { workspace = true, features = ["test-util"] }
+tokio-stream = { workspace = true }
+tracing-subscriber = { workspace = true }
+uuid = { workspace = true }

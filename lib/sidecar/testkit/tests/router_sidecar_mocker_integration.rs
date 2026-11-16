@@ -5,10 +5,10 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use dynamo_backend_common::{BackendError, DisaggregationMode, FinishReason, LLMEngine};
+use dynamo_llm::discovery::ModelManager;
 use dynamo_llm::kv_router::PrefillRouter;
 use dynamo_llm::session_affinity::SessionAffinityMode;
 use dynamo_llm::worker_type::WorkerType;
-use dynamo_llm::{discovery::ModelManager, sync::load::LoadThresholdHandle};
 use dynamo_model_card::model_card::TokenizerKind;
 use dynamo_runtime::pipeline::{AsyncEngine, AsyncEngineContextProvider, Operator, RouterMode};
 use dynamo_sidecar_testkit::{
@@ -19,6 +19,7 @@ use dynamo_sidecar_testkit::{
         StreamPoint,
     },
 };
+use dynamo_sync::load::LoadThresholdHandle;
 use futures::StreamExt;
 use serde_json::{Value, json};
 

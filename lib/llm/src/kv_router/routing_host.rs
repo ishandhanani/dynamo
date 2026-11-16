@@ -307,7 +307,7 @@ pub struct RoutingHost {
     ///
     /// Required for every mode except KV, where the [`KvRouter`] owns the client.
     #[allow(dead_code)]
-    routing_context: Option<Arc<crate::sync::load::RoutingLoadContext>>,
+    routing_context: Option<Arc<dynamo_sync::load::RoutingLoadContext>>,
 }
 
 /// An admitted KV route awaiting dispatch: the selected worker, its booking,

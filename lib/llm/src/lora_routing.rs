@@ -18,10 +18,10 @@ use crate::{
         CandidateSelection, ExecutionRequirements, ExecutionStage, HostedCandidatePolicy,
         KvAdmissionPolicy,
     },
-    sync::runtime_configs::RuntimeConfigWatch,
 };
 use dynamo_frontend_protocols::common::preprocessor::PreprocessedRequest;
 use dynamo_model_card::local_model::runtime_config::ModelRuntimeConfig;
+use dynamo_sync::runtime_configs::RuntimeConfigWatch;
 
 fn policy(request: &PreprocessedRequest) -> RequestPolicy {
     let version = request.routing.as_ref().and_then(|routing| {

@@ -38,7 +38,6 @@ use crate::{
     kv_router::routing_host::request_guard::RouteObservation,
     lora::{LoraReplicaConfig, LoraRoutingTable, LoraStateTracker},
     migration::Migration,
-    sync::load::RoutingLoadContext,
 };
 use dynamo_frontend_protocols::common::{
     extensions::{AgentContextBuilder, SESSION_AFFINITY_CONTEXT_KEY, SessionAffinityId},
@@ -47,6 +46,7 @@ use dynamo_frontend_protocols::common::{
 };
 use dynamo_http_server::metrics::Metrics;
 use dynamo_model_card::local_model::runtime_config::ModelRuntimeConfig;
+use dynamo_sync::load::RoutingLoadContext;
 
 fn request() -> PreprocessedRequest {
     PreprocessedRequest::builder()
@@ -62,8 +62,8 @@ fn request() -> PreprocessedRequest {
 async fn test_load_context(client: &Client) -> Arc<RoutingLoadContext> {
     RoutingLoadContext::start(
         client.clone(),
-        crate::sync::load::RouterLoadSource::Aggregated,
-        crate::sync::load::LoadThresholdHandle::new(Default::default()),
+        dynamo_sync::load::RouterLoadSource::Aggregated,
+        dynamo_sync::load::LoadThresholdHandle::new(Default::default()),
         &client.endpoint.drt().child_token(),
         None,
     )

@@ -29,8 +29,8 @@ use prometheus::{IntCounter, IntGaugeVec};
 use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
 
-use crate::sync::direct_zmq_sub_pool::{DirectZmqSubPool, KV_ZMQ_RCVHWM};
-use crate::sync::membership::kv_state_agent::{
+use dynamo_sync::direct_zmq_sub_pool::{DirectZmqSubPool, KV_ZMQ_RCVHWM};
+use dynamo_sync::membership::kv_state_agent::{
     KV_STATE_ATTACHMENT_INTENT_TOPIC_V2, KV_STATE_EVENT_TOPIC_V2, KV_STATE_HOST_TOPIC_V2,
     KvStateAttachmentIntent, KvStateHostAdvertisement, KvStateHostControlRequest,
     KvStateHostStatus, KvStateIngressProtocol,

@@ -1,9 +1,9 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-use crate::sync::sequence::{RuntimeSequenceSubscriber, SequenceSubscriber};
 use dynamo_lora::LoadEstimator;
 use dynamo_runtime::{component::Endpoint, traits::DistributedRuntimeProvider};
+use dynamo_sync::sequence::{RuntimeSequenceSubscriber, SequenceSubscriber};
 use std::{sync::Arc, time::Duration};
 
 pub trait LoadEstimatorSubscription {
@@ -72,7 +72,6 @@ async fn subscribe_to_events(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::sync::sequence::ACTIVE_SEQUENCES_SUBJECT;
     use dynamo_router_protocol::worker::WorkerWithDpRank;
     use dynamo_runtime::config::environment_names::zmq_broker as broker_env;
     use dynamo_runtime::distributed::DistributedConfig;
@@ -81,6 +80,7 @@ mod tests {
     use dynamo_slot_tracker::host::{
         ActiveSequenceEvent, ActiveSequenceEventBatch, ActiveSequenceEventData,
     };
+    use dynamo_sync::sequence::ACTIVE_SEQUENCES_SUBJECT;
     fn lora_event(
         request_id: &str,
         lora_name: Option<&str>,
