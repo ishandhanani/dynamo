@@ -31,8 +31,9 @@ jemalloc = ["dynamo-sidecar-common/jemalloc"]
 [dependencies]
 dynamo-sglang-generate = { workspace = true }
 dynamo-backend-common = { workspace = true }
-# For the `mm-routing` forward only: the frontend crate behind dynamo-sglang-generate links the
-# preprocessor into this binary, and the feature's code is the preprocessor's.
+# For the `mm-routing` forward only: the feature's code is the preprocessor's. No source here
+# names the preprocessor, and since dynamo-sglang-generate stopped depending on the frontend
+# crate this entry is the only one that puts it in this crate's tree.
 dynamo-preprocessor = { workspace = true }
 dynamo-sync = { workspace = true }
 dynamo-frontend-protocols = { workspace = true }
