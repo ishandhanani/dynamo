@@ -13,7 +13,7 @@ repository.workspace = true
 
 [features]
 # Pull-only stats and snapshots of the worker query client, for the CKF Relay.
-# dynamo-llm forwards its own ckf-diagnostics feature here.
+# dynamo-pool-relay forwards its own ckf-diagnostics feature here.
 ckf-diagnostics = []
 # Exports the test fixtures and test-only handles that dynamo-llm's tests reuse.
 testing = []

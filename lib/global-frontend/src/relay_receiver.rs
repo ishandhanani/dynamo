@@ -16,7 +16,7 @@ use dynamo_global_common::grpc::{
 };
 use dynamo_global_common::{PoolIdDeriver, PoolKey, V1PoolIdDeriver};
 use dynamo_global_router::RelaySource;
-use dynamo_llm::pool_relay::wan::grpc::protocol::{
+use dynamo_pool_relay::wan::grpc::protocol::{
     KvPoolCatalogUpdate, KvPoolLoadUpdate, ServingLoadUpdate, ServingReadinessUpdate,
 };
 use prost::Message;

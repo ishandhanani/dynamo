@@ -374,7 +374,7 @@ mod tests {
     use super::*;
     use dynamo_global_common::{PoolIdDeriver, PoolKey, V1PoolIdDeriver};
     use dynamo_global_router::{Pool, RelaySource};
-    use dynamo_llm::pool_relay::wan::grpc::protocol as wire;
+    use dynamo_pool_relay::wan::grpc::protocol as wire;
 
     fn state(replica: u64, ready: bool) -> Arc<RelayPoolState> {
         let identity = wire::RelayIdentity {

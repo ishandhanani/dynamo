@@ -379,7 +379,7 @@ unrestricted LoadBalancer or expose the pod port to another data center directly
 For access across a trust boundary, terminate TLS in an external proxy and route only its
 protected listener through your network ingress. Keep its upstream connection HTTP/2
 and allow long-lived server streams. See the
-[gRPC contract](https://github.com/ai-dynamo/dynamo/blob/main/lib/llm/src/pool_relay/docs/grpc-contract.md)
+[gRPC contract](https://github.com/ai-dynamo/dynamo/blob/main/lib/pool-relay/src/docs/grpc-contract.md)
 for message sizes, reconnect behavior, and error reasons.
 
 ## Optional mTLS Sidecar

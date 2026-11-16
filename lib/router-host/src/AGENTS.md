@@ -58,7 +58,7 @@ The state these stages read is kept up to date by the crate `dynamo-sync`
   `lib/router/kv-router`.
 - `sequence.rs`, `sequence/`: runtime glue for active-sequence tracking and its replica sync.
 - `load/`: `ActiveLoad`, the load message workers publish on the event plane (written by
-  the publisher, read by `metrics_subscriber.rs`, `worker_monitor.rs`, and `pool_relay/`); the
+  the publisher, read by `metrics_subscriber.rs`, `worker_monitor.rs`, and `dynamo-pool-relay`); the
   subscription to it; the worker monitor; and `routing_load.rs`, the load context shared by a
   worker set's scheduler and its load metrics.
 - `membership/`, `runtime_configs.rs`: KV event-source membership and the watch of per-worker
@@ -93,7 +93,7 @@ The state these stages read is kept up to date by the crate `dynamo-sync`
 - `dynamo-sync` is below this crate and cannot import it. Pass what it needs in, as `KvRouter`
   does with the router-mode selectors of the remote indexer.
 - This crate does not depend on `dynamo-discovery` or `dynamo-llm`: not on the model catalog,
-  `entrypoint`, `http`, `pool_relay` or the publisher. The catalog builds the routers and passes
+  `entrypoint`, `http` or the publisher, and not on `dynamo-pool-relay`. The catalog builds the routers and passes
   in what they need from above: the model manager as `PrefillEndpointProvider`, and its
   scheduler-load publisher as `SchedulerLoadPublisher`.
 

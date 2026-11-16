@@ -31,9 +31,6 @@ integration = ["dynamo-runtime/integration"]
 # matching feature of the protocols and the model card.
 media-ffmpeg = ["dynamo-preprocessor/media-ffmpeg"]
 bench = ["dynamo-kv-router/bench"]
-# Pull-only CKF Relay stats and snapshots. Keep this separate from `metrics`, which
-# is enabled by normal `dynamo-llm` builds and must not retain diagnostic hot-path work.
-ckf-diagnostics = ["dynamo-sync/ckf-diagnostics"]
 kv-router-stress = ["dep:clap", "dep:indicatif", "bench"]
 # Multimodal-aware KV routing info, which the preprocessor in dynamo-preprocessor builds.
 mm-routing = ["dynamo-preprocessor/mm-routing"]
@@ -63,14 +60,10 @@ dynamo-frontend-protocols = { workspace = true }
 dynamo-backend-common = { workspace = true }
 dynamo-discovery = { workspace = true }
 dynamo-http-server = { workspace = true }
-dynamo-global-discovery-client = { workspace = true }
 dynamo-admission = { workspace = true }
-dynamo-global-common = { workspace = true, features = ["grpc"] }
-dynamo-global-view-broadcaster = { path = "../global-view-broadcaster" }
 dynamo-error = { workspace = true, features = ["http"] }
 dynamo-kv-events = { workspace = true }
 dynamo-kv-hashing = { workspace = true }
-dynamo-kv-indexer = { workspace = true, features = ["export"] }
 dynamo-kv-router = { workspace = true, features = ["metrics"] }
 dynamo-lora = { workspace = true }
 dynamo-model-card = { workspace = true }
@@ -90,7 +83,6 @@ dynamo-renderer = { workspace = true }
 
 # workspace
 anyhow = { workspace = true }
-arc-swap = "1.9.1"
 dynamo-protocols = { workspace = true, features = ["protocol-schema"] }
 dynamo-decisions = { workspace = true }
 dynamo-parsers = { workspace = true }
@@ -111,7 +103,6 @@ prometheus = { workspace = true }
 rand = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true, features = ["raw_value"] }
-sha2 = "0.10"
 tempfile = { workspace = true }
 thiserror = { workspace = true }
 tmq = { workspace = true }
@@ -165,8 +156,6 @@ utoipa-swagger-ui = { version = "10.0.2", features = ["axum"] }
 # ping version to 0.13.1 so it depends on prost 0.13.5
 # which is used across other libraries
 tonic = { version = "0.13.1", features = ["zstd"] }
-tonic-health = { workspace = true }
-tonic-reflection = { version = "0.13.1" }
 # Request prost specifically so tonic-build properly compiles protobuf message
 prost = { version = "0.13.5" }
 

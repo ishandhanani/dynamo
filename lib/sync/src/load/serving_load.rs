@@ -16,6 +16,13 @@ pub const SCHEDULER_LOAD_SUBJECT: &str = "scheduler_load";
 /// One complete rank batch per interval; the relay derives freshness from this cadence.
 pub const SCHEDULER_LOAD_PUBLISH_INTERVAL: Duration = Duration::from_secs(1);
 
+/// Frontend load frames (`dynamo_http_server::load::FrontendLoadFrame`), published by every
+/// frontend in its namespace and consumed by the Pool Relay.
+pub const FRONTEND_LOAD_TOPIC: &str = "frontend_load";
+
+/// One complete frame per interval; the relay derives freshness from this cadence.
+pub const FRONTEND_LOAD_PUBLISH_INTERVAL: Duration = Duration::from_secs(1);
+
 /// Whether this process publishes the serving-load streams a Relay
 /// aggregates. Off unless `DYN_SERVING_LOAD_PUBLISH` is truthy.
 pub fn serving_load_publishing_enabled() -> bool {

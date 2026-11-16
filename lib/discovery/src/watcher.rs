@@ -69,11 +69,11 @@ use dynamo_router_host::{
 use dynamo_router_protocol::worker_type::WorkerType;
 use dynamo_sync::load::{LoadThresholdHandle, RouterLoadSource, RoutingLoadContext};
 
-use super::readiness::normalize_legacy_prefill_topology;
 use super::{
     ModelManager,
     controller::{ControllerHost, DesiredInstance, GroupKey, GroupSpec, ModelDiscoveryController},
 };
+use dynamo_model_card::readiness::normalize_legacy_prefill_topology;
 use dynamo_runtime::namespace::{NamespaceFilter, NamespacePrefixMode};
 use tokio_util::sync::CancellationToken;
 

@@ -148,6 +148,7 @@ Removed with no replacement: the dummy shared-cache server, `services::shared_ca
 | `kv_router::shared_cache` | `dynamo_discovery::shared_cache` |
 | `entrypoint::{PreprocessedRouting, build_preprocessed_routing, ChatEngineFactoryCallback, PrefillRoutedEngine}` | `dynamo_discovery` |
 | `lora::{LoadEstimatorSubscription, controller_metrics}`, `http::service::metrics::register_lora_allocation_metrics`, and the `http::service::metrics::LORA_*_GAUGE` gauges | `dynamo_discovery::lora` |
+| `pool_relay` | `dynamo_pool_relay`, the crate root |
 
 A log statement that does not pin a target reports its module path, so its target follows the move.
 
@@ -177,8 +178,9 @@ A log statement that does not pin a target reports its module path, so its targe
 | `dynamo_llm::discovery` | `dynamo_discovery` |
 | `dynamo_llm::kv_router::shared_cache` | `dynamo_discovery::shared_cache` |
 | `dynamo_llm::lora::subscription` | `dynamo_discovery::lora::subscription` |
+| `dynamo_llm::pool_relay` | `dynamo_pool_relay` |
 
-Statements that pin a target keep it: the request-trace sinks still log under `dynamo_llm::request_trace`. Removed with no replacement: `kv_router::WORKER_KV_INDEXER_BUFFER_SIZE`, which is now private to the KV event publisher.
+Statements that pin a target keep it: the request-trace sinks still log under `dynamo_llm::request_trace`. Removed with no replacement: `kv_router::WORKER_KV_INDEXER_BUFFER_SIZE`, which is now private to the KV event publisher. The `ckf-diagnostics` cargo feature leaves `dynamo-llm`; enable `dynamo-pool-relay/ckf-diagnostics` instead.
 
   > **Migrate:** Replace each `dynamo_llm::<pre-split path>` import with the owner path from the first table and add the owner crate to your `Cargo.toml`. A `DYN_LOG` filter scoped to `dynamo_llm` or to one of its modules must name the new crate from the second table. There is no runtime alias, so the old directive no longer selects the moved statements.
 

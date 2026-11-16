@@ -21,8 +21,8 @@ dynamo-global-view-receiver = { path = "../global-view-receiver" }
 dynamo-global-discovery-client = { workspace = true }
 dynamo-global-router = { workspace = true }
 dynamo-global-router-store-dynamodb = { workspace = true }
-# For the PoolRelay protocol and the session header.
-dynamo-llm = { workspace = true }
+# For the PoolRelay protocol.
+dynamo-pool-relay = { workspace = true }
 dynamo-frontend-protocols = { workspace = true }
 dynamo-http-server = { workspace = true }
 dynamo-runtime = { workspace = true }
@@ -52,4 +52,6 @@ url = { workspace = true }
 [dev-dependencies]
 dynamo-global-view-broadcaster = { path = "../global-view-broadcaster" }
 dynamo-discovery = { workspace = true }
+# The forwarding test serves a local frontend.
+dynamo-llm = { workspace = true }
 dynamo-model-card = { workspace = true }

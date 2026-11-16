@@ -1,0 +1,53 @@
+// SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// SPDX-License-Identifier: Apache-2.0
+
+//! # Dynamo Pool Relay
+//!
+//! Pool Relay with endpoint-local CKF pools.
+//!
+//! `docs/architecture.md` and `docs/grpc-contract.md` next to this file describe it. The
+//! crate depends on `dynamo-sync` and never on `dynamo-llm` or `dynamo-discovery`.
+
+pub use dynamo_global_common::PoolKey as RoutingPoolKey;
+
+mod actor;
+mod discovery;
+mod host;
+mod identity;
+mod load;
+mod membership_watch;
+mod namespace_source;
+mod pool_registry;
+mod publication;
+mod resolution;
+mod routing_pool;
+mod serving_load;
+mod topology;
+pub mod wan;
+
+pub use host::{
+    DEFAULT_EXPECTED_UNIQUE_BLOCKS, PoolRelay, PoolRelayConfig, PoolRelayError, PoolRelayHealth,
+    PoolRelayProducerConfig, PoolRelaySources,
+};
+#[cfg(feature = "ckf-diagnostics")]
+pub use host::{
+    PoolRelayActorStats, PoolRelayAggregationStats, PoolRelayCacheDomainStats,
+    PoolRelayDiagnosticSnapshot, PoolRelayEndpointStats, PoolRelayIdentityStats,
+    PoolRelayMemberStats, PoolRelayMemoryStats, PoolRelayPublicationStats, PoolRelayRecoveryStats,
+    PoolRelayStats,
+};
+pub use identity::{
+    CanonicalModelId, CanonicalModelIdError, CanonicalModelRegistration, KvQueryHashFormat,
+    KvQuerySemantics, KvQuerySemanticsError, ModelAlias, ModelAliasError, ModelTarget,
+    PoolCatalogSnapshot, PoolDescriptor, PoolIdentitySources, PoolRelayIdentity, WorkerRole,
+};
+pub use load::PoolLoadSnapshot;
+pub use namespace_source::discovery::PoolRelayDiscoveryConfig;
+pub use namespace_source::{PoolRelaySourcesStatus, file::PoolRelaySourcesFile};
+pub use publication::{
+    PoolPublicationStream, PublicationError, PublicationErrorKind, PublicationFrame,
+    PublicationFrameKind, RelayPublicationSource,
+};
+pub use topology::{
+    AdapterReadiness, TopologyEntry, TopologyMember, TopologyReadinessState, TopologySnapshot,
+};
