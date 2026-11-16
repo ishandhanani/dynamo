@@ -60,7 +60,7 @@ pub use dynamo_kv_hints::{KvHintTransferWorkerMetadata, KvTransferEnforcement};
 pub use dynamo_kv_indexer::IndexRegistry;
 pub use dynamo_kv_indexer::IndexerPolicy;
 
-// What the frontend host (lib/llm) names beyond the lists above.
+// What the frontend host (lib/router-host, lib/discovery) names beyond the lists above.
 pub use crate::filter::{RoutingEligibility, WorkerEligibilityError};
 pub use crate::overlap::{CacheHitEstimates, cache_hit_estimates_from_tiered_matches};
 pub use crate::prefill_load::effective_prefill_tokens;

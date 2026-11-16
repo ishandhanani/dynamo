@@ -156,7 +156,7 @@ Recovery targets the state whose commit became uncertain:
 - An uncertain consumer lane needs lane retirement and a new snapshot, not producer recovery.
 - Ordinary capacity exhaustion omits only physical admission and requires no recovery.
 
-The pool relay in `lib/llm` carries this snapshot/delta protocol between processes without moving
+The Pool Relay in `lib/pool-relay` carries this snapshot/delta protocol between processes without moving
 exact full-hash ownership into the global consumer.
 
 ## Directory map

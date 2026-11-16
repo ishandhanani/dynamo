@@ -1,3 +1,30 @@
+# lib/llm
+
+`dynamo-llm` is the frontend. It owns the OpenAI, Anthropic and System One HTTP service (`http`), the KServe gRPC service (`grpc`), the entrypoint that prepares an engine and runs an input (`entrypoint`), the frontend serving-load publisher (`frontend_load`), the `/generate` format registry (`generate_format`), and the adapter that runs a `dynamo-mocker` engine on the runtime (`mocker`). `utils::lora_name_to_id` backs the Python binding of the same name.
+
+The KV block manager (`block_manager`, `tokens`, `cuda`, `common::dtype`, `src/kernels`, behind the `block-manager` and `cuda` features) also still lives here. It is being removed separately; do not build on it.
+
+Everything else that used to be in this crate is a crate of its own, and `dynamo-llm` re-exports none of it: import the owner. Dependencies point down this list.
+
+| Crate | Path | Owns |
+| --- | --- | --- |
+| `dynamo-llm` | `lib/llm` | the frontend, as above |
+| `dynamo-discovery` | `lib/discovery` | the model catalog (`ModelManager`, `ModelWatcher`, `WorkerSet`), the engines it registers, and the routed-pipeline builder |
+| `dynamo-router-host` | `lib/router-host` | the router's request path: `KvRouter`, the prefill and encode hops, migration, session affinity |
+| `dynamo-sync` | `lib/sync` | what keeps a router's view of its workers up to date: KV index ingest and recovery, active-sequence replica sync, worker load, KV event-source membership |
+| `dynamo-preprocessor` | `lib/preprocessor` | the preprocessor and the detokenizer (`backend`) |
+| `dynamo-telemetry` | `lib/telemetry` | request trace, sinks and recorders |
+| `dynamo-frontend-protocols` | `lib/frontend-protocols` | the OpenAI, Anthropic, tensor and internal request and response types |
+| `dynamo-model-card` | `lib/model-card` | the model deployment card, the runtime config, the local model and the model types |
+
+- The chain is frontend -> discovery -> router host -> sync -> frontend-protocols -> model-card. `dynamo-preprocessor` and `dynamo-telemetry` sit beside `dynamo-sync`, above the protocols and the model card: discovery and the frontend depend on the preprocessor, the preprocessor and the router host on telemetry. No crate in the table depends on one above it.
+- Worker-side code is `dynamo-backend-common` (`lib/backend-common`): the admission gate, the first-token notifier, and the KV event and forward-pass-metrics publishers. It depends on `dynamo-sync` and what is below it, never on this crate; this crate depends on it for the mocker adapter and the worker entrypoint.
+- The Pool Relay is `dynamo-pool-relay` (`lib/pool-relay`), on `dynamo-sync`. This crate does not depend on it.
+- Under all of them: `dynamo-http-server` (the HTTP server machinery and the request metrics) and `dynamo-error` (the error-class to HTTP status policy, feature `http`).
+- Cargo features `media-ffmpeg` and `mm-routing` forward to `dynamo-preprocessor`, and `request-trace-s3` and `request-trace-bench` to `dynamo-telemetry`; they gate no code here.
+- Log targets of moved code name the new crate (`dynamo_discovery::...`, `dynamo_router_host::...`); the v1.7.0 section of the deprecations page has the table.
+- Check: `cargo check -p dynamo-llm --all-targets`, `cargo test -p dynamo-llm --lib` or `--test <name>`, and `cargo tree -p <crate> | grep dynamo-llm` must print nothing for every crate below this one in the table and for `dynamo-backend-common` and `dynamo-pool-relay`.
+
 # Protocol Field Handling
 
 Before changing request or response fields, validation, preprocessing, backend translation, or
@@ -24,8 +51,9 @@ separate exemption from checksum equality. See
 succession contract. N-3 and older combinations are unsupported unless a
 narrower temporary exception is explicitly documented.
 
-Treat model deployment cards, discovery metadata, and worker/frontend wire
-formats owned by this crate as cross-process compatibility surfaces. Consider
+Treat model deployment cards (`dynamo-model-card`), discovery metadata
+(`dynamo-discovery`), and worker/frontend wire formats
+(`dynamo-frontend-protocols`) as cross-process compatibility surfaces. Consider
 both age directions: an older worker with a newer frontend and a newer worker
 with an older frontend, anywhere within the supported window.
 

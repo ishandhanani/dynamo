@@ -19,5 +19,5 @@ pub use crate::selection_config::{SelectionConfig, SharedCacheType};
 pub use crate::shared_cache::SharedCacheHits;
 pub use crate::trace::{SelectionTrace, SelectionTraceSpec};
 
-// What the frontend host (lib/llm) names beyond the lists above.
+// What the frontend host (lib/router-host) names beyond the lists above.
 pub use crate::conditional_disagg::{ConditionalDisaggPolicy, make_conditional_disagg_policy};

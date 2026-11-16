@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! Request-plane DTOs for the worker KV query endpoint and the served indexer endpoints.
-//! `lib/llm` wraps the responses in transparent newtypes that implement the runtime
+//! `lib/sync` wraps the responses in transparent newtypes that implement the runtime
 //! `MaybeError`; these types carry no runtime dependency and move to the stage crate next.
 
 use serde::{Deserialize, Serialize};

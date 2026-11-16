@@ -570,7 +570,7 @@ pub enum DiscoverySpec {
         component: String,
         endpoint: String,
         /// ModelDeploymentCard serialized as JSON
-        /// This allows lib/runtime to remain independent of lib/llm types
+        /// This allows lib/runtime to remain independent of lib/model-card types
         /// DiscoverySpec.from_model() and DiscoveryInstance.deserialize_model() are ergonomic helpers to create and deserialize the model card.
         card_json: serde_json::Value,
         /// Optional suffix appended after instance_id in the key path (e.g., for LoRA adapters)
@@ -720,7 +720,7 @@ pub enum DiscoveryInstance {
         endpoint: String,
         instance_id: u64,
         /// ModelDeploymentCard serialized as JSON
-        /// This allows lib/runtime to remain independent of lib/llm types
+        /// This allows lib/runtime to remain independent of lib/model-card types
         card_json: serde_json::Value,
         /// Optional suffix appended after instance_id in the key path (e.g., for LoRA adapters)
         #[serde(default, skip_serializing_if = "Option::is_none")]

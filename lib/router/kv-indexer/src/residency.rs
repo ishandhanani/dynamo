@@ -77,7 +77,7 @@ fn update_cache_owner_hash(hasher: &mut blake3::Hasher, owner: CacheOwnerId) {
 /// Immutable control-plane projection from exact residency owners to workers
 /// that may currently consume those blocks.
 ///
-/// Router-core stores no discovery state. The lib/llm wrapper resolves and
+/// Router-core stores no discovery state. The lib/sync wrapper resolves and
 /// swaps this snapshot when source, attachment, or readability membership
 /// changes; one snapshot is pinned for each tiered lookup.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
