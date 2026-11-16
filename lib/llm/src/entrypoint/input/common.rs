@@ -8,7 +8,6 @@ use anyhow::Context as _;
 use dynamo_renderer::PromptFormatter;
 
 use crate::{
-    backend::{Backend, ExecutionContext},
     discovery::{ModelManager, ModelWatcher},
     engines::StreamingEngineAdapter,
     entrypoint::EngineConfig,
@@ -16,7 +15,6 @@ use crate::{
     kv_router::{EncoderRouter, KvRouter, PrefillRouter, RoutingHost, RoutingLoadContext},
     migration::Migration,
     namespace::NamespaceFilter,
-    preprocessor::{OpenAIPreprocessor, prompt::prompt_formatter_from_mdc},
     session_affinity::{SessionAffinityMode, create_affinity_coordinator},
 };
 use dynamo_frontend_protocols::common::llm_backend::{
@@ -34,6 +32,8 @@ use dynamo_frontend_protocols::types::{
 };
 use dynamo_http_server::metrics::Metrics;
 use dynamo_model_card::{model_card::ModelDeploymentCard, request_template::RequestTemplate};
+use dynamo_preprocessor::backend::{Backend, ExecutionContext};
+use dynamo_preprocessor::{OpenAIPreprocessor, prompt::prompt_formatter_from_mdc};
 
 use dynamo_kv_router::config::min_initial_workers_from_env;
 use dynamo_lora::policy::validate_router_mode_for_lora;

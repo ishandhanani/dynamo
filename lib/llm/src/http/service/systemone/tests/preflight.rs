@@ -58,7 +58,7 @@ fn preflight_selection_with_tokenizer(
     card.runtime_config.context_length = Some(65_536);
     card.runtime_config.reasoning_parser = reasoning.map(str::to_owned);
     let dynamo_renderer::PromptFormatter::OAI(formatter) =
-        crate::preprocessor::prompt::prompt_formatter_from_mdc(&card).unwrap();
+        dynamo_preprocessor::prompt::prompt_formatter_from_mdc(&card).unwrap();
     let preprocessor =
         OpenAIPreprocessor::new_with_parts(card.clone(), formatter, Arc::new(tokenizer).into())
             .unwrap();

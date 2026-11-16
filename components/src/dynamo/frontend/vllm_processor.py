@@ -364,7 +364,7 @@ class _ReasoningUsageAnnotator:
     """Report reasoning-token usage on the PYTHON chat-processor path.
 
     NVBug 6678449b. dynamo #12181 added this, but only to the RUST OpenAIPreprocessor
-    (lib/llm/src/preprocessor.rs). `--dyn-chat-processor vllm` selects this Python path,
+    (lib/preprocessor/src/lib.rs). `--dyn-chat-processor vllm` selects this Python path,
     which bypasses that code entirely -- and the worker's _build_completion_usage()
     emits no `completion_tokens_details` key at all, so `reasoning_tokens` is ABSENT
     (not null) from usage.
@@ -699,7 +699,7 @@ def _normalize_vllm_image_parts(messages: list[Any]) -> None:
 
 # Request fields the vLLM worker applies from extra_args.sampling_options, sent
 # as the client wrote them: the Rust preprocessor's `sampling_passthrough_args`
-# (lib/llm/src/preprocessor.rs) without `detokenize`, which the worker's token
+# (lib/preprocessor/src/lib.rs) without `detokenize`, which the worker's token
 # path always turns off.
 _SAMPLING_PASSTHROUGH_FIELDS = (
     "allowed_token_ids",

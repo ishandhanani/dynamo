@@ -3135,7 +3135,7 @@ mod tests {
             true.into(),
         );
         card.runtime_config.max_num_seqs = Some(1);
-        let preprocessor = crate::preprocessor::OpenAIPreprocessor::new(card.clone()).unwrap();
+        let preprocessor = dynamo_preprocessor::OpenAIPreprocessor::new(card.clone()).unwrap();
         let mut worker_set = WorkerSet::new(name.to_string(), name.to_string(), card);
         worker_set.generate_engine = Some(Arc::new(SystemOneStubEngine));
         worker_set.systemone_preprocessor = Some(preprocessor);

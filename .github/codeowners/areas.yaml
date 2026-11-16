@@ -31,9 +31,9 @@ areas:
   - lib/llm/src/lora/
   - lib/llm/src/lora_routing.rs
   - lib/lora/
-  - lib/llm/src/preprocessor.rs
-  - lib/llm/src/preprocessor/
-  - lib/llm/src/preprocessor/tools/
+  - lib/preprocessor/src/lib.rs
+  - lib/preprocessor/src/
+  - lib/preprocessor/src/tools/
   - lib/frontend-protocols/
   - lib/frontend-protocols/src/lib.rs
   - lib/frontend-protocols/src/
@@ -44,8 +44,8 @@ areas:
   - lib/frontend-protocols/src/openai/
   - lib/model-card/src/parser_family.rs
   - lib/model-card/src/tensor_model.rs
-  - lib/llm/tests/test_reasoning_parser.rs
-  - lib/llm/tests/test_streaming_tool_parsers.rs
+  - lib/preprocessor/tests/test_reasoning_parser.rs
+  - lib/preprocessor/tests/test_streaming_tool_parsers.rs
   - tests/frontend/
   - tests/frontend/grpc/
 - label: agents
@@ -235,8 +235,8 @@ areas:
   - components/src/dynamo/vllm/multimodal_handlers/
   - components/src/dynamo/vllm/multimodal_utils/
   - components/src/dynamo/vllm/omni/
-  - lib/llm/src/preprocessor/media.rs
-  - lib/llm/src/preprocessor/media/
+  - lib/preprocessor/src/media.rs
+  - lib/preprocessor/src/media/
   - lib/model-card/src/media_config.rs
   - tests/benchmarks/multimodal/
   - tests/mm_router/
@@ -293,9 +293,10 @@ areas:
   - lib/bindings/python/
   - lib/error/
   - lib/llm/
+  - lib/preprocessor/
+  - lib/preprocessor/src/backend.rs
   - lib/llm/benches/
   - lib/llm/bin/
-  - lib/llm/examples/
   - lib/llm/src/bin/
   - lib/llm/src/common/
   - lib/llm/src/discovery/
@@ -1203,12 +1204,12 @@ shared:
   owners:
   - frontend
   - router
-- glob: lib/llm/src/preprocessor/mm_routing/
+- glob: lib/preprocessor/src/mm_routing/
   owners:
   - frontend
   - multimodal
   - router
-- glob: lib/llm/src/preprocessor/media/rdma.rs
+- glob: lib/preprocessor/src/media/rdma.rs
   owners:
   - multimodal
   - router

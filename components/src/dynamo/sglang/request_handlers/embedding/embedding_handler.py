@@ -28,7 +28,7 @@ def _encode_floats_to_base64(floats: List[float]) -> str:
     are concatenated and base64-encoded with the standard alphabet.
 
     Mirrors the Rust ``encode_floats_to_base64`` helper in
-    ``lib/llm/src/preprocessor.rs`` so the two backend code paths
+    ``lib/preprocessor/src/lib.rs`` so the two backend code paths
     produce identical bytes for the same input.
     """
     packed = struct.pack(f"<{len(floats)}f", *floats)

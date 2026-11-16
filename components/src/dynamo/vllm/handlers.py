@@ -953,7 +953,7 @@ def build_sampling_params(
     # skip_special_tokens is intentionally NOT forwarded to vLLM here: this path
     # forces detokenize=False (below), so vLLM never detokenizes and ignores it.
     # Dynamo detokenizes in the Rust backend, which reads skip_special_tokens
-    # directly from the request output_options (lib/llm/src/backend.rs).
+    # directly from the request output_options (lib/preprocessor/src/backend.rs).
 
     # Legacy completions use SamplingParams defaults; chat and Responses use
     # the remaining context when the model has no generation limit.

@@ -24,8 +24,8 @@ use dynamo_frontend_protocols::openai::chat_completions::{
     NvCreateChatCompletionRequest, NvCreateChatCompletionStreamResponse,
 };
 use dynamo_llm::http::service::service_v2::HttpService;
-use dynamo_llm::preprocessor::OpenAIPreprocessor;
 use dynamo_model_card::model_card::ModelDeploymentCard;
+use dynamo_preprocessor::OpenAIPreprocessor;
 use dynamo_runtime::CancellationToken;
 use dynamo_runtime::pipeline::{
     AsyncEngine, AsyncEngineContextProvider, ManyOut, Operator, ResponseStream, SingleIn,

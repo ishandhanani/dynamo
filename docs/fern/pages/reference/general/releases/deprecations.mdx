@@ -130,6 +130,8 @@ Removed with no replacement: the dummy shared-cache server, `services::shared_ca
 | The re-exports `preprocessor::{BackendOutput, PreprocessedRequest, PreprocessedEmbeddingRequest, LLMMetricAnnotation, ANNOTATION_LLM_METRICS, ANNOTATION_PAYLOAD_USAGE}` and `discovery::{WORKER_TYPE_DECODE, WORKER_TYPE_PREFILL}` | `dynamo_frontend_protocols::common::{llm_backend, preprocessor, metrics, timing}` |
 | `request_trace`, `fpm_trace`, `recorder`, `perf` | `dynamo_telemetry`, under the same module names |
 | `telemetry` | `dynamo_telemetry`, the crate root |
+| `preprocessor` | `dynamo_preprocessor`, the crate root |
+| `backend` | `dynamo_preprocessor::backend` |
 
 A log statement that does not pin a target reports its module path, so its target follows the move.
 
@@ -144,6 +146,8 @@ A log statement that does not pin a target reports its module path, so its targe
 | `dynamo_llm::protocols` | `dynamo_frontend_protocols` |
 | `dynamo_llm::{request_trace, fpm_trace, recorder}` | `dynamo_telemetry::{request_trace, fpm_trace, recorder}` |
 | `dynamo_llm::telemetry` | `dynamo_telemetry` |
+| `dynamo_llm::preprocessor` | `dynamo_preprocessor` |
+| `dynamo_llm::backend` | `dynamo_preprocessor::backend` |
 
 Statements that pin a target keep it: the request-trace sinks still log under `dynamo_llm::request_trace`.
 

@@ -406,7 +406,7 @@ fn prepare_branches(
             )
             .map_err(|cause| {
                 if let Some(oversized) =
-                    cause.downcast_ref::<crate::preprocessor::SystemOnePromptTooLong>()
+                    cause.downcast_ref::<dynamo_preprocessor::SystemOnePromptTooLong>()
                 {
                     return (
                         StatusCode::UNPROCESSABLE_ENTITY,
@@ -414,7 +414,7 @@ fn prepare_branches(
                     );
                 }
                 if let Some(oversized) =
-                    cause.downcast_ref::<crate::preprocessor::SystemOneEncodingTooLarge>()
+                    cause.downcast_ref::<dynamo_preprocessor::SystemOneEncodingTooLarge>()
                 {
                     return (
                         StatusCode::UNPROCESSABLE_ENTITY,
@@ -422,7 +422,7 @@ fn prepare_branches(
                     );
                 }
                 if let Some(incompatible) = cause
-                    .downcast_ref::<crate::preprocessor::SystemOneCandidateLabelsIncompatible>()
+                    .downcast_ref::<dynamo_preprocessor::SystemOneCandidateLabelsIncompatible>()
                 {
                     return (
                         StatusCode::UNPROCESSABLE_ENTITY,
@@ -430,7 +430,7 @@ fn prepare_branches(
                     );
                 }
                 let reason = if let Some(incompatible) =
-                    cause.downcast_ref::<crate::preprocessor::SystemOneModelIncompatible>()
+                    cause.downcast_ref::<dynamo_preprocessor::SystemOneModelIncompatible>()
                 {
                     incompatible.0
                 } else if dynamo_error::http::find_canonical_error_in_chain(cause.as_ref())

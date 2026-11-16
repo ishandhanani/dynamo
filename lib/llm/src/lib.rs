@@ -7,7 +7,6 @@
 //! distributed LLM inference solutions.
 
 pub mod admission_gate;
-pub mod backend;
 pub mod common;
 mod direct_zmq_fan_in;
 mod direct_zmq_sub_pool;
@@ -28,7 +27,6 @@ pub mod migration;
 pub mod mocker;
 pub mod namespace;
 pub mod pool_relay;
-pub mod preprocessor;
 mod routing_policy;
 pub mod session_affinity;
 pub use dynamo_tokenizers as tokenizers;

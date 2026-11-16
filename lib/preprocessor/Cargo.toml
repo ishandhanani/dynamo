@@ -1,0 +1,157 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+[package]
+name = "dynamo-preprocessor"
+description = "Preprocessor and detokenizer stages of the Dynamo frontend pipeline"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+homepage.workspace = true
+repository.workspace = true
+
+[features]
+# Frontend video decoding through FFmpeg. dynamo-llm forwards its own media-ffmpeg
+# feature here; the protocols and the model card get theirs so all three agree on
+# the video variant.
+media-ffmpeg = [
+    "dep:video-rs",
+    "dep:ffmpeg-next",
+    "dep:memfile",
+    "dynamo-frontend-protocols/media-ffmpeg",
+    "dynamo-model-card/media-ffmpeg",
+]
+# Per-image token counts for multimodal-aware KV routing. dynamo-llm forwards its own
+# mm-routing feature here.
+mm-routing = ["dep:dynamo-multimodal", "dep:llm-multimodal", "dep:llm-tokenizer"]
+# Exports the `test_fixtures` module that dynamo-llm's HTTP tests reuse.
+testing = []
+# Compiles the media tests that need a NIXL installation.
+testing-nixl = ["dynamo-memory/testing-nixl"]
+
+[[bench]]
+name = "tokenizer_simple"
+harness = false
+
+[[bench]]
+name = "tokenizer_dataset"
+harness = false
+
+[[bench]]
+name = "image_decode"
+harness = false
+
+[[bench]]
+name = "video_decode"
+harness = false
+required-features = ["media-ffmpeg"]
+
+[dependencies]
+# repo
+dynamo-frontend-protocols = { workspace = true }
+dynamo-http-server = { workspace = true }
+dynamo-kv-events = { workspace = true }
+dynamo-kv-hashing = { workspace = true }
+dynamo-memory = { workspace = true }
+dynamo-model-card = { workspace = true }
+dynamo-runtime = { workspace = true }
+dynamo-telemetry = { workspace = true }
+
+# published
+dynamo-parsers = { workspace = true }
+dynamo-parsers-v2 = { workspace = true }
+dynamo-protocols = { workspace = true }
+dynamo-renderer = { workspace = true }
+dynamo-tokenizers = { workspace = true }
+
+# workspace
+anyhow = { workspace = true }
+async-stream = { workspace = true }
+async-trait = { workspace = true }
+either = { workspace = true }
+futures = { workspace = true }
+ipnet = { workspace = true }
+libc = { workspace = true }
+lru = { workspace = true }
+moka = { workspace = true }
+parking_lot = { workspace = true }
+reqwest = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+tokio-util = { workspace = true }
+tracing = { workspace = true }
+url = { workspace = true }
+uuid = { workspace = true }
+xxhash-rust = { workspace = true }
+
+# backend
+galil-seiferas = { version = "0.1" }
+
+# preprocessor
+# "preserve_order" backs minijinja's object values with IndexMap instead of
+# BTreeMap, so JSON object keys survive template rendering in client order.
+# Without it, tool schemas and tool-call arguments render with keys sorted
+# alphabetically, diverging from Python frontends (vLLM/SGLang) which preserve
+# dict insertion order. serde_json already has its preserve_order enabled by
+# dynamo-renderer; minijinja's map is the remaining sort point.
+minijinja = { version = "2.21.0", features = ["loader", "loop_controls", "preserve_order"] }
+
+# media loading in the preprocessor
+base64 = { version = "0.22" }
+# zlib compression for NIXL metadata
+flate2 = { version = "1" }
+image = { version = "0.25", features = ["serde"] }
+libloading = "0.8"
+# Track the in-tree FFmpeg major (container/context.yaml ffmpeg_version): these
+# bind the system libraries, and video-rs 0.12 requires ffmpeg-next =9.0.0.
+video-rs = { version = "0.12.0", optional = true }
+ffmpeg-next = { version = "9.0.0", optional = true }
+memfile = { version = "0.3.2", optional = true }
+tokio-rayon = {version = "2" }
+ndarray = { version = "0.16" }
+
+# Pure-Rust per-VLM-family image preprocessor token-count, used by the
+# `mm-routing` feature for MM-aware KV routing. Pinned to an exact
+# version because per-image token-count math (`calculate_num_tokens`)
+# can change between minor releases as new models are added or
+# smart-resize parameters are tuned. Bumping should be a deliberate,
+# reviewed step paired with re-running our golden cross-check against
+# `transformers`.
+llm-multimodal = { version = "=1.9.0", optional = true }
+# GLM's metadata-only planner; no parallel pixel processing is needed for routing.
+dynamo-multimodal = { version = "=0.2.2", default-features = false, optional = true }
+# Companion to llm-multimodal: provides `HuggingFaceTokenizer` so the
+# model_dir's `tokenizer.json` can be passed to the
+# `ModelRegistry::lookup` for image-placeholder token-id resolution.
+llm-tokenizer = { version = "=1.6.0", optional = true }
+
+[dev-dependencies]
+dynamo-error = { workspace = true, features = ["http"] }
+dynamo-frontend-protocols = { workspace = true, features = ["testing"] }
+dynamo-runtime = { workspace = true, features = ["testing"] }
+axum = { workspace = true }
+criterion = { version = "0.5", features = ["html_reports"] }
+hf-hub = { workspace = true, features = ["tokio", "rustls-tls", "ureq"] }
+insta = { version = "1.41", features = [
+  "glob",
+  "json",
+  "redactions",
+  "filters",
+] }
+mockito = "1.7.0"
+rayon = "1"
+rmp-serde = "1.3"
+rstest = "0.18.2"
+serial_test = "3"
+temp-env = { version = "0.3.6", features = ["async_closure"] }
+tempfile = { workspace = true }
+tokenizers = { version = "0.23.2", default-features = false, features = [
+  "onig",
+  "esaxx_fast",
+  "rustls-tls",
+] }
+tokio = { workspace = true, features = ["test-util"] }
+tracing-subscriber = { workspace = true }

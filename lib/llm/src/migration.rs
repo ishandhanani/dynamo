@@ -4061,7 +4061,7 @@ mod tests {
     // so `test_retry_manager_carries_jail_seed_across_migration` only proves the
     // `jail_seed` field gets copied between hand-built mocks -- removing the real `Backend`
     // seed consumption entirely would not fail it. The tests below instead run raw
-    // (undetokenized) token ids through a real `crate::backend::Backend` wrapping a real
+    // (undetokenized) token ids through a real `dynamo_preprocessor::backend::Backend` wrapping a real
     // `Decoder`, so a migration retry re-creates an actual fresh decoder the way the
     // production pipeline does, and prove the checkpoint is consumed correctly by it.
 
@@ -4104,9 +4104,11 @@ mod tests {
 
     impl crate::tokenizers::traits::Tokenizer for LetterTokenizer {}
 
-    fn letter_backend() -> Arc<crate::backend::Backend> {
+    fn letter_backend() -> Arc<dynamo_preprocessor::backend::Backend> {
         let tokenizer: Arc<dyn crate::tokenizers::traits::Tokenizer> = Arc::new(LetterTokenizer);
-        crate::backend::Backend::from_tokenizer(crate::tokenizers::Tokenizer::from(tokenizer))
+        dynamo_preprocessor::backend::Backend::from_tokenizer(crate::tokenizers::Tokenizer::from(
+            tokenizer,
+        ))
     }
 
     fn jail_request(stop: Option<Vec<String>>) -> PreprocessedRequest {
@@ -4176,7 +4178,7 @@ mod tests {
     /// pipeline does (migration sits outside `Backend` from the response's perspective; see
     /// `lib/llm/src/entrypoint/input/common.rs`).
     struct BackendWrappedEngine {
-        backend: Arc<crate::backend::Backend>,
+        backend: Arc<dynamo_preprocessor::backend::Backend>,
         raw_engine: ServerStreamingEngine<PreprocessedRequest, Annotated<LLMEngineOutput>>,
     }
 
@@ -4195,7 +4197,7 @@ mod tests {
     /// Drives a `RetryManager` wrapping a real `Backend` over a scripted raw-token engine
     /// and returns every data-bearing response for content and accounting assertions.
     async fn run_raw_token_migration_outputs(
-        backend: Arc<crate::backend::Backend>,
+        backend: Arc<dynamo_preprocessor::backend::Backend>,
         stop: Option<Vec<String>>,
         first_attempt_tokens: Vec<u32>,
         retry_tokens: Vec<u32>,
@@ -4275,7 +4277,7 @@ mod tests {
 
     /// Real byte-fallback tokenizer used to prove migration replays incremental decoder
     /// state rather than treating buffered generated IDs as already-consumed prompt.
-    fn byte_fallback_backend() -> Arc<crate::backend::Backend> {
+    fn byte_fallback_backend() -> Arc<dynamo_preprocessor::backend::Backend> {
         let hf: tokenizers::Tokenizer = serde_json::from_value(serde_json::json!({
             "version": "1.0", "truncation": null, "padding": null,
             "added_tokens": [], "normalizer": null, "pre_tokenizer": null,
@@ -4289,7 +4291,9 @@ mod tests {
         .unwrap();
         let tokenizer: Arc<dyn crate::tokenizers::traits::Tokenizer> =
             Arc::new(crate::tokenizers::HuggingFaceTokenizer::from_tokenizer(hf));
-        crate::backend::Backend::from_tokenizer(crate::tokenizers::Tokenizer::from(tokenizer))
+        dynamo_preprocessor::backend::Backend::from_tokenizer(crate::tokenizers::Tokenizer::from(
+            tokenizer,
+        ))
     }
 
     /// A buffered ASCII byte from the failed attempt must be released with the retry's

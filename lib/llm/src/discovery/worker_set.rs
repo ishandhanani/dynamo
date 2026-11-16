@@ -20,7 +20,6 @@ use tokio_util::sync::CancellationToken;
 use crate::{
     discovery::{LoadThresholdHandle, allocator::AllocatorTrimOnDrop},
     kv_router::{EncoderRouter, RoutingLoadContext, prefill_router::PrefillRouterLifecycle},
-    preprocessor::OpenAIPreprocessor,
 };
 use dynamo_frontend_protocols::types::{
     RealtimeBidirectionalEngine,
@@ -36,6 +35,7 @@ use dynamo_frontend_protocols::types::{
     },
 };
 use dynamo_model_card::model_card::ModelDeploymentCard;
+use dynamo_preprocessor::OpenAIPreprocessor;
 
 type StreamingEngine<Req, Resp> = Arc<dyn AsyncEngine<SingleIn<Req>, ManyOut<Resp>, Error>>;
 
@@ -152,7 +152,7 @@ impl<Req: Data, Resp: Data> AsyncEngine<SingleIn<Req>, ManyOut<Resp>, Error>
 {
     async fn generate(&self, mut request: SingleIn<Req>) -> Result<ManyOut<Resp>, Error> {
         request.insert(
-            crate::preprocessor::LORA_NAME_CONTEXT_KEY,
+            dynamo_preprocessor::LORA_NAME_CONTEXT_KEY,
             self.lora_name.clone(),
         );
         self.inner.generate(request).await
@@ -461,7 +461,7 @@ impl WorkerSet {
                 .card
                 .runtime_config
                 .runtime_data
-                .get(crate::preprocessor::DEFAULT_THINKING_MODE_RUNTIME_KEY)
+                .get(dynamo_preprocessor::DEFAULT_THINKING_MODE_RUNTIME_KEY)
                 .and_then(serde_json::Value::as_str)
                 .map(str::to_string),
             structural_tag: self.card.runtime_config.structural_tag.clone(),

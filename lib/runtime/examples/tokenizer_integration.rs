@@ -3,7 +3,7 @@
 
 //! Example showing how to integrate ComputePool with tokenization workloads
 //!
-//! This demonstrates the pattern that could be used in lib/llm/src/preprocessor.rs
+//! This demonstrates the pattern that could be used in lib/preprocessor/src/lib.rs
 //! to leverage the compute pool for batch tokenization operations.
 
 use anyhow::Result;
@@ -40,7 +40,7 @@ impl MockTokenizer {
 
 /// Pattern 1: Direct replacement for par_iter in preprocessor
 ///
-/// This shows how the existing code in lib/llm/src/preprocessor.rs:330
+/// This shows how the existing code in lib/preprocessor/src/lib.rs:330
 /// could be enhanced with explicit compute pool control
 async fn tokenize_batch_with_pool(
     pool: &ComputePool,

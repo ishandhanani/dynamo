@@ -731,14 +731,14 @@ async fn anthropic_messages(
     // Same backstop as the chat handler, so the two aggregation entry points
     // cannot drift. See `wants_reasoning_as_content_when_empty`.
     let move_reasoning_to_content_when_empty =
-        crate::preprocessor::OpenAIPreprocessor::wants_reasoning_as_content_when_empty(
+        dynamo_preprocessor::OpenAIPreprocessor::wants_reasoning_as_content_when_empty(
             request.chat_template_args.as_ref(),
         );
     let parsing_options = parsing_options
         .with_parallel_tool_calls(request.inner.parallel_tool_calls)
         .with_move_reasoning_to_content_when_empty(move_reasoning_to_content_when_empty);
     request.insert(
-        crate::preprocessor::REQUEST_PARSING_OPTIONS_CONTEXT_KEY,
+        dynamo_preprocessor::REQUEST_PARSING_OPTIONS_CONTEXT_KEY,
         parsing_options.clone(),
     );
     // Clients get `tool_use_id`s, not backend IDs; request traces record them.
@@ -752,7 +752,7 @@ async fn anthropic_messages(
     // Computed before `request` moves into `generate`. Only a stream that can
     // withhold every data frame needs forced keep-alive frames.
     let stream_can_defer_all_output =
-        crate::preprocessor::OpenAIPreprocessor::stream_can_defer_all_output(
+        dynamo_preprocessor::OpenAIPreprocessor::stream_can_defer_all_output(
             parsing_options.tool_call_parser.as_deref(),
             parsing_options.reasoning_parser.as_deref(),
             request.chat_template_args.as_ref(),

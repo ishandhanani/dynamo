@@ -40,6 +40,8 @@ pub mod response_headers;
 pub mod router_policy;
 pub mod service_v2;
 pub mod systemone;
+#[cfg(test)]
+mod unified_replay_tests;
 mod worker_metrics;
 #[cfg(test)]
 mod write_timeout_tests;
@@ -50,12 +52,12 @@ pub use frontend_extension::{
     validate_extension_route_path,
 };
 
-use crate::preprocessor::OpenAIPreprocessor;
 use dynamo_frontend_protocols::openai::{
     ParsingOptions,
     chat_completions::{NvCreateChatCompletionRequest, is_thinking_control_key},
 };
 use dynamo_model_card::frontend_config::ChatTemplateDefaults;
+use dynamo_preprocessor::OpenAIPreprocessor;
 
 use dynamo_protocols::types::ChatCompletionToolChoiceOption;
 use dynamo_runtime::error::DynamoError;
@@ -86,8 +88,8 @@ fn apply_request_tool_call_parsing_options(
         .tool_choice
         .as_ref()
         .unwrap_or(&ChatCompletionToolChoiceOption::Auto);
-    let converted_tool_choice = crate::preprocessor::tool_choice::convert_tool_choice(tool_choice);
-    let effective_tools = crate::preprocessor::tool_choice::effective_tools(&request.inner)?;
+    let converted_tool_choice = dynamo_preprocessor::tool_choice::convert_tool_choice(tool_choice);
+    let effective_tools = dynamo_preprocessor::tool_choice::effective_tools(&request.inner)?;
     let converted_tools =
         dynamo_frontend_protocols::openai::tools::convert_tools(effective_tools.as_ref());
     let structural_tag_config = parsing_options.structural_tag.as_ref();
@@ -96,7 +98,7 @@ fn apply_request_tool_call_parsing_options(
         .response_format
         .as_ref()
         .is_some_and(|format| !matches!(format, dynamo_protocols::types::ResponseFormat::Text));
-    let uses_structural_tag = crate::preprocessor::structural_tag::structural_tag_decision(
+    let uses_structural_tag = dynamo_preprocessor::structural_tag::structural_tag_decision(
         (
             parsing_options.tool_call_parser.as_deref(),
             parsing_options.reasoning_parser.as_deref(),
@@ -110,7 +112,7 @@ fn apply_request_tool_call_parsing_options(
     )?
     .is_required();
     let guided_tool_constraint =
-        crate::preprocessor::tool_choice::guided_tool_constraint_with_effective_tools(
+        dynamo_preprocessor::tool_choice::guided_tool_constraint_with_effective_tools(
             request,
             parsing_options.tool_call_parser.as_deref(),
             parsing_options.reasoning_parser.as_deref(),

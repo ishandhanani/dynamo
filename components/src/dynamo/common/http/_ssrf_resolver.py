@@ -9,7 +9,7 @@ internal one at connect. aiohttp's ``TCPConnector(resolver=...)`` hook lets us
 resolve + filter once and hand the connector the validated addresses to dial,
 while the hostname is still used for TLS SNI / certificate verification — the
 same mechanism the Rust frontend uses on reqwest's ``dns_resolver``
-(``lib/llm/src/preprocessor/media/loader.rs``). Reuses
+(``lib/preprocessor/src/media/loader.rs``). Reuses
 :func:`url_validator.is_blocked_ip`.
 
 Scope: this governs **direct** connections. When an egress proxy is configured,

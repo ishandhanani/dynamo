@@ -33,6 +33,6 @@ libjpeg-turbo instead of allowing the configured decoder to fall back to
 `image::ImageReader`.
 
 The implementation is in
-[`lib/llm/benches/image_decode.rs`](../../../lib/llm/benches/image_decode.rs).
+[`lib/preprocessor/benches/image_decode.rs`](../../../lib/preprocessor/benches/image_decode.rs).
 The 4K sweep remains opt-in at the Cargo benchmark level, so
 `cargo test --all-targets` does not execute it in CI.
