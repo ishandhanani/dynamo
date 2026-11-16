@@ -16,6 +16,7 @@ tracing = { workspace = true }
 dynamo-protocols = { workspace = true }
 dynamo-llm = { workspace = true }
 dynamo-http-server = { workspace = true }
+dynamo-model-card = { workspace = true }
 dynamo-runtime = { workspace = true }
 dynamo-error = { workspace = true, features = ["http"] }
 axum = { workspace = true }

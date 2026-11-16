@@ -21,7 +21,7 @@ bitflags! {
     /// expressed as:
     ///
     /// ```rust
-    /// use dynamo_llm::model_type::ModelType;
+    /// use dynamo_model_card::model_type::ModelType;
     /// let mt = ModelType::Chat | ModelType::Completions;
     /// assert!(mt.supports_chat());
     /// assert!(mt.supports_completions());
@@ -38,7 +38,7 @@ bitflags! {
         const TensorBased = 1 << 3;
         // `Prefill` (bit 1 << 4) is a legacy *marker*, not an OpenAI surface.
         // The processing-stage role (prefill / decode / encode / aggregated)
-        // is expressed via [`crate::worker_type::WorkerType`]; `ModelType`
+        // is expressed via [`dynamo_router_protocol::worker_type::WorkerType`]; `ModelType`
         // otherwise only describes the OpenAI-style endpoints a model exposes.
         //
         // It is retained for **cross-version compatibility**: a *new* prefill

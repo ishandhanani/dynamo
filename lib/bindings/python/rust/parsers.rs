@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use dynamo_llm::preprocessor::structural_tag_parser_names;
-use dynamo_llm::protocols::openai::chat_completions::tool_parser_v2::unified_family_names;
+use dynamo_model_card::parser_family::unified_family_names;
 use dynamo_parsers::reasoning::get_available_reasoning_parsers;
 use dynamo_parsers::tool_calling::parsers::get_available_tool_parsers;
 use pyo3::prelude::*;

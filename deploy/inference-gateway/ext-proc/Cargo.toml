@@ -25,6 +25,7 @@ dynamo-kv-router = { workspace = true, features = [
     "replica-sync-zmq",
     "peer-recovery",
 ] }
+dynamo-model-card = { workspace = true }
 dynamo-router-protocol = { workspace = true }
 dynamo-scheduler = { workspace = true }
 dynamo-session-affinity = { workspace = true }
