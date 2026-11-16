@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 pub(crate) mod image_edits;
+pub mod lora;
 mod model;
 pub(crate) mod readiness;
 pub use model::Model;

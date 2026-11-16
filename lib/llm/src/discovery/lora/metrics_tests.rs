@@ -6,8 +6,12 @@ use std::{sync::Arc, time::Duration};
 use dynamo_router_protocol::worker::WorkerWithDpRank;
 use dynamo_runtime::protocols::EndpointId;
 
+use dynamo_lora::{
+    LoadEstimator, LoraAllocationConfig, LoraController, LoraInfo, LoraRoutingTable,
+    LoraStateTracker,
+};
+
 use super::*;
-use crate::http::service::metrics::{LORA_ACTIVE_REQUESTS_GAUGE, LORA_REPLICA_FACTOR_GAUGE};
 
 #[tokio::test(start_paused = true)]
 async fn controller_publishes_into_the_frontend_registry_for_its_endpoint() {

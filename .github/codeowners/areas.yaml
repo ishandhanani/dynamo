@@ -28,7 +28,8 @@ areas:
   - lib/llm/src/http/service.rs
   - lib/llm/src/http/service/
   - lib/llm/src/lora.rs
-  - lib/llm/src/lora/
+  - lib/llm/src/discovery/lora.rs
+  - lib/llm/src/discovery/lora/
   - lib/router-host/src/lora_routing.rs
   - lib/lora/
   - lib/preprocessor/src/lib.rs
@@ -1193,6 +1194,10 @@ shared:
   - frontend
   - observability
 - glob: lib/http-server/src/metrics.rs
+  owners:
+  - frontend
+  - observability
+- glob: lib/llm/src/discovery/lora.rs
   owners:
   - frontend
   - observability

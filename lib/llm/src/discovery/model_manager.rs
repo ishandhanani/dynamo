@@ -36,7 +36,8 @@ use dynamo_runtime::{
     protocols::EndpointId,
 };
 
-use crate::{kv_router::shared_cache::HicacheSharedKvCache, lora::LoadEstimatorSubscription};
+use super::lora::LoadEstimatorSubscription;
+use crate::kv_router::shared_cache::HicacheSharedKvCache;
 use dynamo_frontend_protocols::types::{
     RealtimeBidirectionalEngine,
     generic::tensor::TensorStreamingEngine,
@@ -2626,7 +2627,7 @@ impl ModelManager {
             domain.state_tracker.clone(),
             domain.load_estimator.clone(),
             domain_cancel,
-            crate::lora::controller_metrics(),
+            super::lora::controller_metrics(),
         );
     }
 

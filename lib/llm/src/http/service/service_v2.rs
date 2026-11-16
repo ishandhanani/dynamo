@@ -18,12 +18,10 @@ use super::frontend_extension::{
     FrontendExtensionContext, FrontendRouteExtension, FrontendRouteSet,
 };
 use super::metrics;
-use super::metrics::{
-    register_frontend_metrics_start_time_metric, register_lora_allocation_metrics,
-    register_model_ready_metric,
-};
+use super::metrics::{register_frontend_metrics_start_time_metric, register_model_ready_metric};
 use super::worker_metrics::register_worker_metrics;
 use crate::discovery::ModelManager;
+use crate::discovery::lora::register_lora_allocation_metrics;
 use anyhow::Result;
 use derive_builder::Builder;
 use dynamo_http_server::lifecycle::{
