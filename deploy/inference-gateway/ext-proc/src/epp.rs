@@ -23,7 +23,6 @@ use dynamo_frontend_protocols::common::extensions::{
 use dynamo_frontend_protocols::common::timing::WORKER_TYPE_DECODE;
 use dynamo_frontend_protocols::types::openai::completions::NvCreateCompletionRequest;
 use dynamo_kv_router::config::try_kv_router_config_from_dynamo_env;
-use dynamo_llm::tokenizers::Encoding;
 use dynamo_model_card::model_card::ModelDeploymentCard;
 use dynamo_preprocessor::OpenAIPreprocessor;
 use dynamo_protocols::types::Prompt;
@@ -39,6 +38,7 @@ use dynamo_runtime::namespace::{NamespaceFilter, NamespacePrefixMode};
 use dynamo_runtime::pipeline::RouterMode;
 use dynamo_runtime::{DistributedRuntime, Runtime};
 use dynamo_scheduler::host::{RouterConfigOverride, RoutingConstraints};
+use dynamo_tokenizers::Encoding;
 use tokio::sync::Semaphore;
 use uuid::Uuid;
 

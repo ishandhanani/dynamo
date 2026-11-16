@@ -6,7 +6,7 @@ use std::io::{Read, Seek, SeekFrom};
 use dynamo_decisions::Dialect;
 
 use super::*;
-use crate::tokenizers::{Encoding, traits};
+use dynamo_tokenizers::{Encoding, traits};
 
 #[derive(Default)]
 struct ByteTokenizer {

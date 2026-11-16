@@ -14,7 +14,6 @@ pub mod http;
 // pub mod key_value_store;
 pub mod generate_format;
 pub mod mocker;
-pub use dynamo_tokenizers as tokenizers;
 pub use dynamo_tokenizers::{file_json_field, log_json_err};
 pub mod tokens;
 pub mod utils;

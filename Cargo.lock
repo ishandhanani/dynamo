@@ -2577,6 +2577,7 @@ dependencies = [
  "dynamo-runtime",
  "dynamo-scheduler",
  "dynamo-session-affinity",
+ "dynamo-tokenizers",
  "futures",
  "hyper-util",
  "k8s-openapi",

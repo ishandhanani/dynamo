@@ -160,7 +160,7 @@ pub async fn prepare_engine(
 pub async fn build_pipeline<Req, Resp>(
     card: &ModelDeploymentCard,
     engine: ExecutionContext,
-    tokenizer: crate::tokenizers::Tokenizer,
+    tokenizer: dynamo_tokenizers::Tokenizer,
 ) -> anyhow::Result<Arc<ServiceFrontend<SingleIn<Req>, ManyOut<Annotated<Resp>>>>>
 where
     Req: Data,
@@ -183,7 +183,7 @@ type InputFrontend<Req, Resp> = Arc<ServiceFrontend<SingleIn<Req>, ManyOut<Annot
 pub(crate) fn build_completions_pipeline(
     card: &ModelDeploymentCard,
     engine: ExecutionContext,
-    tokenizer: crate::tokenizers::Tokenizer,
+    tokenizer: dynamo_tokenizers::Tokenizer,
 ) -> anyhow::Result<InputFrontend<NvCreateCompletionRequest, NvCreateCompletionResponse>> {
     let preprocessor = OpenAIPreprocessor::new_for_completions(card.clone(), tokenizer.clone())?;
     link_pipeline(engine, tokenizer, preprocessor)
@@ -191,7 +191,7 @@ pub(crate) fn build_completions_pipeline(
 
 fn link_pipeline<Req, Resp>(
     engine: ExecutionContext,
-    tokenizer: crate::tokenizers::Tokenizer,
+    tokenizer: dynamo_tokenizers::Tokenizer,
     preprocessor: Arc<OpenAIPreprocessor>,
 ) -> anyhow::Result<InputFrontend<Req, Resp>>
 where

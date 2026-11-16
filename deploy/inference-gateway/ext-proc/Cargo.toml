@@ -36,6 +36,7 @@ dynamo-session-affinity = { workspace = true }
 dynamo-protocols = { workspace = true }
 dynamo-http-server = { workspace = true }
 dynamo-runtime = { workspace = true }
+dynamo-tokenizers = { workspace = true }
 
 anyhow = { workspace = true }
 axum = { workspace = true }

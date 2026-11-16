@@ -13,8 +13,8 @@
 //! in a hashmap. We will then use these hashes to test that the tokenizer is working correctly. This
 //! will detect if upstream dependency changes result in different/new behavior.
 
-use dynamo_llm::tokenizers::traits::{Decoder, Encoder, Tokenizer};
-use dynamo_llm::tokenizers::*;
+use dynamo_tokenizers::traits::{Decoder, Encoder, Tokenizer};
+use dynamo_tokenizers::*;
 use rstest::rstest;
 use std::collections::HashMap;
 use std::path::Path;
