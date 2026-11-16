@@ -1874,8 +1874,8 @@ fn infer_metric_worker_type(
 fn advertised_and_policy_worker_roles(
     card: &dynamo_model_card::model_card::ModelDeploymentCard,
 ) -> (
-    Option<llm_rs::worker_type::WorkerType>,
-    Option<llm_rs::worker_type::WorkerType>,
+    Option<dynamo_router_protocol::worker_type::WorkerType>,
+    Option<dynamo_router_protocol::worker_type::WorkerType>,
 ) {
     (card.worker_type, card.worker_type)
 }
@@ -1904,7 +1904,7 @@ mod metric_worker_type_tests {
         inner.register_endpoint_instance().await.unwrap();
         let mut card =
             dynamo_model_card::model_card::ModelDeploymentCard::with_name_only("encode-model");
-        card.worker_type = Some(llm_rs::worker_type::WorkerType::Encode);
+        card.worker_type = Some(dynamo_router_protocol::worker_type::WorkerType::Encode);
         card.model_input = dynamo_model_card::model_type::ModelInput::Tokens;
         card.model_type = dynamo_model_card::model_type::ModelType::Chat;
         dynamo_model_card::local_model::register_model_card(&inner, &card)
@@ -1954,10 +1954,16 @@ mod metric_worker_type_tests {
         assert_eq!(advertised, None);
         assert_eq!(policy, None);
 
-        card.worker_type = Some(llm_rs::worker_type::WorkerType::Decode);
+        card.worker_type = Some(dynamo_router_protocol::worker_type::WorkerType::Decode);
         let (advertised, policy) = advertised_and_policy_worker_roles(&card);
-        assert_eq!(advertised, Some(llm_rs::worker_type::WorkerType::Decode));
-        assert_eq!(policy, Some(llm_rs::worker_type::WorkerType::Decode));
+        assert_eq!(
+            advertised,
+            Some(dynamo_router_protocol::worker_type::WorkerType::Decode)
+        );
+        assert_eq!(
+            policy,
+            Some(dynamo_router_protocol::worker_type::WorkerType::Decode)
+        );
     }
 
     #[tokio::test]

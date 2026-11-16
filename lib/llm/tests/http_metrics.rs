@@ -1028,7 +1028,7 @@ mod integration_tests {
                 dynamo_model_card::model_type::ModelType::Chat,
                 dynamo_model_card::model_type::ModelInput::Text,
                 None,
-                Some(dynamo_llm::worker_type::WorkerType::Aggregated),
+                Some(dynamo_router_protocol::worker_type::WorkerType::Aggregated),
                 Vec::new(),
             )
             .await

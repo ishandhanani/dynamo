@@ -36,7 +36,7 @@ async fn start_unified_replay(
     .unwrap();
     card.runtime_config.tool_call_parser = Some(tool.into());
     card.runtime_config.reasoning_parser = Some(reason.into());
-    card.worker_type = Some(crate::worker_type::WorkerType::Aggregated);
+    card.worker_type = Some(dynamo_router_protocol::worker_type::WorkerType::Aggregated);
     card.needs.clear();
     let preprocessor = OpenAIPreprocessor::new(card.clone()).unwrap();
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();

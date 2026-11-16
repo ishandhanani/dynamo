@@ -1949,7 +1949,7 @@ async fn lora_enablement_and_rl_coexistence() {
 
 #[tokio::test]
 async fn lora_lifecycle_preserves_identity_and_routing_metadata() {
-    use dynamo_llm::worker_type::WorkerType;
+    use dynamo_router_protocol::worker_type::WorkerType;
     let (server, engine, endpoint) =
         started_lora_engine(FakeVllm::default(), "lora_lifecycle").await;
     for card in endpoint

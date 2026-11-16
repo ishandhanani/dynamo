@@ -149,6 +149,7 @@ Removed with no replacement: the dummy shared-cache server, `services::shared_ca
 | `entrypoint::{PreprocessedRouting, build_preprocessed_routing, ChatEngineFactoryCallback, PrefillRoutedEngine}` | `dynamo_discovery` |
 | `lora::{LoadEstimatorSubscription, controller_metrics}`, `http::service::metrics::register_lora_allocation_metrics`, and the `http::service::metrics::LORA_*_GAUGE` gauges | `dynamo_discovery::lora` |
 | `pool_relay` | `dynamo_pool_relay`, the crate root |
+| `worker_type` | `dynamo_router_protocol::worker_type` |
 
 A log statement that does not pin a target reports its module path, so its target follows the move.
 

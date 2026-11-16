@@ -1905,7 +1905,7 @@ async fn test_model_ready_endpoint() {
 #[tokio::test]
 async fn test_model_ready_endpoint_non_displayable_shadow() {
     use dynamo_discovery::WorkerSet;
-    use dynamo_llm::worker_type::WorkerType;
+    use dynamo_router_protocol::worker_type::WorkerType;
 
     let (listener, port) = bind_random_port().await;
     let service = HttpService::builder()

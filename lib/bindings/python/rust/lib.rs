@@ -761,7 +761,7 @@ fn register_model<'p>(
     // (see the check above). Non-Aggregated workers must declare their peers
     // explicitly — an empty `needs` would make them immediately ready with
     // no dependencies, which is only correct for Aggregated.
-    let worker_type_value: Option<llm_rs::worker_type::WorkerType> =
+    let worker_type_value: Option<dynamo_router_protocol::worker_type::WorkerType> =
         Some(worker_type_unwrapped.into());
     let raw_needs: Vec<Vec<WorkerType>> = match (worker_type_unwrapped, needs) {
         (WorkerType::Aggregated, None) => Vec::new(),
@@ -782,7 +782,7 @@ fn register_model<'p>(
         }
         (_, Some(n)) => n,
     };
-    let needs_value: Vec<Vec<llm_rs::worker_type::WorkerType>> = raw_needs
+    let needs_value: Vec<Vec<dynamo_router_protocol::worker_type::WorkerType>> = raw_needs
         .into_iter()
         .map(|alt| alt.into_iter().map(|w| w.into()).collect())
         .collect();
@@ -1359,7 +1359,7 @@ enum ModelInput {
 /// Each worker has exactly one role; values are not combinable. To express
 /// "an encode worker needs Prefill+Decode OR Aggregated", `register_model`
 /// takes `needs` in DNF form (a list of alternative AND-sets). See the Rust
-/// `WorkerType` enum in `lib/llm/src/worker_type.rs` and
+/// `WorkerType` enum in `lib/router/protocol/src/worker_type.rs` and
 /// `docs/proposals/health-disagg-readiness.md`.
 #[pyclass(eq, eq_int)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -1386,24 +1386,24 @@ impl WorkerType {
     }
 }
 
-impl From<WorkerType> for llm_rs::worker_type::WorkerType {
+impl From<WorkerType> for dynamo_router_protocol::worker_type::WorkerType {
     fn from(w: WorkerType) -> Self {
         match w {
-            WorkerType::Prefill => llm_rs::worker_type::WorkerType::Prefill,
-            WorkerType::Decode => llm_rs::worker_type::WorkerType::Decode,
-            WorkerType::Encode => llm_rs::worker_type::WorkerType::Encode,
-            WorkerType::Aggregated => llm_rs::worker_type::WorkerType::Aggregated,
+            WorkerType::Prefill => dynamo_router_protocol::worker_type::WorkerType::Prefill,
+            WorkerType::Decode => dynamo_router_protocol::worker_type::WorkerType::Decode,
+            WorkerType::Encode => dynamo_router_protocol::worker_type::WorkerType::Encode,
+            WorkerType::Aggregated => dynamo_router_protocol::worker_type::WorkerType::Aggregated,
         }
     }
 }
 
-impl From<llm_rs::worker_type::WorkerType> for WorkerType {
-    fn from(w: llm_rs::worker_type::WorkerType) -> Self {
+impl From<dynamo_router_protocol::worker_type::WorkerType> for WorkerType {
+    fn from(w: dynamo_router_protocol::worker_type::WorkerType) -> Self {
         match w {
-            llm_rs::worker_type::WorkerType::Prefill => WorkerType::Prefill,
-            llm_rs::worker_type::WorkerType::Decode => WorkerType::Decode,
-            llm_rs::worker_type::WorkerType::Encode => WorkerType::Encode,
-            llm_rs::worker_type::WorkerType::Aggregated => WorkerType::Aggregated,
+            dynamo_router_protocol::worker_type::WorkerType::Prefill => WorkerType::Prefill,
+            dynamo_router_protocol::worker_type::WorkerType::Decode => WorkerType::Decode,
+            dynamo_router_protocol::worker_type::WorkerType::Encode => WorkerType::Encode,
+            dynamo_router_protocol::worker_type::WorkerType::Aggregated => WorkerType::Aggregated,
         }
     }
 }

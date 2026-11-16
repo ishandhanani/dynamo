@@ -2115,7 +2115,7 @@ mod tests {
         );
 
         let mut card = dynamo_model_card::model_card::ModelDeploymentCard::default();
-        card.worker_type = Some(crate::worker_type::WorkerType::Aggregated);
+        card.worker_type = Some(dynamo_router_protocol::worker_type::WorkerType::Aggregated);
         card.needs = Vec::new();
         let mut workers =
             dynamo_discovery::WorkerSet::new("test-ns".to_string(), "worker".to_string(), card);

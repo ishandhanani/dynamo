@@ -14,10 +14,10 @@ use dynamo_frontend_protocols::openai::chat_completions::{
 };
 use dynamo_llm::http::service::service_v2::HttpService;
 use dynamo_llm::namespace::{NamespaceFilter, NamespacePrefixMode};
-use dynamo_llm::worker_type::WorkerType;
 use dynamo_model_card::model_card::ModelDeploymentCard;
 use dynamo_model_card::model_type::{ModelInput, ModelType};
 use dynamo_model_card::router_config::RouterConfig;
+use dynamo_router_protocol::worker_type::WorkerType;
 use dynamo_runtime::component::StartedEndpoint;
 use dynamo_runtime::discovery::{
     DiscoveryInstance, DiscoveryQuery, DiscoverySpec, EventTransportKind,

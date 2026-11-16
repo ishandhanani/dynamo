@@ -24,13 +24,13 @@ use dynamo_frontend_protocols::common::timing::WORKER_TYPE_DECODE;
 use dynamo_frontend_protocols::types::openai::completions::NvCreateCompletionRequest;
 use dynamo_kv_router::config::try_kv_router_config_from_dynamo_env;
 use dynamo_llm::tokenizers::Encoding;
-use dynamo_llm::worker_type::WorkerType;
 use dynamo_model_card::model_card::ModelDeploymentCard;
 use dynamo_preprocessor::OpenAIPreprocessor;
 use dynamo_protocols::types::Prompt;
 use dynamo_router_host::prefill_router::PrefillReservation;
 use dynamo_router_host::{FindBestMatchOutcome, ManagedKvRouter, PrefillRouter};
 use dynamo_router_protocol::worker::WorkerWithDpRank;
+use dynamo_router_protocol::worker_type::WorkerType;
 use dynamo_runtime::discovery::{
     DiscoveryInstance, DiscoveryQuery, hash_container_name, hash_pod_name,
 };
