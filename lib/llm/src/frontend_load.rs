@@ -16,9 +16,8 @@ use tokio_util::sync::CancellationToken;
 use dynamo_discovery::ModelManager;
 use dynamo_http_server::metrics::Metrics;
 use dynamo_runtime::utils::retry::{Backoff, FailureStreak};
+use dynamo_sync::load::{FRONTEND_LOAD_PUBLISH_INTERVAL, FRONTEND_LOAD_TOPIC};
 
-pub(crate) const FRONTEND_LOAD_TOPIC: &str = "frontend_load";
-pub(crate) const FRONTEND_LOAD_PUBLISH_INTERVAL: Duration = Duration::from_secs(1);
 const PUBLISHER_RETRY_INITIAL: Duration = Duration::from_millis(100);
 const PUBLISHER_RETRY_MAX: Duration = Duration::from_secs(5);
 
@@ -28,10 +27,6 @@ pub(crate) fn frontend_load_namespace(configured: Option<String>) -> String {
         .or_else(|| std::env::var("DYN_NAMESPACE").ok())
         .unwrap_or_else(|| "dynamo".to_string())
 }
-
-pub(crate) use dynamo_http_server::load::{
-    FrontendLoadFrame, FrontendModelLoad, RequestGauges, RequestTotals,
-};
 
 /// Start periodic publishing after the caller checks `DYN_SERVING_LOAD_PUBLISH`.
 pub(crate) fn start_frontend_load_publisher(
@@ -107,7 +102,7 @@ pub(crate) fn start_frontend_load_publisher(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use dynamo_http_server::load::FrontendLoadFrame;
 
     /// A Relay decodes frames from newer frontends that carry fields it does not
     /// know, but never invents identity or zero load for a frame missing them.

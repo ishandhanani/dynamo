@@ -43,8 +43,8 @@ use self::roster::{RosterEvent, Rosters};
 use super::load::{Coverage, PoolDeployment, PoolSchedulerLoad, SCHEDULER_FRESHNESS};
 use super::pool_registry::PoolRegistry;
 use super::topology::TopologyPublisher;
-use crate::frontend_load::{FRONTEND_LOAD_TOPIC, RequestGauges, RequestTotals};
-use dynamo_sync::load::SCHEDULER_LOAD_SUBJECT;
+use dynamo_http_server::load::{RequestGauges, RequestTotals};
+use dynamo_sync::load::{FRONTEND_LOAD_TOPIC, SCHEDULER_LOAD_SUBJECT};
 
 /// A source's report counts for this many of its publish intervals, so one or
 /// two lost reports do not make an aggregate incomplete.
