@@ -19,7 +19,7 @@ use std::sync::Arc;
 use serde_json::{Map, Value, json};
 
 use crate::response_merge::RuleSet;
-use dynamo_llm::generate_format::Worker;
+use dynamo_generate_format::Worker;
 
 /// A worker set for testing format binding.
 pub fn worker() -> Worker<'static> {

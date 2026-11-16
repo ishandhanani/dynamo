@@ -69,6 +69,7 @@
 # === frontend  (@ai-dynamo/dynamo-frontend-codeowners) ===
 /lib/lora/                                                                                              @ai-dynamo/dynamo-frontend-codeowners
 /lib/http-server/                                                                                       @ai-dynamo/dynamo-frontend-codeowners
+/lib/generate-format/                                                                                   @ai-dynamo/dynamo-frontend-codeowners
 /lib/frontend-protocols/                                                                                @ai-dynamo/dynamo-frontend-codeowners
 /examples/chat_templates/                                                                               @ai-dynamo/dynamo-frontend-codeowners
 /lib/frontend-protocols/src/                                                                            @ai-dynamo/dynamo-frontend-codeowners
@@ -552,7 +553,6 @@ requirements.txt                                                                
 /lib/telemetry/src/stream.rs                                                                            @ai-dynamo/dynamo-observability-codeowners
 /lib/llm/src/block_manager.md                                                                           @ai-dynamo/dynamo-kv-memory-codeowners
 /lib/llm/src/block_manager.rs                                                                           @ai-dynamo/dynamo-kv-memory-codeowners
-/lib/llm/src/generate_format/                                                                           @ai-dynamo/dynamo-frontend-codeowners
 /tests/benchmarks/multimodal/                                                                           @ai-dynamo/dynamo-multimodal-codeowners
 /tests/serve/test_vllm_xpu.py                                                                           @ai-dynamo/dynamo-xpu-codeowners
 /.github/codeowners/areas.yaml                                                                          @ai-dynamo/dynamo-process-codeowners
@@ -565,7 +565,6 @@ requirements.txt                                                                
 /lib/preprocessor/src/media.rs                                                                          @ai-dynamo/dynamo-multimodal-codeowners
 /lib/telemetry/src/jsonl_gz.rs                                                                          @ai-dynamo/dynamo-observability-codeowners
 /tests/fault_tolerance/deploy/                                                                          @ai-dynamo/dynamo-fault-tolerance-codeowners
-/lib/llm/src/generate_format.rs                                                                         @ai-dynamo/dynamo-frontend-codeowners
 /lib/router-host/src/migration/                                                                         @ai-dynamo/dynamo-runtime-codeowners
 /tests/fault_tolerance/etcd_ha/                                                                         @ai-dynamo/dynamo-fault-tolerance-codeowners
 /lib/llm/src/block_manager/pool/                                                                        @ai-dynamo/dynamo-kv-memory-codeowners

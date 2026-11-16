@@ -10,7 +10,7 @@ use dynamo_frontend_protocols::{
     Annotated,
     common::llm_backend::{LLMEngineOutput, PreprocessedRequest},
 };
-use dynamo_llm::generate_format::{ClientRequest, SharedFormat};
+use dynamo_generate_format::{ClientRequest, SharedFormat};
 use dynamo_llm::http::service::{format_generate, service_v2};
 use dynamo_runtime::engine::{AsyncEngine, ResponseStream};
 use dynamo_runtime::error::DynamoError;

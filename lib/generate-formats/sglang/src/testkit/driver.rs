@@ -16,7 +16,7 @@ use crate::PAYLOAD_KEY;
 use dynamo_frontend_protocols::response_merge::{
     PREFILL_OUTPUT_ANNOTATION, PREFILL_OUTPUT_FIRST_ANNOTATION,
 };
-use dynamo_llm::generate_format::{ClientRequest, GenerateFormat, Opened};
+use dynamo_generate_format::{ClientRequest, GenerateFormat, Opened};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Topology {

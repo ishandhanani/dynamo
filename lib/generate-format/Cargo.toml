@@ -1,0 +1,32 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+[package]
+name = "dynamo-generate-format"
+description = "The contract an engine-native /generate format implements for the Dynamo frontend, and the registry the frontend selects one from"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+homepage.workspace = true
+repository.workspace = true
+
+[features]
+# Exports `test_formats`, the stand-in formats dynamo-llm's tests install.
+testing = ["dep:dynamo-model-card"]
+
+[dependencies]
+# repo
+dynamo-error = { workspace = true, features = ["http"] }
+dynamo-frontend-protocols = { workspace = true }
+dynamo-http-server = { workspace = true }
+dynamo-model-card = { workspace = true, optional = true }
+dynamo-runtime = { workspace = true }
+
+# workspace
+anyhow = { workspace = true }
+axum = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+mime = "0.3"

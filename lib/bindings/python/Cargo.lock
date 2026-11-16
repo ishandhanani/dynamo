@@ -2249,11 +2249,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "dynamo-generate-format"
+version = "1.8.0"
+dependencies = [
+ "anyhow",
+ "axum",
+ "dynamo-error",
+ "dynamo-frontend-protocols",
+ "dynamo-http-server",
+ "dynamo-runtime",
+ "mime",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "dynamo-generate-format-catalog"
 version = "1.8.0"
 dependencies = [
  "anyhow",
- "dynamo-llm",
+ "dynamo-generate-format",
  "dynamo-sglang-generate",
  "dynamo-vllm-generate",
 ]
@@ -2451,6 +2466,7 @@ dependencies = [
  "dynamo-discovery",
  "dynamo-error",
  "dynamo-frontend-protocols",
+ "dynamo-generate-format",
  "dynamo-http-server",
  "dynamo-kv-events",
  "dynamo-kv-hashing",
@@ -2888,6 +2904,7 @@ dependencies = [
  "dynamo-discovery",
  "dynamo-error",
  "dynamo-frontend-protocols",
+ "dynamo-generate-format",
  "dynamo-generate-format-catalog",
  "dynamo-kv-events",
  "dynamo-kv-hashing",
@@ -3180,8 +3197,8 @@ dependencies = [
  "base64 0.22.1",
  "dynamo-error",
  "dynamo-frontend-protocols",
+ "dynamo-generate-format",
  "dynamo-http-server",
- "dynamo-llm",
  "dynamo-model-card",
  "dynamo-protocols 10.0.1",
  "dynamo-runtime",
@@ -3428,10 +3445,10 @@ dependencies = [
  "base64 0.22.1",
  "dynamo-error",
  "dynamo-frontend-protocols",
+ "dynamo-generate-format",
  "dynamo-http-server",
  "dynamo-kv-events",
  "dynamo-kv-hashing",
- "dynamo-llm",
  "dynamo-model-card",
  "dynamo-protocols 10.0.1",
  "dynamo-runtime",
@@ -3451,7 +3468,6 @@ dependencies = [
  "clap",
  "dynamo-backend-common",
  "dynamo-frontend-protocols",
- "dynamo-llm",
  "dynamo-lora",
  "dynamo-model-card",
  "dynamo-preprocessor",

@@ -329,10 +329,10 @@ fn register_core(m: &Bound<'_, PyModule>) -> PyResult<()> {
         rs::logging::init();
     }
 
-    let mut formats = dynamo_llm::generate_format::Registry::default();
+    let mut formats = dynamo_generate_format::Registry::default();
     dynamo_generate_format_catalog::register(&mut formats)
         .map_err(|error| PyRuntimeError::new_err(error.to_string()))?;
-    if !dynamo_llm::generate_format::install(formats) {
+    if !dynamo_generate_format::install(formats) {
         return Err(PyRuntimeError::new_err(
             "generate format registry already installed",
         ));

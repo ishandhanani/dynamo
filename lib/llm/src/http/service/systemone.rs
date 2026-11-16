@@ -26,7 +26,6 @@ use super::{
     decision_lifecycle::{self, run_until_killed, spawn_blocking_with_permit},
     service_v2,
 };
-use crate::generate_format::{Bound, ClientRequest, GenerateExchange, Worker};
 use dynamo_discovery::{SystemOneExecutionSelection, SystemOneSelectionError};
 use dynamo_frontend_protocols::{
     Annotated,
@@ -36,6 +35,7 @@ use dynamo_frontend_protocols::{
     response_merge::PREFILL_OUTPUT_ANNOTATION,
     systemone::{build_native_score_request, parse_candidate_scores},
 };
+use dynamo_generate_format::{Bound, ClientRequest, GenerateExchange, Worker};
 use dynamo_http_server::{
     disconnect::create_connection_monitor,
     metrics::{CancellationLabels, Endpoint, Metrics, SystemOnePhase},
@@ -695,7 +695,7 @@ fn bind_native(
     native: &serde_json::Value,
     request_id: &str,
 ) -> anyhow::Result<Bound> {
-    let format = crate::generate_format::named("sglang")?;
+    let format = dynamo_generate_format::named("sglang")?;
     let body = serde_json::to_vec(native)?;
     let mut headers = axum::http::HeaderMap::new();
     headers.insert(

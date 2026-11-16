@@ -2225,6 +2225,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "dynamo-generate-format"
+version = "1.8.0"
+dependencies = [
+ "anyhow",
+ "axum",
+ "dynamo-error",
+ "dynamo-frontend-protocols",
+ "dynamo-http-server",
+ "dynamo-runtime",
+ "mime",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "dynamo-http-server"
 version = "1.8.0"
 dependencies = [
@@ -2374,6 +2389,7 @@ dependencies = [
  "dynamo-discovery",
  "dynamo-error",
  "dynamo-frontend-protocols",
+ "dynamo-generate-format",
  "dynamo-http-server",
  "dynamo-kv-events",
  "dynamo-kv-hashing",

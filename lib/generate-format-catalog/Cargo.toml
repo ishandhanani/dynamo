@@ -12,12 +12,13 @@ repository.workspace = true
 description = "Default build-time /generate format catalog for Dynamo"
 
 [dependencies]
-dynamo-llm = { workspace = true }
+dynamo-generate-format = { workspace = true }
 anyhow = { workspace = true }
 dynamo-sglang-generate = { workspace = true }
 dynamo-vllm-generate = { workspace = true }
 
 [dev-dependencies]
+dynamo-llm = { workspace = true }
 dynamo-model-card = { workspace = true }
 dynamo-discovery = { workspace = true }
 dynamo-frontend-protocols = { workspace = true }

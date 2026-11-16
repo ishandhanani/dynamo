@@ -1199,8 +1199,8 @@ pub(super) static HTTP_SVC_SYSTEMONE_PATH_ENV: &str = "DYN_HTTP_SVC_SYSTEMONE_PA
 /// Resolve legacy backend switches once; readiness and routing use the same formats.
 fn configured_generate_routes(
     enable_engine_apis: bool,
-) -> Result<Vec<(String, crate::generate_format::SharedFormat)>> {
-    use crate::generate_format::{named, selected};
+) -> Result<Vec<(String, dynamo_generate_format::SharedFormat)>> {
+    use dynamo_generate_format::{named, selected};
     resolve_generate_routes(
         [
             (
@@ -1228,8 +1228,8 @@ fn configured_generate_routes(
 }
 
 fn resolve_generate_routes(
-    entries: impl IntoIterator<Item = (Result<crate::generate_format::SharedFormat>, String)>,
-) -> Result<Vec<(String, crate::generate_format::SharedFormat)>> {
+    entries: impl IntoIterator<Item = (Result<dynamo_generate_format::SharedFormat>, String)>,
+) -> Result<Vec<(String, dynamo_generate_format::SharedFormat)>> {
     let mut routes = Vec::new();
     for (format, path) in entries {
         validate_generate_route_path(&path)?;
@@ -1678,7 +1678,7 @@ impl HttpServiceConfigBuilder {
         state: Arc<State>,
         request_template: &Option<RequestTemplate>,
         enable_anthropic_endpoints: bool,
-        generate_routes: Vec<(String, crate::generate_format::SharedFormat)>,
+        generate_routes: Vec<(String, dynamo_generate_format::SharedFormat)>,
         systemone_enabled: bool,
         enable_batch_endpoints: bool,
     ) -> Result<Vec<(EndpointType, Vec<RouteDoc>, axum::Router)>> {
@@ -2298,7 +2298,7 @@ mod tests {
 
     // These tests own route readiness, not either backend's wire format.
     fn install_readiness_formats() {
-        crate::generate_format::test_formats::install();
+        dynamo_generate_format::test_formats::install();
     }
 
     #[tokio::test]
@@ -4165,7 +4165,7 @@ mod tests {
         install_readiness_formats();
         let error = resolve_generate_routes(["vllm", "sglang"].map(|name| {
             (
-                crate::generate_format::named(name),
+                dynamo_generate_format::named(name),
                 "/native/shared".to_string(),
             )
         }))

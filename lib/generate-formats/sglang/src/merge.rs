@@ -48,7 +48,7 @@ use dynamo_frontend_protocols::common::llm_backend::{LLMEngineOutput, Preprocess
 use dynamo_frontend_protocols::common::preprocessor::RoutingHints;
 use dynamo_frontend_protocols::common::{OutputOptions, SamplingOptions, StopConditions};
 use dynamo_frontend_protocols::response_merge::prefill_annotations;
-use dynamo_llm::generate_format::{
+use dynamo_generate_format::{
     Bound, ClientError, ClientRequest, GenerateExchange, GenerateFormat, Opened,
 };
 
@@ -261,14 +261,14 @@ impl<C: ClientCodec> GenerateFormat for SglangFormat<C> {
         error: axum::extract::rejection::BytesRejection,
         headers: &axum::http::HeaderMap,
     ) -> ClientError {
-        self.parse_error(dynamo_llm::generate_format::json_body_error(headers, error).body_text())
+        self.parse_error(dynamo_generate_format::json_body_error(headers, error).body_text())
     }
 
     fn worker_error(
         &self,
         error: &(dyn std::error::Error + 'static),
-        phase: dynamo_llm::generate_format::ErrorPhase,
-    ) -> dynamo_llm::generate_format::WorkerError {
+        phase: dynamo_generate_format::ErrorPhase,
+    ) -> dynamo_generate_format::WorkerError {
         crate::errors::classify(error, phase)
     }
 

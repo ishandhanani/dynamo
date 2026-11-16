@@ -15,7 +15,7 @@ description = "vLLM client format for Dynamo /generate"
 dynamo-kv-events = { workspace = true }
 dynamo-kv-hashing = { workspace = true }
 tracing = { workspace = true }
-dynamo-llm = { workspace = true }
+dynamo-generate-format = { workspace = true }
 dynamo-frontend-protocols = { workspace = true }
 dynamo-model-card = { workspace = true }
 anyhow = { workspace = true }

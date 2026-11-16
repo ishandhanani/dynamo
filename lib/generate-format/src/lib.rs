@@ -1,7 +1,13 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
+//! # Dynamo Generate Format
+//!
 //! Engine-native `/generate` formats.
+//!
+//! This crate is the contract between the frontend and the format crates under
+//! `lib/generate-formats/`. It never depends on `dynamo-llm`, so a worker-side crate that
+//! links a format does not link the frontend.
 //!
 //! A [`GenerateFormat`] owns one `/generate` wire format end to end: it turns
 //! a client body into the routed request and assembles the worker's responses
@@ -268,8 +274,9 @@ pub fn named(name: &str) -> anyhow::Result<SharedFormat> {
         .get(name)
 }
 
-/// Formats for this crate's tests, which cannot link the real format crates.
-#[cfg(test)]
+/// Formats for the tests of the frontend (`dynamo-llm`), which cannot link the real format
+/// crates. Exported with the `testing` feature.
+#[cfg(feature = "testing")]
 pub mod test_formats {
     use super::*;
     use dynamo_frontend_protocols::common::preprocessor::RoutingHints;
