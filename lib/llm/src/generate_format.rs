@@ -270,7 +270,7 @@ pub fn named(name: &str) -> anyhow::Result<SharedFormat> {
 
 /// Formats for this crate's tests, which cannot link the real format crates.
 #[cfg(test)]
-pub(crate) mod test_formats {
+pub mod test_formats {
     use super::*;
     use dynamo_frontend_protocols::common::preprocessor::RoutingHints;
     use dynamo_frontend_protocols::common::{OutputOptions, SamplingOptions, StopConditions};
@@ -390,7 +390,7 @@ pub(crate) mod test_formats {
         }
     }
 
-    pub(crate) fn install() {
+    pub fn install() {
         static INSTALL: std::sync::Once = std::sync::Once::new();
         INSTALL.call_once(|| {
             let mut registry = Registry::default();
