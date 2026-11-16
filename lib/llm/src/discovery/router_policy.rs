@@ -14,7 +14,7 @@ use dynamo_router_protocol::worker_type::WorkerType;
 
 /// One concrete process-local router. Rebuilding the same endpoint creates a new ID.
 #[derive(Clone, Serialize)]
-pub(crate) struct RouterPolicyTarget {
+pub struct RouterPolicyTarget {
     pub router_id: Uuid,
     pub model: String,
     pub namespace: String,
@@ -29,12 +29,12 @@ struct Entry {
 }
 
 #[derive(Default)]
-pub(crate) struct RouterPolicyRegistry {
+pub struct RouterPolicyRegistry {
     entries: Mutex<HashMap<Uuid, Entry>>,
 }
 
 impl RouterPolicyRegistry {
-    pub(crate) fn register(
+    pub fn register(
         &self,
         model: String,
         endpoint: EndpointId,
@@ -62,13 +62,13 @@ impl RouterPolicyRegistry {
         id
     }
 
-    pub(crate) fn get(&self, id: Uuid) -> Option<(RouterPolicyTarget, Arc<RuntimePolicyControl>)> {
+    pub fn get(&self, id: Uuid) -> Option<(RouterPolicyTarget, Arc<RuntimePolicyControl>)> {
         let entries = self.entries.lock();
         let entry = entries.get(&id)?;
         Some((entry.target.clone(), entry.control.upgrade()?))
     }
 
-    pub(crate) fn list(
+    pub fn list(
         &self,
         model: Option<&str>,
     ) -> Vec<(RouterPolicyTarget, Arc<RuntimePolicyControl>)> {

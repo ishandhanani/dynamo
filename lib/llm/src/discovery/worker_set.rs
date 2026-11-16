@@ -159,7 +159,7 @@ pub struct WorkerSet {
     card: ModelDeploymentCard,
 
     // Engines — each WorkerSet owns its own pipelines
-    pub(crate) chat_engine: Option<OpenAIChatCompletionsStreamingEngine>,
+    pub chat_engine: Option<OpenAIChatCompletionsStreamingEngine>,
     pub(crate) completions_engine: Option<OpenAICompletionsStreamingEngine>,
     pub(crate) embeddings_engine: Option<OpenAIEmbeddingsStreamingEngine>,
     pub(crate) classify_engine: Option<OpenAIClassifyStreamingEngine>,
@@ -181,7 +181,7 @@ pub struct WorkerSet {
     load_context: Option<Arc<RoutingLoadContext>>,
 
     /// Shared configuration handle for this routing load context.
-    pub(crate) load_thresholds: Option<LoadThresholdHandle>,
+    pub load_thresholds: Option<LoadThresholdHandle>,
 
     /// Prefill router for disaggregated serving. Stored here so the watcher can
     /// deactivate it when all prefill workers die, and reactivate when they rejoin.

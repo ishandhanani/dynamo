@@ -19,7 +19,7 @@ use dynamo_frontend_protocols::openai::images::{NvCreateImageRequest, NvImagesRe
 use dynamo_frontend_protocols::types::{Annotated, openai::images::OpenAIImagesStreamingEngine};
 use dynamo_model_card::model_card::ModelDeploymentCard;
 
-pub(crate) const SNAPSHOT_KEY: &str = "image_edit_admission";
+pub const SNAPSHOT_KEY: &str = "image_edit_admission";
 
 /// Read version-1 capability metadata, honoring explicit zero.
 /// Missing, malformed, or unknown-version records retain the legacy limit of one.
@@ -46,7 +46,7 @@ pub(crate) fn advertised_limit(card: &ModelDeploymentCard) -> usize {
 }
 
 #[derive(Clone, Debug)]
-pub(crate) struct ImageEditSnapshot {
+pub struct ImageEditSnapshot {
     pub(crate) worker_ids: HashSet<u64>,
     pub(crate) max_input_images: usize,
 }
@@ -142,9 +142,9 @@ impl
     }
 }
 
-pub(crate) struct ImageEngineSelection {
-    pub(crate) engine: OpenAIImagesStreamingEngine,
-    pub(crate) snapshot: Option<ImageEditSnapshot>,
+pub struct ImageEngineSelection {
+    pub engine: OpenAIImagesStreamingEngine,
+    pub snapshot: Option<ImageEditSnapshot>,
 }
 
 #[cfg(test)]

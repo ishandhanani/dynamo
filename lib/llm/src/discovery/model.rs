@@ -87,26 +87,26 @@ pub struct ModelReadiness {
 
 /// A generate engine and the routing metadata advertised by the same WorkerSet.
 #[derive(Clone)]
-pub(crate) struct GenerateEngineSelection {
-    pub(crate) engine: GenerateStreamingEngine,
-    pub(crate) kv_cache_block_size: u32,
-    pub(crate) lora_name: Option<String>,
-    pub(crate) tower_connector_lora_enabled: bool,
+pub struct GenerateEngineSelection {
+    pub engine: GenerateStreamingEngine,
+    pub kv_cache_block_size: u32,
+    pub lora_name: Option<String>,
+    pub tower_connector_lora_enabled: bool,
 }
 
 /// Aggregate SGLang engine and model assets selected from one WorkerSet snapshot.
 #[derive(Clone)]
-pub(crate) struct SystemOneExecutionSelection {
-    pub(crate) canonical_model: String,
-    pub(crate) engine: GenerateStreamingEngine,
-    pub(crate) card: ModelDeploymentCard,
-    pub(crate) preprocessor: Arc<OpenAIPreprocessor>,
-    pub(crate) admitted_ids: Option<tokio::sync::watch::Receiver<Vec<u64>>>,
-    pub(crate) lifecycle_cancellation: Option<tokio_util::sync::CancellationToken>,
+pub struct SystemOneExecutionSelection {
+    pub canonical_model: String,
+    pub engine: GenerateStreamingEngine,
+    pub card: ModelDeploymentCard,
+    pub preprocessor: Arc<OpenAIPreprocessor>,
+    pub admitted_ids: Option<tokio::sync::watch::Receiver<Vec<u64>>>,
+    pub lifecycle_cancellation: Option<tokio_util::sync::CancellationToken>,
 }
 
 impl SystemOneExecutionSelection {
-    pub(crate) fn validate_dispatch(
+    pub fn validate_dispatch(
         &self,
         pinned_worker: Option<u64>,
     ) -> Result<(), SystemOneSelectionError> {
@@ -131,7 +131,7 @@ impl SystemOneExecutionSelection {
         Ok(())
     }
 
-    pub(crate) fn decision_capabilities(&self) -> dynamo_decisions::Capabilities {
+    pub fn decision_capabilities(&self) -> dynamo_decisions::Capabilities {
         // The serialized SGLang capability pins the zero-decode requested-ID
         // contract, including vocabulary logprobs and meta_info.cached_tokens.
         // Tokenizer-specific candidate limits are checked during preflight.
@@ -148,7 +148,7 @@ impl SystemOneExecutionSelection {
 }
 
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
-pub(crate) enum SystemOneSelectionError {
+pub enum SystemOneSelectionError {
     #[error("model is not registered")]
     NotFound,
     #[error("model does not support aggregate SGLang scoring")]

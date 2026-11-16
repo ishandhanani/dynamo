@@ -154,8 +154,8 @@ pub(crate) struct RemovedDiscoveryGroup {
     pub(crate) cards: Vec<ModelDeploymentCard>,
 }
 
-pub(crate) struct CommittedModelView {
-    pub(crate) name: String,
+pub struct CommittedModelView {
+    pub name: String,
     pub(crate) is_ready: bool,
     pub(crate) aliases: Vec<String>,
 }
@@ -177,7 +177,7 @@ impl From<CommittedModelView> for dynamo_http_server::load::ModelLoadView {
 ///
 /// Note: Don't implement Clone for this, put it in an Arc instead.
 pub struct ModelManager {
-    pub(crate) router_policies: super::router_policy::RouterPolicyRegistry,
+    pub router_policies: super::router_policy::RouterPolicyRegistry,
     /// Model name → Model (which contains WorkerSets with engines)
     models: DashMap<String, Arc<Model>>,
 
@@ -244,13 +244,13 @@ impl ModelManager {
         self.worker_inventory.publish(group_id, observation);
     }
 
-    pub(crate) fn worker_inventory(
+    pub fn worker_inventory(
         &self,
     ) -> Vec<(String, super::worker_inventory::WorkerGroupObservation)> {
         self.worker_inventory.snapshot()
     }
 
-    pub(crate) fn worker_group_available_ids(
+    pub fn worker_group_available_ids(
         &self,
         group_id: &str,
         endpoint: &EndpointId,
@@ -475,12 +475,12 @@ impl ModelManager {
             .map(|entry| entry.value().clone())
     }
 
-    pub(crate) fn get_committed_model(&self, model_name: &str) -> Option<Arc<Model>> {
+    pub fn get_committed_model(&self, model_name: &str) -> Option<Arc<Model>> {
         self.catalog.load().models.get(model_name).cloned()
     }
 
     /// Committed primary models with their aliases, sorted by name.
-    pub(crate) fn committed_model_views(&self) -> Vec<CommittedModelView> {
+    pub fn committed_model_views(&self) -> Vec<CommittedModelView> {
         let catalog = self.catalog.load();
         let mut aliases_by_primary = HashMap::<&str, Vec<String>>::new();
         for (alias, primary) in catalog.aliases.iter() {
@@ -1177,7 +1177,7 @@ impl ModelManager {
     /// so they always come from the same published snapshot. A LoRA adapter is a
     /// distinct servable model rather than a second name for one, is never
     /// recorded in `aliases`, and so keeps its own entry.
-    pub(crate) fn registered_model_readiness(&self) -> Vec<(String, bool)> {
+    pub fn registered_model_readiness(&self) -> Vec<(String, bool)> {
         let catalog = self.catalog.load();
         let mut readiness = catalog
             .models
@@ -1500,7 +1500,7 @@ impl ModelManager {
     }
 
     /// Resolve the model before applying its WorkerSet-level edit admission policy.
-    pub(crate) fn select_image_edit_engine(
+    pub fn select_image_edit_engine(
         &self,
         model: &str,
         count: usize,
@@ -1588,7 +1588,7 @@ impl ModelManager {
 
     /// Select a Generate engine and its routing metadata from one worker set
     /// that advertises `capability`.
-    pub(crate) fn get_generate_engine_for_capability_with_routing(
+    pub fn get_generate_engine_for_capability_with_routing(
         &self,
         model: &str,
         capability: &str,
@@ -1602,7 +1602,7 @@ impl ModelManager {
     }
 
     /// Resolve an alias and select all System One execution inputs from one catalog snapshot.
-    pub(crate) fn get_systemone_execution_selection(
+    pub fn get_systemone_execution_selection(
         &self,
         requested_model: &str,
     ) -> Result<SystemOneExecutionSelection, SystemOneSelectionError> {
@@ -2759,7 +2759,7 @@ impl ModelManager {
     }
 
     /// See [`Model::accepts_load_thresholds`].
-    pub(crate) fn accepts_load_thresholds(&self, model: &str) -> bool {
+    pub fn accepts_load_thresholds(&self, model: &str) -> bool {
         self.models
             .get(model)
             .is_some_and(|model| model.accepts_load_thresholds())

@@ -312,7 +312,7 @@ impl ModelWatcher {
     }
 
     #[allow(clippy::too_many_arguments)]
-    pub(crate) fn new_with_plugins(
+    pub fn new_with_plugins(
         runtime: DistributedRuntime,
         model_manager: Arc<ModelManager>,
         router_config: RouterConfig,
@@ -365,11 +365,11 @@ impl ModelWatcher {
         self.tokenizer_fallback_enabled = enabled;
     }
 
-    pub(crate) fn set_generate_engine_capabilities(&mut self, capabilities: Vec<&'static str>) {
+    pub fn set_generate_engine_capabilities(&mut self, capabilities: Vec<&'static str>) {
         self.generate_engine_capabilities = capabilities;
     }
 
-    pub(crate) fn set_systemone_enabled(&mut self, enabled: bool) {
+    pub fn set_systemone_enabled(&mut self, enabled: bool) {
         self.systemone_enabled = enabled;
     }
     /// Compatibility wrapper for callers that enable the vLLM Generate route.
