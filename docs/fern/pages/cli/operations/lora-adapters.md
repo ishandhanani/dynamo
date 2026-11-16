@@ -44,7 +44,7 @@ See the [feature support matrix](../../reference/general/compatibility.mdx#featu
         ManagerNode --> HF["hf://<br/>(custom)"]
     ```
 
-    - **Rust core** (`lib/llm/src/lora/`): Downloading, caching, and validation
+    - **Rust core** (`lib/lora/`): Downloading, caching, and validation
     - **Python manager** (`components/src/dynamo/common/lora/`): Custom source support
     - **Worker handlers** (`components/src/dynamo/vllm/handlers.py` and `components/src/dynamo/sglang/request_handlers/handler_base.py`): Backend load/unload and inference integration
   </Accordion>

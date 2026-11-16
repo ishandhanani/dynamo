@@ -23,11 +23,10 @@ use dynamo_scheduler::host::PrefillLoadEstimator;
 
 use dynamo_renderer::PromptFormatter;
 
-use crate::{
-    discovery::WorkerSet,
-    entrypoint::{self, ChatEngineFactoryCallback},
-    worker_type::WorkerType,
+use super::pipeline::{
+    ChatEngineFactoryCallback, build_preprocessed_routing_with_session_affinity_mode,
 };
+use crate::WorkerSet;
 use dynamo_frontend_protocols::common::preprocessor::PreprocessedEmbeddingRequest;
 use dynamo_frontend_protocols::common::timing::WORKER_TYPE_DECODE;
 use dynamo_frontend_protocols::types::generic::realtime::{
@@ -67,6 +66,7 @@ use dynamo_router_host::{
     EncoderRouter, PrefillRouter, plugins::RouterPluginBuilder,
     worker_set_target::CommittedWorkerSetTarget,
 };
+use dynamo_router_protocol::worker_type::WorkerType;
 use dynamo_sync::load::{LoadThresholdHandle, RouterLoadSource, RoutingLoadContext};
 
 use super::readiness::normalize_legacy_prefill_topology;
@@ -74,7 +74,7 @@ use super::{
     ModelManager,
     controller::{ControllerHost, DesiredInstance, GroupKey, GroupSpec, ModelDiscoveryController},
 };
-use crate::namespace::{NamespaceFilter, NamespacePrefixMode};
+use dynamo_runtime::namespace::{NamespaceFilter, NamespacePrefixMode};
 use tokio_util::sync::CancellationToken;
 
 /// Constructs a collision-free WorkerSet storage key from its exact endpoint,
@@ -312,7 +312,7 @@ impl ModelWatcher {
     }
 
     #[allow(clippy::too_many_arguments)]
-    pub(crate) fn new_with_plugins(
+    pub fn new_with_plugins(
         runtime: DistributedRuntime,
         model_manager: Arc<ModelManager>,
         router_config: RouterConfig,
@@ -365,11 +365,11 @@ impl ModelWatcher {
         self.tokenizer_fallback_enabled = enabled;
     }
 
-    pub(crate) fn set_generate_engine_capabilities(&mut self, capabilities: Vec<&'static str>) {
+    pub fn set_generate_engine_capabilities(&mut self, capabilities: Vec<&'static str>) {
         self.generate_engine_capabilities = capabilities;
     }
 
-    pub(crate) fn set_systemone_enabled(&mut self, enabled: bool) {
+    pub fn set_systemone_enabled(&mut self, enabled: bool) {
         self.systemone_enabled = enabled;
     }
     /// Compatibility wrapper for callers that enable the vLLM Generate route.
@@ -743,7 +743,7 @@ impl ModelWatcher {
 
             let preprocessed_routing = if needs_preprocessed_routing {
                 Some(
-                    entrypoint::input::build_preprocessed_routing_with_session_affinity_mode(
+                    build_preprocessed_routing_with_session_affinity_mode(
                         &client,
                         self.manager.clone(),
                         router_config.router_mode,
@@ -1587,7 +1587,7 @@ fn lora_projection_fingerprint(card: &ModelDeploymentCard) -> anyhow::Result<Str
         "aliases": &card.aliases,
         "lora": &card.lora,
         "base_capacity": card.runtime_config.max_gpu_lora_count,
-        "requires_registration": card.runtime_config.runtime_flag_enabled(crate::lora::LORA_REQUIRES_REGISTRATION),
+        "requires_registration": card.runtime_config.runtime_flag_enabled(dynamo_lora::LORA_REQUIRES_REGISTRATION),
     });
     canonicalize_json_object_keys(&mut value);
     Ok(blake3::hash(&serde_json::to_vec(&value)?).to_string())
@@ -1614,7 +1614,7 @@ pub(super) fn qwen_video_contract_digest(card: &ModelDeploymentCard) -> Option<S
 
 fn worker_set_chat_preprocessor(
     card: &ModelDeploymentCard,
-    tokenizer: crate::tokenizers::Tokenizer,
+    tokenizer: dynamo_tokenizers::Tokenizer,
     cancellation: &CancellationToken,
 ) -> anyhow::Result<Arc<OpenAIPreprocessor>> {
     let PromptFormatter::OAI(formatter) =
@@ -1632,7 +1632,7 @@ fn worker_set_chat_preprocessor(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::discovery::Model;
+    use crate::Model;
     use dynamo_model_card::local_model::runtime_config::VLLM_INFERENCE_V1_GENERATE_CAPABILITY;
     use dynamo_model_card::model_card::ModelDeploymentCard;
     use dynamo_router_host::session_affinity::SessionAffinityMode;
@@ -1764,7 +1764,7 @@ mod tests {
         // The live case proves this response actually triggers speculative dispatch.
         for retire_worker_set in [false, true] {
             let model_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-                .join("tests/data/sample-models/mock-llama-3.1-8b-instruct");
+                .join("../llm/tests/data/sample-models/mock-llama-3.1-8b-instruct");
             let card = ModelDeploymentCard::load_from_disk(model_path, None).unwrap();
             let runtime_cancellation = CancellationToken::new();
             let cancellation = runtime_cancellation.child_token();
@@ -2493,7 +2493,7 @@ request_classifier:
                 .endpoint("generate");
             endpoint.register_endpoint_instance().await.unwrap();
             let model_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-                .join("tests/data/sample-models/mock-llama-3.1-8b-instruct");
+                .join("../llm/tests/data/sample-models/mock-llama-3.1-8b-instruct");
             let mut card = ModelDeploymentCard::load_from_disk(model_path, None).unwrap();
             card.set_name(&format!("classifier-model-{instance}"));
             card.model_type = ModelType::Chat;
@@ -3067,7 +3067,7 @@ request_classifier:
             ..base_mcid.clone()
         };
         let model_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("tests/data/sample-models/mock-llama-3.1-8b-instruct");
+            .join("../llm/tests/data/sample-models/mock-llama-3.1-8b-instruct");
         let mut base_card = ModelDeploymentCard::load_from_disk(model_path, None).unwrap();
         base_card.set_name("lora-lifecycle-base");
         base_card.model_input = ModelInput::Tokens;
@@ -3639,7 +3639,7 @@ request_classifier:
                 .unwrap()
                 .endpoint("generate");
             let model_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-                .join("tests/data/sample-models/mock-llama-3.1-8b-instruct");
+                .join("../llm/tests/data/sample-models/mock-llama-3.1-8b-instruct");
             let mut card = ModelDeploymentCard::load_from_disk(model_path, None).unwrap();
             card.set_name(&format!("parser-factory-model-{index}"));
             card.model_input = input;

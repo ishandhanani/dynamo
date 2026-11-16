@@ -18,14 +18,12 @@ use super::frontend_extension::{
     FrontendExtensionContext, FrontendRouteExtension, FrontendRouteSet,
 };
 use super::metrics;
-use super::metrics::{
-    register_frontend_metrics_start_time_metric, register_lora_allocation_metrics,
-    register_model_ready_metric,
-};
+use super::metrics::{register_frontend_metrics_start_time_metric, register_model_ready_metric};
 use super::worker_metrics::register_worker_metrics;
-use crate::discovery::ModelManager;
 use anyhow::Result;
 use derive_builder::Builder;
+use dynamo_discovery::ModelManager;
+use dynamo_discovery::lora::register_lora_allocation_metrics;
 use dynamo_http_server::lifecycle::{
     InflightPermit, ServiceObserver, ServiceStage, echo_request_id_header, track_inflight_response,
 };
@@ -599,7 +597,7 @@ impl State {
     /// Check the model's local HTTP routes independently of process readiness.
     /// Tensor-only models have no HTTP inference route. Every HTTP engine
     /// registered for this model must have its corresponding route enabled.
-    pub(crate) fn model_http_routes_ready(&self, model: &crate::discovery::Model) -> bool {
+    pub(crate) fn model_http_routes_ready(&self, model: &dynamo_discovery::Model) -> bool {
         let routes = [
             (model.has_chat_engine(), EndpointType::Chat),
             (
@@ -1042,7 +1040,7 @@ impl HttpService {
     }
 
     fn start_frontend_load_publisher(&self, cancel_token: &CancellationToken) {
-        if !crate::pool_relay::serving_load_publishing_enabled() {
+        if !dynamo_sync::load::serving_load_publishing_enabled() {
             return;
         }
         let Some(target) = &self.frontend_load_target else {
@@ -2120,7 +2118,7 @@ mod tests {
         card.worker_type = Some(crate::worker_type::WorkerType::Aggregated);
         card.needs = Vec::new();
         let mut workers =
-            crate::discovery::WorkerSet::new("test-ns".to_string(), "worker".to_string(), card);
+            dynamo_discovery::WorkerSet::new("test-ns".to_string(), "worker".to_string(), card);
         let (members, receiver) = tokio::sync::watch::channel::<Vec<u64>>(vec![]);
         workers.set_instance_watcher(receiver);
         state
@@ -2151,8 +2149,8 @@ mod tests {
             .add_chat_completions_model(
                 model_name,
                 "worker",
-                Arc::new(crate::engines::StreamingEngineAdapter::new(
-                    crate::engines::make_echo_engine(),
+                Arc::new(dynamo_discovery::engines::StreamingEngineAdapter::new(
+                    dynamo_discovery::engines::make_echo_engine(),
                 )),
             )
             .unwrap();
@@ -2226,8 +2224,8 @@ mod tests {
             .add_chat_completions_model(
                 "http-model",
                 "worker",
-                Arc::new(crate::engines::StreamingEngineAdapter::new(
-                    crate::engines::make_echo_engine(),
+                Arc::new(dynamo_discovery::engines::StreamingEngineAdapter::new(
+                    dynamo_discovery::engines::make_echo_engine(),
                 )),
             )
             .unwrap();
@@ -3450,8 +3448,8 @@ mod tests {
 
     fn make_chat_engine()
     -> dynamo_frontend_protocols::types::openai::chat_completions::OpenAIChatCompletionsStreamingEngine{
-        Arc::new(crate::engines::StreamingEngineAdapter::new(
-            crate::engines::make_echo_engine(),
+        Arc::new(dynamo_discovery::engines::StreamingEngineAdapter::new(
+            dynamo_discovery::engines::make_echo_engine(),
         ))
     }
 
@@ -3910,8 +3908,8 @@ mod tests {
                     .add_chat_completions_model(
                         "decision-model",
                         "chat-worker",
-                        Arc::new(crate::engines::StreamingEngineAdapter::new(
-                            crate::engines::make_echo_engine(),
+                        Arc::new(dynamo_discovery::engines::StreamingEngineAdapter::new(
+                            dynamo_discovery::engines::make_echo_engine(),
                         )),
                     )
                     .unwrap();

@@ -10,13 +10,13 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use axum::http::HeaderMap;
+use dynamo_discovery::engines::{StreamingEngineAdapter, make_echo_engine};
 use dynamo_global_common::PoolKey;
 use dynamo_global_frontend::{Metrics, PoolSnapshot};
 use dynamo_global_router::{
     InFlightTracker, Pool, PoolSelector, PoolTarget, RoundRobinSelector, RoutingRequest,
     SelectionCorePolicy, SelectionCoreSelector,
 };
-use dynamo_llm::engines::{StreamingEngineAdapter, make_echo_engine};
 use dynamo_llm::http::service::service_v2::HttpService;
 use dynamo_model_card::endpoint_type::EndpointType;
 use futures::StreamExt;

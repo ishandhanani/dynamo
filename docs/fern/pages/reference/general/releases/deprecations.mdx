@@ -138,11 +138,16 @@ Removed with no replacement: the dummy shared-cache server, `services::shared_ca
 | `discovery::{kv_source_membership, kv_state_agent}`, `discovery::KvSourceMembershipWatch`, and the `discovery` re-exports of the `kv_source_membership` items | `dynamo_sync::membership` |
 | `discovery::{RuntimeConfigWatch, runtime_config_watch}` | `dynamo_sync::runtime_configs` |
 | `kv_router::metrics::{WORKER_LOAD_METRICS, WorkerLoadMetrics, RemoteIndexerMetrics}` | `dynamo_sync::metrics` |
-| `kv_router::SCHEDULER_LOAD_SUBJECT` | `dynamo_llm::scheduler_load` |
+| `kv_router::SCHEDULER_LOAD_SUBJECT` | `dynamo_sync::load` |
 | The other `kv_router` crate-root items (`KvRouter`, `KvPushRouter`, `RoutingHost`, `PrefillRouter`, `EncoderRouter`, `ManagedKvRouter`, ...) and `kv_router::{encoder_router, metrics, plugins, prefill_router}` | `dynamo_router_host`, the crate root |
 | `session_affinity`, `migration` | `dynamo_router_host::{session_affinity, migration}` |
 | `admission_gate`, `first_token`, `fpm_publisher` | `dynamo_backend_common`, under the same module names |
 | `kv_router::publisher` | `dynamo_backend_common::kv_publisher` |
+| `discovery`, apart from the rows above | `dynamo_discovery`, the crate root |
+| `engines` | `dynamo_discovery::engines` |
+| `kv_router::shared_cache` | `dynamo_discovery::shared_cache` |
+| `entrypoint::{PreprocessedRouting, build_preprocessed_routing, ChatEngineFactoryCallback, PrefillRoutedEngine}` | `dynamo_discovery` |
+| `lora::{LoadEstimatorSubscription, controller_metrics}`, `http::service::metrics::register_lora_allocation_metrics`, and the `http::service::metrics::LORA_*_GAUGE` gauges | `dynamo_discovery::lora` |
 
 A log statement that does not pin a target reports its module path, so its target follows the move.
 
@@ -160,7 +165,7 @@ A log statement that does not pin a target reports its module path, so its targe
 | `dynamo_llm::preprocessor` | `dynamo_preprocessor` |
 | `dynamo_llm::backend` | `dynamo_preprocessor::backend` |
 | `dynamo_llm::kv_router::indexer` | `dynamo_sync::indexer` |
-| `dynamo_llm::kv_router::sequence` | `dynamo_sync::sequence`, and `dynamo_llm::scheduler_load` for the scheduler-load publisher |
+| `dynamo_llm::kv_router::sequence` | `dynamo_sync::sequence`, and `dynamo_discovery::scheduler_load` for the scheduler-load publisher |
 | `dynamo_llm::kv_router::{metrics_subscriber, routing_load}`, `dynamo_llm::discovery::worker_monitor` | `dynamo_sync::load::{metrics_subscriber, routing_load, worker_monitor}` |
 | `dynamo_llm::discovery::kv_source_watch` | `dynamo_sync::membership::kv_source_watch` |
 | `dynamo_llm::discovery::runtime_configs` | `dynamo_sync::runtime_configs` |
@@ -169,6 +174,9 @@ A log statement that does not pin a target reports its module path, so its targe
 | `dynamo_llm::{migration, session_affinity}` | `dynamo_router_host::{migration, session_affinity}` |
 | `dynamo_llm::{admission_gate, first_token, fpm_publisher}` | `dynamo_backend_common::{admission_gate, first_token, fpm_publisher}` |
 | `dynamo_llm::kv_router::publisher` | `dynamo_backend_common::kv_publisher` |
+| `dynamo_llm::discovery` | `dynamo_discovery` |
+| `dynamo_llm::kv_router::shared_cache` | `dynamo_discovery::shared_cache` |
+| `dynamo_llm::lora::subscription` | `dynamo_discovery::lora::subscription` |
 
 Statements that pin a target keep it: the request-trace sinks still log under `dynamo_llm::request_trace`. Removed with no replacement: `kv_router::WORKER_KV_INDEXER_BUFFER_SIZE`, which is now private to the KV event publisher.
 
@@ -588,7 +596,7 @@ Statements that pin a target keep it: the request-trace sinks still log under `d
 
 <span className="dynref-badge dynref-badge--blue">Behavioral</span> **EPP default RUST_LOG changed from debug/kv_router=trace to info** ([#11550](https://github.com/ai-dynamo/dynamo/pull/11550)).
 
-  > **Migrate:** Explicitly set RUST_LOG=debug,dynamo_sync=trace,dynamo_router_host=trace,dynamo_llm::kv_router=trace on the EPP component if verbose KV-router trace logging is still required.
+  > **Migrate:** Explicitly set RUST_LOG=debug,dynamo_sync=trace,dynamo_router_host=trace,dynamo_discovery::shared_cache=trace on the EPP component if verbose KV-router trace logging is still required.
 
 <span className="dynref-badge dynref-badge--blue">Behavioral</span> **Monitoring scripts now target dynamo-system namespace by default instead of dynamo** ([#10771](https://github.com/ai-dynamo/dynamo/pull/10771)).
 

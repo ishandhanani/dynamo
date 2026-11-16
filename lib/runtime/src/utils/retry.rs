@@ -7,14 +7,14 @@ use std::time::Duration;
 
 /// Capped exponential backoff: `initial`, doubling up to `max`.
 #[derive(Debug, Clone)]
-pub(crate) struct Backoff {
+pub struct Backoff {
     initial: Duration,
     max: Duration,
     next: Duration,
 }
 
 impl Backoff {
-    pub(crate) const fn new(initial: Duration, max: Duration) -> Self {
+    pub const fn new(initial: Duration, max: Duration) -> Self {
         Self {
             initial,
             max,
@@ -23,13 +23,13 @@ impl Backoff {
     }
 
     /// The delay before the next attempt; each call doubles the one after it.
-    pub(crate) fn next_delay(&mut self) -> Duration {
+    pub fn next_delay(&mut self) -> Duration {
         let delay = self.next;
         self.next = self.next.saturating_mul(2).min(self.max);
         delay
     }
 
-    pub(crate) fn reset(&mut self) {
+    pub fn reset(&mut self) {
         self.next = self.initial;
     }
 }
@@ -37,25 +37,25 @@ impl Backoff {
 /// Consecutive failures of one repeating operation, so it can warn once per
 /// streak, log repeats at debug, and log recovery at info.
 #[derive(Debug, Default)]
-pub(crate) struct FailureStreak {
+pub struct FailureStreak {
     failures: u64,
 }
 
 impl FailureStreak {
     /// Counts a failure. True when it starts a streak and should be warned about.
-    pub(crate) fn fail(&mut self) -> bool {
+    pub fn fail(&mut self) -> bool {
         self.failures = self.failures.saturating_add(1);
         self.failures == 1
     }
 
     /// Ends the streak. Returns its length when one was in progress, so the
     /// caller can report recovery.
-    pub(crate) fn recover(&mut self) -> Option<u64> {
+    pub fn recover(&mut self) -> Option<u64> {
         let failures = std::mem::take(&mut self.failures);
         (failures > 0).then_some(failures)
     }
 
-    pub(crate) fn failures(&self) -> u64 {
+    pub fn failures(&self) -> u64 {
         self.failures
     }
 }

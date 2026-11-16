@@ -61,7 +61,7 @@ async fn respond(
     card.runtime_config
         .runtime_data
         .insert(format.capability().into(), Value::Bool(true));
-    let ws = dynamo_llm::discovery::WorkerSet::new("test".into(), "test".into(), card)
+    let ws = dynamo_discovery::WorkerSet::new("test".into(), "test".into(), card)
         .with_generate_engine(engine);
     assert!(state.manager().add_worker_set("test-model", "test", ws));
     let (_, router) = format_generate::router(state, None, format);
@@ -392,7 +392,7 @@ async fn overlapping_public_ids_have_independent_cancellation_contexts() {
     card.runtime_config
         .runtime_data
         .insert(format.capability().into(), Value::Bool(true));
-    let ws = dynamo_llm::discovery::WorkerSet::new("test".into(), "test".into(), card)
+    let ws = dynamo_discovery::WorkerSet::new("test".into(), "test".into(), card)
         .with_generate_engine(Arc::new(Capture(tx)));
     assert!(state.manager().add_worker_set("test-model", "test", ws));
     let (_, router) = format_generate::router(state, None, format);
@@ -541,7 +541,7 @@ async fn concurrent_requests_sharing_a_client_id_get_their_own_output() {
         card.runtime_config
             .runtime_data
             .insert(format.capability().into(), Value::Bool(true));
-        let ws = dynamo_llm::discovery::WorkerSet::new("test".into(), "test".into(), card)
+        let ws = dynamo_discovery::WorkerSet::new("test".into(), "test".into(), card)
             .with_generate_engine(pipeline);
         assert!(state.manager().add_worker_set("test-model", "test", ws));
         let (_, router) = format_generate::router(state, None, format.clone());

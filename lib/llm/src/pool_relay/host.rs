@@ -72,15 +72,15 @@ use super::routing_pool::RoutingPoolRegistration;
 use super::serving_load::ServingLoadAggregator;
 use super::topology::{TopologyPublisher, TopologySnapshot};
 use super::wan::grpc::{GrpcTransport, PoolRelayGrpcConfig};
-use crate::scheduler_load::SCHEDULER_LOAD_SUBJECT;
-use crate::utils::retry::{Backoff, FailureStreak};
 use dynamo_model_card::local_model::runtime_config::ModelRuntimeConfig;
+use dynamo_runtime::utils::retry::{Backoff, FailureStreak};
 #[cfg(feature = "ckf-diagnostics")]
 use dynamo_sync::indexer::WorkerQueryHealthSnapshot;
 use dynamo_sync::indexer::{
     DEFAULT_RECOVERY_ATTEMPT_TIMEOUT, RecoverySupervisor, TargetFaultDisposition,
     start_target_subscriber,
 };
+use dynamo_sync::load::SCHEDULER_LOAD_SUBJECT;
 use dynamo_sync::load::metrics_subscriber::KvMetricsSubscriber;
 use dynamo_sync::membership::{
     KvSourceMembershipCoordinator, KvSourceMembershipView, KvSourceMembershipWatch,

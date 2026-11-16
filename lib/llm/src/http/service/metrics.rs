@@ -6,7 +6,6 @@ use dynamo_runtime::metrics::prometheus_names::{
     frontend_service, name_prefix, sanitize_frontend_prometheus_prefix,
 };
 use prometheus::{
-    IntGaugeVec, Opts,
     core::{Collector, Desc},
     proto::{Gauge, LabelPair, Metric, MetricFamily, MetricType},
 };
@@ -14,7 +13,7 @@ use serde::Serialize;
 use std::sync::{Arc, LazyLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use crate::discovery::ModelManager;
+use dynamo_discovery::ModelManager;
 use dynamo_frontend_protocols::{
     common::metrics::{ANNOTATION_LLM_METRICS, LLMMetricAnnotation},
     openai::chat_completions::NvCreateChatCompletionStreamResponse,
@@ -132,119 +131,6 @@ pub fn register_model_ready_metric(
     metrics_prefix: Option<String>,
 ) -> Result<(), prometheus::Error> {
     registry.register(Box::new(ModelReadyCollector::new(manager, metrics_prefix)?))
-}
-
-// ---------------------------------------------------------------------------
-// LoRA allocation metrics (updated by LoraController each tick)
-// ---------------------------------------------------------------------------
-
-pub static LORA_REPLICA_FACTOR_GAUGE: LazyLock<IntGaugeVec> = LazyLock::new(|| {
-    IntGaugeVec::new(
-        Opts::new(
-            format!("dynamo_frontend_{}", frontend_service::LORA_REPLICA_FACTOR),
-            "Number of replicas allocated for a LoRA adapter",
-        ),
-        &["endpoint", "lora"],
-    )
-    .expect("Failed to create lora_replica_factor gauge")
-});
-
-pub static LORA_IS_ACTIVE_GAUGE: LazyLock<IntGaugeVec> = LazyLock::new(|| {
-    IntGaugeVec::new(
-        Opts::new(
-            format!("dynamo_frontend_{}", frontend_service::LORA_IS_ACTIVE),
-            "Whether a LoRA adapter is active (1) or inactive (0)",
-        ),
-        &["endpoint", "lora"],
-    )
-    .expect("Failed to create lora_is_active gauge")
-});
-
-pub static LORA_RAW_ARRIVAL_COUNT_GAUGE: LazyLock<IntGaugeVec> = LazyLock::new(|| {
-    IntGaugeVec::new(
-        Opts::new(
-            format!(
-                "dynamo_frontend_{}",
-                frontend_service::LORA_RAW_ARRIVAL_COUNT
-            ),
-            "Raw arrival count (windowed rate counter) for a LoRA adapter",
-        ),
-        &["endpoint", "lora"],
-    )
-    .expect("Failed to create lora_raw_arrival_count gauge")
-});
-
-pub static LORA_ESTIMATED_LOAD_GAUGE: LazyLock<IntGaugeVec> = LazyLock::new(|| {
-    IntGaugeVec::new(
-        Opts::new(
-            format!("dynamo_frontend_{}", frontend_service::LORA_ESTIMATED_LOAD),
-            "Estimated load (windowed request count) for a LoRA adapter",
-        ),
-        &["endpoint", "lora"],
-    )
-    .expect("Failed to create lora_estimated_load gauge")
-});
-
-pub static LORA_ACTIVE_REQUESTS_GAUGE: LazyLock<IntGaugeVec> = LazyLock::new(|| {
-    IntGaugeVec::new(
-        Opts::new(
-            format!("dynamo_frontend_{}", frontend_service::LORA_ACTIVE_REQUESTS),
-            "Number of in-flight requests for a LoRA adapter",
-        ),
-        &["endpoint", "lora"],
-    )
-    .expect("Failed to create lora_active_requests gauge")
-});
-
-pub static LORA_CHURN_LOADS_GAUGE: LazyLock<IntGaugeVec> = LazyLock::new(|| {
-    IntGaugeVec::new(
-        Opts::new(
-            format!(
-                "dynamo_frontend_{}",
-                frontend_service::LORA_CHURN_LOADS_TOTAL
-            ),
-            "Total LoRA loads (new placements) this tick",
-        ),
-        &["endpoint"],
-    )
-    .expect("Failed to create lora_churn_loads gauge")
-});
-
-pub static LORA_CHURN_UNLOADS_GAUGE: LazyLock<IntGaugeVec> = LazyLock::new(|| {
-    IntGaugeVec::new(
-        Opts::new(
-            format!(
-                "dynamo_frontend_{}",
-                frontend_service::LORA_CHURN_UNLOADS_TOTAL
-            ),
-            "Total LoRA unloads (removed placements) this tick",
-        ),
-        &["endpoint"],
-    )
-    .expect("Failed to create lora_churn_unloads gauge")
-});
-
-pub static LORA_OVERFLOW_COUNT_GAUGE: LazyLock<IntGaugeVec> = LazyLock::new(|| {
-    IntGaugeVec::new(
-        Opts::new(
-            format!("dynamo_frontend_{}", frontend_service::LORA_OVERFLOW_COUNT),
-            "MCF solver overflow count (unplaceable replicas)",
-        ),
-        &["endpoint"],
-    )
-    .expect("Failed to create lora_overflow_count gauge")
-});
-
-pub fn register_lora_allocation_metrics(registry: &Registry) -> Result<(), prometheus::Error> {
-    registry.register(Box::new(LORA_REPLICA_FACTOR_GAUGE.clone()))?;
-    registry.register(Box::new(LORA_IS_ACTIVE_GAUGE.clone()))?;
-    registry.register(Box::new(LORA_RAW_ARRIVAL_COUNT_GAUGE.clone()))?;
-    registry.register(Box::new(LORA_ESTIMATED_LOAD_GAUGE.clone()))?;
-    registry.register(Box::new(LORA_ACTIVE_REQUESTS_GAUGE.clone()))?;
-    registry.register(Box::new(LORA_CHURN_LOADS_GAUGE.clone()))?;
-    registry.register(Box::new(LORA_CHURN_UNLOADS_GAUGE.clone()))?;
-    registry.register(Box::new(LORA_OVERFLOW_COUNT_GAUGE.clone()))?;
-    Ok(())
 }
 
 struct ModelServingLoadCollector {
@@ -557,7 +443,7 @@ pub fn router(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::discovery::UNKNOWN_METRIC_MODEL;
+    use dynamo_discovery::UNKNOWN_METRIC_MODEL;
     use dynamo_http_server::metrics::*;
     use std::time::Duration;
     const STATE_AWAITING_FIRST_TOKEN: &str = "awaiting_first_token";
@@ -650,16 +536,18 @@ mod tests {
 
         let mut card = ModelDeploymentCard::default();
         card.worker_type = Some(crate::worker_type::WorkerType::Aggregated);
-        let mut worker_set = crate::discovery::WorkerSet::new(
+        let mut worker_set = dynamo_discovery::WorkerSet::new(
             "watched".to_string(),
             "watched-mdc".to_string(),
             card,
         );
         let (worker_tx, worker_rx) = tokio::sync::watch::channel(Vec::new());
         worker_set.set_instance_watcher(worker_rx);
-        worker_set.chat_engine = Some(Arc::new(crate::engines::StreamingEngineAdapter::new(
-            crate::engines::make_echo_engine(),
-        )));
+        worker_set.chat_engine = Some(Arc::new(
+            dynamo_discovery::engines::StreamingEngineAdapter::new(
+                dynamo_discovery::engines::make_echo_engine(),
+            ),
+        ));
         assert!(manager.add_worker_set("test-model", "watched", worker_set));
         assert_eq!(model_ready_value(&registry, "test-model"), Some(0.0));
         assert!(!load_ready());
@@ -709,16 +597,18 @@ mod tests {
 
         let mut card = ModelDeploymentCard::default();
         card.worker_type = Some(crate::worker_type::WorkerType::Aggregated);
-        let mut worker_set = crate::discovery::WorkerSet::new(
+        let mut worker_set = dynamo_discovery::WorkerSet::new(
             "watched".to_string(),
             "watched-mdc".to_string(),
             card,
         );
         let (worker_tx, worker_rx) = tokio::sync::watch::channel(Vec::new());
         worker_set.set_instance_watcher(worker_rx);
-        worker_set.chat_engine = Some(Arc::new(crate::engines::StreamingEngineAdapter::new(
-            crate::engines::make_echo_engine(),
-        )));
+        worker_set.chat_engine = Some(Arc::new(
+            dynamo_discovery::engines::StreamingEngineAdapter::new(
+                dynamo_discovery::engines::make_echo_engine(),
+            ),
+        ));
         let worker_set = Arc::new(worker_set);
 
         // `register_alias` refuses a name that is already a live primary, so it must
@@ -882,8 +772,8 @@ mod tests {
             .add_chat_completions_model(
                 "registered-model",
                 "checksum",
-                Arc::new(crate::engines::StreamingEngineAdapter::new(
-                    crate::engines::make_echo_engine(),
+                Arc::new(dynamo_discovery::engines::StreamingEngineAdapter::new(
+                    dynamo_discovery::engines::make_echo_engine(),
                 )),
             )
             .unwrap();

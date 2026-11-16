@@ -26,10 +26,8 @@ use super::{
     decision_lifecycle::{self, run_until_killed, spawn_blocking_with_permit},
     service_v2,
 };
-use crate::{
-    discovery::{SystemOneExecutionSelection, SystemOneSelectionError},
-    generate_format::{Bound, ClientRequest, GenerateExchange, Worker},
-};
+use crate::generate_format::{Bound, ClientRequest, GenerateExchange, Worker};
+use dynamo_discovery::{SystemOneExecutionSelection, SystemOneSelectionError};
 use dynamo_frontend_protocols::{
     Annotated,
     common::{

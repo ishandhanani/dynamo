@@ -189,7 +189,7 @@ struct Args {
 }
 
 /// Compute LocalBlockHash (tokens_hash) from a slice of token IDs.
-/// Uses the same algorithm as lib/llm/src/kv_router/protocols.rs::compute_block_hash_for_seq
+/// Uses the same algorithm as `dynamo_kv_hashing::routing::compute_block_hash_for_seq`
 fn compute_block_hashes(tokens: &[u32], kv_block_size: u32) -> Vec<LocalBlockHash> {
     tokens
         .chunks_exact(kv_block_size as usize)

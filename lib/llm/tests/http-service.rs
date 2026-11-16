@@ -1904,7 +1904,7 @@ async fn test_model_ready_endpoint() {
 /// *any* registered model, displayable or not.
 #[tokio::test]
 async fn test_model_ready_endpoint_non_displayable_shadow() {
-    use dynamo_llm::discovery::WorkerSet;
+    use dynamo_discovery::WorkerSet;
     use dynamo_llm::worker_type::WorkerType;
 
     let (listener, port) = bind_random_port().await;

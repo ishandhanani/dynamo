@@ -7,20 +7,16 @@
 //! distributed LLM inference solutions.
 
 pub mod common;
-pub mod discovery;
-pub mod engines;
 pub mod entrypoint;
 mod frontend_load;
 pub mod grpc;
 pub mod http;
 // pub mod key_value_store;
 pub mod generate_format;
-pub mod kv_router;
 pub mod lora;
 pub mod mocker;
 pub mod namespace;
 pub mod pool_relay;
-pub mod scheduler_load;
 pub use dynamo_tokenizers as tokenizers;
 pub use dynamo_tokenizers::{file_json_field, log_json_err};
 pub mod tokens;

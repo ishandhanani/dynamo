@@ -100,7 +100,7 @@ logic but do not share the same serialization, RPC, or process boundaries.
 | `../frontend/vllm_processor.py` | vLLM-native Python pre/postprocessor |
 | `__main__.py` | Standalone Python router service |
 | `../thunderagent_router/__main__.py` | Custom registered router facade |
-| `../../../../lib/llm/src/entrypoint/input/common.rs` | Builds embedded Rust routing pipelines |
+| `../../../../lib/discovery/src/pipeline.rs` | Builds embedded Rust routing pipelines |
 | `../../../../lib/router-host/src/routing_host.rs` | Routed-generation orchestration and router-side tracker updates |
 | `../../../../lib/router-host/src/routing_host/kv_selection.rs` | Worker selection, pinned routing, and sticky-worker validation |
 | `../../../../lib/frontend-protocols/src/common/preprocessor.rs` | `PreprocessedRequest`; tracker is `#[serde(skip)]` |

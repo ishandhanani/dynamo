@@ -4,8 +4,8 @@ The publisher is worker side: it runs next to the engine, and it lives in
 `dynamo-backend-common` so that a worker gets it without linking the frontend. Do not import
 `dynamo-llm` here. The router's request path is the crate `dynamo-router-host`: see
 [`lib/router-host/AGENTS.md`](../../../router-host/AGENTS.md); do not import it here outside
-tests. The HiCache shared KV cache client stays in `dynamo-llm`
-(`lib/llm/src/kv_router/shared_cache.rs`).
+tests. The HiCache shared KV cache client is in `dynamo-discovery`
+(`lib/discovery/src/shared_cache.rs`).
 
 ## Shared processing
 

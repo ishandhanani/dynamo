@@ -36,15 +36,8 @@ use dynamo_runtime::{
     protocols::EndpointId,
 };
 
-use crate::{
-    kv_router::shared_cache::HicacheSharedKvCache,
-    lora::{
-        LoadEstimatorSubscription, LoraFilter, LoraRoutingTable, LoraStateTracker,
-        load_estimator::LoadEstimator,
-        state_tracker::{LoraWorkerObservation, LoraWorkerProjection},
-    },
-    worker_type::WorkerType,
-};
+use super::lora::LoadEstimatorSubscription;
+use crate::shared_cache::HicacheSharedKvCache;
 use dynamo_frontend_protocols::types::{
     RealtimeBidirectionalEngine,
     generic::tensor::TensorStreamingEngine,
@@ -58,6 +51,11 @@ use dynamo_frontend_protocols::types::{
         videos::OpenAIVideosStreamingEngine,
     },
 };
+use dynamo_lora::{
+    LoraFilter, LoraRoutingTable, LoraStateTracker,
+    load_estimator::LoadEstimator,
+    state_tracker::{LoraWorkerObservation, LoraWorkerProjection},
+};
 use dynamo_model_card::{
     local_model::runtime_config::{
         DisaggregatedEndpoint, ModelRuntimeConfig, VLLM_INFERENCE_V1_GENERATE_CAPABILITY,
@@ -70,6 +68,7 @@ use dynamo_router_host::{
     KvRouter, SelectionPolicySource, prefill_router::PrefillEndpointProvider,
     worker_set_target::WorkerSetTarget,
 };
+use dynamo_router_protocol::worker_type::WorkerType;
 use dynamo_sync::indexer::KvEventSourceRequirement;
 
 struct LoraEndpointDomain {
@@ -155,8 +154,8 @@ pub(crate) struct RemovedDiscoveryGroup {
     pub(crate) cards: Vec<ModelDeploymentCard>,
 }
 
-pub(crate) struct CommittedModelView {
-    pub(crate) name: String,
+pub struct CommittedModelView {
+    pub name: String,
     pub(crate) is_ready: bool,
     pub(crate) aliases: Vec<String>,
 }
@@ -178,7 +177,7 @@ impl From<CommittedModelView> for dynamo_http_server::load::ModelLoadView {
 ///
 /// Note: Don't implement Clone for this, put it in an Arc instead.
 pub struct ModelManager {
-    pub(crate) router_policies: super::router_policy::RouterPolicyRegistry,
+    pub router_policies: super::router_policy::RouterPolicyRegistry,
     /// Model name → Model (which contains WorkerSets with engines)
     models: DashMap<String, Arc<Model>>,
 
@@ -245,13 +244,13 @@ impl ModelManager {
         self.worker_inventory.publish(group_id, observation);
     }
 
-    pub(crate) fn worker_inventory(
+    pub fn worker_inventory(
         &self,
     ) -> Vec<(String, super::worker_inventory::WorkerGroupObservation)> {
         self.worker_inventory.snapshot()
     }
 
-    pub(crate) fn worker_group_available_ids(
+    pub fn worker_group_available_ids(
         &self,
         group_id: &str,
         endpoint: &EndpointId,
@@ -307,7 +306,7 @@ impl ModelManager {
             kv_source_memberships: DashMap::new(),
             lora_domains: DashMap::new(),
             committed_lora_endpoints: parking_lot::Mutex::new(HashSet::new()),
-            lora_enabled: crate::lora::lora_serving_enabled(),
+            lora_enabled: dynamo_lora::lora_serving_enabled(),
             lora_load_feeds: DashMap::new(),
             lora_controller_cancel: parking_lot::Mutex::new(None),
             alias_to_primary: DashMap::new(),
@@ -362,7 +361,7 @@ impl ModelManager {
                 }
                 worker_projection.is_registration_required |= card
                     .runtime_config
-                    .runtime_flag_enabled(crate::lora::LORA_REQUIRES_REGISTRATION);
+                    .runtime_flag_enabled(dynamo_lora::LORA_REQUIRES_REGISTRATION);
 
                 for (adapter_key, adapter_card) in &group.adapters {
                     let Ok(adapter_mcid) = ModelCardInstanceId::from_path(adapter_key) else {
@@ -476,12 +475,12 @@ impl ModelManager {
             .map(|entry| entry.value().clone())
     }
 
-    pub(crate) fn get_committed_model(&self, model_name: &str) -> Option<Arc<Model>> {
+    pub fn get_committed_model(&self, model_name: &str) -> Option<Arc<Model>> {
         self.catalog.load().models.get(model_name).cloned()
     }
 
     /// Committed primary models with their aliases, sorted by name.
-    pub(crate) fn committed_model_views(&self) -> Vec<CommittedModelView> {
+    pub fn committed_model_views(&self) -> Vec<CommittedModelView> {
         let catalog = self.catalog.load();
         let mut aliases_by_primary = HashMap::<&str, Vec<String>>::new();
         for (alias, primary) in catalog.aliases.iter() {
@@ -1178,7 +1177,7 @@ impl ModelManager {
     /// so they always come from the same published snapshot. A LoRA adapter is a
     /// distinct servable model rather than a second name for one, is never
     /// recorded in `aliases`, and so keeps its own entry.
-    pub(crate) fn registered_model_readiness(&self) -> Vec<(String, bool)> {
+    pub fn registered_model_readiness(&self) -> Vec<(String, bool)> {
         let catalog = self.catalog.load();
         let mut readiness = catalog
             .models
@@ -1501,7 +1500,7 @@ impl ModelManager {
     }
 
     /// Resolve the model before applying its WorkerSet-level edit admission policy.
-    pub(crate) fn select_image_edit_engine(
+    pub fn select_image_edit_engine(
         &self,
         model: &str,
         count: usize,
@@ -1589,7 +1588,7 @@ impl ModelManager {
 
     /// Select a Generate engine and its routing metadata from one worker set
     /// that advertises `capability`.
-    pub(crate) fn get_generate_engine_for_capability_with_routing(
+    pub fn get_generate_engine_for_capability_with_routing(
         &self,
         model: &str,
         capability: &str,
@@ -1603,7 +1602,7 @@ impl ModelManager {
     }
 
     /// Resolve an alias and select all System One execution inputs from one catalog snapshot.
-    pub(crate) fn get_systemone_execution_selection(
+    pub fn get_systemone_execution_selection(
         &self,
         requested_model: &str,
     ) -> Result<SystemOneExecutionSelection, SystemOneSelectionError> {
@@ -1689,7 +1688,7 @@ impl ModelManager {
 
     fn aggregated_local_card() -> ModelDeploymentCard {
         let mut card = ModelDeploymentCard::default();
-        card.worker_type = Some(crate::worker_type::WorkerType::Aggregated);
+        card.worker_type = Some(dynamo_router_protocol::worker_type::WorkerType::Aggregated);
         card.needs = Vec::new();
         card
     }
@@ -1719,7 +1718,7 @@ impl ModelManager {
         mut card: ModelDeploymentCard,
         engine: OpenAIChatCompletionsStreamingEngine,
     ) -> Result<(), ModelManagerError> {
-        card.worker_type = Some(crate::worker_type::WorkerType::Aggregated);
+        card.worker_type = Some(dynamo_router_protocol::worker_type::WorkerType::Aggregated);
         card.needs = Vec::new();
         let _reservation = self.reservation_lock.lock();
         self.ensure_name_not_alias(model)?;
@@ -2036,8 +2035,10 @@ impl ModelManager {
         }
         let namespace = format!("__local_prefill_{}", model);
         let mut card = ModelDeploymentCard::default();
-        card.worker_type = Some(crate::worker_type::WorkerType::Prefill);
-        card.needs = vec![vec![crate::worker_type::WorkerType::Decode]];
+        card.worker_type = Some(dynamo_router_protocol::worker_type::WorkerType::Prefill);
+        card.needs = vec![vec![
+            dynamo_router_protocol::worker_type::WorkerType::Decode,
+        ]];
         let ws = WorkerSet::new(namespace.clone(), card_checksum.to_string(), card);
         model_entry.add_worker_set(namespace, Arc::new(ws));
         self.publish_catalog_locked();
@@ -2605,13 +2606,13 @@ impl ModelManager {
             return;
         }
 
-        let config = crate::lora::LoraAllocationConfig::from_env();
+        let config = dynamo_lora::LoraAllocationConfig::from_env();
         if !config.enabled {
             return;
         }
         domain
             .load_estimator
-            .set_config(crate::lora::LoadEstimatorConfig {
+            .set_config(dynamo_lora::LoadEstimatorConfig {
                 rate_window: std::time::Duration::from_secs(config.effective_rate_window_secs()),
                 buckets_per_second: config.buckets_per_second,
                 predictor_type: config.predictor_type,
@@ -2619,14 +2620,14 @@ impl ModelManager {
             });
         let domain_cancel = cancel_token.child_token();
         *domain.controller_cancel.lock() = Some(domain_cancel.clone());
-        let _handle = crate::lora::LoraController::start_for_endpoint_with_metrics(
+        let _handle = dynamo_lora::LoraController::start_for_endpoint_with_metrics(
             endpoint_id.clone(),
             config,
             domain.routing_table.clone(),
             domain.state_tracker.clone(),
             domain.load_estimator.clone(),
             domain_cancel,
-            crate::lora::controller_metrics(),
+            super::lora::controller_metrics(),
         );
     }
 
@@ -2758,7 +2759,7 @@ impl ModelManager {
     }
 
     /// See [`Model::accepts_load_thresholds`].
-    pub(crate) fn accepts_load_thresholds(&self, model: &str) -> bool {
+    pub fn accepts_load_thresholds(&self, model: &str) -> bool {
         self.models
             .get(model)
             .is_some_and(|model| model.accepts_load_thresholds())
@@ -3197,7 +3198,7 @@ mod tests {
         name: &str,
     ) -> tokio::sync::watch::Sender<Vec<u64>> {
         let mut card = ModelDeploymentCard::load_from_disk(
-            "tests/data/sample-models/mock-llama-3.1-8b-instruct",
+            "../llm/tests/data/sample-models/mock-llama-3.1-8b-instruct",
             None,
         )
         .unwrap();
@@ -4427,7 +4428,7 @@ mod tests {
 
     #[test]
     fn sidecar_unload_preserves_routing_to_registered_replicas() {
-        use crate::lora::{LORA_REQUIRES_REGISTRATION, LoraAllocationConfig, LoraController};
+        use dynamo_lora::{LORA_REQUIRES_REGISTRATION, LoraAllocationConfig, LoraController};
 
         let manager = ModelManager::new();
         let mut base = ModelDeploymentCard::with_name_only("base");
@@ -4845,8 +4846,10 @@ mod tests {
     /// is not serving-ready.
     fn incomplete_decode_chat_ws(namespace: &str, mdcsum: &str) -> WorkerSet {
         let mut card = ModelDeploymentCard::default();
-        card.worker_type = Some(crate::worker_type::WorkerType::Decode);
-        card.needs = vec![vec![crate::worker_type::WorkerType::Prefill]];
+        card.worker_type = Some(dynamo_router_protocol::worker_type::WorkerType::Decode);
+        card.needs = vec![vec![
+            dynamo_router_protocol::worker_type::WorkerType::Prefill,
+        ]];
         // Watch receiver keeps its last value after the sender drops, so
         // worker_count stays 1 without holding the sender.
         let (_tx, rx) = tokio::sync::watch::channel(vec![1u64]);

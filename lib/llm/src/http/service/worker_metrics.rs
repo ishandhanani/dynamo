@@ -11,8 +11,8 @@ use prometheus::{
     proto::{Metric, MetricFamily},
 };
 
-use crate::discovery::ModelManager;
-use crate::discovery::worker_inventory::{WorkerGroupObservation, WorkerGroupState};
+use dynamo_discovery::ModelManager;
+use dynamo_discovery::worker_inventory::{WorkerGroupObservation, WorkerGroupState};
 use dynamo_http_server::metrics::WORKER_LAST_INPUT_SEQUENCE_TOKENS_GAUGE;
 use dynamo_http_server::metrics::WORKER_LAST_INTER_TOKEN_LATENCY_GAUGE;
 use dynamo_http_server::metrics::WORKER_LAST_TIME_TO_FIRST_TOKEN_GAUGE;
@@ -293,7 +293,7 @@ pub(super) fn register_worker_metrics(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::discovery::worker_inventory::WorkerInventory;
+    use dynamo_discovery::worker_inventory::WorkerInventory;
     use dynamo_model_card::local_model::runtime_config::ModelRuntimeConfig;
     use dynamo_runtime::protocols::EndpointId;
     use parking_lot::Mutex;

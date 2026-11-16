@@ -5,7 +5,7 @@ use super::*;
 
 #[test]
 fn model_aliases_are_deduplicated_before_implicit_selection() {
-    let manager = crate::discovery::ModelManager::new();
+    let manager = dynamo_discovery::ModelManager::new();
     assert!(manager.register_alias("alias", "primary"));
     let models = ["primary", "alias", "other"].map(String::from).to_vec();
     assert_eq!(

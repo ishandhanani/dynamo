@@ -16,13 +16,13 @@ use std::time::{Duration, Instant};
 
 use anyhow::Result;
 use dashmap::DashMap;
+use dynamo_discovery::ModelManager;
 use dynamo_frontend_protocols::common::extensions::{
     NvExt, NvExtProvider, routing_constraints_to_kv,
 };
 use dynamo_frontend_protocols::common::timing::WORKER_TYPE_DECODE;
 use dynamo_frontend_protocols::types::openai::completions::NvCreateCompletionRequest;
 use dynamo_kv_router::config::try_kv_router_config_from_dynamo_env;
-use dynamo_llm::discovery::ModelManager;
 use dynamo_llm::tokenizers::Encoding;
 use dynamo_llm::worker_type::WorkerType;
 use dynamo_model_card::model_card::ModelDeploymentCard;

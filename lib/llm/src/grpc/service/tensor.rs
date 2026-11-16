@@ -95,7 +95,7 @@ pub async fn tensor_response_stream(
         .manager()
         .get_tensor_engine(model)
         .map_err(|e| match e {
-            crate::discovery::ModelManagerError::ModelUnavailable(_) => {
+            dynamo_discovery::ModelManagerError::ModelUnavailable(_) => {
                 Status::unavailable("model temporarily unavailable")
             }
             _ => Status::not_found("model not found"),

@@ -5,13 +5,13 @@ use std::collections::{HashMap, HashSet};
 
 use dynamo_runtime::protocols::EndpointId;
 
-use crate::worker_type::WorkerType;
 use dynamo_frontend_protocols::common::timing::WORKER_TYPE_DECODE;
 use dynamo_model_card::local_model::runtime_config::ModelRuntimeConfig;
 use dynamo_model_card::model_type::ModelType;
+use dynamo_router_protocol::worker_type::WorkerType;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum WorkerGroupState {
+pub enum WorkerGroupState {
     Ready,
     Pending,
     MaterializationFailed,
@@ -19,19 +19,19 @@ pub(crate) enum WorkerGroupState {
 }
 
 #[derive(Clone, Debug)]
-pub(crate) struct WorkerGroupObservation {
-    pub(crate) model: String,
-    pub(crate) endpoint: EndpointId,
-    pub(crate) worker_type: &'static str,
-    pub(crate) model_type: ModelType,
-    pub(crate) workers: HashMap<u64, ModelRuntimeConfig>,
-    pub(crate) committed: HashSet<u64>,
-    pub(crate) checksum_mismatches: HashSet<u64>,
-    pub(crate) state: WorkerGroupState,
+pub struct WorkerGroupObservation {
+    pub model: String,
+    pub endpoint: EndpointId,
+    pub worker_type: &'static str,
+    pub model_type: ModelType,
+    pub workers: HashMap<u64, ModelRuntimeConfig>,
+    pub committed: HashSet<u64>,
+    pub checksum_mismatches: HashSet<u64>,
+    pub state: WorkerGroupState,
 }
 
 impl WorkerGroupObservation {
-    pub(crate) fn metric_worker_type(&self) -> &'static str {
+    pub fn metric_worker_type(&self) -> &'static str {
         // Encode workers can serve the public token-generation path, whose load and timing
         // attribution is decode even though its topology role remains encode.
         if self.worker_type == WorkerType::Encode.as_str()
@@ -48,12 +48,12 @@ impl WorkerGroupObservation {
 
 /// Tracks discovered groups independently of successful catalog admission.
 #[derive(Default)]
-pub(crate) struct WorkerInventory {
+pub struct WorkerInventory {
     groups: parking_lot::Mutex<HashMap<String, WorkerGroupObservation>>,
 }
 
 impl WorkerInventory {
-    pub(crate) fn publish(&self, group_id: String, observation: Option<WorkerGroupObservation>) {
+    pub fn publish(&self, group_id: String, observation: Option<WorkerGroupObservation>) {
         let mut groups = self.groups.lock();
         if let Some(observation) = observation {
             groups.insert(group_id, observation);
@@ -62,7 +62,7 @@ impl WorkerInventory {
         }
     }
 
-    pub(crate) fn snapshot(&self) -> Vec<(String, WorkerGroupObservation)> {
+    pub fn snapshot(&self) -> Vec<(String, WorkerGroupObservation)> {
         self.groups
             .lock()
             .iter()

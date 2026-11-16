@@ -612,9 +612,9 @@ impl ErrorMessage {
     /// registered model with no servable worker set (whichever role is missing).
     /// It returns the identical canonical 503 body so both code paths speak with
     /// one voice to the client.
-    pub fn from_model_error(e: &crate::discovery::ModelManagerError) -> ErrorResponse {
+    pub fn from_model_error(e: &dynamo_discovery::ModelManagerError) -> ErrorResponse {
         match e {
-            crate::discovery::ModelManagerError::ModelUnavailable(model) => {
+            dynamo_discovery::ModelManagerError::ModelUnavailable(model) => {
                 Self::service_unavailable_with_body(model_not_ready_message(model))
             }
             _ => Self::model_not_found(),
@@ -5949,7 +5949,7 @@ async fn images_with_request(
                 message: format!("No serving worker set supports {input_count} input images for this model"),
             }))?;
         if let Some(snapshot) = selection.snapshot {
-            request.insert(crate::discovery::image_edits::SNAPSHOT_KEY, snapshot);
+            request.insert(dynamo_discovery::image_edits::SNAPSHOT_KEY, snapshot);
         }
         selection.engine
     };
@@ -6769,7 +6769,7 @@ pub fn audios_router(
 mod tests {
 
     use super::*;
-    use crate::discovery::ModelManagerError;
+    use dynamo_discovery::ModelManagerError;
     use dynamo_frontend_protocols::common::extensions::NvExt;
     use dynamo_frontend_protocols::common::{SamplingOptionsProvider, StopConditionsProvider};
     use dynamo_frontend_protocols::openai::chat_completions::NvCreateChatCompletionRequest;

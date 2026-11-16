@@ -9,7 +9,7 @@ The module map and the rules for changing this code are in [`AGENTS.md`](AGENTS.
 
 ## Layer map
 
-The frontend pipeline (`lib/llm/src/entrypoint/input/common.rs`, `PreprocessedRouting::build_pipeline`)
+The frontend pipeline (`lib/discovery/src/pipeline.rs`, `PreprocessedRouting::build_pipeline`)
 runs these stages in order:
 
 ```mermaid
@@ -99,7 +99,7 @@ sequenceDiagram
 ```
 
 Discovery builds the pipeline once per Decode or Aggregated worker set
-(`lib/llm/src/discovery/watcher.rs`). Only a Decode set gets a real `PrefillRouter`; every other set gets a
+(`lib/discovery/src/watcher.rs`). Only a Decode set gets a real `PrefillRouter`; every other set gets a
 disabled one that always passes requests through. Prefill worker sets, and Encode worker sets
 that serve no model type of their own, build no pipeline: they are reached only through these
 hops.
@@ -233,5 +233,5 @@ constraints, and for the `KvRouter` of the prefill worker set. It holds no `Mode
 exactly one prefill worker set and one decode worker set. The encoder target follows the
 `encoder_result_handoff` rules there. In Direct mode the prefill hop requires
 `routing.prefill_worker_id`. See
-[`lib/llm/src/discovery/AGENTS.md`](../../llm/src/discovery/AGENTS.md) for worker-set admission
+[`lib/discovery/src/AGENTS.md`](../../discovery/src/AGENTS.md) for worker-set admission
 and succession.

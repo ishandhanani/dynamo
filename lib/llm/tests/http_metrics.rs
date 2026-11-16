@@ -3,6 +3,7 @@
 
 use anyhow::Error;
 use async_stream::stream;
+use dynamo_discovery::UNKNOWN_METRIC_MODEL;
 use dynamo_frontend_protocols::common::metrics::LLMMetricAnnotation;
 use dynamo_frontend_protocols::{
     Annotated,
@@ -12,7 +13,7 @@ use dynamo_frontend_protocols::{
     openai::completions::{NvCreateCompletionRequest, NvCreateCompletionResponse},
 };
 use dynamo_http_server::metrics::Endpoint;
-use dynamo_llm::{discovery::UNKNOWN_METRIC_MODEL, http::service::service_v2::HttpService};
+use dynamo_llm::http::service::service_v2::HttpService;
 use dynamo_model_card::model_card::ModelDeploymentCard;
 use dynamo_runtime::metrics::prometheus_names::frontend_service::METRICS_PREFIX_ENV;
 use dynamo_runtime::{
@@ -933,10 +934,8 @@ async fn test_responses_non_streaming_observes_metrics_before_backend_error_pref
 #[cfg(feature = "integration")]
 mod integration_tests {
     use super::*;
-    use dynamo_llm::{
-        discovery::ModelWatcher, engines::make_echo_engine, entrypoint::EngineConfig,
-        namespace::NamespaceFilter,
-    };
+    use dynamo_discovery::{ModelWatcher, engines::make_echo_engine};
+    use dynamo_llm::{entrypoint::EngineConfig, namespace::NamespaceFilter};
     use dynamo_model_card::local_model::LocalModelBuilder;
     use dynamo_runtime::DistributedRuntime;
     use dynamo_runtime::discovery::DiscoveryQuery;
@@ -1008,7 +1007,9 @@ mod integration_tests {
         };
 
         let card = local_model.card().clone();
-        let engine = Arc::new(dynamo_llm::engines::StreamingEngineAdapter::new(engine));
+        let engine = Arc::new(dynamo_discovery::engines::StreamingEngineAdapter::new(
+            engine,
+        ));
         let manager = service.model_manager();
         manager
             .add_chat_completions_model(model.service_name(), card.mdcsum(), engine.clone())

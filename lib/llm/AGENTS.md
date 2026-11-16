@@ -20,7 +20,7 @@ configuration retains the set while any of its workers remain; a mismatched
 newcomer receives no traffic and must not remove healthy serving state.
 Equivalent serving behavior or supported wire representations do not grant a
 separate exemption from checksum equality. See
-[`src/discovery/AGENTS.md`](src/discovery/AGENTS.md) for the admission and
+[`lib/discovery/src/AGENTS.md`](../discovery/src/AGENTS.md) for the admission and
 succession contract. N-3 and older combinations are unsupported unless a
 narrower temporary exception is explicitly documented.
 

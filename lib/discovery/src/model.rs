@@ -87,26 +87,26 @@ pub struct ModelReadiness {
 
 /// A generate engine and the routing metadata advertised by the same WorkerSet.
 #[derive(Clone)]
-pub(crate) struct GenerateEngineSelection {
-    pub(crate) engine: GenerateStreamingEngine,
-    pub(crate) kv_cache_block_size: u32,
-    pub(crate) lora_name: Option<String>,
-    pub(crate) tower_connector_lora_enabled: bool,
+pub struct GenerateEngineSelection {
+    pub engine: GenerateStreamingEngine,
+    pub kv_cache_block_size: u32,
+    pub lora_name: Option<String>,
+    pub tower_connector_lora_enabled: bool,
 }
 
 /// Aggregate SGLang engine and model assets selected from one WorkerSet snapshot.
 #[derive(Clone)]
-pub(crate) struct SystemOneExecutionSelection {
-    pub(crate) canonical_model: String,
-    pub(crate) engine: GenerateStreamingEngine,
-    pub(crate) card: ModelDeploymentCard,
-    pub(crate) preprocessor: Arc<OpenAIPreprocessor>,
-    pub(crate) admitted_ids: Option<tokio::sync::watch::Receiver<Vec<u64>>>,
-    pub(crate) lifecycle_cancellation: Option<tokio_util::sync::CancellationToken>,
+pub struct SystemOneExecutionSelection {
+    pub canonical_model: String,
+    pub engine: GenerateStreamingEngine,
+    pub card: ModelDeploymentCard,
+    pub preprocessor: Arc<OpenAIPreprocessor>,
+    pub admitted_ids: Option<tokio::sync::watch::Receiver<Vec<u64>>>,
+    pub lifecycle_cancellation: Option<tokio_util::sync::CancellationToken>,
 }
 
 impl SystemOneExecutionSelection {
-    pub(crate) fn validate_dispatch(
+    pub fn validate_dispatch(
         &self,
         pinned_worker: Option<u64>,
     ) -> Result<(), SystemOneSelectionError> {
@@ -131,7 +131,7 @@ impl SystemOneExecutionSelection {
         Ok(())
     }
 
-    pub(crate) fn decision_capabilities(&self) -> dynamo_decisions::Capabilities {
+    pub fn decision_capabilities(&self) -> dynamo_decisions::Capabilities {
         // The serialized SGLang capability pins the zero-decode requested-ID
         // contract, including vocabulary logprobs and meta_info.cached_tokens.
         // Tokenizer-specific candidate limits are checked during preflight.
@@ -148,7 +148,7 @@ impl SystemOneExecutionSelection {
 }
 
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
-pub(crate) enum SystemOneSelectionError {
+pub enum SystemOneSelectionError {
     #[error("model is not registered")]
     NotFound,
     #[error("model does not support aggregate SGLang scoring")]
@@ -163,9 +163,9 @@ struct NamespaceReadinessEval {
     ready: bool,
     has_legacy: bool,
     legacy_live_workers: usize,
-    present: std::collections::HashSet<crate::worker_type::WorkerType>,
-    missing: std::collections::HashSet<crate::worker_type::WorkerType>,
-    ambiguous: std::collections::HashSet<crate::worker_type::WorkerType>,
+    present: std::collections::HashSet<dynamo_router_protocol::worker_type::WorkerType>,
+    missing: std::collections::HashSet<dynamo_router_protocol::worker_type::WorkerType>,
+    ambiguous: std::collections::HashSet<dynamo_router_protocol::worker_type::WorkerType>,
 }
 
 type WorkerSetMap = HashMap<String, Arc<WorkerSet>>;
@@ -441,8 +441,8 @@ impl Model {
     fn ws_type_and_needs(
         ws: &WorkerSet,
     ) -> Option<(
-        crate::worker_type::WorkerType,
-        Vec<Vec<crate::worker_type::WorkerType>>,
+        dynamo_router_protocol::worker_type::WorkerType,
+        Vec<Vec<dynamo_router_protocol::worker_type::WorkerType>>,
     )> {
         let card = ws.card();
         card.worker_type.map(|wt| (wt, card.needs.clone()))
@@ -1139,7 +1139,7 @@ mod tests {
         watch::Sender<Vec<u64>>,
     ) {
         let mut card = ModelDeploymentCard::default();
-        card.worker_type = Some(crate::worker_type::WorkerType::Aggregated);
+        card.worker_type = Some(dynamo_router_protocol::worker_type::WorkerType::Aggregated);
         card.kv_cache_block_size = block_size;
         card.lora = lora_name.map(|name| LoraInfo {
             name: name.to_string(),
@@ -1363,11 +1363,11 @@ mod tests {
         configure: impl FnOnce(&mut ModelDeploymentCard),
     ) -> (Arc<WorkerSet>, watch::Sender<Vec<u64>>) {
         let mut card = ModelDeploymentCard::load_from_disk(
-            "tests/data/sample-models/mock-llama-3.1-8b-instruct",
+            "../llm/tests/data/sample-models/mock-llama-3.1-8b-instruct",
             None,
         )
         .unwrap();
-        card.worker_type = Some(crate::worker_type::WorkerType::Aggregated);
+        card.worker_type = Some(dynamo_router_protocol::worker_type::WorkerType::Aggregated);
         card.runtime_config.runtime_data.insert(
             dynamo_model_card::local_model::runtime_config::SGLANG_GENERATE_CAPABILITY.to_string(),
             true.into(),
@@ -1448,7 +1448,7 @@ mod tests {
                 card.worker_type = None;
             },
             |card| {
-                card.worker_type = Some(crate::worker_type::WorkerType::Prefill);
+                card.worker_type = Some(dynamo_router_protocol::worker_type::WorkerType::Prefill);
             },
             |card| {
                 card.lora = Some(LoraInfo {
@@ -1457,7 +1457,9 @@ mod tests {
                 });
             },
             |card| {
-                card.needs = vec![vec![crate::worker_type::WorkerType::Prefill]];
+                card.needs = vec![vec![
+                    dynamo_router_protocol::worker_type::WorkerType::Prefill,
+                ]];
             },
             |card| {
                 card.runtime_config
@@ -1748,7 +1750,7 @@ mod tests {
             dynamo_model_card::model_card::ModelDeploymentCard::default(),
         );
         let pr = PrefillRouter::disabled(
-            std::sync::Arc::new(crate::discovery::ModelManager::new()),
+            std::sync::Arc::new(crate::ModelManager::new()),
             dynamo_runtime::pipeline::RouterMode::RoundRobin,
             None,
         );
@@ -1797,7 +1799,7 @@ mod tests {
     /// sender closes, which is all `is_displayable` reads.
     fn make_encode_worker_set(namespace: &str, mdcsum: &str) -> Arc<WorkerSet> {
         let mut card = ModelDeploymentCard::default();
-        card.worker_type = Some(crate::worker_type::WorkerType::Encode);
+        card.worker_type = Some(dynamo_router_protocol::worker_type::WorkerType::Encode);
         let (_tx, rx) = watch::channel(vec![1_u64]);
         let mut ws = WorkerSet::new(namespace.to_string(), mdcsum.to_string(), card);
         ws.set_instance_watcher(rx);
@@ -1863,7 +1865,7 @@ mod tests {
     // worker's two-alternative needs and the rejection of cards with no
     // declared `worker_type`.
 
-    use crate::worker_type::WorkerType;
+    use dynamo_router_protocol::worker_type::WorkerType;
 
     /// Build a WorkerSet with an explicit worker_type / needs and a live
     /// worker count (via a watch channel).

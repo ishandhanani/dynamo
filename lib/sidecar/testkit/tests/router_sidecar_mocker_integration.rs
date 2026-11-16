@@ -5,7 +5,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use dynamo_backend_common::{BackendError, DisaggregationMode, FinishReason, LLMEngine};
-use dynamo_llm::discovery::ModelManager;
+use dynamo_discovery::ModelManager;
 use dynamo_llm::worker_type::WorkerType;
 use dynamo_model_card::model_card::TokenizerKind;
 use dynamo_router_host::PrefillRouter;

@@ -44,7 +44,7 @@ use super::load::{Coverage, PoolDeployment, PoolSchedulerLoad, SCHEDULER_FRESHNE
 use super::pool_registry::PoolRegistry;
 use super::topology::TopologyPublisher;
 use crate::frontend_load::{FRONTEND_LOAD_TOPIC, RequestGauges, RequestTotals};
-use crate::scheduler_load::SCHEDULER_LOAD_SUBJECT;
+use dynamo_sync::load::SCHEDULER_LOAD_SUBJECT;
 
 /// A source's report counts for this many of its publish intervals, so one or
 /// two lost reports do not make an aggregate incomplete.

@@ -31,7 +31,7 @@ use crate::frontend_load::{
     FRONTEND_LOAD_PUBLISH_INTERVAL, FRONTEND_LOAD_TOPIC, FrontendLoadFrame, FrontendModelLoad,
     RequestGauges, RequestTotals,
 };
-use crate::utils::retry::{Backoff, FailureStreak};
+use dynamo_runtime::utils::retry::{Backoff, FailureStreak};
 
 /// How long a frontend's frame counts as observed.
 pub(super) const FRONTEND_FRESHNESS: Duration = freshness(FRONTEND_LOAD_PUBLISH_INTERVAL);

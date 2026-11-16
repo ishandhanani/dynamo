@@ -23,7 +23,7 @@ use serde_json::{Map, Value};
 use uuid::Uuid;
 
 use super::RouteDoc;
-use crate::discovery::{ModelManager, router_policy::RouterPolicyTarget};
+use dynamo_discovery::{ModelManager, router_policy::RouterPolicyTarget};
 
 const CONTROL_TIMEOUT: Duration = Duration::from_secs(5);
 
@@ -244,7 +244,7 @@ mod tests {
 
     #[tokio::test]
     async fn busy_threshold_subresource_and_legacy_route_share_model_state() {
-        use crate::discovery::WorkerSet;
+        use dynamo_discovery::WorkerSet;
         use dynamo_model_card::router_config::LoadThresholdConfig;
         use dynamo_sync::load::LoadThresholdHandle;
 
@@ -354,7 +354,7 @@ mod tests {
     /// to the other WorkerSets and reports their thresholds.
     #[tokio::test]
     async fn busy_threshold_writes_skip_direct_routing_worker_sets() {
-        use crate::discovery::WorkerSet;
+        use dynamo_discovery::WorkerSet;
         use dynamo_model_card::router_config::LoadThresholdConfig;
         use dynamo_sync::load::LoadThresholdHandle;
 

@@ -51,7 +51,7 @@ async fn start_unified_replay(
     // HTTP aggregation reads parser configuration from the selected worker
     // card, just as discovery does for a deployed model.
     let mut workers =
-        crate::discovery::WorkerSet::new("replay-workers".into(), "replay-checksum".into(), card);
+        dynamo_discovery::WorkerSet::new("replay-workers".into(), "replay-checksum".into(), card);
     workers.chat_engine = Some(Arc::new(UnifiedReplayEngine {
         preprocessor,
         native,

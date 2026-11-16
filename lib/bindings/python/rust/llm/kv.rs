@@ -2041,7 +2041,7 @@ async fn create_kv_router_from_endpoint(
     plugins: RouterPlugins,
 ) -> anyhow::Result<RsManagedKvRouter> {
     // Create ModelManager and use it to create KvRouter (ensures registration)
-    let model_manager = Arc::new(llm_rs::discovery::ModelManager::new());
+    let model_manager = Arc::new(dynamo_discovery::ModelManager::new());
     let endpoint_id = endpoint.id();
     let track_active_blocks = kv_router_config
         .as_ref()
@@ -2078,7 +2078,7 @@ async fn create_kv_router_from_endpoint(
                 needs_policy_role,
                 "Waiting for worker model card in discovery"
             );
-            llm_rs::discovery::wait_for_endpoint_model_card(
+            dynamo_discovery::wait_for_endpoint_model_card(
                 endpoint,
                 std::time::Duration::from_secs(wait_secs),
                 None,

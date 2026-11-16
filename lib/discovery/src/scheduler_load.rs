@@ -3,7 +3,7 @@
 
 //! Router scheduler load snapshots published on the event plane.
 //!
-//! The frontend-side counterpart is [`crate::frontend_load`]; the Pool Relay aggregates both.
+//! The frontend-side counterpart is `frontend_load` in `dynamo-llm`; the Pool Relay aggregates both.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -16,18 +16,13 @@ use dynamo_runtime::traits::DistributedRuntimeProvider;
 use dynamo_runtime::transports::event_plane::EventPublisher;
 use dynamo_scheduler::host::ModelLoadResponse;
 use dynamo_slot_tracker::host::{SchedulerGroup, SchedulerLoad};
+use dynamo_sync::load::{
+    SCHEDULER_LOAD_PUBLISH_INTERVAL, SCHEDULER_LOAD_SUBJECT, serving_load_publishing_enabled,
+};
 use tokio_util::sync::CancellationToken;
 
-use crate::utils::retry::{Backoff, FailureStreak};
+use dynamo_runtime::utils::retry::{Backoff, FailureStreak};
 
-/// Router scheduler views of per-worker load, consumed by the Pool Relay.
-///
-/// Kept separate from [`KV_METRICS_SUBJECT`](dynamo_sync::load::KV_METRICS_SUBJECT) so one router's view never
-/// overwrites another router's worker-overload state.
-pub const SCHEDULER_LOAD_SUBJECT: &str = "scheduler_load";
-
-/// One complete rank batch per interval; the relay derives freshness from this cadence.
-pub(crate) const SCHEDULER_LOAD_PUBLISH_INTERVAL: Duration = Duration::from_secs(1);
 const SCHEDULER_LOAD_RETRY_INITIAL: Duration = Duration::from_millis(100);
 const SCHEDULER_LOAD_RETRY_MAX: Duration = Duration::from_secs(5);
 
@@ -38,7 +33,7 @@ pub(crate) fn start_scheduler_load_publisher(
     replica_sync: bool,
     cancellation_token: CancellationToken,
 ) {
-    if !crate::pool_relay::serving_load_publishing_enabled() {
+    if !serving_load_publishing_enabled() {
         return;
     }
     let group = if replica_sync {

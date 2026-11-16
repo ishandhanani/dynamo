@@ -11,7 +11,7 @@
 #   1. Same-model load balancing — pass the same MODEL twice; the frontend
 #      should weighted-randomly distribute requests across both workers.
 #   2. Multi-model dispatch       — pass two different MODELs; the
-#      name-keyed router (lib/llm/src/discovery/model_manager.rs) should
+#      name-keyed router (lib/discovery/src/model_manager.rs) should
 #      send each request only to the worker registered for that model.
 #
 # GPUs: 2
@@ -73,7 +73,7 @@ print_curl_footer <<CURL
 CURL
 
 # Frontend — same routing layer as the single-worker case; the name-keyed
-# DashMap lookup in lib/llm/src/discovery/model_manager.rs handles both the
+# DashMap lookup in lib/discovery/src/model_manager.rs handles both the
 # same-model fan-out (weighted-random across matching workers) and the
 # multi-model dispatch (model field selects the set of eligible workers).
 python3 -m dynamo.frontend &
@@ -97,7 +97,7 @@ common_worker_args=(
 #
 # Why namespaces and not just unique components or endpoints: the frontend
 # keys ``Model.worker_sets`` by ``(namespace, model_type)`` (see
-# ``worker_set_key`` in ``lib/llm/src/discovery/watcher.rs``), and
+# ``worker_set_key`` in ``lib/discovery/src/watcher.rs``), and
 # ``add_worker_set`` is an insert-overwrite on that key. Two workers
 # sharing a namespace -- regardless of how their endpoint paths differ --
 # both hash to the same ``ws_key``, and the second registration silently

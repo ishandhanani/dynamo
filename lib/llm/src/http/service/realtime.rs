@@ -74,7 +74,7 @@ const REQUEST_CHANNEL_CAPACITY: usize = 64;
 const CLOSE_DRAIN_TIMEOUT: Duration = Duration::from_secs(5);
 
 use super::{RouteDoc, service_v2};
-use crate::discovery::ModelManagerError;
+use dynamo_discovery::ModelManagerError;
 use dynamo_error::http::SanitizedError;
 use dynamo_frontend_protocols::types::RealtimeBidirectionalEngine;
 use dynamo_protocols::types::realtime::{

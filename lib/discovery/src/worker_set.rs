@@ -14,7 +14,7 @@ use dynamo_runtime::protocols::EndpointId;
 use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
 
-use crate::discovery::allocator::AllocatorTrimOnDrop;
+use crate::allocator::AllocatorTrimOnDrop;
 use dynamo_frontend_protocols::types::{
     RealtimeBidirectionalEngine,
     generic::tensor::TensorStreamingEngine,
@@ -159,7 +159,7 @@ pub struct WorkerSet {
     card: ModelDeploymentCard,
 
     // Engines — each WorkerSet owns its own pipelines
-    pub(crate) chat_engine: Option<OpenAIChatCompletionsStreamingEngine>,
+    pub chat_engine: Option<OpenAIChatCompletionsStreamingEngine>,
     pub(crate) completions_engine: Option<OpenAICompletionsStreamingEngine>,
     pub(crate) embeddings_engine: Option<OpenAIEmbeddingsStreamingEngine>,
     pub(crate) classify_engine: Option<OpenAIClassifyStreamingEngine>,
@@ -181,7 +181,7 @@ pub struct WorkerSet {
     load_context: Option<Arc<RoutingLoadContext>>,
 
     /// Shared configuration handle for this routing load context.
-    pub(crate) load_thresholds: Option<LoadThresholdHandle>,
+    pub load_thresholds: Option<LoadThresholdHandle>,
 
     /// Prefill router for disaggregated serving. Stored here so the watcher can
     /// deactivate it when all prefill workers die, and reactivate when they rejoin.
@@ -379,7 +379,7 @@ impl WorkerSet {
     pub fn is_encode_set(&self) -> bool {
         matches!(
             self.card.worker_type,
-            Some(crate::worker_type::WorkerType::Encode),
+            Some(dynamo_router_protocol::worker_type::WorkerType::Encode),
         )
     }
 
@@ -953,7 +953,7 @@ mod tests {
 
     fn make_encode_worker_set() -> WorkerSet {
         let mut card = ModelDeploymentCard::default();
-        card.worker_type = Some(crate::worker_type::WorkerType::Encode);
+        card.worker_type = Some(dynamo_router_protocol::worker_type::WorkerType::Encode);
         WorkerSet::new("ns1".to_string(), "abc".to_string(), card)
     }
 
@@ -980,9 +980,9 @@ mod tests {
         assert!(ws.is_prefill_set());
 
         for role in [
-            crate::worker_type::WorkerType::Prefill,
-            crate::worker_type::WorkerType::Decode,
-            crate::worker_type::WorkerType::Aggregated,
+            dynamo_router_protocol::worker_type::WorkerType::Prefill,
+            dynamo_router_protocol::worker_type::WorkerType::Decode,
+            dynamo_router_protocol::worker_type::WorkerType::Aggregated,
         ] {
             let mut card = ModelDeploymentCard::default();
             card.worker_type = Some(role);
