@@ -22,8 +22,8 @@ use super::{PublisherInput, ZmqRecoveryConfig};
 use dynamo_runtime::transports::zmq::sockets::{connect_sub_socket, multipart_message};
 
 pub struct DecodedZmqKvBatch {
-    pub(super) source_cursor: u64,
-    pub(super) batch: KvEventBatch,
+    pub source_cursor: u64,
+    pub batch: KvEventBatch,
 }
 
 /// Decode the transport envelope shared by legacy and residency-aware inputs.

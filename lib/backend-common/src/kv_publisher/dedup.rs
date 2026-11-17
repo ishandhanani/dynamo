@@ -24,6 +24,7 @@ pub enum EventDedupPolicy {
 /// reaches zero. `SetLike` events bypass bookkeeping when their producer
 /// guarantees at most one logical residency per owner, tier, and block hash.
 /// Clears reset refcounts for the emitting rank across storage tiers.
+#[derive(Default)]
 pub struct EventDedupFilter {
     /// Per-(dp_rank, storage_tier, residency_domain) refcounts.
     per_rank_tier:
@@ -31,7 +32,7 @@ pub struct EventDedupFilter {
 }
 
 impl EventDedupFilter {
-    pub(super) fn new() -> Self {
+    pub fn new() -> Self {
         Self {
             per_rank_tier: HashMap::new(),
         }

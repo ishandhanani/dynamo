@@ -12,7 +12,7 @@ use dynamo_kv_indexer::host::{KvRouterError, LocalKvIndexer};
 use dynamo_runtime::transports::event_plane::EventPublisher;
 use dynamo_scheduler::host::RouterEventSink;
 
-pub struct EventPlanePublisher(pub(super) EventPublisher);
+pub struct EventPlanePublisher(pub EventPublisher);
 
 /// Bound normal event-plane batches while always allowing one complete event.
 ///
