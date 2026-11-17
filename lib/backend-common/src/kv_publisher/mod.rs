@@ -38,18 +38,18 @@ use dynamo_sync::indexer::start_worker_kv_query_endpoint;
 use dynamo_sync::membership::KvEventSource as DiscoveredKvEventSource;
 
 mod attachment_owner;
-mod batching;
-mod dedup;
+pub mod batching;
+pub mod dedup;
 mod event_processor;
-mod metrics;
+pub mod metrics;
 mod multimodal_embedding_cache;
-mod sinks;
+pub mod sinks;
 mod state_agent;
 mod state_agent_host;
 #[cfg(test)]
 mod tests;
 mod worker_metrics;
-mod zmq_listener;
+pub mod zmq_listener;
 mod zmq_recovery;
 pub use zmq_recovery::{KvStreamCommand, KvStreamStatus, ZmqRecoveryConfig};
 
@@ -76,10 +76,10 @@ pub use worker_metrics::WorkerMetricsPublisher;
 use zmq_listener::start_zmq_listener;
 
 /// Events the worker-local KV indexer keeps for router queries (the most recent ones).
-const WORKER_KV_INDEXER_BUFFER_SIZE: usize = 1024;
+pub const WORKER_KV_INDEXER_BUFFER_SIZE: usize = 1024;
 const MAX_BATCHING_TIMEOUT_MS: u64 = 15_000;
 pub const DEFAULT_BATCHING_TIMEOUT_MS: Option<u64> = None;
-const DEFAULT_MAX_BATCH_BLOCKS: usize = 128;
+pub const DEFAULT_MAX_BATCH_BLOCKS: usize = 128;
 
 /// Configure the source of KV events.
 /// Currently, only ZMQ is supported.
