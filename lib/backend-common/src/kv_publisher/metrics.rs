@@ -17,7 +17,7 @@ use prometheus::{IntCounter, IntCounterVec};
 /// Metrics for the KV publisher, created via the MetricsHierarchy API.
 /// This provides automatic `dynamo_namespace`, `dynamo_component`, and other
 /// hierarchy labels for free.
-pub(crate) struct KvPublisherMetrics {
+pub struct KvPublisherMetrics {
     /// Total number of raw events dropped by engines before reaching publisher.
     pub engines_dropped_events_total: IntCounter,
     /// Total number of decoded ZMQ KV events by relay stage and event type.
@@ -130,7 +130,7 @@ impl KvPublisherMetrics {
     }
 }
 
-pub(crate) fn kv_publisher_metrics() -> Option<Arc<KvPublisherMetrics>> {
+pub fn kv_publisher_metrics() -> Option<Arc<KvPublisherMetrics>> {
     KV_PUBLISHER_METRICS.get().cloned()
 }
 

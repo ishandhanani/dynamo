@@ -53,7 +53,9 @@ use futures::StreamExt;
 use tokio::sync::{Mutex, mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
 
-use super::{WORKER_KV_INDEXER_BUFFER_SIZE, metrics::kv_publisher_metrics};
+use dynamo_backend_common::kv_publisher::{
+    WORKER_KV_INDEXER_BUFFER_SIZE, metrics::kv_publisher_metrics,
+};
 use dynamo_runtime::transports::zmq::sockets::{
     MultipartMessage, SubSocket, connect_sub_socket, multipart_message,
 };
@@ -67,7 +69,7 @@ use dynamo_sync::{
     },
 };
 
-use super::{
+use dynamo_backend_common::kv_publisher::{
     DEFAULT_MAX_BATCH_BLOCKS,
     batching::PlacementEventCoalescer,
     dedup::{EventDedupFilter, EventDedupPolicy},

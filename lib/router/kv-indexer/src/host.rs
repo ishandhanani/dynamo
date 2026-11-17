@@ -58,7 +58,8 @@ pub use crate::types::{
 };
 
 // What the frontend host (lib/sync, lib/router-host), the worker-side publisher
-// (lib/backend-common) and the Pool Relay (lib/pool-relay) name beyond the lists above.
+// (lib/backend-common), the KV state agent (lib/kv-state-agent) and the Pool Relay
+// (lib/pool-relay) name beyond the lists above.
 pub use crate::api::{
     IndexerQueryRequest, IndexerQueryResponse, IndexerRecordRoutingDecisionRequest,
     IndexerRecordRoutingDecisionResponse, KV_INDEXER_QUERY_ENDPOINT,

@@ -18,13 +18,13 @@ use super::sinks::emit;
 /// deliberately owns no event IDs, timers, indexers, publishers, or error
 /// policy, so both publisher lifecycles can share it without sharing commits.
 #[derive(Debug)]
-pub(super) struct PlacementEventCoalescer<K> {
+pub struct PlacementEventCoalescer<K> {
     pending: Option<(K, PlacementEvent)>,
     max_batch_blocks: usize,
 }
 
 impl<K: Eq> PlacementEventCoalescer<K> {
-    pub(super) fn new(max_batch_blocks: usize) -> Self {
+    pub fn new(max_batch_blocks: usize) -> Self {
         Self {
             pending: None,
             max_batch_blocks,
@@ -40,7 +40,7 @@ impl<K: Eq> PlacementEventCoalescer<K> {
     /// Two outputs are possible when an incompatible or oversized mutation
     /// follows a pending mutation, or when `Cleared` flushes the pending value
     /// and then passes through as its own barrier.
-    pub(super) fn push(&mut self, key: K, event: PlacementEvent) -> [Option<PlacementEvent>; 2] {
+    pub fn push(&mut self, key: K, event: PlacementEvent) -> [Option<PlacementEvent>; 2] {
         if matches!(&event.event.data, KvCacheEventData::Cleared) {
             return [self.flush(), Some(event)];
         }
@@ -72,7 +72,7 @@ impl<K: Eq> PlacementEventCoalescer<K> {
         [flushed, None]
     }
 
-    pub(super) fn flush(&mut self) -> Option<PlacementEvent> {
+    pub fn flush(&mut self) -> Option<PlacementEvent> {
         self.pending.take().map(|(_, event)| event)
     }
 }

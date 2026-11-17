@@ -12,7 +12,7 @@ use dynamo_kv_indexer::host::{KvRouterError, LocalKvIndexer};
 use dynamo_runtime::transports::event_plane::EventPublisher;
 use dynamo_scheduler::host::RouterEventSink;
 
-pub(super) struct EventPlanePublisher(pub(super) EventPublisher);
+pub struct EventPlanePublisher(pub EventPublisher);
 
 /// Bound normal event-plane batches while always allowing one complete event.
 ///
@@ -25,7 +25,7 @@ pub(super) struct EventPlanePublisher(pub(super) EventPublisher);
 pub(super) const MAX_EVENT_PLANE_KV_EVENTS_PER_BATCH: usize = 128;
 pub(super) const MAX_EVENT_PLANE_KV_EVENT_BATCH_BLOCKS: usize = 8_192;
 
-pub(super) trait RouterEventBatchSink: Send + Sync {
+pub trait RouterEventBatchSink: Send + Sync {
     fn publish_events(&self, events: &[RouterEvent]) -> impl Future<Output = Result<()>> + Send;
 }
 
@@ -154,7 +154,7 @@ pub(super) fn event_plane_event_batches(
 ///
 /// Callers own logging and fail-open/fail-closed policy. `Cleared` is stronger
 /// inside `LocalKvIndexer` and returns only after every affected tier completes.
-pub(super) async fn admit_local_event(
+pub async fn admit_local_event(
     local_indexer: Option<&LocalKvIndexer>,
     event: &RouterEvent,
 ) -> Result<(), KvRouterError> {

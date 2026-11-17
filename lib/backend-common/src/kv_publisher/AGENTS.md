@@ -7,6 +7,8 @@ The publisher is worker side: it runs next to the engine, and it lives in
 tests. The HiCache shared KV cache client is in `dynamo-discovery`
 (`lib/discovery/src/shared_cache.rs`).
 
+The state-agent publisher is the crate `dynamo-kv-state-agent` ([`lib/kv-state-agent`](../../../kv-state-agent/AGENTS.md)), above this one. It calls the stages it shares with the legacy publisher across the crate boundary, which is why `PlacementEventCoalescer`, `EventDedupFilter`, `EventDedupPolicy`, `EventPlanePublisher`, `RouterEventBatchSink`, `admit_local_event`, `DecodedZmqKvBatch`, `decode_zmq_kv_batch` and `kv_publisher_metrics` are public. The rules below hold for both publishers.
+
 ## Shared processing
 
 Legacy and state-agent publishers should share decoding, normalization,

@@ -19,6 +19,8 @@ processor publishes normalized events through the configured event plane.
   externally.
 - `worker_metrics.rs`: emits worker-local runtime metrics.
 
+The KV state agent (`lib/kv-state-agent`, the crate `dynamo-kv-state-agent`) reuses the decode step of `zmq_listener.rs`, the coalescer of `batching.rs`, `dedup.rs` and the local admission and event-plane sink of `sinks.rs`; it does not run `event_processor.rs`.
+
 ## Stage Notes
 
 `zmq_listener.rs` skips ignored raw events before assigning the publisher-local

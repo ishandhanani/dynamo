@@ -36,7 +36,7 @@ use dynamo_sync::membership::kv_state_agent::{
     KvStateHostStatus, KvStateIngressProtocol,
 };
 
-use super::state_agent::{
+use crate::state_agent::{
     KvStateAgent, KvStateAgentAttachmentConfig, KvStateAgentConfig, KvStateAgentSlotConfig,
     KvStateAgentSockets, KvStateAgentVllmSource,
 };

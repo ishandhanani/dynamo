@@ -21,15 +21,15 @@ use super::metrics::kv_publisher_metrics;
 use super::{PublisherInput, ZmqRecoveryConfig};
 use dynamo_runtime::transports::zmq::sockets::{connect_sub_socket, multipart_message};
 
-pub(super) struct DecodedZmqKvBatch {
-    pub(super) source_cursor: u64,
-    pub(super) batch: KvEventBatch,
+pub struct DecodedZmqKvBatch {
+    pub source_cursor: u64,
+    pub batch: KvEventBatch,
 }
 
 /// Decode the transport envelope shared by legacy and residency-aware inputs.
 ///
 /// Callers retain their own malformed-input and protocol-version policies.
-pub(super) fn decode_zmq_kv_batch(
+pub fn decode_zmq_kv_batch(
     frames: dynamo_runtime::transports::zmq::sockets::MultipartMessage,
 ) -> Result<DecodedZmqKvBatch> {
     let (source_cursor, payload) = split_zmq_kv_batch(frames)?;
