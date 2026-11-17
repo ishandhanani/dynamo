@@ -63,7 +63,6 @@ zmq = { workspace = true }
 
 [dev-dependencies]
 dynamo-router-host = { workspace = true, features = ["testing"] }
-dynamo-sync = { workspace = true, features = ["testing"] }
 reqwest = { workspace = true }
 rstest = "0.18.2"
 serde_json = { workspace = true }
