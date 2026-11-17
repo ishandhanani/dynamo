@@ -81,6 +81,7 @@ dynamo-mocker = { path = "../../mocker" }
 dynamo-model-card = { path = "../../model-card" }
 dynamo-parsers = { version = "=11.0.11" }
 dynamo-backend-common = { path = "../../backend-common" }
+dynamo-kv-state-agent = { path = "../../kv-state-agent" }
 dynamo-sidecar-common = { path = "../../sidecar/common" }
 # default-features = false: sidecar defaults (mm-routing, jemalloc) must not reach the wheel.
 dynamo-sglang-sidecar = { path = "../../sidecar/sglang", default-features = false }

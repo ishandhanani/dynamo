@@ -86,7 +86,7 @@ BLOCK_SIZE = 16
 ROUTER_OVERLOAD_DEBUG_DYN_LOG = (
     "info,"
     "dynamo_sync=debug,"
-    "dynamo_router_host=debug,dynamo_backend_common::kv_publisher=debug,dynamo_discovery::shared_cache=debug,"
+    "dynamo_router_host=debug,dynamo_backend_common::kv_publisher=debug,dynamo_kv_state_agent=debug,dynamo_discovery::shared_cache=debug,"
     "dynamo_runtime::pipeline::network::egress::push_router=debug,"
     "dynamo_mocker_engine=debug"
 )

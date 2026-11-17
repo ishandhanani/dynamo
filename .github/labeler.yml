@@ -47,6 +47,7 @@ router:
           - components/src/dynamo/router/**
           - lib/discovery/src/shared_cache.rs
           - lib/backend-common/src/kv_publisher/**
+          - lib/kv-state-agent/**
           - lib/router-host/**
           - lib/sync/**
 

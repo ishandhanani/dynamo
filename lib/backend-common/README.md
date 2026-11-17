@@ -403,7 +403,8 @@ lib/backend-common/
         admission_gate/    #   gate per backend worker, in front of the engine
         first_token.rs   # FirstTokenSource / FirstTokenNotifier
         kv_publisher/    # KvEventPublisher, WorkerMetricsPublisher, ZMQ listener
-                         #   and recovery, KV state agent (see its AGENTS.md)
+                         #   and recovery (see its AGENTS.md); the KV state agent
+                         #   is lib/kv-state-agent
         fpm_publisher.rs # FpmEventRelay / FpmDirectPublisher (forward-pass metrics)
         args.rs          # CommonArgs — shared CLI flags every engine flattens
         disagg.rs        # DisaggregationMode enum + clap value-parser

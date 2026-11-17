@@ -264,7 +264,7 @@ trtllm_configs = {
             ),
         ],
         env={
-            "DYN_LOG": "dynamo_backend_common::kv_publisher=trace,dynamo_scheduler::selector=info",
+            "DYN_LOG": "dynamo_backend_common::kv_publisher=trace,dynamo_kv_state_agent=trace,dynamo_scheduler::selector=info",
             # Disable ANSI so structured tracing fields render as plain
             # `key=value` (color codes otherwise split `worker_id`/`=`/value and
             # break the expected_log regex).

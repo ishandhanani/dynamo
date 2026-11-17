@@ -37,15 +37,12 @@ use dynamo_runtime::traits::DistributedRuntimeProvider;
 use dynamo_sync::indexer::start_worker_kv_query_endpoint;
 use dynamo_sync::membership::KvEventSource as DiscoveredKvEventSource;
 
-mod attachment_owner;
 pub mod batching;
 pub mod dedup;
 mod event_processor;
 pub mod metrics;
 mod multimodal_embedding_cache;
 pub mod sinks;
-mod state_agent;
-mod state_agent_host;
 #[cfg(test)]
 mod tests;
 mod worker_metrics;
@@ -53,25 +50,14 @@ pub mod zmq_listener;
 mod zmq_recovery;
 pub use zmq_recovery::{KvStreamCommand, KvStreamStatus, ZmqRecoveryConfig};
 
-pub use attachment_owner::{KvStateAttachmentDescriptor, KvStateAttachmentOwner};
-
 #[cfg(test)]
 use dedup::{EventDedupFilter, EventDedupPolicy};
-pub use dynamo_sync::membership::kv_state_agent::KvStateIngressProtocol;
 #[cfg(test)]
 use event_processor::run_event_processor_loop;
 use event_processor::start_event_processor;
 use metrics::KvPublisherMetrics;
 pub use multimodal_embedding_cache::MultimodalEmbeddingCachePublisher;
 use sinks::EventPlanePublisher;
-pub use state_agent::{
-    KvStateAgent, KvStateAgentAttachmentConfig, KvStateAgentConfig, KvStateAgentSlotConfig,
-    KvStateAgentSockets, KvStateAgentVllmSource, resolve_stable_dp_slot_id,
-};
-pub use state_agent_host::{
-    DEFAULT_KV_STATE_AGENT_MAX_SLOTS, DEFAULT_KV_STATE_AGENT_SLOTS_PER_SOCKET, KvStateAgentHost,
-    KvStateAgentHostConfig,
-};
 pub use worker_metrics::WorkerMetricsPublisher;
 use zmq_listener::start_zmq_listener;
 

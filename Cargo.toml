@@ -57,6 +57,7 @@ members = [
     "lib/bench",
     "lib/backend-common",
     "lib/backend-common/examples/mocker",
+    "lib/kv-state-agent",
     "lib/sidecar/common",
     "lib/sidecar/testkit",
     "lib/sidecar/vllm",
@@ -139,6 +140,7 @@ dynamo-parsers = { version = "=11.0.11" }
 #   sparse index: curl https://index.crates.io/dy/na/dynamo-parsers-v2   (one JSON line per release; read the "vers" field)
 dynamo-parsers-v2 = { version = "=0.10.2" }
 dynamo-backend-common = { path = "lib/backend-common", version = "1.8.0" }
+dynamo-kv-state-agent = { path = "lib/kv-state-agent", version = "1.8.0" }
 dynamo-sidecar-common = { path = "lib/sidecar/common", version = "1.8.0" }
 
 

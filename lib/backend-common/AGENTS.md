@@ -22,16 +22,16 @@ the raw path alongside the LLM `chat`/`completions`/`embedding`/etc.
 
 ## What The Crate Owns
 
-Besides the engine contract and the `Worker`, the crate owns the code that runs in a worker next to its engine. It moved here from `dynamo-llm`, so a worker gets it without linking the frontend, and `dynamo-llm` (the worker entrypoint) and `dynamo-mocker-engine` (the mocker's KV and forward-pass publishers) depend on this crate for it.
+Besides the engine contract and the `Worker`, the crate owns the code that runs in a worker next to its engine. It moved here from `dynamo-llm`, so a worker gets it without linking the frontend, and `dynamo-llm` (the worker entrypoint), `dynamo-mocker-engine` (the mocker's KV and forward-pass publishers) and `dynamo-kv-state-agent` (the stages of the KV event publisher the state agent shares) depend on this crate for it.
 
 - `admission_gate` (`admission_gate.rs`, `admission_gate/metrics.rs`): one `WorkerAdmissionGate` per backend worker, in front of the engine; `AdmissionEngine` serves an engine through it.
 - `first_token` (`first_token.rs`): `FirstTokenSource` and `FirstTokenNotifier`, the worker-side first-token notification.
-- `kv_publisher` (`kv_publisher/`): `KvEventPublisher`, `WorkerMetricsPublisher`, the ZMQ listener and its recovery, and the KV state agent (`KvStateAgentHost`, `KvStateAttachmentOwner`). Read [`src/kv_publisher/AGENTS.md`](src/kv_publisher/AGENTS.md) before changing it. It is not `publisher.rs`, which only wires these publishers for the `Worker`.
+- `kv_publisher` (`kv_publisher/`): `KvEventPublisher`, `WorkerMetricsPublisher`, and the ZMQ listener and its recovery. Read [`src/kv_publisher/AGENTS.md`](src/kv_publisher/AGENTS.md) before changing it. It is not `publisher.rs`, which only wires these publishers for the `Worker`. The KV state agent (`KvStateAgent`, `KvStateAgentHost`, `KvStateAttachmentOwner`) is the crate `dynamo-kv-state-agent` ([`lib/kv-state-agent`](../kv-state-agent/AGENTS.md)), above this one; the public items of `kv_publisher::{batching, dedup, metrics, sinks, zmq_listener}` and the constants `WORKER_KV_INDEXER_BUFFER_SIZE` and `DEFAULT_MAX_BATCH_BLOCKS` are public for it.
 - `fpm_publisher` (`fpm_publisher.rs`): `FpmEventRelay` and `FpmDirectPublisher`, the forward-pass-metrics relay.
 - Depends on (Dynamo crates): `dynamo-runtime`, `dynamo-model-card`, `dynamo-frontend-protocols`, `dynamo-telemetry`, `dynamo-sync`, `dynamo-rl`, `dynamo-mocker` (the forward-pass snapshot types `fpm_publisher` publishes), the published `dynamo-protocols`, and the router crates `dynamo-router-protocol`, `dynamo-kv-events`, `dynamo-kv-hashing`, `dynamo-kv-hints`, `dynamo-kv-indexer`, `dynamo-scheduler` and `dynamo-slot-tracker`.
-- Must not depend on: `dynamo-llm` or any crate above it, and `dynamo-router-host` or `dynamo-preprocessor` outside dev-dependencies. `cargo tree -p dynamo-backend-common | grep dynamo-llm` must print nothing.
+- Must not depend on: `dynamo-llm` or any crate above it, `dynamo-kv-state-agent`, and `dynamo-router-host` or `dynamo-preprocessor` outside dev-dependencies. `cargo tree -p dynamo-backend-common | grep dynamo-llm` must print nothing.
 - Admission limits and queueing, rejection and cancellation behaviour, publisher batching, dedup, recovery and ordering, metric names and labels, log message text, env vars and wire formats defined here are contracts.
-- Log targets are `dynamo_backend_common::...`. `DYN_LOG=dynamo_backend_common::kv_publisher=debug` shows the publisher's lines.
+- Log targets are `dynamo_backend_common::...`. `DYN_LOG=dynamo_backend_common::kv_publisher=debug` shows the publisher's lines; the state agent's are `dynamo_kv_state_agent::...`.
 - Features: `testing` exports the conformance kit and the test-only handles that `dynamo-llm`'s tests reuse; `integration` enables the NATS-backed tests.
 
 ## Engine Lifecycle

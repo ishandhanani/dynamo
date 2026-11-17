@@ -88,6 +88,7 @@ areas:
   - lib/sync/src/metrics.rs
   - lib/sync/src/metrics/
   - lib/backend-common/src/kv_publisher/
+  - lib/kv-state-agent/
   - tests/router/
   - tests/router/configs/
   - lib/router-plugins/
