@@ -49,10 +49,6 @@ pub use recovery::{
     TargetFaultDisposition, start_target_subscriber,
 };
 pub(crate) use recovery::{KvEventSubscriptionHandle, start_subscriber};
-pub use recovery::{
-    KvStateAgentStatusCell, start_worker_kv_query_endpoint,
-    start_worker_kv_query_endpoint_with_status,
-};
 #[cfg(any(test, feature = "testing"))]
 pub use recovery::{WorkerQueryClient, WorkerQueryTransport};
 

@@ -18,6 +18,7 @@ processor publishes normalized events through the configured event plane.
 - `sinks.rs`: applies events to the local worker indexer and publishes them
   externally.
 - `worker_metrics.rs`: emits worker-local runtime metrics.
+- `worker_query_endpoint.rs`: serves the local worker indexer to routers, which query it to recover the worker's KV index (the client is `dynamo-sync`, `indexer/recovery/worker_query.rs`; the reply type both ends share is `dynamo_sync::indexer::WorkerKvQueryReply`).
 
 The KV state agent (`lib/kv-state-agent`, the crate `dynamo-kv-state-agent`) reuses the decode step of `zmq_listener.rs`, the coalescer of `batching.rs`, `dedup.rs` and the local admission and event-plane sink of `sinks.rs`; it does not run `event_processor.rs`.
 

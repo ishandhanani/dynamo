@@ -2295,6 +2295,7 @@ name = "dynamo-backend-common"
 version = "1.8.0"
 dependencies = [
  "anyhow",
+ "arc-swap",
  "async-stream",
  "async-trait",
  "bytes",

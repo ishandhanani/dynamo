@@ -34,7 +34,6 @@ use dynamo_runtime::discovery::{DiscoverySpec, EventScope};
 use dynamo_runtime::protocols::EndpointId;
 use dynamo_runtime::traits::DistributedRuntimeProvider;
 
-use dynamo_sync::indexer::start_worker_kv_query_endpoint;
 use dynamo_sync::membership::KvEventSource as DiscoveredKvEventSource;
 
 pub mod batching;
@@ -46,6 +45,7 @@ pub mod sinks;
 #[cfg(test)]
 mod tests;
 mod worker_metrics;
+mod worker_query_endpoint;
 pub mod zmq_listener;
 mod zmq_recovery;
 pub use zmq_recovery::{KvStreamCommand, KvStreamStatus, ZmqRecoveryConfig};
@@ -59,6 +59,10 @@ use metrics::KvPublisherMetrics;
 pub use multimodal_embedding_cache::MultimodalEmbeddingCachePublisher;
 use sinks::EventPlanePublisher;
 pub use worker_metrics::WorkerMetricsPublisher;
+pub use worker_query_endpoint::{
+    KvStateAgentStatusCell, start_worker_kv_query_endpoint,
+    start_worker_kv_query_endpoint_with_status,
+};
 use zmq_listener::start_zmq_listener;
 
 /// Events the worker-local KV indexer keeps for router queries (the most recent ones).

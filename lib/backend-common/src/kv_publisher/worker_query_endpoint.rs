@@ -25,7 +25,7 @@ use dynamo_runtime::{
 use futures::StreamExt;
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 
-use crate::indexer::reply::WorkerKvQueryReply;
+use dynamo_sync::indexer::WorkerKvQueryReply;
 
 /// Maximum recovery queries served past the event buffer at once.
 ///

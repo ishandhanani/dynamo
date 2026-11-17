@@ -132,7 +132,8 @@ Removed with no replacement: the dummy shared-cache server, `services::shared_ca
 | `telemetry` | `dynamo_telemetry`, the crate root |
 | `preprocessor` | `dynamo_preprocessor`, the crate root |
 | `backend` | `dynamo_preprocessor::backend` |
-| `kv_router::indexer`, `kv_router::{Indexer, MULTIMODAL_EMBEDDING_CACHE_SUBJECT}` | `dynamo_sync::indexer` |
+| `kv_router::indexer::{KvStateAgentStatusCell, start_worker_kv_query_endpoint, start_worker_kv_query_endpoint_with_status}` | `dynamo_backend_common::kv_publisher` |
+| `kv_router::indexer`, apart from the row above, and `kv_router::{Indexer, MULTIMODAL_EMBEDDING_CACHE_SUBJECT}` | `dynamo_sync::indexer` |
 | `kv_router::sequence`, `kv_router::ACTIVE_SEQUENCES_SUBJECT` | `dynamo_sync::sequence` |
 | `kv_router::active_load`, `kv_router::{ActiveLoad, KV_METRICS_SUBJECT, RouterLoadSource, RoutingLoadContext, SchedulerLoadSender}`, `discovery::{KvWorkerMonitor, LoadThresholdHandle, WorkerLoadState}` | `dynamo_sync::load` |
 | `discovery::{kv_source_membership, kv_state_agent}`, `discovery::KvSourceMembershipWatch`, and the `discovery` re-exports of the `kv_source_membership` items | `dynamo_sync::membership` |
@@ -174,7 +175,8 @@ A log statement that does not pin a target reports its module path, so its targe
 | `dynamo_llm::telemetry` | `dynamo_telemetry` |
 | `dynamo_llm::preprocessor` | `dynamo_preprocessor` |
 | `dynamo_llm::backend` | `dynamo_preprocessor::backend` |
-| `dynamo_llm::kv_router::indexer` | `dynamo_sync::indexer` |
+| `dynamo_llm::kv_router::indexer::recovery::worker_query_endpoint` | `dynamo_backend_common::kv_publisher::worker_query_endpoint` |
+| `dynamo_llm::kv_router::indexer`, apart from the row above | `dynamo_sync::indexer` |
 | `dynamo_llm::kv_router::sequence` | `dynamo_sync::sequence`, and `dynamo_discovery::scheduler_load` for the scheduler-load publisher |
 | `dynamo_llm::kv_router::{metrics_subscriber, routing_load}`, `dynamo_llm::discovery::worker_monitor` | `dynamo_sync::load::{metrics_subscriber, routing_load, worker_monitor}` |
 | `dynamo_llm::discovery::kv_source_watch` | `dynamo_sync::membership::kv_source_watch` |

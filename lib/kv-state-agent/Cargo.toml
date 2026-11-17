@@ -34,7 +34,7 @@ tokio-util = { workspace = true }
 tracing = { workspace = true }
 
 [dev-dependencies]
-dynamo-kv-hashing = { workspace = true }
 # `KvStateAgentStatusCell::snapshot`, a test-only handle.
-dynamo-sync = { workspace = true, features = ["testing"] }
+dynamo-backend-common = { workspace = true, features = ["testing"] }
+dynamo-kv-hashing = { workspace = true }
 rmp-serde = "1.3"
