@@ -16,6 +16,8 @@ autoexamples = false
 [features]
 # Enables the conformance test kit (testing.rs). Intended for `[dev-dependencies]`
 # in backend crates — adds no weight to production binaries.
+# Also exports the test-only handles other crates' tests use
+# (`kv_publisher::KvStateAgentStatusCell::snapshot`).
 testing = []
 # Enables NATS-backed integration tests (e.g. the on_endpoint_ready handoff).
 # Forwards to dynamo-runtime's integration feature for `create_test_drt_async`.
@@ -39,6 +41,7 @@ dynamo-rl = { workspace = true }
 dynamo-router-protocol = { workspace = true }
 
 anyhow = { workspace = true }
+arc-swap = "1.9.1"
 async-stream = { workspace = true }
 async-trait = { workspace = true }
 bytes = { workspace = true }
@@ -60,7 +63,6 @@ zmq = { workspace = true }
 
 [dev-dependencies]
 dynamo-router-host = { workspace = true, features = ["testing"] }
-dynamo-sync = { workspace = true, features = ["testing"] }
 reqwest = { workspace = true }
 rstest = "0.18.2"
 serde_json = { workspace = true }

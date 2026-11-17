@@ -41,6 +41,7 @@ pub use self::embedding_cache::{
 pub use self::event_source_requirement::KvEventSourceRequirement;
 use self::remote::RemoteIndexer;
 pub use self::remote::{ServedIndexerHandle, ServedIndexerMode, ensure_served_indexer_service};
+pub use self::reply::WorkerKvQueryReply;
 #[cfg(feature = "ckf-diagnostics")]
 pub use recovery::WorkerQueryHealthSnapshot;
 pub use recovery::{
@@ -48,10 +49,6 @@ pub use recovery::{
     TargetFaultDisposition, start_target_subscriber,
 };
 pub(crate) use recovery::{KvEventSubscriptionHandle, start_subscriber};
-pub use recovery::{
-    KvStateAgentStatusCell, start_worker_kv_query_endpoint,
-    start_worker_kv_query_endpoint_with_status,
-};
 #[cfg(any(test, feature = "testing"))]
 pub use recovery::{WorkerQueryClient, WorkerQueryTransport};
 
