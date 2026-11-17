@@ -41,6 +41,7 @@ pub use self::embedding_cache::{
 pub use self::event_source_requirement::KvEventSourceRequirement;
 use self::remote::RemoteIndexer;
 pub use self::remote::{ServedIndexerHandle, ServedIndexerMode, ensure_served_indexer_service};
+pub use self::reply::WorkerKvQueryReply;
 #[cfg(feature = "ckf-diagnostics")]
 pub use recovery::WorkerQueryHealthSnapshot;
 pub use recovery::{
