@@ -8,7 +8,7 @@ mod scorer;
 
 use std::sync::Arc;
 
-use dynamo_kv_router::plugins::prelude::*;
+use dynamo_kv_router::plugins::v1alpha1::*;
 use picker::LowestCostPicker;
 use scorer::{ActiveRequestsScorer, UncachedBlocksScorer};
 
@@ -22,9 +22,8 @@ fn provider(
     let _: Parameters = parameters.deserialize()?;
 
     Ok(Arc::new(
-        |config: &SelectionConfig, worker_type, _partition| {
+        |_config: &SelectionConfig, worker_type, _partition| {
             WorkerSelectionPolicy::new(
-                config.clone(),
                 worker_type.as_str(),
                 vec![
                     Box::new(ActiveRequestsScorer),

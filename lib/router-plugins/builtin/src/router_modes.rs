@@ -7,7 +7,7 @@
 //! `PushRouter` runs the same pickers through the instance selectors its caller passes, so each
 //! algorithm lives only here.
 //!
-//! [`WorkerInputs::ACTIVE_REQUESTS`]: dynamo_kv_router::plugins::worker_selection::WorkerInputs::ACTIVE_REQUESTS
+//! [`WorkerInputs::ACTIVE_REQUESTS`]: dynamo_kv_router::plugins::v1alpha1::WorkerInputs::ACTIVE_REQUESTS
 
 mod least_loaded;
 mod random;
@@ -15,7 +15,7 @@ mod round_robin;
 
 use std::sync::Arc;
 
-use dynamo_kv_router::plugins::prelude::*;
+use dynamo_kv_router::plugins::v1alpha1::*;
 
 pub use least_loaded::LEAST_LOADED;
 pub use random::RANDOM;
@@ -64,13 +64,8 @@ fn provider<P: WorkerPicker + 'static>(
     move |parameters| {
         let _: NoParameters = parameters.deserialize()?;
         Ok(Arc::new(
-            move |config: &SelectionConfig, worker_type, _partition| {
-                WorkerSelectionPolicy::new(
-                    config.clone(),
-                    worker_type.as_str(),
-                    Vec::new(),
-                    Box::new(picker()),
-                )
+            move |_config: &SelectionConfig, worker_type, _partition| {
+                WorkerSelectionPolicy::new(worker_type.as_str(), Vec::new(), Box::new(picker()))
             },
         ))
     }

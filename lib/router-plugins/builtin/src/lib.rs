@@ -36,7 +36,10 @@ pub fn with_defaults(registry: RouterPluginRegistry) -> RouterPluginRegistry {
     registry
 }
 
-use dynamo_kv_router::plugins::prelude::*;
+// `default_registry` and `with_defaults` are the host half of this crate: they set the host's
+// default policy, which only a host can do.
+use dynamo_kv_router::plugins::host::RouterPluginRegistryHostExt;
+use dynamo_kv_router::plugins::v1alpha1::*;
 
 /// Register the named providers Dynamo ships, without changing the host's default factory.
 ///
@@ -56,7 +59,11 @@ pub fn register(registry: &mut RouterPluginRegistry) -> Result<(), RouterPluginR
 
 #[cfg(test)]
 mod tests {
-    use dynamo_kv_router::plugins::prelude::*;
+    use dynamo_kv_router::config::KvRouterConfig;
+    // `default_registry` and `with_defaults` are the host half of this crate: they set the host's
+    // default policy, which only a host can do.
+    use dynamo_kv_router::plugins::host::RouterPluginRegistryHostExt;
+    use dynamo_kv_router::plugins::v1alpha1::*;
 
     use super::*;
 

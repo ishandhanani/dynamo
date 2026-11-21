@@ -266,7 +266,7 @@ mod tests {
     use std::sync::Mutex;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
-    use dynamo_kv_router::plugins::prelude::*;
+    use dynamo_kv_router::plugins::v1alpha1::*;
     use dynamo_scheduler::host::{CatalogReconciler, WorkerRequest};
 
     use super::*;
@@ -477,11 +477,10 @@ worker_selection:
                         provider_calls.fetch_add(1, Ordering::Relaxed);
                         let factory_calls = Arc::clone(&factory_calls);
                         let factory: WorkerSelectionPolicyFactory =
-                            Arc::new(move |config, worker_type, _partition| {
+                            Arc::new(move |_config, worker_type, _partition| {
                                 factory_calls.fetch_add(1, Ordering::Relaxed);
                                 assert_eq!(worker_type, WorkerType::Aggregated);
                                 WorkerSelectionPolicy::new(
-                                    config.clone(),
                                     worker_type.as_str(),
                                     Vec::new(),
                                     Box::new(FirstEligiblePicker),
@@ -765,9 +764,8 @@ worker_selection:
                     move |_parameters: &WorkerSelectionPolicyParameters| {
                         let picker = picker.clone();
                         let factory: WorkerSelectionPolicyFactory =
-                            Arc::new(move |config, worker_type, _partition| {
+                            Arc::new(move |_config, worker_type, _partition| {
                                 WorkerSelectionPolicy::new(
-                                    config.clone(),
                                     worker_type.as_str(),
                                     Vec::new(),
                                     Box::new(picker.clone()),

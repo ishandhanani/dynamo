@@ -3,7 +3,7 @@
 
 mod support;
 
-use dynamo_kv_router::plugins::prelude::*;
+use dynamo_kv_router::plugins::v1alpha1::*;
 use dynamo_scheduler::host::WorkerSelector;
 use std::sync::{
     Arc,
@@ -207,7 +207,6 @@ fn each_component_can_only_read_its_own_inputs() {
                             calls: calls.clone(),
                         };
                         let policy = WorkerSelectionPolicy::new_with_filters(
-                            SelectionConfig::default(),
                             "test",
                             vec![
                                 Box::new(probe(filter_mask)),

@@ -17,7 +17,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use dynamo_kv_router::plugins::prelude::*;
+use dynamo_kv_router::plugins::v1alpha1::*;
 use parking_lot::Mutex;
 
 /// Policy type selected under a `worker_selection` role.
@@ -187,9 +187,8 @@ fn provider(
     parameters.validate()?;
 
     Ok(Arc::new(
-        move |config: &SelectionConfig, worker_type, _partition| {
+        move |_config: &SelectionConfig, worker_type, _partition| {
             WorkerSelectionPolicy::new(
-                config.clone(),
                 worker_type.as_str(),
                 Vec::new(),
                 Box::new(SharedStickyMinLoadPicker(Mutex::new(

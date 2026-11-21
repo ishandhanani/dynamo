@@ -1919,11 +1919,11 @@ async fn stream_failure_releases_booking_before_error_is_observable() {
 #[tokio::test]
 #[serial_test::serial]
 async fn decode_progress_collection_follows_picker_declaration() {
-    use dynamo_kv_router::plugins::prelude::{
-        WorkerInputView, WorkerInputs, WorkerPicker, WorkerSelectionContext, WorkerSelectionPolicy,
-    };
-    use dynamo_kv_router::plugins::worker_selection::experimental::decode_progress::{
+    use dynamo_kv_router::plugins::experimental::decode_progress::{
         DECODE_PROGRESS, DecodeProgressByRow,
+    };
+    use dynamo_kv_router::plugins::v1alpha1::{
+        WorkerInputView, WorkerInputs, WorkerPicker, WorkerSelectionContext, WorkerSelectionPolicy,
     };
     use dynamo_worker_selection::host::WorkerSelectionPolicyError;
 
@@ -1969,9 +1969,8 @@ async fn decode_progress_collection_follows_picker_declaration() {
             HashMap::from([(7, ModelRuntimeConfig::default())]),
             config,
             None::<RecordingClassifier>,
-            SelectionPolicySource::Factory(Arc::new(move |config, role, _| {
+            SelectionPolicySource::Factory(Arc::new(move |_config, role, _| {
                 WorkerSelectionPolicy::new(
-                    config.clone(),
                     role.as_str(),
                     Vec::new(),
                     Box::new(Probe {
